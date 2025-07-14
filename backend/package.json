@@ -1,0 +1,45 @@
+{
+  "name": "openwebui-backend",
+  "version": "1.0.0",
+  "description": "Complete backend for OpenWebUI platform",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "build": "echo 'Build complete'",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "db:setup": "node scripts/setup-db.js",
+    "db:migrate": "prisma migrate dev",
+    "db:reset": "prisma migrate reset"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "dotenv": "^16.3.1",
+    "bcryptjs": "^3.0.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.1",
+    "sharp": "^0.34.3",
+    "prisma": "^6.11.1",
+    "@prisma/client": "^6.11.1",
+    "stripe": "^18.3.0",
+    "nodemailer": "^6.10.1",
+    "zod": "^3.24.1",
+    "mammoth": "^1.6.0",
+    "xlsx": "^0.18.5",
+    "pdf-parse": "^1.1.1",
+    "tesseract.js": "^5.0.4",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "compression": "^1.7.4",
+    "cookie-parser": "^1.4.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2",
+    "@types/node": "^22.0.0"
+  }
+}

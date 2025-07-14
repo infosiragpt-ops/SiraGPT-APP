@@ -3,7 +3,7 @@ import { SidebarProvider } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarInset } from "@/components/ui/sidebar"
 import { AuthGuard } from "@/components/auth-guard"
-import { ChatProvider } from "@/lib/chat-context"
+import { ChatProvider } from "@/lib/chat-context-integrated"
 
 export default function ChatLayout({
   children,

@@ -43,8 +43,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { useAuth } from "@/lib/auth-context"
-import { useChat } from "@/lib/chat-context"
+import { useAuth } from "@/lib/auth-context-integrated"
+import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter } from "next/navigation"
 
 
