@@ -1,74 +1,139 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Bot, Settings, Plus, MoreHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Switch } from "@/components/ui/switch"
+import { apiClient } from "@/lib/api"
+import { toast } from "sonner"
 
-const aiModels = [
-  {
-    id: "gpt-4",
-    name: "GPT-4",
-    provider: "OpenAI",
-    status: "active",
-    usage: 15420,
-    cost: "$0.03/1K tokens",
-    description: "Most capable GPT model for complex tasks",
-  },
-  {
-    id: "gpt-3.5-turbo",
-    name: "GPT-3.5 Turbo",
-    provider: "OpenAI",
-    status: "active",
-    usage: 8930,
-    cost: "$0.002/1K tokens",
-    description: "Fast and efficient for most tasks",
-  },
-  {
-    id: "claude-3-opus",
-    name: "Claude 3 Opus",
-    provider: "Anthropic",
-    status: "active",
-    usage: 5240,
-    cost: "$0.015/1K tokens",
-    description: "Most powerful Claude model",
-  },
-  {
-    id: "claude-3-sonnet",
-    name: "Claude 3 Sonnet",
-    provider: "Anthropic",
-    status: "inactive",
-    usage: 0,
-    cost: "$0.003/1K tokens",
-    description: "Balanced performance and speed",
-  },
-  {
-    id: "grok-2",
-    name: "Grok 2",
-    provider: "xAI",
-    status: "active",
-    usage: 2150,
-    cost: "$0.01/1K tokens",
-    description: "Real-time information access",
-  },
-]
+interface AIModel {
+  id: string
+  name: string
+  displayName: string
+  provider: string
+  description?: string
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
 
 export default function ModelsPage() {
-  const [models, setModels] = useState(aiModels)
+  const [models, setModels] = useState<AIModel[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [formData, setFormData] = useState({
+    name: '',
+    displayName: '',
+    provider: '',
+    description: '',
+    apiKey: ''
+  })
 
-  const toggleModelStatus = (modelId: string) => {
-    setModels((prev) =>
-      prev.map((model) =>
-        model.id === modelId ? { ...model, status: model.status === "active" ? "inactive" : "active" } : model,
-      ),
-    )
+  useEffect(() => {
+    loadModels()
+  }, [])
+
+  const loadModels = async () => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/models`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+        }
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setModels(data.models)
+      }
+    } catch (error) {
+      console.error('Failed to load models:', error)
+      toast.error('Failed to load models')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleCreateModel = async (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/models`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+        },
+        body: JSON.stringify(formData)
+      })
+      
+      if (response.ok) {
+        toast.success('Model created successfully')
+        setIsDialogOpen(false)
+        setFormData({ name: '', displayName: '', provider: '', description: '', apiKey: '' })
+        loadModels()
+      } else {
+        const error = await response.json()
+        toast.error(error.error || 'Failed to create model')
+      }
+    } catch (error) {
+      console.error('Failed to create model:', error)
+      toast.error('Failed to create model')
+    }
+  }
+
+  const toggleModelStatus = async (modelId: string, currentStatus: boolean) => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/models/${modelId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+        },
+        body: JSON.stringify({ isActive: !currentStatus })
+      })
+      
+      if (response.ok) {
+        toast.success('Model status updated')
+        loadModels()
+      } else {
+        toast.error('Failed to update model status')
+      }
+    } catch (error) {
+      console.error('Failed to update model:', error)
+      toast.error('Failed to update model')
+    }
+  }
+
+  const deleteModel = async (modelId: string) => {
+    if (!confirm('Are you sure you want to delete this model?')) return
+    
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/models/${modelId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+        }
+      })
+      
+      if (response.ok) {
+        toast.success('Model deleted successfully')
+        loadModels()
+      } else {
+        toast.error('Failed to delete model')
+      }
+    } catch (error) {
+      console.error('Failed to delete model:', error)
+      toast.error('Failed to delete model')
+    }
   }
 
   return (
@@ -80,34 +145,69 @@ export default function ModelsPage() {
         </div>
         <Dialog>
           <DialogTrigger asChild>
-            <Button>
+            <Button onClick={() => setIsDialogOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />
               Add Model
             </Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogHeader>
               <DialogTitle>Add New AI Model</DialogTitle>
             </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="model-name">Model Name</Label>
-                <Input id="model-name" placeholder="Enter model name" />
+            <form onSubmit={handleCreateModel} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Model Name</Label>
+                  <Input 
+                    id="name" 
+                    placeholder="e.g., gpt-4" 
+                    value={formData.name}
+                    onChange={(e) => setFormData({...formData, name: e.target.value})}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="displayName">Display Name</Label>
+                  <Input 
+                    id="displayName" 
+                    placeholder="e.g., GPT-4" 
+                    value={formData.displayName}
+                    onChange={(e) => setFormData({...formData, displayName: e.target.value})}
+                    required
+                  />
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="provider">Provider</Label>
-                <Input id="provider" placeholder="Enter provider name" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="api-endpoint">API Endpoint</Label>
-                <Input id="api-endpoint" placeholder="Enter API endpoint URL" />
+                <Input 
+                  id="provider" 
+                  placeholder="e.g., OpenAI" 
+                  value={formData.provider}
+                  onChange={(e) => setFormData({...formData, provider: e.target.value})}
+                  required
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="description">Description</Label>
-                <Textarea id="description" placeholder="Enter model description" />
+                <Textarea 
+                  id="description" 
+                  placeholder="Enter model description" 
+                  value={formData.description}
+                  onChange={(e) => setFormData({...formData, description: e.target.value})}
+                />
               </div>
-              <Button className="w-full">Add Model</Button>
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="apiKey">API Key (Optional)</Label>
+                <Input 
+                  id="apiKey" 
+                  type="password"
+                  placeholder="Enter API key if required" 
+                  value={formData.apiKey}
+                  onChange={(e) => setFormData({...formData, apiKey: e.target.value})}
+                />
+              </div>
+              <Button type="submit" className="w-full">Add Model</Button>
+            </form>
           </DialogContent>
         </Dialog>
       </div>
@@ -129,7 +229,7 @@ export default function ModelsPage() {
             <Bot className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{models.filter((m) => m.status === "active").length}</div>
+            <div className="text-2xl font-bold">{models.filter((m) => m.isActive).length}</div>
           </CardContent>
         </Card>
         <Card>
@@ -138,7 +238,7 @@ export default function ModelsPage() {
             <Bot className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{models.reduce((sum, m) => sum + m.usage, 0).toLocaleString()}</div>
+            <div className="text-2xl font-bold">-</div>
           </CardContent>
         </Card>
         <Card>
@@ -175,16 +275,24 @@ export default function ModelsPage() {
                 <TableRow key={model.id}>
                   <TableCell>
                     <div>
-                      <div className="font-medium">{model.name}</div>
+                      <div className="font-medium">{model.displayName}</div>
                       <div className="text-sm text-muted-foreground">{model.description}</div>
                     </div>
                   </TableCell>
                   <TableCell>{model.provider}</TableCell>
                   <TableCell>
-                    <Badge variant={model.status === "active" ? "default" : "secondary"}>{model.status}</Badge>
+                    <div className="flex items-center space-x-2">
+                      <Switch 
+                        checked={model.isActive} 
+                        onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
+                      />
+                      <Badge variant={model.isActive ? "default" : "secondary"}>
+                        {model.isActive ? "Active" : "Inactive"}
+                      </Badge>
+                    </div>
                   </TableCell>
-                  <TableCell>{model.usage.toLocaleString()} calls</TableCell>
-                  <TableCell>{model.cost}</TableCell>
+                  <TableCell>-</TableCell>
+                  <TableCell>-</TableCell>
                   <TableCell>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -197,11 +305,16 @@ export default function ModelsPage() {
                           <Settings className="mr-2 h-4 w-4" />
                           Configure
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => toggleModelStatus(model.id)}>
-                          {model.status === "active" ? "Deactivate" : "Activate"}
+                        <DropdownMenuItem onClick={() => toggleModelStatus(model.id, model.isActive)}>
+                          {model.isActive ? "Deactivate" : "Activate"}
                         </DropdownMenuItem>
                         <DropdownMenuItem>View Analytics</DropdownMenuItem>
-                        <DropdownMenuItem className="text-red-600">Remove Model</DropdownMenuItem>
+                        <DropdownMenuItem 
+                          className="text-red-600" 
+                          onClick={() => deleteModel(model.id)}
+                        >
+                          Remove Model
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
