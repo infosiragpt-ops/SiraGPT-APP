@@ -16,6 +16,7 @@ model User {
   name         String
   password     String
   avatar       String?
+  googleId     String?  @unique
   plan         Plan     @default(FREE)
   isAdmin      Boolean  @default(false)
   apiUsage     Int      @default(0)
@@ -31,6 +32,20 @@ model User {
   files     File[]
 
   @@map("users")
+}
+
+model AiModel {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  displayName String
+  provider    String
+  description String?
+  apiKey      String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("ai_models")
 }
 
 model Session {

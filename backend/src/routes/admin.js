@@ -1,11 +1,101 @@
 const express = require('express');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const prisma = require('../config/database');
+const { body, validationResult } = require('express-validator');
 
 const router = express.Router();
 
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
+
+// AI Models Management
+router.get('/models', async (req, res) => {
+  try {
+    const models = await prisma.aiModel.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json({ models });
+  } catch (error) {
+    console.error('Get models error:', error);
+    res.status(500).json({ error: 'Failed to fetch models' });
+  }
+});
+
+router.post('/models', [
+  body('name').trim().isLength({ min: 1 }).withMessage('Name is required'),
+  body('displayName').trim().isLength({ min: 1 }).withMessage('Display name is required'),
+  body('provider').trim().isLength({ min: 1 }).withMessage('Provider is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { name, displayName, provider, description, apiKey } = req.body;
+
+    const model = await prisma.aiModel.create({
+      data: {
+        name,
+        displayName,
+        provider,
+        description,
+        apiKey
+      }
+    });
+
+    res.status(201).json({ model });
+  } catch (error) {
+    console.error('Create model error:', error);
+    if (error.code === 'P2002') {
+      return res.status(400).json({ error: 'Model name already exists' });
+    }
+    res.status(500).json({ error: 'Failed to create model' });
+  }
+});
+
+router.put('/models/:id', [
+  body('displayName').optional().trim().isLength({ min: 1 }),
+  body('provider').optional().trim().isLength({ min: 1 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { displayName, provider, description, apiKey, isActive } = req.body;
+    const updateData = {};
+
+    if (displayName) updateData.displayName = displayName;
+    if (provider) updateData.provider = provider;
+    if (description !== undefined) updateData.description = description;
+    if (apiKey !== undefined) updateData.apiKey = apiKey;
+    if (typeof isActive === 'boolean') updateData.isActive = isActive;
+
+    const model = await prisma.aiModel.update({
+      where: { id: req.params.id },
+      data: updateData
+    });
+
+    res.json({ model });
+  } catch (error) {
+    console.error('Update model error:', error);
+    res.status(500).json({ error: 'Failed to update model' });
+  }
+});
+
+router.delete('/models/:id', async (req, res) => {
+  try {
+    await prisma.aiModel.delete({
+      where: { id: req.params.id }
+    });
+    res.json({ message: 'Model deleted successfully' });
+  } catch (error) {
+    console.error('Delete model error:', error);
+    res.status(500).json({ error: 'Failed to delete model' });
+  }
+});
 
 // Get all users
 router.get('/users', async (req, res) => {

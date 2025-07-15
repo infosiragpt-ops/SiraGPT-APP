@@ -4,8 +4,44 @@ const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const passport = require('../config/passport');
 
 const router = express.Router();
+
+// Google OAuth routes
+router.get('/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+router.get('/google/callback',
+  passport.authenticate('google', { session: false }),
+  async (req, res) => {
+    try {
+      // Create session token
+      const token = jwt.sign(
+        { userId: req.user.id },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      await prisma.session.create({
+        data: {
+          userId: req.user.id,
+          token,
+          expiresAt
+        }
+      });
+
+      // Redirect to frontend with token
+      res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${token}`);
+    } catch (error) {
+      console.error('Google auth callback error:', error);
+      res.redirect(`${process.env.FRONTEND_URL}/auth/login?error=auth_failed`);
+    }
+  }
+);
 
 // Register
 router.post('/register', [

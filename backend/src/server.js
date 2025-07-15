@@ -5,6 +5,8 @@ const morgan = require('morgan');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
+const session = require('express-session');
+const passport = require('./config/passport');
 require('dotenv').config();
 
 const authRoutes = require('./routes/auth');
@@ -44,6 +46,18 @@ app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
+
+// Session configuration for Google OAuth
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-session-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: process.env.NODE_ENV === 'production' }
+}));
+
+// Passport middleware
+app.use(passport.initialize());
+app.use(passport.session());
 
 // Logging
 if (process.env.NODE_ENV !== 'production') {

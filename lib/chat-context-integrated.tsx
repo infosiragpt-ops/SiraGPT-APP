@@ -46,17 +46,39 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const { user, token } = useAuth()
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
-  const [selectedModel, setSelectedModel] = useState("ChatGPT")
+  const [selectedModel, setSelectedModel] = useState("")
+  const [availableModels, setAvailableModels] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
+  const [hasInitialized, setHasInitialized] = useState(false)
 
   // Load user's chats
   useEffect(() => {
     if (user && token) {
-      loadUserChats()
+      initializeChat()
     }
   }, [user, token])
 
+  const initializeChat = async () => {
+    if (hasInitialized) return
+    
+    try {
+      // Load available models first
+      const modelsResponse = await apiClient.getAIModels()
+      setAvailableModels(modelsResponse.models)
+      
+      // Set default model
+      if (modelsResponse.models.length > 0 && !selectedModel) {
+        setSelectedModel(modelsResponse.models[0].name)
+      }
+      
+      // Load chats
+      await loadUserChats()
+      setHasInitialized(true)
+    } catch (error) {
+      console.error("Failed to initialize chat:", error)
+    }
+  }
   const loadUserChats = async () => {
     try {
       const response = await apiClient.getChats()
@@ -67,7 +89,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }
 
   const createNewChat = useCallback(async () => {
-    if (!user || !token) return
+    if (!user || !token || !selectedModel) return
 
     try {
       const response = await apiClient.createChat({
@@ -82,7 +104,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         id: `msg-${Date.now()}`,
         chatId: newChat.id,
         role: "ASSISTANT",
-        content: `Hello! I'm ${selectedModel}. How can I help you today?`,
+        content: `Hello! I'm ${availableModels.find(m => m.name === selectedModel)?.displayName || selectedModel}. How can I help you today?`,
         timestamp: new Date().toISOString(),
       }
 
@@ -94,7 +116,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Failed to create chat:", error)
     }
-  }, [user, token, selectedModel])
+  }, [user, token, selectedModel, availableModels])
 
   const selectChat = useCallback(
     async (chatId: string) => {
@@ -154,7 +176,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         id: `msg-${Date.now()}`,
         chatId: currentChat.id,
         role: "ASSISTANT",
-        content: `Hello! I'm ${selectedModel}. How can I help you today?`,
+        content: `Hello! I'm ${availableModels.find(m => m.name === selectedModel)?.displayName || selectedModel}. How can I help you today?`,
         timestamp: new Date().toISOString(),
       }
 
@@ -173,7 +195,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Failed to clear chat:", error)
     }
-  }, [currentChat, token, selectedModel])
+  }, [currentChat, token, selectedModel, availableModels])
 
   const deleteChat = useCallback(
     async (chatId: string) => {
@@ -208,6 +230,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         uploadedFiles,
         setUploadedFiles,
+        availableModels,
       }}
     >
       {children}

@@ -5,6 +5,28 @@ const prisma = require('../config/database');
 
 const router = express.Router();
 
+// Get available models
+router.get('/models', async (req, res) => {
+  try {
+    const models = await prisma.aiModel.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        displayName: true,
+        provider: true,
+        description: true
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    res.json({ models });
+  } catch (error) {
+    console.error('Get AI models error:', error);
+    res.status(500).json({ error: 'Failed to fetch AI models' });
+  }
+});
+
 // AI Service Integration
 async function generateAIResponse(model, prompt, files = []) {
   // This is where you'd integrate with actual AI services

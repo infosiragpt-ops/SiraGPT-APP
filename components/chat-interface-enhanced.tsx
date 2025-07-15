@@ -24,29 +24,30 @@ import {
 type Props = {
   selectedModel: string;
   setSelectedModel: (name: string) => void;
+  availableModels: any[];
 };
 
-export const NavbarModelSelector: React.FC<Props> = ({ selectedModel, setSelectedModel }) => {
-  const selectedModelData = llmModels.find((m) => m.name === selectedModel);
+export const NavbarModelSelector: React.FC<Props> = ({ selectedModel, setSelectedModel, availableModels }) => {
+  const selectedModelData = availableModels.find((m) => m.name === selectedModel);
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
-        {selectedModelData?.icon && <selectedModelData.icon className="h-4 w-4" />}
-        <span className="text-sm font-medium">{selectedModel}</span>
+        <Bot className="h-4 w-4" />
+        <span className="text-sm font-medium">{selectedModelData?.displayName || selectedModel}</span>
         <ChevronDown className="h-4 w-4 opacity-70" />
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-56">
-        {llmModels.map((model) => (
+        {availableModels.map((model) => (
           <DropdownMenuItem
             key={model.name}
             onSelect={() => setSelectedModel(model.name)}
             className="flex items-center gap-2 py-2"
           >
-            <model.icon className="h-4 w-4 flex-shrink-0" />
+            <Bot className="h-4 w-4 flex-shrink-0" />
             <div className="flex flex-col">
-              <span className="text-sm">{model.name}</span>
+              <span className="text-sm">{model.displayName}</span>
               <span className="text-xs text-muted-foreground">{model.description}</span>
             </div>
           </DropdownMenuItem>
@@ -193,7 +194,8 @@ export default function ChatInterface() {
     isLoading, 
     setSelectedModel,
     uploadedFiles,
-    setUploadedFiles
+    setUploadedFiles,
+    availableModels
   } = useChat()
 
   const [input, setInput] = React.useState("")
@@ -203,9 +205,12 @@ export default function ChatInterface() {
 
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
 
+  // Only create new chat if we have models and no current chat
   React.useEffect(() => {
-    if (!currentChat) createNewChat()
-  }, [currentChat, createNewChat])
+    if (!currentChat && availableModels.length > 0 && selectedModel) {
+      createNewChat()
+    }
+  }, [currentChat, createNewChat, availableModels, selectedModel])
 
   const handleSend = async () => {
     if (!input.trim() || isLoading || !currentChat) return
@@ -248,6 +253,7 @@ export default function ChatInterface() {
             <NavbarModelSelector
               selectedModel={selectedModel}
               setSelectedModel={setSelectedModel}
+              availableModels={availableModels}
             />
           </div>
           <div className="flex items-center gap-2">

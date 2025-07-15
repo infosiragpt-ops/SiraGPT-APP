@@ -145,6 +145,44 @@ async function main() {
 
     console.log('✅ Demo files created');
 
+    // Create default AI models
+    const defaultModels = [
+      {
+        name: 'chatgpt',
+        displayName: 'ChatGPT',
+        provider: 'OpenAI',
+        description: 'GPT-4 and GPT-3.5 Turbo models'
+      },
+      {
+        name: 'claude',
+        displayName: 'Claude',
+        provider: 'Anthropic',
+        description: 'Claude 3 Opus and Sonnet models'
+      },
+      {
+        name: 'grok',
+        displayName: 'Grok',
+        provider: 'xAI',
+        description: 'Grok-2 model by xAI'
+      },
+      {
+        name: 'gemini',
+        displayName: 'Gemini',
+        provider: 'Google',
+        description: 'Gemini Pro model'
+      }
+    ];
+
+    for (const model of defaultModels) {
+      await prisma.aiModel.upsert({
+        where: { name: model.name },
+        update: {},
+        create: model
+      });
+    }
+
+    console.log('✅ Default AI models created');
+
     console.log('🎉 Database setup complete!');
     console.log('');
     console.log('Demo credentials:');
