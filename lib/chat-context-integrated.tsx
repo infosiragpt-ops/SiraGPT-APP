@@ -36,6 +36,8 @@ interface ChatContextType {
   selectedModel: string
   setSelectedModel: (model: string) => void
   isLoading: boolean
+  availableModels: any[]
+
   uploadedFiles: any[]
   setUploadedFiles: (files: any[]) => void
 }
@@ -61,17 +63,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const initializeChat = async () => {
     if (hasInitialized) return
-    
+
     try {
       // Load available models first
       const modelsResponse = await apiClient.getAIModels()
       setAvailableModels(modelsResponse.models)
-      
+
       // Set default model
       if (modelsResponse.models.length > 0 && !selectedModel) {
         setSelectedModel(modelsResponse.models[0].name)
       }
-      
+
       // Load chats
       await loadUserChats()
       setHasInitialized(true)
@@ -98,7 +100,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       })
 
       const newChat = response.chat
-      
+
       // Add initial assistant message
       const initialMessage: Message = {
         id: `msg-${Date.now()}`,
@@ -109,7 +111,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
 
       newChat.messages = [initialMessage]
-      
+
       setChats((prev) => [newChat, ...prev])
       setCurrentChat(newChat)
       setUploadedFiles([]) // Clear uploaded files for new chat
@@ -136,6 +138,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (!currentChat || !user || !token) return
 
       setIsLoading(true)
+      console.log("addMessage working");
 
       try {
         // Generate AI response with file context
@@ -145,13 +148,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           chatId: currentChat.id,
           files: fileIds || uploadedFiles.map(f => f.id),
         })
-        
+
         // Reload the chat to get updated messages
         const chatResponse = await apiClient.getChat(currentChat.id)
         const updatedChat = chatResponse.chat
-        
+
         setCurrentChat(updatedChat)
-        setChats((prev) => prev.map((chat) => 
+        setChats((prev) => prev.map((chat) =>
           chat.id === currentChat.id ? updatedChat : chat
         ))
 
@@ -171,7 +174,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     try {
       await apiClient.clearChat(currentChat.id)
-      
+
       const initialMessage: Message = {
         id: `msg-${Date.now()}`,
         chatId: currentChat.id,
@@ -188,7 +191,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
 
       setCurrentChat(clearedChat)
-      setChats((prev) => prev.map((chat) => 
+      setChats((prev) => prev.map((chat) =>
         chat.id === currentChat.id ? clearedChat : chat
       ))
       setUploadedFiles([]) // Clear uploaded files

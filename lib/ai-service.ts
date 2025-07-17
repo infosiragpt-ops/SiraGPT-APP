@@ -1,18 +1,301 @@
+// "use client"
+
+// // AI Service for multiple providers
+// export interface AIProvider {
+//   name: string
+//   models: string[]
+//   generateText: (prompt: string, model: string, apiKey: string) => Promise<string>
+//   generateImage?: (prompt: string, model: string, apiKey: string) => Promise<string> // Image generation ke liye naya function
+
+// }
+
+// class OpenAIProvider implements AIProvider {
+//   name = "OpenAI"
+//   models = ["gpt-4", "gpt-3.5-turbo"]
+
+//   async generateText(prompt: string, model: string, apiKey: string): Promise<string> {
+//     try {
+//       const response = await fetch("https://api.openai.com/v1/chat/completions", {
+//         method: "POST",
+//         headers: {
+//           "Content-Type": "application/json",
+//           Authorization: `Bearer ${apiKey}`,
+//         },
+//         body: JSON.stringify({
+//           model: model,
+//           messages: [{ role: "user", content: prompt }],
+//           max_tokens: 1000,
+//         }),
+//       })
+
+//       console.log(response);
+
+
+//       if (!response.ok) {
+//         throw new Error(`OpenAI API error: ${response.statusText}`)
+//       }
+
+//       const data = await response.json()
+//       return data.choices[0].message.content
+//     } catch (error) {
+//       console.error("OpenAI API error:", error)
+//       return "I apologize, but I'm having trouble connecting to OpenAI right now. Please try again later."
+//     }
+//   }
+
+//   async generateImage(prompt: string, model: string, apiKey: string): Promise<string> {
+//     try {
+//       const response = await fetch("https://api.openai.com/v1/images/generations", {
+//         method: "POST",
+//         headers: {
+//           "Content-Type": "application/json",
+//           Authorization: `Bearer ${apiKey}`,
+//         },
+//         body: JSON.stringify({
+//           model: model,
+//           prompt: prompt,
+//           n: 1,
+//           size: "1024x1024",
+//         }),
+//       })
+
+//       if (!response.ok) {
+//         throw new Error(`OpenAI Image API error: ${response.statusText}`)
+//       }
+
+//       const data = await response.json()
+//       return data.data[0].url // Generate ki gayi image ka URL lautayein
+//     } catch (error) {
+//       console.error("OpenAI Image API error:", error)
+//       return "Maaf kijiye, abhi OpenAI se image banane mein samasya aa rahi hai. Kripya baad mein prayas karein."
+//     }
+//   }
+// }
+
+// class AnthropicProvider implements AIProvider {
+//   name = "Anthropic"
+//   models = ["claude-3-opus", "claude-3-sonnet"]
+
+//   async generateText(prompt: string, model: string, apiKey: string): Promise<string> {
+//     try {
+//       const response = await fetch("https://api.anthropic.com/v1/messages", {
+//         method: "POST",
+//         headers: {
+//           "Content-Type": "application/json",
+//           "x-api-key": apiKey,
+//           "anthropic-version": "2023-06-01",
+//         },
+//         body: JSON.stringify({
+//           model: model,
+//           max_tokens: 1000,
+//           messages: [{ role: "user", content: prompt }],
+//         }),
+//       })
+
+//       if (!response.ok) {
+//         throw new Error(`Anthropic API error: ${response.statusText}`)
+//       }
+
+//       const data = await response.json()
+//       return data.content[0].text
+//     } catch (error) {
+//       console.error("Anthropic API error:", error)
+//       return "I apologize, but I'm having trouble connecting to Claude right now. Please try again later."
+//     }
+//   }
+// }
+
+// class GroqProvider implements AIProvider {
+//   name = "Groq"
+//   models = ["llama2-70b-4096", "mixtral-8x7b-32768"]
+
+//   async generateText(prompt: string, model: string, apiKey: string): Promise<string> {
+//     try {
+//       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+//         method: "POST",
+//         headers: {
+//           "Content-Type": "application/json",
+//           Authorization: `Bearer ${apiKey}`,
+//         },
+//         body: JSON.stringify({
+//           model: model,
+//           messages: [{ role: "user", content: prompt }],
+//           max_tokens: 1000,
+//         }),
+//       })
+
+//       if (!response.ok) {
+//         throw new Error(`Groq API error: ${response.statusText}`)
+//       }
+
+//       const data = await response.json()
+//       return data.choices[0].message.content
+//     } catch (error) {
+//       console.error("Groq API error:", error)
+//       return "I apologize, but I'm having trouble connecting to Groq right now. Please try again later."
+//     }
+//   }
+// }
+
+// // Simulated providers for demo
+// class SimulatedProvider implements AIProvider {
+//   name: string
+//   models: string[]
+
+//   constructor(name: string, models: string[]) {
+//     this.name = name
+//     this.models = models
+//   }
+
+//   async generateText(prompt: string, model: string): Promise<string> {
+//     // Simulate API delay
+//     await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 2000))
+
+//     const responses = [
+//       `Hello! I'm ${this.name} (${model}). I understand you're asking about: "${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}". Here's my response based on my training data.`,
+//       `That's an interesting question! As ${this.name}, I can help you with that. Let me provide you with a comprehensive answer.`,
+//       `Great question! Using ${model}, I can analyze this topic and provide you with detailed insights.`,
+//       `I'd be happy to help you with that inquiry. Based on my knowledge as ${this.name}, here's what I can tell you.`,
+//       `Thank you for your question. As an AI assistant powered by ${model}, I'll do my best to provide you with accurate information.`,
+//     ]
+
+//     return responses[Math.floor(Math.random() * responses.length)]
+//   }
+// }
+
+// export class AIService {
+//   private providers: Map<string, AIProvider> = new Map()
+//   private apiKeys: Map<string, string> = new Map()
+
+//   constructor() {
+//     // Initialize providers
+//     this.providers.set("ChatGPT", new OpenAIProvider())
+//     this.providers.set("Claude", new AnthropicProvider())
+//     this.providers.set("Grok", new GroqProvider())
+//     this.providers.set("DeepSeek", new SimulatedProvider("DeepSeek", ["deepseek-chat", "deepseek-coder"]))
+//     this.providers.set("Gemini", new SimulatedProvider("Gemini", ["gemini-pro", "gemini-pro-vision"]))
+//   }
+
+//   setApiKey(provider: string, apiKey: string) {
+//     this.apiKeys.set(provider, apiKey)
+//   }
+
+//   async generateResponse(provider: string, model: string, prompt: string): Promise<string> {
+//     const aiProvider = this.providers.get(provider)
+//     if (!aiProvider) {
+//       throw new Error(`Provider ${provider} not found`)
+//     }
+
+//     const apiKey = this.apiKeys.get(provider) || ""
+
+//     // For demo purposes, use simulated responses if no API key
+//     if (!apiKey && (provider === "ChatGPT" || provider === "Claude" || provider === "Grok")) {
+//       const simulatedProvider = new SimulatedProvider(provider, aiProvider.models)
+//       return simulatedProvider.generateText(prompt, model)
+//     }
+
+//     return aiProvider.generateText(prompt, model, apiKey)
+//   }
+
+
+//   async generateImageResponse(provider: string, model: string, prompt: string): Promise<string> {
+//     const aiProvider = this.providers.get(provider)
+//     if (!aiProvider || !aiProvider.generateImage) {
+//       throw new Error(`Provider ${provider} image generation ko support nahi karta.`)
+//     }
+
+//     const apiKey = this.apiKeys.get(provider) || ""
+//     return aiProvider.generateImage(prompt, model, apiKey)
+//   }
+
+
+//   getAvailableProviders(): string[] {
+//     return Array.from(this.providers.keys())
+//   }
+
+//   getModelsForProvider(provider: string): string[] {
+//     const aiProvider = this.providers.get(provider)
+//     return aiProvider ? aiProvider.models : []
+//   }
+
+//   getImageModelsForProvider(provider: string): string[] {
+//     const aiProvider = this.providers.get(provider)
+//     // TypeScript ko yeh batane ke liye ki 'imageModels' maujood ho sakta hai, ek type cast ka istemal karein
+//     const providerWithImageModels = aiProvider as any;
+//     return providerWithImageModels?.imageModels ? providerWithImageModels.imageModels : []
+//   }
+// }
+
+// export const aiService = new AIService()
+
+
 "use client"
 
-// AI Service for multiple providers
+// Enhanced AI Service with real API integration
 export interface AIProvider {
   name: string
   models: string[]
-  generateText: (prompt: string, model: string, apiKey: string) => Promise<string>
+  generateText: (prompt: string, model: string, apiKey: string, files?: any[]) => Promise<AIResponse>
+  generateImage?: (prompt: string, apiKey: string) => Promise<string>
+}
+
+export interface AIResponse {
+  content: string
+  images?: string[]
+  tokens?: number
 }
 
 class OpenAIProvider implements AIProvider {
   name = "OpenAI"
-  models = ["gpt-4", "gpt-3.5-turbo"]
+  models = ["gpt-4", "gpt-3.5-turbo", "gpt-4-vision-preview"]
 
-  async generateText(prompt: string, model: string, apiKey: string): Promise<string> {
+  async generateText(prompt: string, model: string, apiKey: string, files?: any[]): Promise<AIResponse> {
     try {
+      const messages: any[] = []
+
+      // Add file context if files are provided
+      if (files && files.length > 0) {
+        const fileContext = files.map(file => {
+          if (file.extractedText) {
+            return `File: ${file.name}\nContent: ${file.extractedText}`
+          }
+          return `File: ${file.name} (${file.type})`
+        }).join('\n\n')
+
+        messages.push({
+          role: "system",
+          content: `You have access to the following files:\n\n${fileContext}\n\nUse this information to answer the user's questions.`
+        })
+      }
+
+      // Add user message with image support
+      const userMessage: any = {
+        role: "user",
+        content: []
+      }
+
+      // Add text content
+      userMessage.content.push({
+        type: "text",
+        text: prompt
+      })
+
+      // Add images if present
+      if (files) {
+        files.forEach(file => {
+          if (file.type?.startsWith('image/') && file.url) {
+            userMessage.content.push({
+              type: "image_url",
+              image_url: {
+                url: file.url
+              }
+            })
+          }
+        })
+      }
+
+      messages.push(userMessage)
+
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -20,31 +303,79 @@ class OpenAIProvider implements AIProvider {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: model,
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 1000,
+          model: model === "gpt-4-vision-preview" ? "gpt-4-vision-preview" : model,
+          messages: messages,
+          max_tokens: 2000,
         }),
       })
 
       if (!response.ok) {
-        throw new Error(`OpenAI API error: ${response.statusText}`)
+        const error = await response.json()
+        throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`)
       }
 
       const data = await response.json()
-      return data.choices[0].message.content
+      return {
+        content: data.choices[0].message.content,
+        tokens: data.usage?.total_tokens
+      }
     } catch (error) {
       console.error("OpenAI API error:", error)
-      return "I apologize, but I'm having trouble connecting to OpenAI right now. Please try again later."
+      return {
+        content: "I apologize, but I'm having trouble connecting to OpenAI right now. Please check your API key and try again.",
+        tokens: 0
+      }
+    }
+  }
+
+  async generateImage(prompt: string, apiKey: string): Promise<string> {
+    try {
+      const response = await fetch("https://api.openai.com/v1/images/generations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          prompt: prompt,
+          n: 1,
+          size: "1024x1024",
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`OpenAI Image API error: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      return data.data[0].url
+    } catch (error) {
+      console.error("OpenAI Image API error:", error)
+      throw error
     }
   }
 }
 
 class AnthropicProvider implements AIProvider {
   name = "Anthropic"
-  models = ["claude-3-opus", "claude-3-sonnet"]
+  models = ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"]
 
-  async generateText(prompt: string, model: string, apiKey: string): Promise<string> {
+  async generateText(prompt: string, model: string, apiKey: string, files?: any[]): Promise<AIResponse> {
     try {
+      let fullPrompt = prompt
+
+      // Add file context
+      if (files && files.length > 0) {
+        const fileContext = files.map(file => {
+          if (file.extractedText) {
+            return `File: ${file.name}\nContent: ${file.extractedText}`
+          }
+          return `File: ${file.name} (${file.type})`
+        }).join('\n\n')
+
+        fullPrompt = `Context from uploaded files:\n\n${fileContext}\n\nUser question: ${prompt}`
+      }
+
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -54,8 +385,8 @@ class AnthropicProvider implements AIProvider {
         },
         body: JSON.stringify({
           model: model,
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }],
+          max_tokens: 2000,
+          messages: [{ role: "user", content: fullPrompt }],
         }),
       })
 
@@ -64,104 +395,80 @@ class AnthropicProvider implements AIProvider {
       }
 
       const data = await response.json()
-      return data.content[0].text
+      return {
+        content: data.content[0].text,
+        tokens: data.usage?.input_tokens + data.usage?.output_tokens
+      }
     } catch (error) {
       console.error("Anthropic API error:", error)
-      return "I apologize, but I'm having trouble connecting to Claude right now. Please try again later."
-    }
-  }
-}
-
-class GroqProvider implements AIProvider {
-  name = "Groq"
-  models = ["llama2-70b-4096", "mixtral-8x7b-32768"]
-
-  async generateText(prompt: string, model: string, apiKey: string): Promise<string> {
-    try {
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: model,
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 1000,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`Groq API error: ${response.statusText}`)
+      return {
+        content: "I apologize, but I'm having trouble connecting to Claude right now. Please check your API key and try again.",
+        tokens: 0
       }
-
-      const data = await response.json()
-      return data.choices[0].message.content
-    } catch (error) {
-      console.error("Groq API error:", error)
-      return "I apologize, but I'm having trouble connecting to Groq right now. Please try again later."
     }
   }
 }
 
-// Simulated providers for demo
-class SimulatedProvider implements AIProvider {
-  name: string
-  models: string[]
-
-  constructor(name: string, models: string[]) {
-    this.name = name
-    this.models = models
-  }
-
-  async generateText(prompt: string, model: string): Promise<string> {
-    // Simulate API delay
-    await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 2000))
-
-    const responses = [
-      `Hello! I'm ${this.name} (${model}). I understand you're asking about: "${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}". Here's my response based on my training data.`,
-      `That's an interesting question! As ${this.name}, I can help you with that. Let me provide you with a comprehensive answer.`,
-      `Great question! Using ${model}, I can analyze this topic and provide you with detailed insights.`,
-      `I'd be happy to help you with that inquiry. Based on my knowledge as ${this.name}, here's what I can tell you.`,
-      `Thank you for your question. As an AI assistant powered by ${model}, I'll do my best to provide you with accurate information.`,
-    ]
-
-    return responses[Math.floor(Math.random() * responses.length)]
-  }
-}
-
+// Enhanced AI Service
 export class AIService {
   private providers: Map<string, AIProvider> = new Map()
   private apiKeys: Map<string, string> = new Map()
 
   constructor() {
-    // Initialize providers
     this.providers.set("ChatGPT", new OpenAIProvider())
     this.providers.set("Claude", new AnthropicProvider())
-    this.providers.set("Grok", new GroqProvider())
-    this.providers.set("DeepSeek", new SimulatedProvider("DeepSeek", ["deepseek-chat", "deepseek-coder"]))
-    this.providers.set("Gemini", new SimulatedProvider("Gemini", ["gemini-pro", "gemini-pro-vision"]))
+
+    // Load API keys from environment or localStorage
+    this.loadApiKeys()
+  }
+
+  private loadApiKeys() {
+    // Try to load from environment first
+    if (typeof window !== 'undefined') {
+      const openaiKey = localStorage.getItem('openai_api_key') || process.env.OPENAI_API_KEY
+      const anthropicKey = localStorage.getItem('anthropic_api_key') || process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY
+
+      if (openaiKey) this.apiKeys.set("ChatGPT", openaiKey)
+      if (anthropicKey) this.apiKeys.set("Claude", anthropicKey)
+    }
   }
 
   setApiKey(provider: string, apiKey: string) {
     this.apiKeys.set(provider, apiKey)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(`${provider.toLowerCase()}_api_key`, apiKey)
+    }
   }
 
-  async generateResponse(provider: string, model: string, prompt: string): Promise<string> {
+  async generateResponse(provider: string, model: string, prompt: string, files?: any[]): Promise<AIResponse> {
     const aiProvider = this.providers.get(provider)
     if (!aiProvider) {
       throw new Error(`Provider ${provider} not found`)
     }
 
-    const apiKey = this.apiKeys.get(provider) || ""
-
-    // For demo purposes, use simulated responses if no API key
-    if (!apiKey && (provider === "ChatGPT" || provider === "Claude" || provider === "Grok")) {
-      const simulatedProvider = new SimulatedProvider(provider, aiProvider.models)
-      return simulatedProvider.generateText(prompt, model)
+    const apiKey = this.apiKeys.get(provider)
+    if (!apiKey) {
+      return {
+        content: `Please set your ${provider} API key in settings to use this model.`,
+        tokens: 0
+      }
     }
 
-    return aiProvider.generateText(prompt, model, apiKey)
+    return aiProvider.generateText(prompt, model, apiKey, files)
+  }
+
+  async generateImage(provider: string, prompt: string): Promise<string> {
+    const aiProvider = this.providers.get(provider)
+    if (!aiProvider?.generateImage) {
+      throw new Error(`Image generation not supported for ${provider}`)
+    }
+
+    const apiKey = "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"
+    if (!apiKey) {
+      throw new Error(`API key not set for ${provider}`)
+    }
+
+    return aiProvider.generateImage(prompt, apiKey)
   }
 
   getAvailableProviders(): string[] {
@@ -171,6 +478,10 @@ export class AIService {
   getModelsForProvider(provider: string): string[] {
     const aiProvider = this.providers.get(provider)
     return aiProvider ? aiProvider.models : []
+  }
+
+  hasApiKey(provider: string): boolean {
+    return this.apiKeys.has(provider)
   }
 }
 

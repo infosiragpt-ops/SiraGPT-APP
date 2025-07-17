@@ -49,7 +49,7 @@ export default function ModelsPage() {
           'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
         }
       })
-      
+
       if (response.ok) {
         const data = await response.json()
         setModels(data.models)
@@ -64,7 +64,7 @@ export default function ModelsPage() {
 
   const handleCreateModel = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/models`, {
         method: 'POST',
@@ -74,7 +74,7 @@ export default function ModelsPage() {
         },
         body: JSON.stringify(formData)
       })
-      
+
       if (response.ok) {
         toast.success('Model created successfully')
         setIsDialogOpen(false)
@@ -100,7 +100,7 @@ export default function ModelsPage() {
         },
         body: JSON.stringify({ isActive: !currentStatus })
       })
-      
+
       if (response.ok) {
         toast.success('Model status updated')
         loadModels()
@@ -115,7 +115,7 @@ export default function ModelsPage() {
 
   const deleteModel = async (modelId: string) => {
     if (!confirm('Are you sure you want to delete this model?')) return
-    
+
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/models/${modelId}`, {
         method: 'DELETE',
@@ -123,7 +123,7 @@ export default function ModelsPage() {
           'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
         }
       })
-      
+
       if (response.ok) {
         toast.success('Model deleted successfully')
         loadModels()
@@ -158,52 +158,52 @@ export default function ModelsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="name">Model Name</Label>
-                  <Input 
-                    id="name" 
-                    placeholder="e.g., gpt-4" 
+                  <Input
+                    id="name"
+                    placeholder="e.g., gpt-4"
                     value={formData.name}
-                    onChange={(e) => setFormData({...formData, name: e.target.value})}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     required
                   />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="displayName">Display Name</Label>
-                  <Input 
-                    id="displayName" 
-                    placeholder="e.g., GPT-4" 
+                  <Input
+                    id="displayName"
+                    placeholder="e.g., GPT-4"
                     value={formData.displayName}
-                    onChange={(e) => setFormData({...formData, displayName: e.target.value})}
+                    onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
                     required
                   />
                 </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="provider">Provider</Label>
-                <Input 
-                  id="provider" 
-                  placeholder="e.g., OpenAI" 
+                <Input
+                  id="provider"
+                  placeholder="e.g., OpenAI"
                   value={formData.provider}
-                  onChange={(e) => setFormData({...formData, provider: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
                   required
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="description">Description</Label>
-                <Textarea 
-                  id="description" 
-                  placeholder="Enter model description" 
+                <Textarea
+                  id="description"
+                  placeholder="Enter model description"
                   value={formData.description}
-                  onChange={(e) => setFormData({...formData, description: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="apiKey">API Key (Optional)</Label>
-                <Input 
-                  id="apiKey" 
+                <Input
+                  id="apiKey"
                   type="password"
-                  placeholder="Enter API key if required" 
+                  placeholder="Enter API key if required"
                   value={formData.apiKey}
-                  onChange={(e) => setFormData({...formData, apiKey: e.target.value})}
+                  onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
                 />
               </div>
               <Button type="submit" className="w-full">Add Model</Button>
@@ -282,8 +282,8 @@ export default function ModelsPage() {
                   <TableCell>{model.provider}</TableCell>
                   <TableCell>
                     <div className="flex items-center space-x-2">
-                      <Switch 
-                        checked={model.isActive} 
+                      <Switch
+                        checked={model.isActive}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
                       />
                       <Badge variant={model.isActive ? "default" : "secondary"}>
@@ -309,8 +309,8 @@ export default function ModelsPage() {
                           {model.isActive ? "Deactivate" : "Activate"}
                         </DropdownMenuItem>
                         <DropdownMenuItem>View Analytics</DropdownMenuItem>
-                        <DropdownMenuItem 
-                          className="text-red-600" 
+                        <DropdownMenuItem
+                          className="text-red-600"
                           onClick={() => deleteModel(model.id)}
                         >
                           Remove Model
