@@ -330,7 +330,7 @@ class OpenAIProvider implements AIProvider {
 
   async generateImage(prompt: string, apiKey: string): Promise<string> {
     try {
-      console.log("generateImage ai.ts");
+      console.log("generateImage ai.ts", apiKey);
 
       const response = await fetch("https://api.openai.com/v1/images/generations", {
         method: "POST",
@@ -339,7 +339,7 @@ class OpenAIProvider implements AIProvider {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          id: '',
+
           model: "dall-e-3",
           prompt: prompt,
           n: 1,

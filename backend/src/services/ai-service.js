@@ -1,4 +1,6 @@
 
+const prisma = require('../config/database');
+
 class OpenAIProvider {
     constructor() {
         this.name = "OpenAI";
@@ -6,8 +8,26 @@ class OpenAIProvider {
         this.imageModels = ["dall-e-3"];
     }
 
-    async generateText(prompt, model, apiKey) {
+    async generateText(prompt, model, apiKey, chatId) {
         try {
+            // Step 1: get previous chat history from DB
+            const history = await prisma.message.findMany({
+                where: { chatId },
+                orderBy: { timestamp: 'asc' }
+            });
+
+            // Step 2: convert DB messages to OpenAI format
+            const messages = history.map(m => ({
+                role: m.role === 'USER' ? 'user' : 'assistant',
+                content: m.content
+            }));
+
+            console.log(messages);
+
+            // Step 3: add current prompt at the end
+            messages.push({ role: "user", content: prompt });
+
+            // Step 4: call OpenAI API with full conversation
             const response = await fetch("https://api.openai.com/v1/chat/completions", {
                 method: "POST",
                 headers: {
@@ -16,14 +36,12 @@ class OpenAIProvider {
                 },
                 body: JSON.stringify({
                     model: model,
-                    messages: [{ role: "user", content: prompt }],
-                    max_tokens: 1000,
-                    // tools: [{ "type": "image_generation" }],
-
+                    messages: messages,
+                    max_tokens: 1000
                 }),
             });
 
-            console.log(response);
+            console.log("OpenAI API response status:", response.status);
 
             if (!response.ok) {
                 throw new Error(`OpenAI API error: ${response.statusText}`);
@@ -38,6 +56,7 @@ class OpenAIProvider {
     }
 
     async generateImage(prompt, model, apiKey) {
+
         try {
             const response = await fetch("https://api.openai.com/v1/images/generations", {
                 method: "POST",
@@ -177,7 +196,7 @@ class AIService {
         this.apiKeys.set(provider, apiKey);
     }
 
-    async generateResponse(provider, model, prompt) {
+    async generateResponse(provider, model, prompt, chatId) {
         const aiProvider = this.providers.get(provider);
         if (!aiProvider) {
             throw new Error(`Provider ${provider} not found`);
@@ -189,7 +208,7 @@ class AIService {
             const simulatedProvider = new SimulatedProvider(provider, aiProvider.models);
             return simulatedProvider.generateText(prompt, model);
         }
-        return aiProvider.generateText(prompt, model, apiKey);
+        return aiProvider.generateText(prompt, model, apiKey, chatId);
     }
 
     async generateImageResponse(provider, model, prompt) {

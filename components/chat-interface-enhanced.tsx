@@ -116,7 +116,7 @@ const ApiKeysDialog = () => {
 }
 
 // Image Generation Dialog
-const ImageGenerationDialog = ({ onImageGenerated }: { onImageGenerated: (imageUrl: string) => void }) => {
+/*const ImageGenerationDialog = ({ onImageGenerated }: { onImageGenerated: (imageUrl: string) => void }) => {
   const [isOpen, setIsOpen] = React.useState(false)
   const [prompt, setPrompt] = React.useState('')
   const [isGenerating, setIsGenerating] = React.useState(false)
@@ -183,7 +183,7 @@ const ImageGenerationDialog = ({ onImageGenerated }: { onImageGenerated: (imageU
       </DialogContent>
     </Dialog>
   )
-}
+}*/
 
 // Enhanced Model Selector
 const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels }: any) => {
@@ -634,9 +634,9 @@ export default function ChatInterface() {
           {/* Function buttons row */}
           <div className="flex flex-wrap items-center justify-start gap-2">
             <FileUploadDialog onFilesUploaded={handleFilesUploaded} />
-            <ImageGenerationDialog onImageGenerated={handleImageGenerated} />
+            {/* <ImageGenerationDialog onImageGenerated={handleImageGenerated} /> */}
 
-            <Button
+            {/* <Button
               variant="outline"
               size="sm"
               onClick={() => setIsRecording((prev) => !prev)}
@@ -652,17 +652,17 @@ export default function ChatInterface() {
               <Badge variant="secondary" className="text-xs ml-1">
                 Soon
               </Badge>
-            </Button>
+            </Button> */}
 
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={isSearching || !input.trim()}
-              className="flex items-center gap-2 bg-transparent"
-            >
-              {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
-              Web Search
-            </Button>
+            {/* <Button
+                variant="outline"
+                size="sm"
+                disabled={isSearching || !input.trim()}
+                className="flex items-center gap-2 bg-transparent"
+              >
+                {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4" />}
+                Web Search
+              </Button> */}
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
