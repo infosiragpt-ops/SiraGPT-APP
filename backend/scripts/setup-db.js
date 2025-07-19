@@ -1,7 +1,8 @@
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient(
+);
 
 async function main() {
   console.log('🚀 Setting up database...');
@@ -9,7 +10,7 @@ async function main() {
   try {
     // Create admin user
     const hashedPassword = await bcrypt.hash('password', 12);
-    
+
     const adminUser = await prisma.user.upsert({
       where: { email: 'admin@example.com' },
       update: {},
@@ -52,7 +53,7 @@ async function main() {
       const user = demoUsers[Math.floor(Math.random() * demoUsers.length)];
       const models = ['ChatGPT', 'Claude', 'Grok', 'DeepSeek', 'Gemini'];
       const model = models[Math.floor(Math.random() * models.length)];
-      
+
       const chat = await prisma.chat.create({
         data: {
           userId: user.id,
@@ -67,8 +68,8 @@ async function main() {
           data: {
             chatId: chat.id,
             role: j % 2 === 0 ? 'USER' : 'ASSISTANT',
-            content: j % 2 === 0 
-              ? `This is a demo user message ${j + 1}` 
+            content: j % 2 === 0
+              ? `This is a demo user message ${j + 1}`
               : `This is a demo AI response ${j + 1} from ${model}`,
             tokens: j % 2 === 1 ? Math.floor(Math.random() * 500) + 100 : null,
           },
@@ -85,7 +86,7 @@ async function main() {
       const plan = plans[Math.floor(Math.random() * plans.length)];
       const providers = ['STRIPE', 'PAYPAL', 'MERCADOPAGO'];
       const provider = providers[Math.floor(Math.random() * providers.length)];
-      
+
       await prisma.payment.create({
         data: {
           userId: user.id,
@@ -105,7 +106,7 @@ async function main() {
       const user = demoUsers[Math.floor(Math.random() * demoUsers.length)];
       const models = ['ChatGPT', 'Claude', 'Grok', 'DeepSeek', 'Gemini'];
       const model = models[Math.floor(Math.random() * models.length)];
-      
+
       await prisma.apiUsage.create({
         data: {
           userId: user.id,
@@ -129,7 +130,7 @@ async function main() {
         { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: 'docx' }
       ];
       const fileType = fileTypes[Math.floor(Math.random() * fileTypes.length)];
-      
+
       await prisma.file.create({
         data: {
           userId: user.id,

@@ -330,6 +330,8 @@ class OpenAIProvider implements AIProvider {
 
   async generateImage(prompt: string, apiKey: string): Promise<string> {
     try {
+      console.log("generateImage ai.ts");
+
       const response = await fetch("https://api.openai.com/v1/images/generations", {
         method: "POST",
         headers: {
@@ -337,17 +339,22 @@ class OpenAIProvider implements AIProvider {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
+          id: '',
+          model: "dall-e-3",
           prompt: prompt,
           n: 1,
           size: "1024x1024",
         }),
       })
 
+
       if (!response.ok) {
         throw new Error(`OpenAI Image API error: ${response.statusText}`)
       }
 
       const data = await response.json()
+      console.log(data.data[0].url, "generateImage");
+
       return data.data[0].url
     } catch (error) {
       console.error("OpenAI Image API error:", error)

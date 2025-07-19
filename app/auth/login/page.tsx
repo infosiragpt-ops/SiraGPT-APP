@@ -38,9 +38,11 @@ export default function LoginPage() {
         toast.success("Login successful!")
         router.push("/chat")
       } else {
-        toast.error("Invalid credentials. Try admin@example.com / password")
+        toast.error("Invalid credentials.")
       }
     } catch (error) {
+      console.log("Login failed. Please try again.", error);
+
       toast.error("Login failed. Please try again.")
     } finally {
       setIsLoading(false)

@@ -2,7 +2,7 @@
 class OpenAIProvider {
     constructor() {
         this.name = "OpenAI";
-        this.models = ["gpt-4", "gpt-3.5-turbo"];
+        this.models = ["gpt-4", "gpt-4.1"];
         this.imageModels = ["dall-e-3"];
     }
 
@@ -18,8 +18,12 @@ class OpenAIProvider {
                     model: model,
                     messages: [{ role: "user", content: prompt }],
                     max_tokens: 1000,
+                    // tools: [{ "type": "image_generation" }],
+
                 }),
             });
+
+            console.log(response);
 
             if (!response.ok) {
                 throw new Error(`OpenAI API error: ${response.statusText}`);
@@ -28,7 +32,7 @@ class OpenAIProvider {
             const data = await response.json();
             return data.choices[0].message.content;
         } catch (error) {
-            console.error("OpenAI API error:", error);
+            console.error("OpenAI API errors:", error);
             return "I apologize, but I'm having trouble connecting to OpenAI right now. Please try again later.";
         }
     }
@@ -46,9 +50,17 @@ class OpenAIProvider {
                     prompt: prompt,
                     n: 1,
                     size: "1024x1024",
+
                 }),
             });
 
+
+            console.log(JSON.stringify({
+                model: model,
+                prompt: prompt,
+                n: 1,
+                size: "1024x1024",
+            }));
             if (!response.ok) {
                 throw new Error(`OpenAI Image API error: ${response.statusText}`);
             }

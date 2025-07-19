@@ -7,7 +7,7 @@ class ApiClient {
 
   constructor(baseURL: string) {
     this.baseURL = baseURL;
-    
+
     // Get token from localStorage on client side
     if (typeof window !== 'undefined') {
       this.token = localStorage.getItem('auth-token');
@@ -16,7 +16,7 @@ class ApiClient {
 
   private async request(endpoint: string, options: RequestInit = {}) {
     const url = `${this.baseURL}${endpoint}`;
-    
+
     const config: RequestInit = {
       headers: {
         'Content-Type': 'application/json',
@@ -29,7 +29,7 @@ class ApiClient {
 
     try {
       const response = await fetch(url, config);
-      
+
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Network error' }));
         throw new Error(error.error || `HTTP ${response.status}`);
@@ -59,11 +59,11 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    
+
     if (result.token) {
       this.setToken(result.token);
     }
-    
+
     return result;
   }
 
@@ -72,11 +72,11 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    
+
     if (result.token) {
       this.setToken(result.token);
     }
-    
+
     return result;
   }
 
@@ -165,6 +165,12 @@ class ApiClient {
       body: JSON.stringify(data),
     });
   }
+  /*async generateAI(data: { model: string; messages: any[]; chatId?: string; files?: string[] }) {
+    return this.request('/ai/generate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }*/
 
   async getAIModels() {
     return this.request('/ai/models');

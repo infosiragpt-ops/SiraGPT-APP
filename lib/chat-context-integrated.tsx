@@ -12,7 +12,7 @@ interface Message {
   content: string
   tokens?: number
   timestamp: string
-  files?: any[]
+  files?: any[],
 }
 
 interface Chat {
@@ -141,6 +141,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       console.log("addMessage working");
 
       try {
+        const userMessage: Message = {
+          id: `msg-${Date.now()}`,
+          chatId: currentChat.id,
+          role: "USER",
+          content,
+          timestamp: new Date().toDateString(),
+        };
+
+        {
+          const updatedMessages = [...currentChat.messages, userMessage]
+          const updatedChat = {
+            ...currentChat,
+            messages: updatedMessages,
+            title: '',
+            updatedAt: new Date().toDateString(),
+          }
+
+          setCurrentChat(updatedChat)
+
+          setChats((prev) => prev.map((chat) => (chat.id === currentChat.id ? updatedChat : chat)))
+        }
         // Generate AI response with file context
         const response = await apiClient.generateAI({
           model: selectedModel,
@@ -169,6 +190,86 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [currentChat, user, token, selectedModel, uploadedFiles],
   )
 
+  // const addMessage = useCallback(
+  //   async (content: string, fileIds?: string[]) => {
+  //     // 1. Shuruaati checks
+  //     console.log('log working');
+
+  //     if (!currentChat || !user || !token || !content.trim()) return;
+
+  //     setIsLoading(true);
+  //     const chatId = currentChat.id;
+
+  //     // 2. User ka naya message object banayein (for Optimistic UI)
+  //     // Isse user ka message turant screen par dikh jaata hai.
+  //     const userMessage: Message = {
+  //       id: `user-msg-${Date.now()}`,
+  //       role: 'USER',
+  //       content: content,
+  //       timestamp: new Date().toISOString(),
+  //       chatId: chatId,
+  //       // tokens: 0, // Agar Message type mein hai to add karein
+  //     };
+
+  //     // 3. UI ko turant update karein
+  //     setCurrentChat((prevChat) => ({
+  //       ...prevChat!,
+  //       messages: [...prevChat!.messages, userMessage],
+  //     }));
+
+  //     // 4. API ke liye poori chat history taiyar karein
+  //     // Yahi sabse zaroori hissa hai context ke liye.
+  //     const apiMessages = [...currentChat.messages, userMessage].map(msg => ({
+  //       role: msg.role === 'USER' ? 'user' : 'assistant',
+  //       content: msg.content,
+  //     }));
+
+  //     try {
+  //       // 5. Backend ko EK hi API call karein, lekin is baar poori history ke saath
+  //       // Hum ab 'prompt' nahi, balki 'messages' array bhejenge.
+  //       const aiResponse = await apiClient.generateAI({
+  //         model: selectedModel,
+  //         chatId: chatId,
+  //         messages: apiMessages, // <-- BADLAV #1: 'prompt' ke bajaye 'messages'
+  //         files: fileIds || uploadedFiles.map(f => f.id),
+  //       });
+
+  //       // 6. AI ka jawab object banayein
+  //       // Man lete hain ki `generateAI` ab AI ka message return karta hai
+  //       const aiMessage: Message = {
+  //         id: aiResponse.messageId || `ai-msg-${Date.now()}`,
+  //         role: 'ASSISTANT',
+  //         content: aiResponse.content,
+  //         tokens: aiResponse.tokens,
+  //         timestamp: new Date().toISOString(),
+  //         chatId: chatId,
+  //       };
+
+  //       // 7. Final state ko update karein. DOBARA FETCH KARNE KI ZAROORAT NAHI.
+  //       // BADLAV #2: apiClient.getChat() ko hata diya gaya hai.
+  //       setCurrentChat((prevChat) => ({
+  //         ...prevChat!,
+  //         messages: [...prevChat!.messages, aiMessage],
+  //       }));
+
+  //       setChats((prev) =>
+  //         prev.map((chat) => (chat.id === chatId ? { ...chat, messages: [...chat.messages, aiMessage] } : chat))
+  //       );
+
+  //       setUploadedFiles([]);
+
+  //     } catch (error) {
+  //       console.error("Failed to generate AI response:", error);
+  //       setCurrentChat((prevChat) => ({
+  //         ...prevChat!,
+  //         messages: prevChat!.messages.filter(msg => msg.id !== userMessage.id),
+  //       }));
+  //     } finally {
+  //       setIsLoading(false);
+  //     }
+  //   },
+  //   [currentChat, user, token, selectedModel, uploadedFiles, setCurrentChat, setChats, setUploadedFiles],
+  // );
   const clearCurrentChat = useCallback(async () => {
     if (!currentChat || !token) return
 
