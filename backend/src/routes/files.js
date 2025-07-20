@@ -5,8 +5,14 @@ const fileProcessor = require('../services/fileProcessor');
 const prisma = require('../config/database');
 const fs = require('fs').promises;
 const path = require('path');
+const OpenAI = require('openai');
 
 const router = express.Router();
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // Upload files
 router.post('/upload', authenticateToken, upload.array('files', 5), async (req, res) => {
@@ -25,6 +31,23 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
         // Generate thumbnail for images
         const thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
         
+        // Upload to OpenAI Files API if it's a supported file type
+        let openaiFileId = null;
+        if (file.mimetype === 'application/pdf' || 
+            file.mimetype.startsWith('text/') ||
+            file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+          try {
+            const fileStream = await fs.readFile(file.path);
+            const openaiFile = await openai.files.create({
+              file: new File([fileStream], file.originalname, { type: file.mimetype }),
+              purpose: 'assistants'
+            });
+            openaiFileId = openaiFile.id;
+          } catch (openaiError) {
+            console.error('OpenAI file upload error:', openaiError);
+          }
+        }
+        
         // Save file record to database
         const fileRecord = await prisma.file.create({
           data: {
@@ -34,7 +57,8 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
             mimeType: file.mimetype,
             size: file.size,
             path: file.path,
-            extractedText: result.extractedText
+            extractedText: result.extractedText,
+            openaiFileId: openaiFileId
           }
         });
 
@@ -46,6 +70,7 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
           url: `/uploads/${req.user.id}/${file.filename}`,
           thumbnailUrl: thumbnailPath ? `/uploads/${req.user.id}/${path.basename(thumbnailPath)}` : null,
           extractedText: result.extractedText,
+          openaiFileId: openaiFileId,
           success: result.success,
           error: result.error
         });

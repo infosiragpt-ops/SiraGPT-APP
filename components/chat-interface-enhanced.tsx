@@ -21,7 +21,8 @@ import {
   Eye,
   Download,
   Palette,
-  Camera
+  Camera,
+  Plus
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -234,29 +235,22 @@ const FileUploadDialog = ({ onFilesUploaded }: { onFilesUploaded: (files: any[])
   const [isUploading, setIsUploading] = React.useState(false)
   const [dragActive, setDragActive] = React.useState(false)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const { user } = useAuth()
 
   const handleFiles = async (files: FileList) => {
     if (files.length === 0) return
 
     setIsUploading(true)
     try {
-      const uploadedFiles = []
-
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        const fileData = {
-          id: `file-${Date.now()}-${i}`,
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          url: URL.createObjectURL(file),
-          extractedText: await extractTextFromFile(file)
-        }
-        uploadedFiles.push(fileData)
+      // Upload files to backend
+      const response = await apiClient.uploadFiles(files)
+      
+      if (response.files) {
+        onFilesUploaded(response.files)
+        toast.success(`${response.files.length} file(s) uploaded successfully`)
+      } else {
+        toast.error('File upload failed')
       }
-
-      onFilesUploaded(uploadedFiles)
-      toast.success(`${files.length} file(s) uploaded successfully`)
       setIsOpen(false)
     } catch (error) {
       console.error('File upload failed:', error)
@@ -264,22 +258,6 @@ const FileUploadDialog = ({ onFilesUploaded }: { onFilesUploaded: (files: any[])
     } finally {
       setIsUploading(false)
     }
-  }
-
-  const extractTextFromFile = async (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      if (file.type.startsWith('text/')) {
-        const reader = new FileReader()
-        reader.onload = (e) => resolve(e.target?.result as string || '')
-        reader.readAsText(file)
-      } else if (file.type === 'application/pdf') {
-        resolve(`PDF file: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`)
-      } else if (file.type.startsWith('image/')) {
-        resolve(`Image file: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`)
-      } else {
-        resolve(`File: ${file.name} (${file.type})`)
-      }
-    })
   }
 
   const handleDrag = (e: React.DragEvent) => {
@@ -392,6 +370,15 @@ const FileDisplay = ({ files, onRemove }: { files: any[]; onRemove: (index: numb
 
 // Enhanced Message Component
 const MessageComponent = ({ message, user }: { message: any; user: any }) => {
+  // Parse files if they exist
+  let parsedFiles = []
+  if (message.files) {
+    try {
+      parsedFiles = typeof message.files === 'string' ? JSON.parse(message.files) : message.files
+    } catch (e) {
+      parsedFiles = []
+    }
+  }
 
 
   return (
@@ -409,12 +396,12 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
           <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
 
           {/* Display generated images */}
-          {message.images && message.images.length > 0 && (
+          {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image') && (
             <div className="space-y-2">
-              {message.images.map((imageUrl: string, index: number) => (
+              {parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
                 <div key={index} className="relative">
                   <img
-                    src={imageUrl}
+                    src={file.url}
                     alt="Generated image"
                     className="max-w-full h-auto rounded-lg"
                   />
@@ -423,7 +410,7 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
                       size="sm"
                       variant="secondary"
                       className="h-6 w-6 p-0"
-                      onClick={() => window.open(imageUrl, '_blank')}
+                      onClick={() => window.open(file.url, '_blank')}
                     >
                       <Eye className="h-3 w-3" />
                     </Button>
@@ -433,7 +420,7 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
                       className="h-6 w-6 p-0"
                       onClick={() => {
                         const a = document.createElement('a')
-                        a.href = imageUrl
+                        a.href = file.url
                         a.download = `generated-image-${Date.now()}.png`
                         a.click()
                       }}
@@ -447,21 +434,19 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
           )}
 
           {/* Display attached files */}
-          {message.files && message.files.length > 0 && (
+          {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type !== 'image') && (
             <div className="mt-2 pt-2 border-t border-border/20">
               <div className="flex flex-wrap gap-1">
-                {message.files.map((file: any, index: number) => (
-                  <div key={index} className="flex items-center gap-1">
-                    {file.type?.startsWith('image/') ? (
-                      <img src={file.url} alt={file.name} className="w-8 h-8 object-cover rounded" />
-                    ) : (
+                {parsedFiles
+                  .filter((f: any) => f.type !== 'image')
+                  .map((file: any, index: number) => (
+                    <div key={index} className="flex items-center gap-1">
                       <FileText className="h-4 w-4" />
-                    )}
-                    <Badge variant="outline" className="text-xs">
-                      {file.name}
-                    </Badge>
-                  </div>
-                ))}
+                      <Badge variant="outline" className="text-xs">
+                        {file.name || 'File'}
+                      </Badge>
+                    </div>
+                  ))}
               </div>
             </div>
           )}
@@ -503,6 +488,8 @@ export default function ChatInterface() {
   const [isRecording, setIsRecording] = React.useState(false)
   const [isSearching, setIsSearching] = React.useState(false)
   const [showInstructions, setShowInstructions] = React.useState(false)
+  const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
+  const [chatType, setChatType] = React.useState<'text' | 'image'>('text')
 
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
@@ -523,11 +510,40 @@ export default function ChatInterface() {
       createNewChat()
     }
   }, [currentChat, createNewChat, availableModels, selectedModel])
+  
   const handleSend = async () => {
     if (!input.trim() || isLoading || !currentChat) return
+    
     const msg = input.trim()
     setInput("")
-    await addMessage(msg)
+    
+    if (chatType === 'image') {
+      await handleImageGeneration(msg)
+    } else {
+      await addMessage(msg, uploadedFiles.map(f => f.id))
+    }
+  }
+  
+  const handleImageGeneration = async (prompt: string) => {
+    if (!currentChat) return
+    
+    setIsGeneratingImage(true)
+    try {
+      const response = await apiClient.generateImage({
+        prompt,
+        chatId: currentChat.id
+      })
+      
+      // Reload chat to get updated messages
+      const chatResponse = await apiClient.getChat(currentChat.id)
+      // Update chat context with new messages
+      toast.success('Image generated successfully!')
+    } catch (error) {
+      console.error('Image generation failed:', error)
+      toast.error('Image generation failed. Please try again.')
+    } finally {
+      setIsGeneratingImage(false)
+    }
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -541,11 +557,14 @@ export default function ChatInterface() {
     setUploadedFiles([...uploadedFiles, ...files])
   }
 
-  const handleImageGenerated = (imageUrl: string) => {
-    // Add generated image to chat
-    const imageMessage = `Here's the image I generated for you:`
-    setInput(imageMessage)
-    // You could also automatically send it
+  const createNewImageChat = () => {
+    setChatType('image')
+    createNewChat()
+  }
+  
+  const createNewTextChat = () => {
+    setChatType('text')
+    createNewChat()
   }
 
   const removeFile = (index: number) => {
@@ -571,6 +590,11 @@ export default function ChatInterface() {
               setSelectedModel={setSelectedModel}
               availableModels={availableModels}
             />
+            <div className="flex items-center gap-2">
+              <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
+                {chatType === 'text' ? 'Text Chat' : 'Image Generation'}
+              </Badge>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <ApiKeysDialog />
@@ -589,7 +613,7 @@ export default function ChatInterface() {
             <MessageComponent key={message.id} message={message} user={user} />
           ))}
 
-          {isLoading && (
+          {(isLoading || isGeneratingImage) && (
             <div className="flex gap-3 justify-start">
               <Avatar className="h-8 w-8 flex-shrink-0">
                 <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
@@ -597,7 +621,9 @@ export default function ChatInterface() {
               <Card className="bg-muted p-3">
                 <div className="flex items-center gap-2">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  <span className="text-sm">Thinking...</span>
+                  <span className="text-sm">
+                    {isGeneratingImage ? 'Generating image...' : 'Thinking...'}
+                  </span>
                 </div>
               </Card>
             </div>
@@ -609,7 +635,9 @@ export default function ChatInterface() {
       <div className="border-t border-border/40 p-4">
         <div className="max-w-4xl mx-auto space-y-3">
           {/* File Display */}
-          <FileDisplay files={uploadedFiles} onRemove={removeFile} />
+          {chatType === 'text' && (
+            <FileDisplay files={uploadedFiles} onRemove={removeFile} />
+          )}
 
           {/* Input Area */}
           <div className="bg-background">
@@ -618,14 +646,27 @@ export default function ChatInterface() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Type your message here... (Try: 'generate image of a sunset')"
+                placeholder={
+                  chatType === 'image' 
+                    ? "Describe the image you want to generate..." 
+                    : "Type your message here..."
+                }
                 className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
-                disabled={isLoading}
+                disabled={isLoading || isGeneratingImage}
               />
 
               <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                <Button onClick={handleSend} disabled={!input.trim() || isLoading} size="sm" className="h-8 w-8 p-0">
-                  <Send className="h-4 w-4" />
+                <Button 
+                  onClick={handleSend} 
+                  disabled={!input.trim() || isLoading || isGeneratingImage} 
+                  size="sm" 
+                  className="h-8 w-8 p-0"
+                >
+                  {isGeneratingImage ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
                 </Button>
               </div>
             </div>
@@ -633,8 +674,29 @@ export default function ChatInterface() {
 
           {/* Function buttons row */}
           <div className="flex flex-wrap items-center justify-start gap-2">
-            <FileUploadDialog onFilesUploaded={handleFilesUploaded} />
-            {/* <ImageGenerationDialog onImageGenerated={handleImageGenerated} /> */}
+            {chatType === 'text' && (
+              <FileUploadDialog onFilesUploaded={handleFilesUploaded} />
+            )}
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={createNewTextChat}
+              className="flex items-center gap-2"
+            >
+              <MessageSquare className="h-4 w-4" />
+              New Text Chat
+            </Button>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={createNewImageChat}
+              className="flex items-center gap-2"
+            >
+              <Palette className="h-4 w-4" />
+              New Image Chat
+            </Button>
 
             {/* <Button
               variant="outline"
@@ -666,7 +728,10 @@ export default function ChatInterface() {
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
-            Press Enter to send, Shift+Enter for new line. Try: "generate image of..." for AI image creation
+            {chatType === 'image' 
+              ? 'Press Enter to generate image, Shift+Enter for new line'
+              : 'Press Enter to send, Shift+Enter for new line'
+            }
           </p>
         </div>
       </div>

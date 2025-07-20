@@ -138,7 +138,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (!currentChat || !user || !token) return
 
       setIsLoading(true)
-      console.log("addMessage working");
 
       try {
         const userMessage: Message = {
@@ -147,6 +146,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           role: "USER",
           content,
           timestamp: new Date().toDateString(),
+          files: fileIds && fileIds.length > 0 ? fileIds : undefined,
         };
 
         {
@@ -167,7 +167,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           model: selectedModel,
           prompt: content,
           chatId: currentChat.id,
-          files: fileIds || uploadedFiles.map(f => f.id),
+          files: fileIds || [],
         })
 
         // Reload the chat to get updated messages
@@ -187,7 +187,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false)
       }
     },
-    [currentChat, user, token, selectedModel, uploadedFiles],
+    [currentChat, user, token, selectedModel],
   )
 
   // const addMessage = useCallback(

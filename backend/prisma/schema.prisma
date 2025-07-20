@@ -99,6 +99,7 @@ model File {
   size        Int
   path        String
   extractedText String? @db.Text
+  openaiFileId String? // OpenAI Files API ID
   createdAt   DateTime @default(now())
 
   // Relations

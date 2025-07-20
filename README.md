@@ -6,6 +6,8 @@ A comprehensive AI platform supporting multiple LLM APIs with text, image, audio
 
 - 🤖 **Multi-LLM Support**: ChatGPT, Claude, Grok, DeepSeek, Gemini
 - 💬 **Real-time Chat**: Interactive chat interface with AI responses
+- 🖼️ **Image Generation**: DALL-E 3 integration for AI image creation
+- 📁 **File Upload**: Support for documents, images, and text files with AI analysis
 - 👥 **User Management**: Complete authentication and user profiles
 - 🔧 **Admin Panel**: Comprehensive admin dashboard with analytics
 - 💳 **Payment Integration**: PayPal and MercadoPago support
@@ -24,20 +26,33 @@ A comprehensive AI platform supporting multiple LLM APIs with text, image, audio
 2. **Install dependencies**
    \`\`\`bash
    npm install
+   cd backend && npm install
    \`\`\`
 
 3. **Set up environment variables**
    \`\`\`bash
    cp .env.local.example .env.local
+   cd backend && cp .env.example .env
    # Edit .env.local with your API keys
    \`\`\`
 
-4. **Run the development server**
+4. **Set up the database**
    \`\`\`bash
+   cd backend
+   npm run db:push
+   npm run db:setup
+   \`\`\`
+
+5. **Run the development servers**
+   \`\`\`bash
+   # Terminal 1 - Backend
+   cd backend && npm run dev
+   
+   # Terminal 2 - Frontend
    npm run dev
    \`\`\`
 
-5. **Open your browser**
+6. **Open your browser**
    Navigate to [http://localhost:3000](http://localhost:3000)
 
 ## Demo Credentials
@@ -63,6 +78,26 @@ PAYPAL_CLIENT_ID=your_paypal_client_id
 MERCADOPAGO_ACCESS_TOKEN=your_mercadopago_token
 \`\`\`
 
+## New Features
+
+### File Upload & Analysis
+- Upload documents (PDF, Word, Excel, PowerPoint)
+- Upload images with OCR text extraction
+- AI can analyze and answer questions about uploaded files
+- Files are processed and stored securely
+
+### Image Generation
+- Dedicated image generation chat mode
+- DALL-E 3 integration for high-quality images
+- Separate chat interface for image creation
+- Download and view generated images
+
+### Enhanced Chat Experience
+- File attachments in conversations
+- Visual file previews
+- Improved message display with file context
+- Better error handling and user feedback
+
 ## Project Structure
 
 \`\`\`
@@ -71,6 +106,10 @@ MERCADOPAGO_ACCESS_TOKEN=your_mercadopago_token
 │   ├── auth/              # Authentication pages
 │   ├── chat/              # Chat interface
 │   └── globals.css        # Global styles
+├── backend/               # Backend API server
+│   ├── src/               # Source code
+│   ├── prisma/            # Database schema
+│   └── uploads/           # File storage
 ├── components/            # React components
 │   ├── ui/               # UI components
 │   └── ...               # Feature components

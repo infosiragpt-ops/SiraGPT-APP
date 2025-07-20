@@ -165,6 +165,14 @@ class ApiClient {
       body: JSON.stringify(data),
     });
   }
+
+  async generateImage(data: { prompt: string; chatId?: string }) {
+    return this.request('/ai/generate-image', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   /*async generateAI(data: { model: string; messages: any[]; chatId?: string; files?: string[] }) {
     return this.request('/ai/generate', {
       method: 'POST',
