@@ -34,8 +34,17 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // CORS configuration
+// const corsOptions = {
+//   origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:3000'],
+//   credentials: true,
+//   optionsSuccessStatus: 200
+// };
+// app.use(cors(corsOptions));
+
 const corsOptions = {
-  origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:3000'],
+  origin: function (origin, callback) {
+    callback(null, true); // allow any origin
+  },
   credentials: true,
   optionsSuccessStatus: 200
 };

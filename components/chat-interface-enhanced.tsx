@@ -22,7 +22,8 @@ import {
   Download,
   Palette,
   Camera,
-  Plus
+  Plus,
+  MessageSquare
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -57,7 +58,7 @@ const ApiKeysDialog = () => {
   React.useEffect(() => {
     if (isOpen) {
       setKeys({
-        openai: localStorage.getItem('openai_api_key') || "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",
+        openai: process.env.OPENAI_API_KEY || "",
         anthropic: localStorage.getItem('anthropic_api_key') || ''
       })
     }
@@ -115,76 +116,6 @@ const ApiKeysDialog = () => {
     </Dialog>
   )
 }
-
-// Image Generation Dialog
-/*const ImageGenerationDialog = ({ onImageGenerated }: { onImageGenerated: (imageUrl: string) => void }) => {
-  const [isOpen, setIsOpen] = React.useState(false)
-  const [prompt, setPrompt] = React.useState('')
-  const [isGenerating, setIsGenerating] = React.useState(false)
-
-  const handleGenerate = async () => {
-    if (!prompt.trim()) return
-
-    setIsGenerating(true)
-    try {
-      const imageUrl = await aiService.generateImage('ChatGPT', prompt)
-      onImageGenerated(imageUrl)
-      toast.success('Image generated successfully')
-      setIsOpen(false)
-      setPrompt('')
-    } catch (error) {
-      console.error('Image generation failed:', error)
-      toast.error('Image generation failed. Please check your API key.')
-    } finally {
-      setIsGenerating(false)
-    }
-  }
-
-  return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="flex items-center gap-2">
-          <Palette className="h-4 w-4" />
-          Generate Image
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Generate Image with AI</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="image-prompt">Describe the image you want to create</Label>
-            <Textarea
-              id="image-prompt"
-              placeholder="A beautiful sunset over mountains..."
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              className="min-h-[100px]"
-            />
-          </div>
-          <Button
-            onClick={handleGenerate}
-            disabled={!prompt.trim() || isGenerating}
-            className="w-full"
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Generating...
-              </>
-            ) : (
-              <>
-                <Palette className="mr-2 h-4 w-4" />
-                Generate Image
-              </>
-            )}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}*/
 
 // Enhanced Model Selector
 const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels }: any) => {
@@ -244,7 +175,7 @@ const FileUploadDialog = ({ onFilesUploaded }: { onFilesUploaded: (files: any[])
     try {
       // Upload files to backend
       const response = await apiClient.uploadFiles(files)
-      
+
       if (response.files) {
         onFilesUploaded(response.files)
         toast.success(`${response.files.length} file(s) uploaded successfully`)
@@ -442,7 +373,7 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
                   .map((file: any, index: number) => (
                     <div key={index} className="flex items-center gap-1">
                       <FileText className="h-4 w-4" />
-                      <Badge variant="outline" className="text-xs">
+                      <Badge className="text-xs">
                         {file.name || 'File'}
                       </Badge>
                     </div>
@@ -480,6 +411,7 @@ export default function ChatInterface() {
     isLoading,
     setSelectedModel,
     uploadedFiles,
+    selectChat,
     setUploadedFiles,
     availableModels
   } = useChat()
@@ -495,45 +427,63 @@ export default function ChatInterface() {
   const chatCreationInitiated = React.useRef(false);
 
   // React.useEffect(() => {
+  //   if (currentChat || chatCreationInitiated.current) {
+  //     return;
+  //   }
+  //   // Add a check for !isLoading to prevent multiple calls
   //   if (!currentChat && availableModels.length > 0 && selectedModel) {
+  //     chatCreationInitiated.current = true;
   //     createNewChat()
   //   }
   // }, [currentChat, createNewChat, availableModels, selectedModel])
-
   React.useEffect(() => {
     if (currentChat || chatCreationInitiated.current) {
       return;
     }
-    // Add a check for !isLoading to prevent multiple calls
+
+    // Check if there's a chat id in localStorage
+    const savedChatId = localStorage.getItem('currentChatId');
+    if (savedChatId) {
+
+      // Maybe call API to load this chat into currentChat
+      selectChat(savedChatId)
+      return;
+    }
+
+    // First time after auth and no saved chat
     if (!currentChat && availableModels.length > 0 && selectedModel) {
       chatCreationInitiated.current = true;
       createNewChat()
+
     }
-  }, [currentChat, createNewChat, availableModels, selectedModel])
-  
+  }, [currentChat, createNewChat, availableModels, selectedModel]);
+
+  const loadChatById = async () => {
+
+  }
   const handleSend = async () => {
     if (!input.trim() || isLoading || !currentChat) return
-    
+
     const msg = input.trim()
     setInput("")
-    
+
     if (chatType === 'image') {
       await handleImageGeneration(msg)
     } else {
       await addMessage(msg, uploadedFiles.map(f => f.id))
     }
   }
-  
+
   const handleImageGeneration = async (prompt: string) => {
     if (!currentChat) return
-    
+
     setIsGeneratingImage(true)
     try {
       const response = await apiClient.generateImage({
         prompt,
         chatId: currentChat.id
       })
-      
+
       // Reload chat to get updated messages
       const chatResponse = await apiClient.getChat(currentChat.id)
       // Update chat context with new messages
@@ -561,7 +511,7 @@ export default function ChatInterface() {
     setChatType('image')
     createNewChat()
   }
-  
+
   const createNewTextChat = () => {
     setChatType('text')
     createNewChat()
@@ -597,7 +547,7 @@ export default function ChatInterface() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <ApiKeysDialog />
+            {/* <ApiKeysDialog /> */}
             <ThemeToggle />
             <Button variant="outline" size="sm" onClick={clearCurrentChat}>
               Clear Chat
@@ -647,8 +597,8 @@ export default function ChatInterface() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
                 placeholder={
-                  chatType === 'image' 
-                    ? "Describe the image you want to generate..." 
+                  chatType === 'image'
+                    ? "Describe the image you want to generate..."
                     : "Type your message here..."
                 }
                 className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
@@ -656,10 +606,10 @@ export default function ChatInterface() {
               />
 
               <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                <Button 
-                  onClick={handleSend} 
-                  disabled={!input.trim() || isLoading || isGeneratingImage} 
-                  size="sm" 
+                <Button
+                  onClick={handleSend}
+                  disabled={!input.trim() || isLoading || isGeneratingImage}
+                  size="sm"
                   className="h-8 w-8 p-0"
                 >
                   {isGeneratingImage ? (
@@ -677,8 +627,8 @@ export default function ChatInterface() {
             {chatType === 'text' && (
               <FileUploadDialog onFilesUploaded={handleFilesUploaded} />
             )}
-            
-            <Button
+
+            {/* <Button
               variant="outline"
               size="sm"
               onClick={createNewTextChat}
@@ -686,8 +636,8 @@ export default function ChatInterface() {
             >
               <MessageSquare className="h-4 w-4" />
               New Text Chat
-            </Button>
-            
+            </Button> */}
+
             <Button
               variant="outline"
               size="sm"
@@ -728,7 +678,7 @@ export default function ChatInterface() {
           </div>
 
           <p className="text-center text-xs text-muted-foreground">
-            {chatType === 'image' 
+            {chatType === 'image'
               ? 'Press Enter to generate image, Shift+Enter for new line'
               : 'Press Enter to send, Shift+Enter for new line'
             }

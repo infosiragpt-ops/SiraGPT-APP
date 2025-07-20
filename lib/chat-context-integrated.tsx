@@ -113,6 +113,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       newChat.messages = [initialMessage]
 
       setChats((prev) => [newChat, ...prev])
+      localStorage.setItem('currentChatId', newChat.id);
+
       setCurrentChat(newChat)
       setUploadedFiles([]) // Clear uploaded files for new chat
     } catch (error) {

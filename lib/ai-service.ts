@@ -432,7 +432,7 @@ export class AIService {
   private loadApiKeys() {
     // Try to load from environment first
     if (typeof window !== 'undefined') {
-      const openaiKey = localStorage.getItem('openai_api_key') || process.env.OPENAI_API_KEY
+      const openaiKey = process.env.OPENAI_API_KEY
       const anthropicKey = localStorage.getItem('anthropic_api_key') || process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY
 
       if (openaiKey) this.apiKeys.set("ChatGPT", openaiKey)
