@@ -52,7 +52,7 @@ cp .env.local.example .env.local
 
 ### 2. Database Setup
 
-Set up a PostgreSQL database and update the `DATABASE_URL` in your `.env.local` file.
+Set up a PostgreSQL database and update the `PRISMA_DATABASE_URL` in your `.env.local` file.
 
 ```bash
 # Generate Prisma client

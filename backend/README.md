@@ -202,7 +202,7 @@ PORT=5000
 NODE_ENV=development
 
 # Database
-DATABASE_URL="postgresql://..."
+PRISMA_DATABASE_URL="postgresql://..."
 
 # JWT
 JWT_SECRET="your-secret-key"

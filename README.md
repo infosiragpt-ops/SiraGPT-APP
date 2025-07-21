@@ -71,7 +71,7 @@ ANTHROPIC_API_KEY=your_anthropic_api_key
 GROQ_API_KEY=your_groq_api_key
 
 # Database (optional - uses mock data by default)
-DATABASE_URL=your_database_url
+PRISMA_DATABASE_URL=your_PRISMA_DATABASE_URL
 
 # Payment Providers (optional)
 PAYPAL_CLIENT_ID=your_paypal_client_id
