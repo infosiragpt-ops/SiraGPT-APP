@@ -2,10 +2,10 @@
   "name": "openwebui-backend",
   "version": "1.0.0",
   "description": "Complete backend for OpenWebUI platform",
-  "main": "src/server.js",
+  "main": "index.js",
   "scripts": {
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js",
+    "dev": "nodemon index.js",
+    "start": "node  index.js",
     "build": "echo 'Build complete'",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
