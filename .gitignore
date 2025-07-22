@@ -13,8 +13,6 @@
 /.next/
 /out/
 
-.backend 
-/backend
 
 # production
 /build
