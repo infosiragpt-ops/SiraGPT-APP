@@ -134,6 +134,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           c.id === chatId ? chat : c
         ))
         
+        // Store the current chat ID in localStorage
+        localStorage.setItem('currentChatId', chatId)
+        
         setUploadedFiles([]) // Clear uploaded files when switching chats
       } catch (error) {
         console.error("Failed to load chat:", error)

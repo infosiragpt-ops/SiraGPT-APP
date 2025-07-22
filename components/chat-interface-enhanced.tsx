@@ -465,16 +465,33 @@ export default function ChatInterface() {
 
   // Load chat type from localStorage on component mount
   React.useEffect(() => {
-    const savedChatType = localStorage.getItem('chatType') as 'text' | 'image'
-    if (savedChatType) {
-      setChatType(savedChatType)
+    // Determine chat type based on current chat messages
+    if (currentChat) {
+      const hasImageMessages = currentChat.messages.some(msg => 
+        msg.role === "ASSISTANT" && (
+          (msg.content.startsWith('http') && (msg.content.includes('oaidalleapiprodscus') || msg.content.includes('dalle'))) ||
+          (msg.files && JSON.parse(msg.files || '[]').some((f: any) => f.type === 'image'))
+        )
+      )
+      setChatType(hasImageMessages ? 'image' : 'text')
+    } else {
+      // Default to text chat for new chats
+      setChatType('text')
     }
-  }, [])
+  }, [currentChat])
 
-  // Save chat type to localStorage when it changes
+  // Update chat type when switching chats
   React.useEffect(() => {
-    localStorage.setItem('chatType', chatType)
-  }, [chatType])
+    if (currentChat) {
+      const hasImageMessages = currentChat.messages.some(msg => 
+        msg.role === "ASSISTANT" && (
+          (msg.content.startsWith('http') && (msg.content.includes('oaidalleapiprodscus') || msg.content.includes('dalle'))) ||
+          (msg.files && JSON.parse(msg.files || '[]').some((f: any) => f.type === 'image'))
+        )
+      )
+      setChatType(hasImageMessages ? 'image' : 'text')
+    }
+  }, [currentChat?.id])
 
   // React.useEffect(() => {
   //   if (currentChat || chatCreationInitiated.current) {
@@ -529,37 +546,13 @@ export default function ChatInterface() {
 
     setIsGeneratingImage(true)
     try {
-      // Add user message immediately for better UX
-      const userMessage = {
-        id: `msg-${Date.now()}`,
-        chatId: currentChat.id,
-        role: "USER" as const,
-        content: prompt,
-        timestamp: new Date().toISOString(),
-      }
-
-      // Update UI immediately with user message
-      const updatedChat = {
-        ...currentChat,
-        messages: [...currentChat.messages, userMessage]
-      }
-      
-      // Update the current chat context immediately
-      selectChat(currentChat.id) // This will trigger a reload from the context
-      
       const response = await apiClient.generateImage({
         prompt,
         chatId: currentChat.id
       })
 
-      // After successful generation, reload chat to get all updated messages including the AI response
-      const chatResponse = await apiClient.getChat(currentChat.id)
-      if (chatResponse.chat) {
-        // Update the chat context with the complete updated chat
-        const updatedChatWithAI = chatResponse.chat
-        // You might need to call a method to update the current chat in context
-        // This depends on your chat context implementation
-      }
+      // Reload the current chat to get the updated messages
+      await selectChat(currentChat.id)
       
       toast.success('Image generated successfully!')
     } catch (error) {
@@ -583,13 +576,11 @@ export default function ChatInterface() {
 
   const createNewImageChat = () => {
     setChatType('image')
-    localStorage.setItem('chatType', 'image')
     createNewChat()
   }
 
   const createNewTextChat = () => {
     setChatType('text')
-    localStorage.setItem('chatType', 'text')
     createNewChat()
   }
 
@@ -618,8 +609,15 @@ export default function ChatInterface() {
             />
             <div className="flex items-center gap-2 mt-2">
               <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
+                <MessageSquare className="h-3 w-3 mr-1" />
                 {chatType === 'text' ? 'Text Chat' : 'Image Generation'}
               </Badge>
+              {chatType === 'image' && (
+                <Badge variant="secondary" className="text-xs">
+                  <Palette className="h-3 w-3 mr-1" />
+                  DALL-E 3
+                </Badge>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -721,7 +719,7 @@ export default function ChatInterface() {
               className="flex items-center gap-2"
             >
               <Palette className="h-4 w-4" />
-              New Image Chat
+              {chatType === 'image' ? 'Image Generation' : 'New Image Chat'}
             </Button>
 
             {/* <Button
