@@ -390,7 +390,7 @@ router.post(
           data: { 
             chatId, 
             role: 'ASSISTANT', 
-            content: `Here's the image I generated for you: ${imageUrl}`,
+            content: imageUrl, // Store just the image URL
             tokens,
             files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt }])
           }

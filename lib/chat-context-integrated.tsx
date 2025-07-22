@@ -126,7 +126,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     async (chatId: string) => {
       try {
         const response = await apiClient.getChat(chatId)
-        setCurrentChat(response.chat)
+        const chat = response.chat
+        setCurrentChat(chat)
+        
+        // Update the chats list to ensure consistency
+        setChats((prev) => prev.map((c) => 
+          c.id === chatId ? chat : c
+        ))
+        
         setUploadedFiles([]) // Clear uploaded files when switching chats
       } catch (error) {
         console.error("Failed to load chat:", error)
@@ -172,7 +179,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           files: fileIds || [],
         })
 
-        // Reload the chat to get updated messages
+        // Reload the chat to get updated messages including the AI response
         const chatResponse = await apiClient.getChat(currentChat.id)
         const updatedChat = chatResponse.chat
 
@@ -185,6 +192,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setUploadedFiles([])
       } catch (error) {
         console.error("Failed to generate AI response:", error)
+        // On error, reload the chat to ensure we have the latest state
+        try {
+          const chatResponse = await apiClient.getChat(currentChat.id)
+          const updatedChat = chatResponse.chat
+          setCurrentChat(updatedChat)
+          setChats((prev) => prev.map((chat) =>
+            chat.id === currentChat.id ? updatedChat : chat
+          ))
+        } catch (reloadError) {
+          console.error("Failed to reload chat after error:", reloadError)
+        }
       } finally {
         setIsLoading(false)
       }

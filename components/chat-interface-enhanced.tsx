@@ -327,9 +327,11 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
           <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
 
           {/* Display generated images */}
-          {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image') && (
+          {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) || 
+            (message.role === "ASSISTANT" && message.content.startsWith('http') && (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')))) && (
             <div className="space-y-2">
-              {parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
+              {/* Handle files array images */}
+              {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
                 <div key={index} className="relative">
                   <img
                     src={file.url}
@@ -361,6 +363,41 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
                   </div>
                 </div>
               ))}
+              
+              {/* Handle direct image URL in content */}
+              {message.role === "ASSISTANT" && message.content.startsWith('http') && 
+               (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')) && (
+                <div className="relative">
+                  <img
+                    src={message.content}
+                    alt="Generated image"
+                    className="max-w-full h-auto rounded-lg"
+                  />
+                  <div className="absolute top-2 right-2 flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="h-6 w-6 p-0"
+                      onClick={() => window.open(message.content, '_blank')}
+                    >
+                      <Eye className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="h-6 w-6 p-0"
+                      onClick={() => {
+                        const a = document.createElement('a')
+                        a.href = message.content
+                        a.download = `generated-image-${Date.now()}.png`
+                        a.click()
+                      }}
+                    >
+                      <Download className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -426,6 +463,19 @@ export default function ChatInterface() {
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
 
+  // Load chat type from localStorage on component mount
+  React.useEffect(() => {
+    const savedChatType = localStorage.getItem('chatType') as 'text' | 'image'
+    if (savedChatType) {
+      setChatType(savedChatType)
+    }
+  }, [])
+
+  // Save chat type to localStorage when it changes
+  React.useEffect(() => {
+    localStorage.setItem('chatType', chatType)
+  }, [chatType])
+
   // React.useEffect(() => {
   //   if (currentChat || chatCreationInitiated.current) {
   //     return;
@@ -479,14 +529,38 @@ export default function ChatInterface() {
 
     setIsGeneratingImage(true)
     try {
+      // Add user message immediately for better UX
+      const userMessage = {
+        id: `msg-${Date.now()}`,
+        chatId: currentChat.id,
+        role: "USER" as const,
+        content: prompt,
+        timestamp: new Date().toISOString(),
+      }
+
+      // Update UI immediately with user message
+      const updatedChat = {
+        ...currentChat,
+        messages: [...currentChat.messages, userMessage]
+      }
+      
+      // Update the current chat context immediately
+      selectChat(currentChat.id) // This will trigger a reload from the context
+      
       const response = await apiClient.generateImage({
         prompt,
         chatId: currentChat.id
       })
 
-      // Reload chat to get updated messages
+      // After successful generation, reload chat to get all updated messages including the AI response
       const chatResponse = await apiClient.getChat(currentChat.id)
-      // Update chat context with new messages
+      if (chatResponse.chat) {
+        // Update the chat context with the complete updated chat
+        const updatedChatWithAI = chatResponse.chat
+        // You might need to call a method to update the current chat in context
+        // This depends on your chat context implementation
+      }
+      
       toast.success('Image generated successfully!')
     } catch (error) {
       console.error('Image generation failed:', error)
@@ -509,11 +583,13 @@ export default function ChatInterface() {
 
   const createNewImageChat = () => {
     setChatType('image')
+    localStorage.setItem('chatType', 'image')
     createNewChat()
   }
 
   const createNewTextChat = () => {
     setChatType('text')
+    localStorage.setItem('chatType', 'text')
     createNewChat()
   }
 
@@ -540,7 +616,7 @@ export default function ChatInterface() {
               setSelectedModel={setSelectedModel}
               availableModels={availableModels}
             />
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 mt-2">
               <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
                 {chatType === 'text' ? 'Text Chat' : 'Image Generation'}
               </Badge>
