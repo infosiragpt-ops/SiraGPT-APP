@@ -23,7 +23,7 @@ export default function AuthCallback() {
       if (token) {
         // Store token and redirect
         localStorage.setItem('auth-token', token)
-        
+
         try {
           // Verify token by getting user info
           const response = await fetch('/api/auth/me', {
@@ -31,7 +31,7 @@ export default function AuthCallback() {
               'Authorization': `Bearer ${token}`
             }
           })
-          
+
           if (response.ok) {
             router.push('/chat')
           } else {
