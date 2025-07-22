@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
   url      = env("PRISMA_DATABASE_URL")
 }
 
@@ -16,6 +16,7 @@ model User {
   name         String
   password     String
   avatar       String?
+  googleId     String?  @unique
   plan         Plan     @default(FREE)
   isAdmin      Boolean  @default(false)
   apiUsage     Int      @default(0)
@@ -28,8 +29,23 @@ model User {
   payments  Payment[]
   apiUsages ApiUsage[]
   sessions  Session[]
+  files     File[]
 
   @@map("users")
+}
+
+model AiModel {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  displayName String
+  provider    String
+  description String?
+  apiKey      String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("ai_models")
 }
 
 model Session {
@@ -66,11 +82,30 @@ model Message {
   content   String      @db.Text
   tokens    Int?
   timestamp DateTime    @default(now())
+  files     Json?       // Store file references
 
   // Relations
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
   @@map("messages")
+}
+
+model File {
+  id          String   @id @default(cuid())
+  userId      String
+  filename    String
+  originalName String
+  mimeType    String
+  size        Int
+  path        String
+  extractedText String? @db.Text
+  openaiFileId String? // OpenAI Files API ID
+  createdAt   DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("files")
 }
 
 model Payment {
