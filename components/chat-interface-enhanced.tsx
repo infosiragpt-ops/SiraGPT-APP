@@ -327,79 +327,79 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
           <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
 
           {/* Display generated images */}
-          {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) || 
+          {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
             (message.role === "ASSISTANT" && message.content.startsWith('http') && (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')))) && (
-            <div className="space-y-2">
-              {/* Handle files array images */}
-              {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
-                <div key={index} className="relative">
-                  <img
-                    src={file.url}
-                    alt="Generated image"
-                    className="max-w-full h-auto rounded-lg"
-                  />
-                  <div className="absolute top-2 right-2 flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="h-6 w-6 p-0"
-                      onClick={() => window.open(file.url, '_blank')}
-                    >
-                      <Eye className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="h-6 w-6 p-0"
-                      onClick={() => {
-                        const a = document.createElement('a')
-                        a.href = file.url
-                        a.download = `generated-image-${Date.now()}.png`
-                        a.click()
-                      }}
-                    >
-                      <Download className="h-3 w-3" />
-                    </Button>
+              <div className="space-y-2">
+                {/* Handle files array images */}
+                {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
+                  <div key={index} className="relative">
+                    <img
+                      src={file.url}
+                      alt="Generated image"
+                      className="max-w-full h-auto rounded-lg"
+                    />
+                    <div className="absolute top-2 right-2 flex gap-1">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="h-6 w-6 p-0"
+                        onClick={() => window.open(file.url, '_blank')}
+                      >
+                        <Eye className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="h-6 w-6 p-0"
+                        onClick={() => {
+                          const a = document.createElement('a')
+                          a.href = file.url
+                          a.download = `generated-image-${Date.now()}.png`
+                          a.click()
+                        }}
+                      >
+                        <Download className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ))}
-              
-              {/* Handle direct image URL in content */}
-              {message.role === "ASSISTANT" && message.content.startsWith('http') && 
-               (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')) && (
-                <div className="relative">
-                  <img
-                    src={message.content}
-                    alt="Generated image"
-                    className="max-w-full h-auto rounded-lg"
-                  />
-                  <div className="absolute top-2 right-2 flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="h-6 w-6 p-0"
-                      onClick={() => window.open(message.content, '_blank')}
-                    >
-                      <Eye className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="h-6 w-6 p-0"
-                      onClick={() => {
-                        const a = document.createElement('a')
-                        a.href = message.content
-                        a.download = `generated-image-${Date.now()}.png`
-                        a.click()
-                      }}
-                    >
-                      <Download className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+                ))}
+
+                {/* Handle direct image URL in content */}
+                {message.role === "ASSISTANT" && message.content.startsWith('http') &&
+                  (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')) && (
+                    <div className="relative">
+                      <img
+                        src={message.content}
+                        alt="Generated image"
+                        className="max-w-full h-auto rounded-lg"
+                      />
+                      <div className="absolute top-2 right-2 flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-6 w-6 p-0"
+                          onClick={() => window.open(message.content, '_blank')}
+                        >
+                          <Eye className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-6 w-6 p-0"
+                          onClick={() => {
+                            const a = document.createElement('a')
+                            a.href = message.content
+                            a.download = `generated-image-${Date.now()}.png`
+                            a.click()
+                          }}
+                        >
+                          <Download className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+              </div>
+            )}
 
           {/* Display attached files */}
           {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type !== 'image') && (
@@ -450,6 +450,7 @@ export default function ChatInterface() {
     uploadedFiles,
     selectChat,
     setUploadedFiles,
+    chatType, setChatType,
     availableModels
   } = useChat()
 
@@ -458,40 +459,37 @@ export default function ChatInterface() {
   const [isSearching, setIsSearching] = React.useState(false)
   const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
-  const [chatType, setChatType] = React.useState<'text' | 'image'>('text')
+  // const [chatType, setChatType] = React.useState<'text' | 'image'>('text')
 
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
 
-  // Load chat type from localStorage on component mount
-  React.useEffect(() => {
-    // Determine chat type based on current chat messages
-    if (currentChat) {
-      const hasImageMessages = currentChat.messages.some(msg => 
-        msg.role === "ASSISTANT" && (
-          (msg.content.startsWith('http') && (msg.content.includes('oaidalleapiprodscus') || msg.content.includes('dalle'))) ||
-          (msg.files && JSON.parse(msg.files || '[]').some((f: any) => f.type === 'image'))
-        )
-      )
-      setChatType(hasImageMessages ? 'image' : 'text')
-    } else {
-      // Default to text chat for new chats
-      setChatType('text')
-    }
-  }, [currentChat])
+  // ✅ YEH SAHI CODE HAI - ISE UPAR WALE DONO KI JAGAH LAGAYEIN ✅
 
-  // Update chat type when switching chats
   React.useEffect(() => {
-    if (currentChat) {
-      const hasImageMessages = currentChat.messages.some(msg => 
-        msg.role === "ASSISTANT" && (
-          (msg.content.startsWith('http') && (msg.content.includes('oaidalleapiprodscus') || msg.content.includes('dalle'))) ||
-          (msg.files && JSON.parse(msg.files || '[]').some((f: any) => f.type === 'image'))
-        )
-      )
-      setChatType(hasImageMessages ? 'image' : 'text')
+    // Yeh hook sirf tab chalega jab aap koi purana, pehle se bana hua chat select karenge.
+    // Yeh naye chat banate waqt dakhal-andazi nahi karega.
+    console.log(currentChat);
+
+    if (currentChat && currentChat.messages.length > 0) {
+      if (currentChat.messages[0].content !== "Hello! I'm gpt. How can I help you today?") {
+        const hasImageMessages = currentChat.messages.some(msg =>
+          msg.role === "ASSISTANT" && (
+            (msg.content.startsWith('http') && (msg.content.includes('oaidalleapiprodscus') || msg.content.includes('dalle'))) ||
+            (msg.files && JSON.parse(msg.files.toString() || '[]').some((f: any) => f.type === 'image'))
+          )
+        );
+        console.log(hasImageMessages);
+
+        // Purane chat ke content ke hisab se type set karein
+        setChatType(hasImageMessages ? 'image' : 'text');
+      }
+
     }
-  }, [currentChat?.id])
+    // Humne "else" block ko poori tarah se hata diya hai.
+    // Isliye jab naya chat banega (messages.length 0 hoga), to yeh hook kuch nahi karega.
+    // Isse aapka 'image' type reset hone se bach jayega.
+  }, [currentChat]);
 
   // React.useEffect(() => {
   //   if (currentChat || chatCreationInitiated.current) {
@@ -553,7 +551,7 @@ export default function ChatInterface() {
 
       // Reload the current chat to get the updated messages
       await selectChat(currentChat.id)
-      
+
       toast.success('Image generated successfully!')
     } catch (error) {
       console.error('Image generation failed:', error)
@@ -575,13 +573,13 @@ export default function ChatInterface() {
   }
 
   const createNewImageChat = () => {
-    setChatType('image')
-    createNewChat()
+    // setChatType('image')
+    createNewChat('image')
   }
 
   const createNewTextChat = () => {
-    setChatType('text')
-    createNewChat()
+    // setChatType('text')
+    createNewChat('text')
   }
 
   const removeFile = (index: number) => {

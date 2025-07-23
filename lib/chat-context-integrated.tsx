@@ -28,7 +28,8 @@ interface Chat {
 interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
-  createNewChat: () => void
+  // createNewChat: () => void
+  createNewChat: (type?: 'text' | 'image') => void
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[]) => Promise<void>
   clearCurrentChat: () => void
@@ -37,8 +38,9 @@ interface ChatContextType {
   setSelectedModel: (model: string) => void
   isLoading: boolean
   availableModels: any[]
-
+  chatType: 'text' | 'image';
   uploadedFiles: any[]
+  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image'>>;
   setUploadedFiles: (files: any[]) => void
 }
 
@@ -53,7 +55,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [hasInitialized, setHasInitialized] = useState(false)
-
+  const [chatType, setChatType] = useState<'text' | 'image'>('text');
   // Load user's chats
   useEffect(() => {
     if (user && token) {
@@ -90,15 +92,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const createNewChat = useCallback(async () => {
+  const createNewChat = useCallback(async (type: 'text' | 'image' = 'text') => {
     if (!user || !token || !selectedModel) return
-
+    setChatType(type);
     try {
       const response = await apiClient.createChat({
         title: "New Chat",
         model: selectedModel,
       })
-
       const newChat = response.chat
 
       // Add initial assistant message
@@ -120,7 +121,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Failed to create chat:", error)
     }
-  }, [user, token, selectedModel, availableModels])
+  }, [user, token, selectedModel, availableModels, setChatType])
 
   const selectChat = useCallback(
     async (chatId: string) => {
@@ -128,15 +129,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const response = await apiClient.getChat(chatId)
         const chat = response.chat
         setCurrentChat(chat)
-        
+
         // Update the chats list to ensure consistency
-        setChats((prev) => prev.map((c) => 
+        setChats((prev) => prev.map((c) =>
           c.id === chatId ? chat : c
         ))
-        
+
         // Store the current chat ID in localStorage
         localStorage.setItem('currentChatId', chatId)
-        
+
         setUploadedFiles([]) // Clear uploaded files when switching chats
       } catch (error) {
         console.error("Failed to load chat:", error)
@@ -356,6 +357,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSelectedModel,
         isLoading,
         uploadedFiles,
+        chatType,
+        setChatType,
         setUploadedFiles,
         availableModels,
       }}
