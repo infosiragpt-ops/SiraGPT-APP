@@ -231,35 +231,36 @@ router.post(
 
       // Prepare messages for OpenAI
       const messages = [];
-      
+
       // Add system message with file context if files are present
       if (processedFiles.length > 0) {
-        const fileContext = processedFiles.map(f => 
+        const fileContext = processedFiles.map(f =>
           `File: ${f.name}\nContent: ${f.extractedText || 'Binary file'}`
         ).join('\n\n');
-        
+
         messages.push({
           role: 'system',
           content: `You have access to the following files:\n\n${fileContext}\n\nUse this information to answer the user's questions.`
         });
       }
-      
+
       // Add user message
       messages.push({
         role: 'user',
         content: prompt
       });
+      console.log("working generates", model, " ", messages);
 
       // Call OpenAI API
       let content, tokens;
       try {
         const completion = await openai.chat.completions.create({
-          model: 'gpt-4',
+          model: model,// 'gpt-4',
           messages: messages,
           max_tokens: 2000,
           ...(openaiFiles.length > 0 && { file_ids: openaiFiles })
         });
-        
+
         content = completion.choices[0].message.content;
         tokens = completion.usage?.total_tokens || 0;
       } catch (openaiError) {
@@ -355,7 +356,7 @@ router.post(
 
       // Generate image using OpenAI DALL-E
       let imageUrl, tokens = 1000; // Fixed cost for image generation
-      
+
       try {
         const response = await openai.images.generate({
           model: 'dall-e-3',
@@ -364,7 +365,7 @@ router.post(
           size: '1024x1024',
           quality: 'standard'
         });
-        
+
         imageUrl = response.data[0].url;
       } catch (openaiError) {
         console.error('OpenAI Image API error:', openaiError);
@@ -387,9 +388,9 @@ router.post(
         });
 
         await prisma.message.create({
-          data: { 
-            chatId, 
-            role: 'ASSISTANT', 
+          data: {
+            chatId,
+            role: 'ASSISTANT',
             content: imageUrl, // Store just the image URL
             tokens,
             files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt }])
