@@ -635,7 +635,7 @@ export default function ChatInterface() {
             <MessageComponent key={message.id} message={message} user={user} />
           ))}
 
-          {(isLoading || isGeneratingImage) && (
+          {/* {(isLoading || isGeneratingImage) && (
             <div className="flex gap-3 justify-start">
               <Avatar className="h-8 w-8 flex-shrink-0">
                 <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
@@ -649,7 +649,7 @@ export default function ChatInterface() {
                 </div>
               </Card>
             </div>
-          )}
+          )} */}
         </div>
       </ScrollArea>
 

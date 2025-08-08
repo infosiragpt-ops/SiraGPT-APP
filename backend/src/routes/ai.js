@@ -175,6 +175,59 @@ router.post(
     }
   }
 );*/
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles) {
+  try {
+    console.log("Background task: Saving to database...");
+
+    // ✅ Save messages if chatId provided
+    if (chatId) {
+      const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
+      if (!chat) {
+        console.error("Chat not found for background save, skipping.");
+        return;
+      }
+
+      await prisma.message.create({
+        data: {
+          chatId,
+          role: 'USER',
+          content: prompt,
+          files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
+        }
+      });
+
+      await prisma.message.create({
+        data: { chatId, role: 'ASSISTANT', content: fullResponseContent, tokens }
+      });
+
+      await prisma.chat.update({
+        where: { id: chatId },
+        data: {
+          updatedAt: new Date(),
+          title: chat.title === 'New Chat'
+            ? prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '')
+            : chat.title
+        }
+      });
+    }
+
+    // ✅ Track usage
+    await prisma.apiUsage.create({
+      data: { userId, model, tokens, cost: tokens * 0.001 }
+    });
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { apiUsage: { increment: tokens } }
+    });
+
+    console.log("Background task: Database save complete.");
+  } catch (dbError) {
+    console.error("Error in background database save:", dbError);
+  }
+}
+
+
 // ✅ Generate AI text response with file support
 router.post(
   '/generate',
@@ -251,18 +304,42 @@ router.post(
       });
       console.log("working generates", model, " ", messages);
 
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+
       // Call OpenAI API
-      let content, tokens;
+      let fullResponseContent = '';
+      let tokens = 0;
+
+
       try {
-        const completion = await openai.chat.completions.create({
+        const stream = await openai.chat.completions.create({
           model: model,// 'gpt-4',
           messages: messages,
+          stream: true,
           max_tokens: 2000,
           ...(openaiFiles.length > 0 && { file_ids: openaiFiles })
         });
 
-        content = completion.choices[0].message.content;
-        tokens = completion.usage?.total_tokens || 0;
+        content = '';
+        // Stream se data parhein aur client ko bhejein
+        for await (const chunk of stream) {
+          const contentChunk = chunk.choices[0]?.delta?.content || '';
+          if (contentChunk) {
+            fullResponseContent += contentChunk;
+            // ✅ PROBLEM #2 KA FIX: Yahan 'contents' ki jagah 'content' use karein
+            console.log(fullResponseContent);
+
+            res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+          }
+        }
+        const finalCompletion = await stream.finalChatCompletion();
+        tokens = finalCompletion.usage?.total_tokens || 0;
+        saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
+
       } catch (openaiError) {
         console.error('OpenAI API error:', openaiError);
         // Fallback to AI service
@@ -273,57 +350,14 @@ router.post(
         tokens = content.length + prompt.length;
       }
 
-      // ✅ Save messages if chatId provided
-      if (chatId) {
-        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
-        if (!chat) {
-          return res.status(404).json({ error: 'Chat not found' });
-        }
 
-        await prisma.message.create({
-          data: {
-            chatId,
-            role: 'USER',
-            content: prompt,
-            files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
-          }
-        });
-
-        await prisma.message.create({
-          data: { chatId, role: 'ASSISTANT', content, tokens }
-        });
-
-        await prisma.chat.update({
-          where: { id: chatId },
-          data: {
-            updatedAt: new Date(),
-            title: chat.title === 'New Chat'
-              ? prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '')
-              : chat.title
-          }
-        });
-      }
-
-      // ✅ Track usage
-      await prisma.apiUsage.create({
-        data: { userId, model, tokens, cost: tokens * 0.001 }
-      });
-
-      const updatedUser = await prisma.user.update({
-        where: { id: userId },
-        data: { apiUsage: { increment: tokens } }
-      });
-
-      res.json({
-        content,
-        tokens,
-        files: processedFiles,
-        usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
-      });
 
     } catch (error) {
       console.error('AI generation error:', error);
       res.status(500).json({ error: error.message || 'AI generation failed' });
+    }
+    finally {
+      res.end();
     }
   }
 );

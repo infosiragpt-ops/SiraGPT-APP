@@ -51,7 +51,16 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // Body parsing middleware
-app.use(compression());
+app.use(compression({
+    filter: (req, res) => {
+        // Agar response 'text/event-stream' hai, to usse compress mat karo
+        if (res.getHeader('Content-Type') === 'text/event-stream') {
+            return false;
+        }
+        // Baaki sab responses ko compress karo
+        return compression.filter(req, res);
+    }
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());

@@ -159,19 +159,86 @@ class ApiClient {
   }
 
   // AI endpoints
-  async generateAI(data: { model: string; prompt: string; chatId?: string; files?: string[] }) {
-    return this.request('/ai/generate', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
+  // async generateAI(data: { model: string; prompt: string; chatId?: string; files?: string[] }) {
+  //   return this.request('/ai/generate', {
+  //     method: 'POST',
+  //     body: JSON.stringify(data),
+  //   });
+  // }
 
+  // ✅ YEH NAYA METHOD STREAMING KE LIYE HAI
+  async generateAIStream(
+    data: { model: string; prompt: string; chatId?: string; files?: string[] },
+    // Yeh callback functions component se aayenge
+    onData: (chunk: string) => void, // Jab data ka naya tukra aaye
+    onClose: () => void, // Jab stream band ho jaye
+    onError: (error: Error) => void // Jab koi error aaye
+  ) {
+    const url = `${this.baseURL}/ai/generate`;
+    const config: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+      body: JSON.stringify(data),
+    };
+
+    try {
+      const response = await fetch(url, config);
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Network error' }));
+        throw new Error(error.error || `HTTP ${response.status}`);
+      }
+
+      // response.body ek ReadableStream hai, hum isko padhenge
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Response body is not readable');
+      }
+
+      const decoder = new TextDecoder('utf-8');
+
+      // Musalsal data padhne ke liye loop
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          onClose(); // Stream khatam ho gayi
+          break;
+        }
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n\n');
+
+        for (const line of lines) {
+          console.log(done, " ", line);
+
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonData = JSON.parse(line.substring(6));
+              if (jsonData.content) {
+
+                onData(jsonData.content); // Data ko component mein bhejein
+              }
+            } catch (e) {
+              // JSON parse error ko ignore karein
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('API stream failed:', error);
+      onError(error);
+    }
+  }
   async generateImage(data: { prompt: string; chatId?: string }) {
     const response = await this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
     })
-    
+
     return response
   }
 
