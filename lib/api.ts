@@ -213,7 +213,7 @@ class ApiClient {
         const lines = chunk.split('\n\n');
 
         for (const line of lines) {
-          console.log(done, " ", line);
+
 
           if (line.startsWith('data: ')) {
             try {

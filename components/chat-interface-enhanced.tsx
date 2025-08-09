@@ -40,12 +40,16 @@ import { Label } from "@/components/ui/label"
 import { apiClient } from "@/lib/api"
 import { aiService } from "@/lib/ai-service"
 import { toast } from "sonner"
+import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'; // Ya koi aur theme chunein
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import MessageComponent from "./message-component"
 
 // API Keys Settings Dialog
 const ApiKeysDialog = () => {
@@ -300,142 +304,144 @@ const FileDisplay = ({ files, onRemove }: { files: any[]; onRemove: (index: numb
 }
 
 // Enhanced Message Component
-const MessageComponent = ({ message, user }: { message: any; user: any }) => {
-  // Parse files if they exist
-  let parsedFiles = []
-  if (message.files) {
-    try {
-      parsedFiles = typeof message.files === 'string' ? JSON.parse(message.files) : message.files
-    } catch (e) {
-      parsedFiles = []
-    }
-  }
+// const MessageComponent = ({ message, user }: { message: any; user: any }) => {
+//   // Parse files if they exist
+//   let parsedFiles = []
+//   if (message.files) {
+//     try {
+//       parsedFiles = typeof message.files === 'string' ? JSON.parse(message.files) : message.files
+//     } catch (e) {
+//       parsedFiles = []
+//     }
+//   }
 
 
-  return (
-    <div className={`flex gap-3 ${message.role === "USER" ? "justify-end" : "justify-start"}`}>
-      {message.role === "ASSISTANT" && (
-        <Avatar className="h-8 w-8 flex-shrink-0">
-          <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
-        </Avatar>
-      )}
-      <Card
-        className={`max-w-[80%] p-3 ${message.role === "USER" ? "bg-primary text-primary-foreground ml-auto" : "bg-muted"
-          }`}
-      >
-        <div className="space-y-2">
-          <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+//   return (
+//     <div className={`flex gap-3 ${message.role === "USER" ? "justify-end" : "justify-start"}`}>
+//       {message.role === "ASSISTANT" && (
+//         <Avatar className="h-8 w-8 flex-shrink-0">
+//           <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
+//         </Avatar>
+//       )}
+//       <Card
+//         className={`max-w-[80%] p-3 ${message.role === "USER" ? "bg-primary text-primary-foreground ml-auto" : "bg-muted"
+//           }`}
+//       >
+//         <div className="space-y-2">
+//           <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
 
-          {/* Display generated images */}
-          {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
-            (message.role === "ASSISTANT" && message.content.startsWith('http') && (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')))) && (
-              <div className="space-y-2">
-                {/* Handle files array images */}
-                {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
-                  <div key={index} className="relative">
-                    <img
-                      src={file.url}
-                      alt="Generated image"
-                      className="max-w-full h-auto rounded-lg"
-                    />
-                    <div className="absolute top-2 right-2 flex gap-1">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        className="h-6 w-6 p-0"
-                        onClick={() => window.open(file.url, '_blank')}
-                      >
-                        <Eye className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        className="h-6 w-6 p-0"
-                        onClick={() => {
-                          const a = document.createElement('a')
-                          a.href = file.url
-                          a.download = `generated-image-${Date.now()}.png`
-                          a.click()
-                        }}
-                      >
-                        <Download className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+//           {/* Display generated images */}
+//           {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
+//             (message.role === "ASSISTANT" && message.content.startsWith('http') && (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')))) && (
+//               <div className="space-y-2">
+//                 {/* Handle files array images */}
+//                 {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
+//                   <div key={index} className="relative">
+//                     <img
+//                       src={file.url}
+//                       alt="Generated image"
+//                       className="max-w-full h-auto rounded-lg"
+//                     />
+//                     <div className="absolute top-2 right-2 flex gap-1">
+//                       <Button
+//                         size="sm"
+//                         variant="secondary"
+//                         className="h-6 w-6 p-0"
+//                         onClick={() => window.open(file.url, '_blank')}
+//                       >
+//                         <Eye className="h-3 w-3" />
+//                       </Button>
+//                       <Button
+//                         size="sm"
+//                         variant="secondary"
+//                         className="h-6 w-6 p-0"
+//                         onClick={() => {
+//                           const a = document.createElement('a')
+//                           a.href = file.url
+//                           a.download = `generated-image-${Date.now()}.png`
+//                           a.click()
+//                         }}
+//                       >
+//                         <Download className="h-3 w-3" />
+//                       </Button>
+//                     </div>
+//                   </div>
+//                 ))}
 
-                {/* Handle direct image URL in content */}
-                {message.role === "ASSISTANT" && message.content.startsWith('http') &&
-                  (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')) && (
-                    <div className="relative">
-                      <img
-                        src={message.content}
-                        alt="Generated image"
-                        className="max-w-full h-auto rounded-lg"
-                      />
-                      <div className="absolute top-2 right-2 flex gap-1">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          className="h-6 w-6 p-0"
-                          onClick={() => window.open(message.content, '_blank')}
-                        >
-                          <Eye className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          className="h-6 w-6 p-0"
-                          onClick={() => {
-                            const a = document.createElement('a')
-                            a.href = message.content
-                            a.download = `generated-image-${Date.now()}.png`
-                            a.click()
-                          }}
-                        >
-                          <Download className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-              </div>
-            )}
+//                 {/* Handle direct image URL in content */}
+//                 {message.role === "ASSISTANT" && message.content.startsWith('http') &&
+//                   (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')) && (
+//                     <div className="relative">
+//                       <img
+//                         src={message.content}
+//                         alt="Generated image"
+//                         className="max-w-full h-auto rounded-lg"
+//                       />
+//                       <div className="absolute top-2 right-2 flex gap-1">
+//                         <Button
+//                           size="sm"
+//                           variant="secondary"
+//                           className="h-6 w-6 p-0"
+//                           onClick={() => window.open(message.content, '_blank')}
+//                         >
+//                           <Eye className="h-3 w-3" />
+//                         </Button>
+//                         <Button
+//                           size="sm"
+//                           variant="secondary"
+//                           className="h-6 w-6 p-0"
+//                           onClick={() => {
+//                             const a = document.createElement('a')
+//                             a.href = message.content
+//                             a.download = `generated-image-${Date.now()}.png`
+//                             a.click()
+//                           }}
+//                         >
+//                           <Download className="h-3 w-3" />
+//                         </Button>
+//                       </div>
+//                     </div>
+//                   )}
+//               </div>
+//             )}
 
-          {/* Display attached files */}
-          {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type !== 'image') && (
-            <div className="mt-2 pt-2 border-t border-border/20">
-              <div className="flex flex-wrap gap-1">
-                {parsedFiles
-                  .filter((f: any) => f.type !== 'image')
-                  .map((file: any, index: number) => (
-                    <div key={index} className="flex items-center gap-1">
-                      <FileText className="h-4 w-4" />
-                      <Badge className="text-xs">
-                        {file.name || 'File'}
-                      </Badge>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
-        </div>
+//           {/* Display attached files */}
+//           {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type !== 'image') && (
+//             <div className="mt-2 pt-2 border-t border-border/20">
+//               <div className="flex flex-wrap gap-1">
+//                 {parsedFiles
+//                   .filter((f: any) => f.type !== 'image')
+//                   .map((file: any, index: number) => (
+//                     <div key={index} className="flex items-center gap-1">
+//                       <FileText className="h-4 w-4" />
+//                       <Badge className="text-xs">
+//                         {file.name || 'File'}
+//                       </Badge>
+//                     </div>
+//                   ))}
+//               </div>
+//             </div>
+//           )}
+//         </div>
 
-        <p className="mt-2 text-xs opacity-70">
-          {new Date(message.timestamp).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
-        </p>
-      </Card>
-      {message.role === "USER" && (
-        <Avatar className="h-8 w-8 flex-shrink-0">
-          <AvatarImage src={user?.avatar || "/placeholder.svg"} />
-          <AvatarFallback className="text-xs">U</AvatarFallback>
-        </Avatar>
-      )}
-    </div>
-  )
-}
+//         <p className="mt-2 text-xs opacity-70">
+//           {new Date(message.timestamp).toLocaleTimeString([], {
+//             hour: "2-digit",
+//             minute: "2-digit",
+//           })}
+//         </p>
+//       </Card>
+//       {message.role === "USER" && (
+//         <Avatar className="h-8 w-8 flex-shrink-0">
+//           <AvatarImage src={user?.avatar || "/placeholder.svg"} />
+//           <AvatarFallback className="text-xs">U</AvatarFallback>
+//         </Avatar>
+//       )}
+//     </div>
+//   )
+// }
+
+
 
 export default function ChatInterface() {
   const { user } = useAuth()

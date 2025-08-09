@@ -283,7 +283,23 @@ router.post(
       }
 
       // Prepare messages for OpenAI
-      const messages = [];
+
+      // Step 1: get previous chat history from DB
+      const history = await prisma.message.findMany({
+        where: { chatId },
+        orderBy: { timestamp: 'asc' }
+      });
+
+      // Step 2: convert DB messages to OpenAI format
+      const messages = history.map(m => ({
+        role: m.role === 'USER' ? 'user' : 'assistant',
+        content: m.content
+      }));
+
+      console.log("AI Services", messages);
+
+      // Step 3: add current prompt at the end
+      messages.push({ role: "user", content: prompt });
 
       // Add system message with file context if files are present
       if (processedFiles.length > 0) {
@@ -313,6 +329,7 @@ router.post(
       // Call OpenAI API
       let fullResponseContent = '';
       let tokens = 0;
+      // console.log("messages", messages);
 
 
       try {
@@ -331,14 +348,16 @@ router.post(
           if (contentChunk) {
             fullResponseContent += contentChunk;
             // ✅ PROBLEM #2 KA FIX: Yahan 'contents' ki jagah 'content' use karein
-            console.log(fullResponseContent);
+
 
             res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
           }
         }
+
         const finalCompletion = await stream.finalChatCompletion();
+        console.log(finalCompletion, "finalCompletion");
+
         tokens = finalCompletion.usage?.total_tokens || 0;
-        saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
 
       } catch (openaiError) {
         console.error('OpenAI API error:', openaiError);
@@ -350,6 +369,7 @@ router.post(
         tokens = content.length + prompt.length;
       }
 
+      saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
 
 
     } catch (error) {

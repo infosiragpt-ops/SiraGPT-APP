@@ -22,7 +22,7 @@ class OpenAIProvider {
                 content: m.content
             }));
 
-            console.log(messages);
+            console.log("AI Service", messages);
 
             // Step 3: add current prompt at the end
             messages.push({ role: "user", content: prompt });
