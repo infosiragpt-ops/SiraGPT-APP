@@ -87,6 +87,9 @@ export function AppSidebar() {
   const [selectedType, setSelectedType] = React.useState("Text Chat")
 
   const handleLogout = () => {
+    localStorage.setItem('currentChatId', "")
+
+
     logout()
     router.push("/auth/login")
   }

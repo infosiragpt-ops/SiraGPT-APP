@@ -103,6 +103,8 @@ class ApiClient {
   }
 
   async getChat(id: string) {
+    console.log("Get Chat Working");
+
     return this.request(`/chats/${id}`);
   }
 

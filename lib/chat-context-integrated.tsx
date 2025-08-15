@@ -29,7 +29,7 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   // createNewChat: () => void
-  createNewChat: (type?: 'text' | 'image') => void
+  createNewChat: (type?: 'text' | 'image', initialContent?: string) => void
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[]) => Promise<void>
   clearCurrentChat: () => void
@@ -92,39 +92,146 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const createNewChat = useCallback(async (type: 'text' | 'image' = 'text') => {
-    if (!user || !token || !selectedModel) return
+  const addMessage = useCallback(
+    async (content: string, fileIds?: string[], chat?: any) => { // Added optional 'chat' parameter
+      const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
+      if (!activeChat || !user || !token) return;
+
+      // STEP 1: User ka message foran UI mein dikhayein
+      const userMessage: Message = {
+        id: `msg-user-${Date.now()}`,
+        chatId: activeChat.id,
+        role: 'USER',
+        content,
+        timestamp: new Date().toISOString(), // Use ISOString for consistency
+        files: fileIds?.length ? fileIds : undefined,
+      };
+
+      // STEP 2: AI ke jawab ke liye ek khaali placeholder banayein
+      // Isse UI mein "AI is typing..." jaisa effect aayega
+      const aiMessagePlaceholder: Message = {
+        id: `msg-ai-${Date.now()}`,
+        chatId: activeChat.id,
+        role: 'ASSISTANT',
+        content: '', // Shuru mein content khaali hoga
+        timestamp: new Date().toISOString(),
+      };
+
+      // Foran UI ko user ke message aur AI ke placeholder ke saath update karein
+      const updatedMessages = [...activeChat.messages, userMessage, aiMessagePlaceholder];
+      const updatedChat = { ...activeChat, messages: updatedMessages };
+
+      setCurrentChat(updatedChat);
+      setChats((prev) => prev.map((c) => (c.id === activeChat.id ? updatedChat : c)));
+      setUploadedFiles([]); // Uploaded files clear kar dein
+      setIsLoading(true); // Loading state start karein
+
+      try {
+        // STEP 3: Nayi streaming API call karein
+        await apiClient.generateAIStream(
+          {
+            model: selectedModel,
+            prompt: content,
+            chatId: activeChat.id,
+            files: fileIds || [],
+          },
+          (chunk) => {
+            // onData: Jab bhi backend se naya text aaye
+            // Hum state mein AI message ke content ko update karte rahenge
+            setCurrentChat((prevChat) => {
+              if (!prevChat) return prevChat;
+
+              const newMessages = prevChat.messages.map((msg) => {
+                if (msg.id === aiMessagePlaceholder.id) {
+                  // Placeholder ke content mein naya chunk jodein
+                  return { ...msg, content: msg.content + chunk };
+                }
+                return msg;
+              });
+              return { ...prevChat, messages: newMessages };
+            });
+          },
+          () => {
+            // onClose: Jab stream khatam ho jaye
+            setIsLoading(false);
+            // Yahan hum chat list (sidebar) ko bhi update kar sakte hain
+            // Taake poora message save ho jaye
+            // if (currentChat) {
+            //   // We can trigger a final state update to ensure everything is synced
+            //   selectChat(currentChat.id)
+            // }
+          },
+          (error) => {
+            // onError: Agar koi error aaye
+            console.error("Streaming failed:", error);
+            setIsLoading(false);
+            // UI mein error message dikhayein
+            setCurrentChat((prevChat) => {
+              if (!prevChat) return prevChat;
+              const newMessages = prevChat.messages.map((msg) => {
+                if (msg.id === aiMessagePlaceholder.id) {
+                  return { ...msg, content: "Sorry, an error occurred. Please try again." };
+                }
+                return msg;
+              });
+              return { ...prevChat, messages: newMessages };
+            });
+          }
+        );
+      } catch (error) {
+        console.error("Failed to start AI stream:", error);
+        setIsLoading(false);
+      }
+
+    },
+    [currentChat, user, token, selectedModel, uploadedFiles]
+  );
+  const createNewChat = useCallback(async (type: 'text' | 'image' = 'text', initialContent?: string) => {
+    if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
       const response = await apiClient.createChat({
-        title: "New Chat",
+        title: initialContent ? initialContent.substring(0, 30) : "New Chat", // Use first 30 chars of initialContent as title
         model: selectedModel,
-      })
-      const newChat = response.chat
+      });
+      const newChat = response.chat;
 
-      // Add initial assistant message
-      const initialMessage: Message = {
-        id: `msg-${Date.now()}`,
-        chatId: newChat.id,
-        role: "ASSISTANT",
-        content: `Hello! I'm ${availableModels.find(m => m.name === selectedModel)?.displayName || selectedModel}. How can I help you today?`,
-        timestamp: new Date().toISOString(),
-      }
+      // Initialize messages array
+      let messages: Message[] = [];
 
-      newChat.messages = [initialMessage]
+      // if (initialContent) {
+      //   // Add user's initial message
+      //   const initialMessage: Message = {
+      //     id: `msg-${Date.now()}`,
+      //     chatId: newChat.id,
+      //     role: "USER",
+      //     content: initialContent,
+      //     timestamp: new Date().toISOString(),
+      //   };
+      //   messages = [initialMessage];
+      // }
+      // If no initialContent, keep messages empty to avoid default message
 
-      setChats((prev) => [newChat, ...prev])
+      newChat.messages = messages;
+
+      setChats((prev) => [newChat, ...prev]);
       localStorage.setItem('currentChatId', newChat.id);
+      setCurrentChat(newChat);
+      setUploadedFiles([]); // Clear uploaded files for new chat
 
-      setCurrentChat(newChat)
-      setUploadedFiles([]) // Clear uploaded files for new chat
+      // If initialContent is provided, immediately call addMessage to get AI response
+      if (initialContent) {
+        await addMessage(initialContent, [], newChat); // Pass newChat as the third parameter
+      }
     } catch (error) {
-      console.error("Failed to create chat:", error)
+      console.error("Failed to create chat:", error);
     }
-  }, [user, token, selectedModel, availableModels, setChatType])
+  }, [user, token, selectedModel, availableModels, setChatType, addMessage]);
 
   const selectChat = useCallback(
     async (chatId: string) => {
+
+
       try {
         const response = await apiClient.getChat(chatId)
         const chat = response.chat
@@ -215,101 +322,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // )
   // ✅ YEH SAHI STREAMING WALA addMessage FUNCTION HAI
 
-  const addMessage = useCallback(
-    async (content: string, fileIds?: string[]) => {
-      if (!currentChat || !user || !token) return;
 
-      // STEP 1: User ka message foran UI mein dikhayein
-      const userMessage: Message = {
-        id: `msg-user-${Date.now()}`,
-        chatId: currentChat.id,
-        role: 'USER',
-        content,
-        timestamp: new Date().toISOString(), // Use ISOString for consistency
-        files: fileIds?.length ? fileIds : undefined,
-      };
-
-      // STEP 2: AI ke jawab ke liye ek khaali placeholder banayein
-      // Isse UI mein "AI is typing..." jaisa effect aayega
-      const aiMessagePlaceholder: Message = {
-        id: `msg-ai-${Date.now()}`,
-        chatId: currentChat.id,
-        role: 'ASSISTANT',
-        content: '', // Shuru mein content khaali hoga
-        timestamp: new Date().toISOString(),
-      };
-
-      // Foran UI ko user ke message aur AI ke placeholder ke saath update karein
-      const updatedMessages = [...currentChat.messages, userMessage, aiMessagePlaceholder];
-      const updatedChat = { ...currentChat, messages: updatedMessages };
-
-      setCurrentChat(updatedChat);
-      setChats((prev) => prev.map((chat) => (chat.id === currentChat.id ? updatedChat : chat)));
-      setUploadedFiles([]); // Uploaded files clear kar dein
-      setIsLoading(true); // Loading state start karein
-
-      try {
-        // STEP 3: Nayi streaming API call karein
-        await apiClient.generateAIStream(
-          {
-            model: selectedModel,
-            prompt: content,
-            chatId: currentChat.id,
-            files: fileIds || [],
-          },
-          (chunk) => {
-            console.log("chunk DAta ", chunk);
-
-            // onData: Jab bhi backend se naya text aaye
-            // Hum state mein AI message ke content ko update karte rahenge
-            setCurrentChat((prevChat) => {
-              if (!prevChat) return prevChat;
-
-              const newMessages = prevChat.messages.map((msg) => {
-                if (msg.id === aiMessagePlaceholder.id) {
-                  // Placeholder ke content mein naya chunk jodein
-                  return { ...msg, content: msg.content + chunk };
-                }
-                return msg;
-              });
-              return { ...prevChat, messages: newMessages };
-            });
-          },
-          () => {
-            // onClose: Jab stream khatam ho jaye
-            setIsLoading(false);
-            // Yahan hum chat list (sidebar) ko bhi update kar sakte hain
-            // Taake poora message save ho jaye
-            if (currentChat) {
-              // We can trigger a final state update to ensure everything is synced
-              selectChat(currentChat.id)
-            }
-          },
-          (error) => {
-            // onError: Agar koi error aaye
-            console.error("Streaming failed:", error);
-            setIsLoading(false);
-            // UI mein error message dikhayein
-            setCurrentChat((prevChat) => {
-              if (!prevChat) return prevChat;
-              const newMessages = prevChat.messages.map((msg) => {
-                if (msg.id === aiMessagePlaceholder.id) {
-                  return { ...msg, content: "Sorry, an error occurred. Please try again." };
-                }
-                return msg;
-              });
-              return { ...prevChat, messages: newMessages };
-            });
-          }
-        );
-      } catch (error) {
-        console.error("Failed to start AI stream:", error);
-        setIsLoading(false);
-      }
-      // `finally` block ki zaroorat nahi kyunki callbacks loading state handle kar rahe hain
-    },
-    [currentChat, user, token, selectedModel, uploadedFiles]
-  );
   // const addMessage = useCallback(
   //   async (content: string, fileIds?: string[]) => {
   //     // 1. Shuruaati checks
