@@ -792,7 +792,8 @@ import {
   Palette,
   Camera,
   Plus,
-  MessageSquare
+  MessageSquare,
+  Check,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -819,6 +820,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import MessageComponent from "./message-component"
+import { Message } from "react-hook-form"
 
 // API Keys Settings Dialog
 const ApiKeysDialog = () => {
@@ -1100,6 +1102,72 @@ export default function ChatInterface() {
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
 
+
+
+  // Speech-to-Text ke liye naye states 
+  const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
+  const recognitionRef = React.useRef<SpeechRecognition | null>(null);
+
+  React.useEffect(() => {
+    // Check if the browser supports Speech Recognition
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (SpeechRecognition) {
+      setIsSpeechSupported(true);
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      // Ab yeh event type aaram se resolve ho jayega
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        let finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          }
+        }
+        if (finalTranscript) {
+          setInput(prevInput => prevInput.trim() + (prevInput ? ' ' : '') + finalTranscript);
+        }
+      };
+
+      // Error event bhi resolve ho jayega
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        console.error("Speech recognition error:", event.error);
+        if (isRecording) {
+          setIsRecording(false);
+        }
+      };
+
+      recognition.onend = () => {
+        // Jab recording ruk jaye (chahe manually ya automatically), state ko false kar dein
+        setIsRecording(false);
+      };
+
+      recognitionRef.current = recognition;
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, []); // Empty dependency array means this runs only once on mount
+
+  const handleMicClick = () => {
+    const recognition = recognitionRef.current;
+    if (!recognition) return;
+
+    if (isRecording) {
+      recognition.stop();
+      // onend event state ko handle kar lega
+    } else {
+      recognition.start();
+      setIsRecording(true); // Recording shuru hote hi state ko true karein
+    }
+  };
+
   // ✅ YEH SAHI CODE HAI - ISE UPAR WALE DONO KI JAGAH LAGAYEIN ✅
 
   React.useEffect(() => {
@@ -1194,13 +1262,17 @@ export default function ChatInterface() {
   const handleFilesUploaded = (files: any[]) => {
     setUploadedFiles([...uploadedFiles, ...files])
   }
-
   const startNewImageChat = () => {
     setChatType('image')
-    if (currentChat) {
-      selectChat(currentChat.id)
-    }
+    createNewChat('image')
   }
+
+  // const startNewImageChat = () => {
+  //   setChatType('image')
+  //   if (currentChat) {
+  //     selectChat(currentChat.id)
+  //   }
+  // }
 
   const removeFile = (index: number) => {
     setUploadedFiles(uploadedFiles.filter((_, i) => i !== index))
@@ -1274,6 +1346,7 @@ export default function ChatInterface() {
                     disabled={isLoading || isGeneratingImage}
                   />
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
+
                     <Button
                       onClick={handleSend}
                       disabled={!input.trim() || isLoading || isGeneratingImage}
@@ -1364,6 +1437,17 @@ export default function ChatInterface() {
                   />
 
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                    {isSpeechSupported && (
+                      <Button
+                        onClick={handleMicClick}
+                        size="sm"
+                        variant={isRecording ? "destructive" : "outline"}
+                        className="h-8 w-8 p-0"
+                        title={isRecording ? "Stop and confirm" : "Start recording"}
+                      >
+                        {isRecording ? <Check className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                      </Button>
+                    )}
                     <Button
                       onClick={handleSend}
                       disabled={!input.trim() || isLoading || isGeneratingImage}
