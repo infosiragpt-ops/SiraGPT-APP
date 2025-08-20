@@ -362,7 +362,7 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
 
                 {/* USER Message in a Card */}
                 {message.role === 'USER' && (
-                    <Card className="p-3 w-auto max-w-[85%] bg-[#F4F4F4] text-primary ">
+                    <Card className="p-3 w-auto max-w-[85%] bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ">
                         <MessageContent />
                         <FileDisplay />
                         {/* <p className="mt-3 text-xs opacity-70 text-right">
