@@ -83,6 +83,7 @@ model Message {
   tokens    Int?
   timestamp DateTime    @default(now())
   files     Json?       // Store file references
+  feedback  String? 
 
   // Relations
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)

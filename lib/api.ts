@@ -130,6 +130,20 @@ class ApiClient {
     return this.request(`/chats/${chatId}/messages`, { method: 'DELETE' });
   }
 
+
+
+  async clearMessageById(messageId: string) {
+    return this.request(`/chats/messages/${messageId}/deleteMessage`, { method: 'DELETE' });
+  }
+
+  async handleFeedbackLikeDislike(messageId: string, feedbackType: 'liked' | 'disliked') {
+    return this.request(`/chats/messages/${messageId}/feedback`, {
+      method: 'POST',
+      body: JSON.stringify({ feedback: feedbackType }),
+    });
+  }
+
+
   // File endpoints
   async uploadFiles(files: FileList) {
     const formData = new FormData();

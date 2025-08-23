@@ -193,17 +193,25 @@ import {
     Clipboard,
     Check,
     Volume2,
-    Square
+    Square,
+    ThumbsUp,
+    ThumbsDown,
+    RefreshCw,
+    Wand2,
+    Share2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import apiClient from '@/lib/api';
+import { toast } from 'sonner';
 
 // Enhanced Message Component (Naya aur behtar version)
-const MessageComponent = ({ message, user }: { message: any; user: any }) => {
+const MessageComponent = ({ message, user, onRegenerate }: { message: any; user: any; onRegenerate: () => void; }) => {
     const [isCopied, setIsCopied] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
+    const [feedbackSent, setFeedbackSent] = useState(message.feedback || null);
 
     // Poora message copy karne ke liye function
     const handleGlobalCopy = () => {
@@ -212,6 +220,20 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
             setTimeout(() => setIsCopied(false), 2000); // 2 second baad icon wapas change ho jayega
         });
     };
+
+    const handleFeedback = async (feedbackType: 'liked' | 'disliked') => {
+        if (feedbackSent) return; // Agar pehle se feedback de diya hai to kuch na karein
+
+        try {
+            // Backend API ko call karein jo humne Step 1.2 mein banayi thi
+            await apiClient.handleFeedbackLikeDislike(message.id, feedbackType);
+            setFeedbackSent(feedbackType); // State update karein taake button ka color change ho
+            toast.success("Feedback submitted!");
+        } catch (error) {
+            toast.error("Could not submit feedback.");
+        }
+    };
+
     const handleSpeak = () => {
         if (isSpeaking) {
             window.speechSynthesis.cancel(); // Speech ko rokein
@@ -377,9 +399,9 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
                         <MessageContent />
                         <FileDisplay />
                         {/* Global Copy Button - Sirf AI messages ke liye */}
-                        <div className="mt-3">
+                        <div className="mt-3 flex items-center gap-1">
                             <Button
-                                variant="ghost" // 'ghost' ya 'secondary' try kar sakte hain
+                                variant="ghost"
                                 size="sm"
                                 className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
                                 onClick={handleGlobalCopy}
@@ -396,6 +418,58 @@ const MessageComponent = ({ message, user }: { message: any; user: any }) => {
                             >
                                 {isSpeaking ? <Square size={16} /> : <Volume2 size={16} />}
                             </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                title="Like"
+                                onClick={() => handleFeedback('liked')}
+                                className={`h-7 w-7 p-1  ${feedbackSent === 'liked'
+                                    ? 'bg-muted text-foreground'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                <ThumbsUp size={16} />
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                // className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                title="Dislike"
+                                className={`h-7 w-7 p-1  ${feedbackSent === 'disliked'
+                                    ? 'bg-muted text-foreground text-red-500'
+                                    : 'text-muted-foreground hover:text-foreground '
+                                    }`}
+                                //  className={`h-7 w-7 p-1 ${feedbackSent === 'disliked' ? 'text-red-500' : ''}`} 
+                                onClick={() => handleFeedback('disliked')}
+                            >
+                                <ThumbsDown size={16} />
+                            </Button>
+
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                title="Regenerate"
+                                onClick={onRegenerate}
+                            >
+                                <RefreshCw size={16} />
+                            </Button>
+                            {/* <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                title="Edit/Customize"
+                            >
+                                <Wand2 size={16} />
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                title="Share"
+                            >
+                                <Share2 size={16} />
+                            </Button> */}
                         </div>
                     </div>
                 )}

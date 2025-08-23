@@ -404,4 +404,85 @@ router.delete('/:id/messages', authenticateToken, async (req, res) => {
   }
 });
 
+
+router.post('/messages/:messageId/feedback', [
+  body('feedback').isIn(['liked', 'disliked']).withMessage('Invalid feedback value'),
+], authenticateToken, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { messageId } = req.params;
+    const { feedback } = req.body;
+
+    // Pehle verify karein ke message user ke chat ka hissa hai
+    const message = await prisma.message.findUnique({
+      where: { id: messageId },
+      select: {
+        chat: {
+          select: {
+            userId: true
+          }
+        }
+      }
+    });
+
+    if (!message || message.chat.userId !== req.user.id) {
+      return res.status(404).json({ error: 'Message not found or access denied' });
+    }
+
+    // Ab feedback update karein
+    const updatedMessage = await prisma.message.update({
+      where: { id: messageId },
+      data: { feedback },
+    });
+
+    res.status(200).json({ message: updatedMessage });
+
+  } catch (error) {
+    console.error('Add feedback error:', error);
+    res.status(500).json({ error: 'Failed to add feedback' });
+  }
+});
+
+// Clear specifi messages
+router.delete('/messages/:messageId/deleteMessage', authenticateToken, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    console.log(messageId);
+
+    const userId = req.user.id;
+    const message = await prisma.message.findUnique({
+      where: {
+        id: messageId,
+      },
+      select: {
+        chat: {
+          select: {
+            userId: true,
+          },
+        },
+      },
+    });
+
+    if (!message || message.chat.userId !== userId) {
+      return res.status(404).json({ error: 'Message not found or access denied.' });
+    }
+
+    await prisma.message.delete({
+      where: {
+        id: messageId,
+      },
+    });
+
+    res.json({ message: 'Message cleared successfully' });
+
+
+  } catch (error) {
+    console.error('Error deleting message:', error);
+    res.status(500).json({ error: 'Failed to delete the message due to a server error.' });
+  }
+});
 module.exports = router;

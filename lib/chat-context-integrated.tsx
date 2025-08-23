@@ -28,7 +28,7 @@ interface Chat {
 interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
-  // createNewChat: () => void
+  setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
   createNewChat: (type?: 'text' | 'image', initialContent?: string) => void
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[]) => Promise<void>
@@ -41,7 +41,8 @@ interface ChatContextType {
   chatType: 'text' | 'image';
   uploadedFiles: any[]
   setChatType: React.Dispatch<React.SetStateAction<'text' | 'image'>>;
-  setUploadedFiles: (files: any[]) => void
+  setUploadedFiles: (files: any[]) => void;
+  regenerateLastMessage: () => void
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined)
@@ -199,18 +200,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Initialize messages array
       let messages: Message[] = [];
 
-      // if (initialContent) {
-      //   // Add user's initial message
-      //   const initialMessage: Message = {
-      //     id: `msg-${Date.now()}`,
-      //     chatId: newChat.id,
-      //     role: "USER",
-      //     content: initialContent,
-      //     timestamp: new Date().toISOString(),
-      //   };
-      //   messages = [initialMessage];
-      // }
-      // If no initialContent, keep messages empty to avoid default message
 
       newChat.messages = messages;
 
@@ -452,10 +441,122 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [currentChat, token],
   )
 
+
+  const regenerateLastMessage = async () => {
+    if (!currentChat || isLoading) return;
+
+    // Aakhri AI message aur usse pehle wala User message dhoondein
+    let lastAiMessageIndex = -1;
+    // let lastAu=
+    for (let i = currentChat.messages.length - 1; i >= 0; i--) {
+      if (currentChat.messages[i].role === 'ASSISTANT') {
+        lastAiMessageIndex = i;
+        break; // Jaise hi mil jaye, loop rok dein
+      }
+    }
+    if (lastAiMessageIndex === -1) {
+      //toast.info("No AI message to regenerate.");
+      return;
+    }
+
+    const lastUserMessage = currentChat.messages[lastAiMessageIndex - 1];
+    const lastAiMessage = currentChat.messages[lastAiMessageIndex];
+    if (!lastUserMessage || lastUserMessage.role !== 'USER') {
+      // toast.error("Could not find the original prompt.");
+      return;
+    }
+
+    const originalUserMessage = currentChat.messages[lastAiMessageIndex - 1];
+    if (!originalUserMessage || originalUserMessage.role !== 'USER') {
+      return;
+    }
+
+
+    const messagesBeforeRegeneration = currentChat.messages.slice(0, lastAiMessageIndex);
+    console.log('messagesBeforeRegeneration.content ', messagesBeforeRegeneration);
+
+    setCurrentChat(prev => prev ? { ...prev, messages: messagesBeforeRegeneration } : null);
+    setIsLoading(true);
+
+    const aiMessagePlaceholder: Message = {
+      id: `ai-regen-${Date.now()}`,
+      chatId: currentChat.id,
+      role: 'ASSISTANT',
+      content: "",
+      tokens: 0,
+      timestamp: new Date().toISOString(),
+
+      files: undefined,
+    };
+
+    // Ab yeh `setCurrentChat` error nahi dega
+    setCurrentChat(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        messages: [...prev.messages, aiMessagePlaceholder]
+      };
+    });
+
+
+    try {
+      // Step 4: Call your streaming function
+      await apiClient.generateAIStream(
+        {
+          model: selectedModel,
+          prompt: originalUserMessage.content,
+          chatId: currentChat.id,
+          files: (originalUserMessage.files?.map((f: any) => f.id) as string[]) || [],
+        },
+        (chunk) => {
+          // onData: Fill the placeholder
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const updatedMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                return { ...msg, content: msg.content + chunk };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: updatedMessages };
+          });
+        },
+        () => {
+          // onClose: Stop loading
+          setIsLoading(false);
+        },
+        (error) => {
+          // onError: Handle error
+          console.error("Streaming failed during regeneration:", error);
+          setIsLoading(false);
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const errorMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                return { ...msg, content: "Sorry, an error occurred during regeneration." };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: errorMessages };
+          });
+        }
+      );
+
+      apiClient.clearMessageById(lastUserMessage.id);
+      apiClient.clearMessageById(lastAiMessage.id);
+
+    } catch (error) {
+      setIsLoading(false);
+    }
+
+  };
+
+
   return (
     <ChatContext.Provider
       value={{
         chats,
+        setCurrentChat,
         currentChat,
         createNewChat,
         selectChat,
@@ -470,6 +571,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setChatType,
         setUploadedFiles,
         availableModels,
+        regenerateLastMessage,
       }}
     >
       {children}

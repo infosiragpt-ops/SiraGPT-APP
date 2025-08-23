@@ -18,6 +18,7 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronDown,
+  PanelLeft,
 } from "lucide-react"
 
 import {
@@ -32,6 +33,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
+  SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
 import {
@@ -47,7 +50,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter } from "next/navigation"
 
-
+import { cn } from "@/lib/utils"
 
 // Generation Types with enhanced functionality
 const generationTypes = [
@@ -85,7 +88,7 @@ export function AppSidebar() {
   const { chats, currentChat, createNewChat, selectChat, deleteChat, selectedModel, setSelectedModel } = useChat()
   const router = useRouter()
   const [selectedType, setSelectedType] = React.useState("Text Chat")
-
+  const { state, toggleSidebar } = useSidebar()
   const handleLogout = () => {
     localStorage.setItem('currentChatId', "")
 
@@ -119,94 +122,54 @@ export function AppSidebar() {
   }
 
   return (
-    <Sidebar className="border-r border-border/40 w-64">
-      <SidebarHeader className="border-b border-border/40 p-4">
-        <div className="flex items-center gap-2 mb-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-            <Bot className="h-4 w-4 text-primary-foreground" />
+    <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
+      <SidebarHeader className={cn("border-b border-border/40 transition-all", state === 'open' ? 'p-4' : 'p-2')}>
+        {/* Jab sidebar open ho to yeh layout dikhega */}
+        <div className={cn("flex items-center justify-between", state === 'closed' && 'hidden')}>
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+              <Bot className="h-4 w-4 text-primary-foreground" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-semibold">OpenWebUI</span>
+              <span className="text-xs text-muted-foreground">AI Platform</span>
+            </div>
           </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold">OpenWebUI</span>
-            <span className="text-xs text-muted-foreground">AI Platform</span>
-          </div>
+          <SidebarTrigger />
         </div>
 
-        <Button onClick={handleNewChat} className="w-full justify-start h-9 px-3 bg-transparent" variant="outline">
-          <Plus className="mr-2 h-4 w-4" />
-          New Chat
-        </Button>
+        {/* Jab sidebar close ho to sirf yeh logo dikhega (hover effect ke saath) */}
+        <div className={cn("relative", state === 'open' && 'hidden')}>
+          <div className="group flex h-8 w-8 items-center justify-center rounded-lg bg-primary cursor-pointer" onClick={toggleSidebar}>
+            <Bot className="h-4 w-4 text-primary-foreground transition-opacity group-hover:opacity-0" />
+            <PanelLeft className="h-4 w-4 text-primary-foreground absolute opacity-0 transition-opacity group-hover:opacity-100" />
+          </div>
+        </div>
       </SidebarHeader>
 
+
+
+
+      <div className={cn("transition-all", state === 'open' ? 'p-4 pt-2' : 'p-2', "mt-4")}>
+        <SidebarMenuButton onClick={() => createNewChat()} className="w-full justify-start h-9 px-3" variant="outline">
+          <Plus className="h-4 w-4" />
+          {/* Yeh text bhi sirf open state mein dikhega */}
+          <span className="group-data-[state=closed]:hidden ml-2">New Chat</span>
+        </SidebarMenuButton>
+      </div>
+
       <SidebarContent className="px-2">
-        {/* AI Models */}
-        {/* <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground mb-2">AI Models</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {llmModels.map((model) => (
-                <SidebarMenuItem key={model.name}>
-                  <SidebarMenuButton
-                    isActive={selectedModel === model.name}
-                    onClick={() => setSelectedModel(model.name)}
-                    className="w-full justify-start h-auto py-3 px-3"
-                  >
-                    <model.icon className="mr-3 h-4 w-4 flex-shrink-0" />
-                    <div className="flex flex-col items-start min-w-0 flex-1">
-                      <span className="text-sm font-medium">{model.name}</span>
-                      <span className="text-xs text-muted-foreground">{model.description}</span>
-                    </div>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup> */}
 
-        {/* <SidebarSeparator className="my-4" /> */}
 
-        {/* Generation Types */}
-        {/* <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-medium text-muted-foreground mb-2">
-            Generation Types
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {generationTypes.map((type) => (
-                <SidebarMenuItem key={type.name}>
-                  <SidebarMenuButton
-                    isActive={selectedType === type.name}
-                    onClick={() => handleTypeChange(type.name)}
-                    className="h-auto py-3 px-3"
-                    disabled={!type.available}
-                  >
-                    <type.icon className="mr-3 h-4 w-4 flex-shrink-0" />
-                    <div className="flex flex-col items-start min-w-0 flex-1">
-                      <div className="flex items-center gap-2 w-full">
-                        <span className="text-sm font-medium">{type.name}</span>
-                        {type.badge && (
-                          <Badge variant="outline" className="text-xs">
-                            {type.badge}
-                          </Badge>
-                        )}
-                      </div>
-                      <span className="text-xs text-muted-foreground">{type.description}</span>
-                    </div>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup> */}
-
-        <SidebarSeparator className="my-4" />
+        <SidebarSeparator />
 
         {/* Recent Chats - Only show for Text Chat */}
         {selectedType === "Text Chat" && (
           <SidebarGroup>
-            <SidebarGroupLabel className="text-xs font-medium text-muted-foreground mb-2">
+            <SidebarGroupLabel className={cn("px-3 py-4 text-center text-sm text-muted-foreground", state === 'closed' && 'hidden')}>
               Recent Chats
             </SidebarGroupLabel>
-            <SidebarGroupContent>
+            <SidebarGroupContent className={cn(state === 'closed' && 'hidden')}>
               <SidebarMenu>
                 {chats.length === 0 ? (
                   <div className="px-3 py-4 text-center text-sm text-muted-foreground">
@@ -221,7 +184,9 @@ export function AppSidebar() {
                           onClick={() => selectChat(chat.id)}
                           className="flex-1 justify-start h-auto py-2 pr-8"
                         >
+
                           <History className="mr-2 h-4 w-4 flex-shrink-0" />
+
                           <div className="flex flex-col items-start min-w-0 flex-1">
                             <span className="text-sm truncate w-full">{chat.title}</span>
                             <span className="text-xs text-muted-foreground">{formatChatTime(chat.updatedAt)}</span>
@@ -260,7 +225,7 @@ export function AppSidebar() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton className="w-full justify-start h-auto py-3">
-                  <Avatar className="h-8 w-8">
+                  <Avatar className={state === 'closed' && 'hidden' ? "h-6 w-6" : "h-9 w-9"}>
                     <AvatarImage src={user?.avatar || "/placeholder.svg"} />
                     <AvatarFallback>
                       {user?.name
@@ -269,7 +234,7 @@ export function AppSidebar() {
                         .join("") || "U"}
                     </AvatarFallback>
                   </Avatar>
-                  <div className="flex flex-col items-start min-w-0 flex-1 ml-2">
+                  <div className={cn("flex flex-col items-start min-w-0 flex-1 ml-2", state === 'closed' && 'hidden')}>
                     <span className="text-sm font-medium truncate">{user?.name || "Admin User"}</span>
                     <span className="text-xs text-muted-foreground">{user?.plan || "Enterprise Plan"}</span>
                   </div>
