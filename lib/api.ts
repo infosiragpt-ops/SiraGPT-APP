@@ -143,6 +143,28 @@ class ApiClient {
     });
   }
 
+  async handleShare(chatId: String) {
+    return this.request(`/chats/${chatId}/share`, {
+      method: 'POST',
+      // body: JSON.stringify({}),
+    });
+  }
+
+  async shareChatIdLink(shareId: String) {
+    return this.request(`/public/share/${shareId}`, {
+      method: 'GET',
+      // body: JSON.stringify({}),
+    });
+  }
+
+
+  async editUserMessage(messageId: String, data: any) {
+    return this.request(`/chats/messages/${messageId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
 
   // File endpoints
   async uploadFiles(files: FileList) {

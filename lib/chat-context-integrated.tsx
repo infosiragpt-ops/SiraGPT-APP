@@ -43,6 +43,7 @@ interface ChatContextType {
   setChatType: React.Dispatch<React.SetStateAction<'text' | 'image'>>;
   setUploadedFiles: (files: any[]) => void;
   regenerateLastMessage: () => void
+  editAndRegenerate: (messageId: string, newContent: string) => void
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined)
@@ -549,6 +550,117 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(false);
     }
 
+
+    const updateMessageInChat = (messageId: string, newContent: string) => {
+      setCurrentChat(prevChat => {
+        if (!prevChat) return null;
+
+        const updatedMessages = prevChat.messages.map(msg => {
+          if (msg.id === messageId) {
+            return { ...msg, content: newContent };
+          }
+          return msg;
+        });
+
+        return { ...prevChat, messages: updatedMessages };
+      });
+    };
+  };
+
+  const editAndRegenerate = async (messageId: string, newContent: string) => {
+    if (!currentChat || isLoading) return;
+
+    // Step 1: Message dhoondein jisko edit kiya gaya
+    const messageIndex = currentChat.messages.findIndex(m => m.id === messageId);
+    if (messageIndex === -1) {
+      // toast.error("Original message not found in chat.");
+      return;
+    }
+
+    // const messagesUpToEdit = currentChat.messages.slice(0, messageIndex + 1);
+
+    // messagesUpToEdit[messageIndex].content = newContent;
+    const updatedMessages = currentChat.messages
+      .slice(0, messageIndex + 1)
+      .map((msg, index) => {
+        if (index === messageIndex) {
+
+          return { ...msg, content: newContent };
+        }
+        // 4. Baaki messages ko waise hi rehne dein
+        return msg;
+      });
+
+    setCurrentChat(prev => prev ? { ...prev, messages: updatedMessages } : null);
+    setIsLoading(true);
+
+    try {
+      await apiClient.editUserMessage(messageId, { content: newContent });
+    } catch (error) {
+      //toast.error("Could not save the edited message.");
+      // Error ki soorat mein UI ko wapas purani state par le aayein (optional)
+      setIsLoading(false);
+      return;
+    }
+
+    // Step 4: Ab naye (edited) prompt se AI stream shuru karein
+    // Yeh code bilkul 'addMessage' jaisa hai, bas user ka message dobara add nahi karta
+    const aiMessagePlaceholder: Message = {
+      id: `ai-regen-${Date.now()}`,
+      chatId: currentChat.id,
+      role: 'ASSISTANT',
+      content: "",
+      tokens: 0,
+      timestamp: new Date().toISOString(),
+
+      files: undefined,
+    };
+    setCurrentChat(prev => prev ? { ...prev, messages: [...prev.messages, aiMessagePlaceholder] } : null);
+
+
+
+    await apiClient.generateAIStream(
+      {
+        model: selectedModel,
+        prompt: newContent,
+        chatId: currentChat.id,
+        files: [],
+      },
+      (chunk) => {
+        // onData: Fill the placeholder
+        setCurrentChat((prevChat) => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = prevChat.messages.map((msg) => {
+            if (msg.id === aiMessagePlaceholder.id) {
+              return { ...msg, content: msg.content + chunk };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: updatedMessages };
+        });
+      },
+      () => {
+        // onClose: Stop loading
+        setIsLoading(false);
+      },
+      (error) => {
+        // onError: Handle error
+        console.error("Streaming failed during regeneration:", error);
+        setIsLoading(false);
+        setCurrentChat((prevChat) => {
+          if (!prevChat) return prevChat;
+          const errorMessages = prevChat.messages.map((msg) => {
+            if (msg.id === aiMessagePlaceholder.id) {
+              return { ...msg, content: "Sorry, an error occurred during regeneration." };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: errorMessages };
+        });
+      }
+    );
+    apiClient.clearMessageById(messageId);
+
   };
 
 
@@ -572,6 +684,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setUploadedFiles,
         availableModels,
         regenerateLastMessage,
+        editAndRegenerate,
       }}
     >
       {children}

@@ -16,6 +16,7 @@ const aiRoutes = require('./src/routes/ai');
 const paymentRoutes = require('./src/routes/payments');
 const adminRoutes = require('./src/routes/admin');
 const userRoutes = require('./src/routes/users');
+const publicRoutes = require('./src/routes/public');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -85,6 +86,7 @@ if (process.env.NODE_ENV !== 'production') {
 // Static files
 app.use('/uploads', express.static('uploads'));
 
+
 // Health check
 app.get('/health', (req, res) => {
     res.json({
@@ -102,6 +104,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/public', publicRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

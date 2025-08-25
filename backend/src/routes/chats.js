@@ -3,7 +3,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const OpenAI = require('openai');
-
+const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
 
@@ -485,4 +485,106 @@ router.delete('/messages/:messageId/deleteMessage', authenticateToken, async (re
     res.status(500).json({ error: 'Failed to delete the message due to a server error.' });
   }
 });
+
+
+router.post('/:chatId/share', authenticateToken, async (req, res) => {
+  try {
+    const { chatId } = req.params;
+
+    // Check karein ke chat user ka hai
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, userId: req.user.id }
+    });
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    let shareId = chat.shareId;
+    // Agar pehle se share nahi hai, to ek naya unique ID banayein
+    if (!shareId) {
+      shareId = uuidv4();
+      await prisma.chat.update({
+        where: { id: chatId },
+        data: {
+          isShared: true,
+          shareId: shareId
+        }
+      });
+    }
+
+    // Aapko .env file mein BASE_URL set karna hoga (e.g., BASE_URL=http://localhost:3000)
+    const shareableLink = `/share/${shareId}`;
+    res.json({ shareableLink });
+
+  } catch (error) {
+    console.error('Share chat error:', error);
+    res.status(500).json({ error: 'Failed to create share link' });
+  }
+});
+
+
+
+// --- Edit a User's Message (Naya aur Behtar Version) ---
+router.put('/messages/:messageId', authenticateToken, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { content } = req.body;
+    if (!content || content.trim() === "") {
+      return res.status(400).json({ error: "Content cannot be empty." });
+    }
+
+    // Transaction shuru karein taake saare operations ek saath hon ya koi na ho
+    const result = await prisma.$transaction(async (tx) => {
+      // Step 1: Message dhoondein aur verify karein ke user ka hai
+      const messageToEdit = await tx.message.findFirst({
+        where: {
+          id: messageId,
+          role: 'USER',
+          chat: { userId: req.user.id }
+        }
+      });
+
+      if (!messageToEdit) {
+        // Agar message nahi milta to transaction ko rollback karne ke liye error throw karein
+        throw new Error("Message not found or you can't edit it.");
+      }
+
+      // Step 2: Is message ke baad wale saare messages ko delete karein
+      await tx.message.deleteMany({
+        where: {
+          chatId: messageToEdit.chatId,
+          timestamp: {
+            gt: messageToEdit.timestamp // 'gt' matlab 'greater than'
+          }
+        }
+      });
+
+      // Step 3: Original message ko naye content se update karein
+      const updatedMessage = await tx.message.update({
+        where: { id: messageId },
+        data: { content: content.trim() }
+      });
+
+      // Step 4: Chat ka 'updatedAt' timestamp bhi update karein
+      await tx.chat.update({
+        where: { id: messageToEdit.chatId },
+        data: { updatedAt: new Date() }
+      });
+
+      return updatedMessage;
+    });
+
+    // Transaction kamyab hone par naya message wapas bhejein
+    res.json({ message: result });
+
+  } catch (error) {
+    console.error('Edit message error:', error);
+    if (error.message.includes("Message not found")) {
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to edit message' });
+  }
+});
+
+
 module.exports = router;

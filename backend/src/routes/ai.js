@@ -284,19 +284,27 @@ router.post(
 
       // Prepare messages for OpenAI
 
+      const latexSystemInstruction = {
+        role: 'system',
+        content: `You are a helpful math tutor. When you explain math functions, return all equations in LaTeX format using Markdown: use \\( ... \\) for inline math and $$ ... $$ for block math. Do not escape backslashes.`
+      };
       // Step 1: get previous chat history from DB
       const history = await prisma.message.findMany({
         where: { chatId },
         orderBy: { timestamp: 'asc' }
       });
 
-      // Step 2: convert DB messages to OpenAI format
-      const messages = history.map(m => ({
+
+      const historyMessages = history.map(m => ({
         role: m.role === 'USER' ? 'user' : 'assistant',
         content: m.content
       }));
 
-      console.log("AI Services", messages);
+      // ✅ NAYI TABDEELI: Step 4 - Final messages array banayein, sab se pehle system message daalein
+      const messages = [
+        latexSystemInstruction, // Hidayat sab se pehle
+        ...historyMessages      // Phir purani chat
+      ];
 
       // Step 3: add current prompt at the end
       messages.push({ role: "user", content: prompt });
