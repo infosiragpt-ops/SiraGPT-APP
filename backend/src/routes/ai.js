@@ -286,7 +286,13 @@ router.post(
 
       const latexSystemInstruction = {
         role: 'system',
-        content: `You are a helpful math tutor. When you explain math functions, return all equations in LaTeX format using Markdown: use \\( ... \\) for inline math and $$ ... $$ for block math. Do not escape backslashes.`
+        content: `You are an expert AI assistant.
+Writing math formulas:
+You have a MathJax render environment.
+- Any LaTeX text between single dollar sign ($) will be rendered as a TeX formula;
+- Use $(tex_formula)$ in-line delimiters to display equations instead of backslash;
+- The render environment only uses $ (single dollarsign) as a container delimiter, never output $$.
+Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
       };
       // Step 1: get previous chat history from DB
       const history = await prisma.message.findMany({
@@ -302,8 +308,8 @@ router.post(
 
       // ✅ NAYI TABDEELI: Step 4 - Final messages array banayein, sab se pehle system message daalein
       const messages = [
-        latexSystemInstruction, // Hidayat sab se pehle
-        ...historyMessages      // Phir purani chat
+        latexSystemInstruction,
+        ...historyMessages
       ];
 
       // Step 3: add current prompt at the end
@@ -312,12 +318,13 @@ router.post(
       // Add system message with file context if files are present
       if (processedFiles.length > 0) {
         const fileContext = processedFiles.map(f =>
-          `File: ${f.name}\nContent: ${f.extractedText || 'Binary file'}`
+          `File: ${f.name}\nContent: ${f.extractedText || 'Binary file'
+          }`
         ).join('\n\n');
 
         messages.push({
           role: 'system',
-          content: `You have access to the following files:\n\n${fileContext}\n\nUse this information to answer the user's questions.`
+          content: `You have access to the following files: \n\n${fileContext} \n\nUse this information to answer the user's questions.`
         });
       }
 

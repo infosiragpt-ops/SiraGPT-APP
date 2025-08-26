@@ -59,12 +59,33 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 response.shareableLink
             );
 
-            navigator.clipboard.writeText(process.env.NEXT_PUBLIC_URL + response.shareableLink);
+            navigator.clipboard.writeText(process.env.NEXT_PUBLIC_API_URL + response.shareableLink);
             toast.success("Shareable link copied to clipboard!");
         } catch (error) {
             toast.error(`Failed to create share link. ${error}`);
         }
     };
+
+
+    // const renderMathContent = (content: string) => {
+    //     // Split content to handle inline ($...$) and display ($$...$$) LaTeX
+    //     const parts = content.split(/(\$\$[\s\S]+?\$\$|\$[\s\S]+?\$)/g);
+    //     return parts.map((part, index) => {
+    //         if (part.startsWith('$$') && part.endsWith('$$')) {
+    //             // Display math (block)
+    //             return <BlockMath key={index} math={part.slice(2, -2)} />;
+    //         } else if (part.startsWith('$') && part.endsWith('$')) {
+    //             // Inline math
+    //             return <InlineMath key={index} math={part.slice(1, -1)} />;
+    //         } else {
+    //             // Regular Markdown content
+    //             return <ReactMarkdown key={index}
+    //                 remarkPlugins={[remarkGfm]}
+    //                 components={{ code: CodeBlock }}
+    //             >{part}</ReactMarkdown>;
+    //         }
+    //     });
+    // };
 
 
     const renderMathContent = (content: string) => {
@@ -79,13 +100,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 return <InlineMath key={index} math={part.slice(1, -1)} />;
             } else {
                 // Regular Markdown content
-                return <ReactMarkdown key={index}
-                    remarkPlugins={[remarkGfm]}
-                    components={{ code: CodeBlock }}
-                >{part}</ReactMarkdown>;
+                return <ReactMarkdown key={index}>{part}</ReactMarkdown>;
             }
         });
     };
+
     const handleEditSave = async () => {
         if (editedContent.trim() === message.content || editedContent.trim() === "") {
             setIsEditing(false);
@@ -205,17 +224,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     // Message content ko render karne ke liye alag se component banaya taaki code saaf rahe
     const MessageContent = () => (
         <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
-            {/* <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]} // Add remarkMath
+                rehypePlugins={[rehypeKatex]} // Add rehypeKatex
+                components={{ code: CodeBlock }}
+            >
+                {message.content}
+            </ReactMarkdown>
 
-                    // remarkPlugins={[remarkGfm, remarkMath]} // Add remarkMath
-                    // rehypePlugins={[rehypeKatex]} // Add rehypeKatex
-                    components={{ code: CodeBlock }}
-                >
-                    {message.content}
-                </ReactMarkdown> */}
 
-            {renderMathContent(message.content)}
         </div>
     );
 
