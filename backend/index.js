@@ -17,6 +17,7 @@ const paymentRoutes = require('./src/routes/payments');
 const adminRoutes = require('./src/routes/admin');
 const userRoutes = require('./src/routes/users');
 const publicRoutes = require('./src/routes/public');
+const downloadRoutes = require('./src/routes/download');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -105,6 +106,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/public', publicRoutes);
+app.use('/api/download', downloadRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

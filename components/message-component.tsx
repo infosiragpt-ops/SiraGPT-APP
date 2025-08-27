@@ -23,6 +23,7 @@ import {
     Share2,
     Pencil
 } from "lucide-react";
+import { DownloadButtons } from './download-buttons';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -410,6 +411,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             >
                                 <Share2 size={16} />
                             </Button>
+                            <DownloadButtons 
+                                content={message.content} 
+                                messageId={message.id} 
+                            />
                         </div>
                     </div>
                 )}
