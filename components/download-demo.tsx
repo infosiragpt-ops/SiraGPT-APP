@@ -6,22 +6,29 @@ import { Button } from '@/components/ui/button';
 import { DownloadButtons } from './download-buttons';
 
 export function DownloadDemo() {
-  const sampleTableContent = `Here are the top 10 countries by population:
+  const sampleTableContent = `Here are examples of derivatives:
 
-| Country | Population (millions) | Capital | GDP (trillion USD) |
-|---------|----------------------|---------|-------------------|
-| China | 1,439 | Beijing | 17.7 |
-| India | 1,380 | New Delhi | 3.7 |
-| United States | 331 | Washington D.C. | 26.9 |
-| Indonesia | 273 | Jakarta | 1.3 |
-| Pakistan | 225 | Islamabad | 0.35 |
-| Brazil | 215 | Brasília | 2.1 |
-| Nigeria | 211 | Abuja | 0.44 |
-| Bangladesh | 166 | Dhaka | 0.46 |
-| Russia | 146 | Moscow | 1.8 |
-| Mexico | 130 | Mexico City | 1.3 |
+Derivative of a constant:
+If $f(x) = 5$, then the derivative is: $f'(x) = \\frac{d}{dx}(5) = 0$
 
-This data shows the most populous countries with their basic economic indicators.`;
+Derivative of $x^n$:
+If $f(x) = x^n$, then: $f'(x) = nx^{n-1}$
+
+So, for example, if $f(x) = x^3$, then $f'(x) = 3x^2$.
+
+Derivative of $e^x$:
+If $f(x) = e^x$, then: $f'(x) = e^x$
+
+Derivative of $\\sin(x)$:
+If $f(x) = \\sin(x)$, then: $f'(x) = \\cos(x)$
+
+Derivative using the product rule:
+If $f(x) = x^2\\sin(x)$, then: $f'(x) = \\frac{d}{dx}(x^2\\sin(x)) = 2x\\sin(x) + x^2\\cos(x)$
+
+Derivative using the chain rule:
+If $f(x) = (3x+1)^4$, then: $f'(x) = 4(3x+1)^3 \\cdot 3 = 12(3x+1)^3$
+
+This demonstrates how mathematical content is properly formatted for downloads.`;
 
   return (
     <Card className="p-6 max-w-4xl mx-auto">

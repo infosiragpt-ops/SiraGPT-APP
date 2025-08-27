@@ -438,6 +438,27 @@ class ApiClient {
 
     return response.blob();
   }
+
+  async downloadPowerPoint(messageId: string, filename?: string) {
+    const url = `${this.baseURL}/download/powerpoint`;
+    const config: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+      body: JSON.stringify({ messageId, filename }),
+    };
+
+    const response = await fetch(url, config);
+    
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Network error' }));
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    return response.blob();
+  }
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);

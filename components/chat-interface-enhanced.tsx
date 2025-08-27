@@ -1356,7 +1356,7 @@ export default function ChatInterface() {
             
             {/* Example prompts for downloadable data */}
             {chatType === 'text' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl mx-auto">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
                 <Button
                   variant="outline"
                   className="p-4 h-auto text-left justify-start"
@@ -1395,6 +1395,26 @@ export default function ChatInterface() {
                   <div>
                     <div className="font-medium">Budget Template</div>
                     <div className="text-xs text-muted-foreground">Create downloadable financial data</div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="p-4 h-auto text-left justify-start"
+                  onClick={() => setInput("Show me examples of derivatives with formulas and explanations")}
+                >
+                  <div>
+                    <div className="font-medium">Math Examples</div>
+                    <div className="text-xs text-muted-foreground">Generate mathematical formulas and explanations</div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="p-4 h-auto text-left justify-start"
+                  onClick={() => setInput("Create a periodic table with element symbols, atomic numbers, and atomic masses")}
+                >
+                  <div>
+                    <div className="font-medium">Science Data</div>
+                    <div className="text-xs text-muted-foreground">Generate scientific reference tables</div>
                   </div>
                 </Button>
               </div>

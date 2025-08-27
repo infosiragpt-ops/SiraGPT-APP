@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState } from 'react';
-import { Download, FileSpreadsheet, FileText, File } from 'lucide-react';
+import { Download, FileSpreadsheet, FileText, File, Presentation } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -15,6 +15,7 @@ import {
   downloadCSV, 
   downloadExcel, 
   downloadWord,
+  downloadHTMLPresentation,
   downloadFile,
   type TableData 
 } from '@/lib/download-utils';
@@ -36,7 +37,7 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
     return null;
   }
 
-  const handleDownload = async (format: 'csv' | 'excel' | 'word' | 'text') => {
+  const handleDownload = async (format: 'csv' | 'excel' | 'word' | 'powerpoint' | 'text') => {
     setIsDownloading(true);
     
     try {
@@ -79,6 +80,20 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
         case 'word':
           await downloadWord(content, `${baseFilename}.docx`, tableData);
           toast.success('Word document downloaded successfully!');
+          break;
+
+        case 'powerpoint':
+          try {
+            // Try backend PowerPoint first
+            const blob = await apiClient.downloadPowerPoint(messageId, `${baseFilename}.pptx`);
+            downloadFile(blob, `${baseFilename}.pptx`);
+            toast.success('PowerPoint presentation downloaded successfully!');
+          } catch (backendError) {
+            console.warn('Backend PowerPoint failed, using HTML presentation:', backendError);
+            // Fallback to HTML presentation
+            downloadHTMLPresentation(content, `${baseFilename}.html`, tableData);
+            toast.success('HTML presentation downloaded successfully! (PowerPoint fallback)');
+          }
           break;
 
         case 'text':
@@ -143,6 +158,13 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
         >
           <FileText size={16} />
           Download as Word
+        </DropdownMenuItem>
+        <DropdownMenuItem 
+          onClick={() => handleDownload('powerpoint')}
+          className="flex items-center gap-2"
+        >
+          <Presentation size={16} />
+          Download as PowerPoint
         </DropdownMenuItem>
         <DropdownMenuItem 
           onClick={() => handleDownload('text')}

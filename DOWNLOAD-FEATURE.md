@@ -13,7 +13,14 @@ This feature allows users to download AI responses in multiple formats (Excel, C
 - **CSV**: For tabular data, compatible with Excel and Google Sheets
 - **Excel (.xlsx)**: Full-featured spreadsheet with auto-sized columns
 - **Word (.docx)**: Complete document with text and tables
+- **PowerPoint (.pptx)**: Presentation slides with content and data tables
 - **Text (.txt)**: Plain text version of the response
+
+### Mathematical Content Support
+- **LaTeX Conversion**: Automatically converts LaTeX math expressions to readable text
+- **Formula Recognition**: Detects mathematical formulas and derivatives
+- **Symbol Translation**: Converts Greek letters and mathematical symbols
+- **Structured Math**: Organizes mathematical examples into tables for easy download
 
 ### How It Works
 
@@ -24,12 +31,22 @@ This feature allows users to download AI responses in multiple formats (Excel, C
 
 ### Example Prompts That Generate Downloadable Data
 
+#### General Data Tables
 ```
 - "Create a table of the top 10 countries by population with their capitals and GDP"
 - "List the Fortune 500 top 20 companies with their revenue and employees"
 - "Generate a comparison table of programming languages with features and use cases"
 - "Create a monthly budget template with categories and amounts"
 - "Show me the largest cities in Europe with population and area"
+```
+
+#### Mathematical Content
+```
+- "Show me examples of derivatives with formulas and explanations"
+- "Create a table of trigonometric identities with their formulas"
+- "List integration techniques with examples and solutions"
+- "Generate a periodic table with element symbols and atomic masses"
+- "Show calculus rules with mathematical expressions"
 ```
 
 ### Technical Implementation
@@ -40,7 +57,8 @@ This feature allows users to download AI responses in multiple formats (Excel, C
 - **Download**: Uses browser APIs for file downloads
 
 #### Backend (Server-side)
-- **API Endpoints**: `/api/download/excel`, `/api/download/csv`, `/api/download/text`
+- **API Endpoints**: `/api/download/excel`, `/api/download/csv`, `/api/download/text`, `/api/download/powerpoint`
+- **Math Processing**: Server-side LaTeX to text conversion
 - **Fallback**: Server-side generation if client-side fails
 - **Security**: Authenticated endpoints with user validation
 
@@ -85,7 +103,8 @@ downloadFile(blob, 'data.csv');
 ```json
 {
   "xlsx": "^0.18.5",
-  "docx": "^8.2.2"
+  "docx": "^8.2.2",
+  "pptxgenjs": "^3.12.0"
 }
 ```
 
