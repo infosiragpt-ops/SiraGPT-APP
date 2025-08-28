@@ -312,26 +312,30 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
         ...historyMessages
       ];
 
-      // Step 3: add current prompt at the end
-      messages.push({ role: "user", content: prompt });
-
-      // Add system message with file context if files are present
+      // Add file context to the user prompt if files are present
+      let finalPrompt = prompt;
       if (processedFiles.length > 0) {
-        const fileContext = processedFiles.map(f =>
-          `File: ${f.name}\nContent: ${f.extractedText || 'Binary file'
-          }`
-        ).join('\n\n');
+        console.log('Processing files for AI:', processedFiles.map(f => ({
+          name: f.name,
+          hasText: !!f.extractedText,
+          textLength: f.extractedText ? f.extractedText.length : 0,
+          mimeType: f.mimeType
+        })));
 
-        messages.push({
-          role: 'system',
-          content: `You have access to the following files: \n\n${fileContext} \n\nUse this information to answer the user's questions.`
-        });
+        const fileContext = processedFiles.map(f => {
+          const content = f.extractedText || 'Binary file - content not available';
+          console.log(`File ${f.name}: ${content.substring(0, 100)}...`);
+          return `File: ${f.name}\nContent: ${content}`;
+        }).join('\n\n');
+
+        finalPrompt = `${prompt}\n\nAttached files:\n${fileContext}`;
+        console.log('Final prompt length:', finalPrompt.length);
       }
 
-      // Add user message
+      // Add user message with file context
       messages.push({
         role: 'user',
-        content: prompt
+        content: finalPrompt
       });
       console.log("working generates", model, " ", messages);
 
@@ -348,12 +352,13 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
 
 
       try {
+        console.log('Calling OpenAI with messages:', messages.length, 'messages');
+        
         const stream = await openai.chat.completions.create({
-          model: model,// 'gpt-4',
+          model: model,
           messages: messages,
           stream: true,
-          max_tokens: 2000,
-          ...(openaiFiles.length > 0 && { file_ids: openaiFiles })
+          max_tokens: 2000
         });
 
         content = '';
@@ -362,20 +367,22 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
           const contentChunk = chunk.choices[0]?.delta?.content || '';
           if (contentChunk) {
             fullResponseContent += contentChunk;
-            // ✅ PROBLEM #2 KA FIX: Yahan 'contents' ki jagah 'content' use karein
-
-
             res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
           }
         }
 
         const finalCompletion = await stream.finalChatCompletion();
-        console.log(finalCompletion, "finalCompletion");
+        console.log('OpenAI response completed, tokens:', finalCompletion.usage?.total_tokens);
 
         tokens = finalCompletion.usage?.total_tokens || 0;
 
       } catch (openaiError) {
         console.error('OpenAI API error:', openaiError);
+        console.error('Error details:', openaiError.response?.data || openaiError.message);
+        
+        // Send error to client
+        res.write(`data: ${JSON.stringify({ error: 'AI service temporarily unavailable' })}\n\n`);
+        
         // Fallback to AI service
         const fileContext = processedFiles.length > 0
           ? '\n\nAttached files:\n' + processedFiles.map(f => `- ${f.name}: ${f.extractedText || '...'}`).join('\n')

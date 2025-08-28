@@ -12,6 +12,8 @@ class FileProcessor {
       const { mimetype, path: filePath, originalname } = file;
       let extractedText = '';
 
+      console.log(`Processing file: ${originalname}, type: ${mimetype}, path: ${filePath}`);
+
       switch (mimetype) {
         case 'application/pdf':
           extractedText = await this.processPDF(filePath);
@@ -40,8 +42,11 @@ class FileProcessor {
           break;
         
         default:
+          console.log(`Unsupported file type: ${mimetype}`);
           extractedText = `File "${originalname}" uploaded successfully. Content type: ${mimetype}`;
       }
+
+      console.log(`File processing complete for ${originalname}: ${extractedText.length} characters extracted`);
 
       return {
         success: true,
@@ -66,8 +71,10 @@ class FileProcessor {
     try {
       const dataBuffer = await fs.readFile(filePath);
       const data = await pdf(dataBuffer);
+      console.log(`PDF file processed: ${filePath}, length: ${data.text.length}`);
       return data.text;
     } catch (error) {
+      console.error(`PDF processing error for ${filePath}:`, error);
       throw new Error(`PDF processing failed: ${error.message}`);
     }
   }
@@ -75,8 +82,10 @@ class FileProcessor {
   async processWord(filePath) {
     try {
       const result = await mammoth.extractRawText({ path: filePath });
+      console.log(`Word file processed: ${filePath}, length: ${result.value.length}`);
       return result.value;
     } catch (error) {
+      console.error(`Word file processing error for ${filePath}:`, error);
       throw new Error(`Word document processing failed: ${error.message}`);
     }
   }
@@ -107,8 +116,11 @@ class FileProcessor {
 
   async processText(filePath) {
     try {
-      return await fs.readFile(filePath, 'utf8');
+      const content = await fs.readFile(filePath, 'utf8');
+      console.log(`Text file processed: ${filePath}, length: ${content.length}`);
+      return content;
     } catch (error) {
+      console.error(`Text file processing error for ${filePath}:`, error);
       throw new Error(`Text file processing failed: ${error.message}`);
     }
   }
