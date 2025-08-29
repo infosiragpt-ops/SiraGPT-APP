@@ -1038,8 +1038,8 @@ const FileDisplay = ({ files, onRemove }: { files: any[]; onRemove: (index: numb
         <div key={index} className="flex items-center gap-2 bg-muted rounded-md px-3 py-2 text-sm">
           {file.type?.startsWith('image/') ? (
             <div className="flex items-center gap-2">
-              <img src={file.url} alt={file.name} className="w-6 h-6 object-cover rounded" />
-              <ImageIcon className="h-4 w-4" />
+              <img src={"http://localhost:5000" + file.url} alt={file.name} className="w-10 h-10 object-cover rounded" />
+              {/* <ImageIcon className="h-4 w-4" /> */}
             </div>
           ) : (
             <FileText className="h-4 w-4" />
@@ -1203,6 +1203,8 @@ export default function ChatInterface() {
       if (response.files) {
         setUploadedFiles([...uploadedFiles, ...response.files]);
         toast.success(`${response.files.length} file(s) uploaded successfully`);
+        console.log("response ", response);
+
       } else {
         toast.error('File upload failed');
       }
@@ -1284,11 +1286,11 @@ export default function ChatInterface() {
     setUploadedFiles(uploadedFiles.filter((_, i) => i !== index))
   }
 
-  React.useEffect(() => {
-    scrollAreaRef.current?.scrollTo({
-      top: scrollAreaRef.current.scrollHeight,
-    })
-  }, [currentChat?.messages, isLoading])
+  // React.useEffect(() => {
+  //   scrollAreaRef.current?.scrollTo({
+  //     top: scrollAreaRef.current.scrollHeight,
+  //   })
+  // }, [currentChat?.messages, isLoading])
 
   const isInitial = !currentChat
 
@@ -1353,72 +1355,6 @@ export default function ChatInterface() {
               <h1 className="text-3xl font-bold">Welcome to AI Chat</h1>
               <p className="text-muted-foreground">Ask anything or generate images with AI.</p>
             </div>
-            
-            {/* Example prompts for downloadable data */}
-            {chatType === 'text' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("Create a table of the top 10 countries by population with their capitals, population, and GDP")}
-                >
-                  <div>
-                    <div className="font-medium">Population Data</div>
-                    <div className="text-xs text-muted-foreground">Get downloadable country statistics</div>
-                  </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("List the Fortune 500 top 20 companies with their revenue, employees, and industry")}
-                >
-                  <div>
-                    <div className="font-medium">Company Rankings</div>
-                    <div className="text-xs text-muted-foreground">Generate business data tables</div>
-                  </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("Create a comparison table of programming languages with their features, performance, and use cases")}
-                >
-                  <div>
-                    <div className="font-medium">Tech Comparison</div>
-                    <div className="text-xs text-muted-foreground">Compare technologies in table format</div>
-                  </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("Generate a monthly budget template with categories, amounts, and percentages")}
-                >
-                  <div>
-                    <div className="font-medium">Budget Template</div>
-                    <div className="text-xs text-muted-foreground">Create downloadable financial data</div>
-                  </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("Show me examples of derivatives with formulas and explanations")}
-                >
-                  <div>
-                    <div className="font-medium">Math Examples</div>
-                    <div className="text-xs text-muted-foreground">Generate mathematical formulas and explanations</div>
-                  </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("Create a periodic table with element symbols, atomic numbers, and atomic masses")}
-                >
-                  <div>
-                    <div className="font-medium">Science Data</div>
-                    <div className="text-xs text-muted-foreground">Generate scientific reference tables</div>
-                  </div>
-                </Button>
-              </div>
-            )}
             <div className="space-y-3">
               {chatType === 'text' && (
                 <FileDisplay files={uploadedFiles} onRemove={removeFile} />
