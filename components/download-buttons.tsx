@@ -29,15 +29,18 @@ interface DownloadButtonsProps {
 export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
   const [isDownloading, setIsDownloading] = useState(false);
   
+  // Check if this is an image message
+  const isImageMessage = content.startsWith('http') && (content.includes('uploads/images') || content.includes('oaidalleapiprodscus') || content.includes('dalle'));
+  
   // Detect if content has downloadable data
   const tableData = detectTableData(content);
   
-  // If no structured data found, don't show download buttons
-  if (!tableData && !content.trim()) {
+  // If no structured data found and not an image, don't show download buttons
+  if (!tableData && !content.trim() && !isImageMessage) {
     return null;
   }
 
-  const handleDownload = async (format: 'csv' | 'excel' | 'word' | 'powerpoint' | 'text') => {
+  const handleDownload = async (format: 'csv' | 'excel' | 'word' | 'powerpoint' | 'text' | 'image') => {
     setIsDownloading(true);
     
     try {
@@ -78,8 +81,17 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
           break;
           
         case 'word':
-          await downloadWord(content, `${baseFilename}.docx`, tableData);
-          toast.success('Word document downloaded successfully!');
+          try {
+            // Use backend Word generation for better formatting
+            const blob = await apiClient.downloadWord(messageId, `${baseFilename}.docx`);
+            downloadFile(blob, `${baseFilename}.docx`);
+            toast.success('Word document downloaded successfully!');
+          } catch (backendError) {
+            console.warn('Backend Word failed, using frontend:', backendError);
+            // Fallback to frontend generation
+            await downloadWord(content, `${baseFilename}.docx`, tableData);
+            toast.success('Word document downloaded successfully!');
+          }
           break;
 
         case 'powerpoint':
@@ -108,6 +120,19 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
             toast.success('Text file downloaded successfully!');
           }
           break;
+
+        case 'image':
+          try {
+            // Download image directly from URL
+            const response = await fetch(content);
+            const blob = await response.blob();
+            const extension = content.includes('.png') ? 'png' : 'jpg';
+            downloadFile(blob, `${baseFilename}.${extension}`);
+            toast.success('Image downloaded successfully!');
+          } catch (error) {
+            toast.error('Failed to download image. Please try again.');
+          }
+          break;
           
         default:
           toast.error('Unsupported format');
@@ -134,45 +159,59 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-48">
-        {tableData && (
+        {isImageMessage ? (
+          // Show only image download option for image messages
+          <DropdownMenuItem 
+            onClick={() => handleDownload('image')}
+            className="flex items-center gap-2"
+          >
+            <File size={16} />
+            Download Image
+          </DropdownMenuItem>
+        ) : (
+          // Show regular download options for text/data messages
           <>
+            {tableData && (
+              <>
+                <DropdownMenuItem 
+                  onClick={() => handleDownload('csv')}
+                  className="flex items-center gap-2"
+                >
+                  <FileSpreadsheet size={16} />
+                  Download as CSV
+                </DropdownMenuItem>
+                <DropdownMenuItem 
+                  onClick={() => handleDownload('excel')}
+                  className="flex items-center gap-2"
+                >
+                  <FileSpreadsheet size={16} />
+                  Download as Excel
+                </DropdownMenuItem>
+              </>
+            )}
             <DropdownMenuItem 
-              onClick={() => handleDownload('csv')}
+              onClick={() => handleDownload('word')}
               className="flex items-center gap-2"
             >
-              <FileSpreadsheet size={16} />
-              Download as CSV
+              <FileText size={16} />
+              Download as Word
             </DropdownMenuItem>
             <DropdownMenuItem 
-              onClick={() => handleDownload('excel')}
+              onClick={() => handleDownload('powerpoint')}
               className="flex items-center gap-2"
             >
-              <FileSpreadsheet size={16} />
-              Download as Excel
+              <Presentation size={16} />
+              Download as PowerPoint
+            </DropdownMenuItem>
+            <DropdownMenuItem 
+              onClick={() => handleDownload('text')}
+              className="flex items-center gap-2"
+            >
+              <File size={16} />
+              Download as Text
             </DropdownMenuItem>
           </>
         )}
-        <DropdownMenuItem 
-          onClick={() => handleDownload('word')}
-          className="flex items-center gap-2"
-        >
-          <FileText size={16} />
-          Download as Word
-        </DropdownMenuItem>
-        <DropdownMenuItem 
-          onClick={() => handleDownload('powerpoint')}
-          className="flex items-center gap-2"
-        >
-          <Presentation size={16} />
-          Download as PowerPoint
-        </DropdownMenuItem>
-        <DropdownMenuItem 
-          onClick={() => handleDownload('text')}
-          className="flex items-center gap-2"
-        >
-          <File size={16} />
-          Download as Text
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -471,32 +471,96 @@ router.post(
         });
       }
 
-      // Generate image using OpenAI DALL-E
+      // Generate image using OpenAI DALL-E with timeout
       let imageUrl, tokens = 1000;
 
       try {
-        // const response = await openai.images.generate({
-        //   model: 'dall-e-3',
-        //   prompt: prompt,
-        //   n: 1,
-        //   size: '1024x1024',
-        //   quality: 'standard'
-        // });
+        // Add timeout to prevent hanging
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Image generation timeout')), 30000); // 30 second timeout
+        });
 
-        // imageUrl = response.data[0].url;
-        const response = await openai.images.generate(
-          {
-            model: "imagen-3.0-generate-002",
-            prompt: prompt,
-            response_format: "b64_json",
-            n: 1,
+        const imagePromise = openai.images.generate({
+          model: "imagen-3.0-generate-002",
+          prompt: prompt,
+          response_format: "b64_json", // Gemini only supports b64_json
+          n: 1,
+          size: "1024x1024" // Limit size to prevent extremely large images
+        });
+
+        const response = await Promise.race([imagePromise, timeoutPromise]);
+        
+        // Convert base64 to file and serve as URL to avoid large data in response
+        const base64Data = response.data[0].b64_json;
+        
+        // Check if base64 data is too large (more than 10MB)
+        if (base64Data.length > 10 * 1024 * 1024) {
+          throw new Error('Generated image is too large');
+        }
+        
+        // Save image to file system and return URL
+        const fs = require('fs').promises;
+        const path = require('path');
+        
+        // Create uploads directory if it doesn't exist
+        const uploadsDir = path.join(__dirname, '../../uploads/images');
+        try {
+          await fs.mkdir(uploadsDir, { recursive: true });
+        } catch (err) {
+          // Directory might already exist
+        }
+        
+        // Generate unique filename
+        const timestamp = Date.now();
+        const filename = `generated-${timestamp}-${Math.random().toString(36).substr(2, 9)}.png`;
+        const filepath = path.join(uploadsDir, filename);
+        
+        // Convert base64 to buffer and save
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        await fs.writeFile(filepath, imageBuffer);
+        
+        // Return full URL instead of base64 data
+        const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+        imageUrl = `${baseUrl}/uploads/images/${filename}`;
+        
+        // Optional: Clean up old images (older than 24 hours) to save disk space
+        try {
+          const files = await fs.readdir(uploadsDir);
+          const now = Date.now();
+          const oneDayAgo = now - (24 * 60 * 60 * 1000);
+          
+          for (const file of files) {
+            if (file.startsWith('generated-')) {
+              const filePath = path.join(uploadsDir, file);
+              const stats = await fs.stat(filePath);
+              if (stats.mtime.getTime() < oneDayAgo) {
+                await fs.unlink(filePath);
+                console.log(`Cleaned up old image: ${file}`);
+              }
+            }
           }
-        );
-        imageUrl = "data:image/png;base64," + response.data[0].b64_json
+        } catch (cleanupError) {
+          console.warn('Image cleanup failed:', cleanupError.message);
+        }
+        
+        // Validate the image URL
+        if (!imageUrl || (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:'))) {
+          throw new Error('Invalid image URL received from API');
+        }
+
+        console.log('Image generated successfully:', imageUrl.substring(0, 100) + '...');
 
       } catch (openaiError) {
         console.error('OpenAI Image API error:', openaiError);
-        return res.status(500).json({ error: 'Image generation failed. Please check your OpenAI API key.' });
+        
+        if (openaiError.message === 'Image generation timeout') {
+          return res.status(408).json({ error: 'Image generation timed out. Please try again.' });
+        }
+        
+        return res.status(500).json({ 
+          error: 'Image generation failed. Please try again.',
+          details: openaiError.message 
+        });
       }
 
       // ✅ Save messages if chatId provided

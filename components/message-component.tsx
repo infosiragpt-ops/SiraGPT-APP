@@ -31,7 +31,7 @@ import { Badge } from "@/components/ui/badge";
 import apiClient from '@/lib/api';
 import { toast } from 'sonner';
 import { Textarea } from './ui/textarea';
-import { BlockMath, InlineMath } from 'react-katex';
+
 
 // Enhanced Message Component (Naya aur behtar version)
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
@@ -45,6 +45,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     const [feedbackSent, setFeedbackSent] = useState(message.feedback || null);
     const [isEditing, setIsEditing] = useState(false);
     const [editedContent, setEditedContent] = useState(message.content);
+    const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>({});
+    const [imageError, setImageError] = useState<{ [key: string]: boolean }>({});
 
     useEffect(() => {
         setEditedContent(message.content);
@@ -54,12 +56,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     //For Share Functioanlity
     const handleShare = async () => {
         try {
-            // Backend API jo humne banayi thi
             const response = await apiClient.handleShare(message.chatId);
-            console.log('response',
-                response.shareableLink
-            );
-
             navigator.clipboard.writeText(process.env.NEXT_PUBLIC_API_URL + response.shareableLink);
             toast.success("Shareable link copied to clipboard!");
         } catch (error) {
@@ -68,43 +65,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     };
 
 
-    // const renderMathContent = (content: string) => {
-    //     // Split content to handle inline ($...$) and display ($$...$$) LaTeX
-    //     const parts = content.split(/(\$\$[\s\S]+?\$\$|\$[\s\S]+?\$)/g);
-    //     return parts.map((part, index) => {
-    //         if (part.startsWith('$$') && part.endsWith('$$')) {
-    //             // Display math (block)
-    //             return <BlockMath key={index} math={part.slice(2, -2)} />;
-    //         } else if (part.startsWith('$') && part.endsWith('$')) {
-    //             // Inline math
-    //             return <InlineMath key={index} math={part.slice(1, -1)} />;
-    //         } else {
-    //             // Regular Markdown content
-    //             return <ReactMarkdown key={index}
-    //                 remarkPlugins={[remarkGfm]}
-    //                 components={{ code: CodeBlock }}
-    //             >{part}</ReactMarkdown>;
-    //         }
-    //     });
-    // };
-
-
-    const renderMathContent = (content: string) => {
-        // Split content to handle inline ($...$) and display ($$...$$) LaTeX
-        const parts = content.split(/(\$\$[\s\S]+?\$\$|\$[\s\S]+?\$)/g);
-        return parts.map((part, index) => {
-            if (part.startsWith('$$') && part.endsWith('$$')) {
-                // Display math (block)
-                return <BlockMath key={index} math={part.slice(2, -2)} />;
-            } else if (part.startsWith('$') && part.endsWith('$')) {
-                // Inline math
-                return <InlineMath key={index} math={part.slice(1, -1)} />;
-            } else {
-                // Regular Markdown content
-                return <ReactMarkdown key={index}>{part}</ReactMarkdown>;
-            }
-        });
-    };
 
     const handleEditSave = async () => {
         if (editedContent.trim() === message.content || editedContent.trim() === "") {
@@ -112,9 +72,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             return;
         }
         try {
-            // Backend API jo humne banayi thi
             await apiClient.editUserMessage(message.id, { content: editedContent });
-            // Context function se UI foran update karein
             updateMessageInChat(message.id, editedContent);
             toast.success("Message updated!");
             setIsEditing(false);
@@ -123,21 +81,19 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         }
     };
 
-    // Poora message copy karne ke liye function
     const handleGlobalCopy = () => {
         navigator.clipboard.writeText(message.content).then(() => {
             setIsCopied(true);
-            setTimeout(() => setIsCopied(false), 2000); // 2 second baad icon wapas change ho jayega
+            setTimeout(() => setIsCopied(false), 2000);
         });
     };
 
     const handleFeedback = async (feedbackType: 'liked' | 'disliked') => {
-        if (feedbackSent) return; // Agar pehle se feedback de diya hai to kuch na karein
+        if (feedbackSent) return;
 
         try {
-            // Backend API ko call karein jo humne Step 1.2 mein banayi thi
             await apiClient.handleFeedbackLikeDislike(message.id, feedbackType);
-            setFeedbackSent(feedbackType); // State update karein taake button ka color change ho
+            setFeedbackSent(feedbackType);
             toast.success("Feedback submitted!");
         } catch (error) {
             toast.error("Could not submit feedback.");
@@ -146,32 +102,26 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 
     const handleSpeak = () => {
         if (isSpeaking) {
-            window.speechSynthesis.cancel(); // Speech ko rokein
+            window.speechSynthesis.cancel();
             setIsSpeaking(false);
             return;
         }
 
-        // Markdown ko saaf karein taaki raw text bola jaye
         const textToSpeak = message.content
-            .replace(/```[\s\S]*?```/g, 'Code block') // Code blocks ko "Code block" se replace karein
-            .replace(/`[^`]*`/g, 'Code') // Inline code ko "Code" se
-            .replace(/([_*#`~]|\\[*#`~])/g, '') // Markdown characters hata dein
-            .replace(/\[(.*?)\]\(.*?\)/g, '$1'); // Links se sirf text nikalein
+            .replace(/```[\s\S]*?```/g, 'Code block')
+            .replace(/`[^`]*`/g, 'Code')
+            .replace(/([_*#`~]|\\[*#`~])/g, '')
+            .replace(/\[(.*?)\]\(.*?\)/g, '$1');
 
         const utterance = new SpeechSynthesisUtterance(textToSpeak);
-
-        // Jab bolna khatam ho jaye to state update karein
         utterance.onend = () => {
             setIsSpeaking(false);
         };
 
-        // Speech shuru karein
         window.speechSynthesis.speak(utterance);
         setIsSpeaking(true);
     };
 
-
-    // Files parse karne ka logic (aapke original code se)
     let parsedFiles = [];
     if (message.files) {
         try {
@@ -181,6 +131,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             parsedFiles = [];
         }
     }
+
+
 
     // Markdown ke andar code blocks ko render karne ke liye custom component
     const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
@@ -223,53 +175,117 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     };
 
     // Message content ko render karne ke liye alag se component banaya taaki code saaf rahe
-    const MessageContent = () => (
-        <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
-            <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-                components={{
-                    code: CodeBlock,
-                    p: ({ children }) => <p className="mb-3">{children}</p>,
-                    ul: ({ children }) => <ul className="mb-3 pl-6">{children}</ul>,
-                    ol: ({ children }) => <ol className="mb-3 pl-6">{children}</ol>,
-                    li: ({ children }) => <li className="mb-1">{children}</li>,
-                    h1: ({ children }) => <h1 className="mb-4 text-xl font-bold">{children}</h1>,
-                    h2: ({ children }) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
-                    h3: ({ children }) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
-                    blockquote: ({ children }) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-                    table: ({ children }) => <table className="border-collapse border border-muted mb-3 w-full">{children}</table>,
-                    th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium">{children}</th>,
-                    td: ({ children }) => <td className="border border-muted px-3 py-2">{children}</td>,
-                    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                    em: ({ children }) => <em className="italic">{children}</em>
-                }}
-            >
-                {message.content}
-            </ReactMarkdown>
-        </div>
-    );
+    const MessageContent = () => {
+        // Don't render markdown for image-only messages to improve performance
+        if (isImageOnlyMessage()) {
+            return null;
+        }
 
-    // File display logic (aapke original code se)
+        return (
+            <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
+                <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={{
+                        code: CodeBlock,
+                        p: ({ children }) => <p className="mb-3">{children}</p>,
+                        ul: ({ children }) => <ul className="mb-3 pl-6">{children}</ul>,
+                        ol: ({ children }) => <ol className="mb-3 pl-6">{children}</ol>,
+                        li: ({ children }) => <li className="mb-1">{children}</li>,
+                        h1: ({ children }) => <h1 className="mb-4 text-xl font-bold">{children}</h1>,
+                        h2: ({ children }) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
+                        h3: ({ children }) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
+                        blockquote: ({ children }) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
+                        table: ({ children }) => <table className="border-collapse border border-muted mb-3 w-full">{children}</table>,
+                        th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium">{children}</th>,
+                        td: ({ children }) => <td className="border border-muted px-3 py-2">{children}</td>,
+                        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                        em: ({ children }) => <em className="italic">{children}</em>
+                    }}
+                >
+                    {message.content}
+                </ReactMarkdown>
+            </div>
+        );
+    };
+
+    // Check if this is an image-only message
+    const isImageOnlyMessage = () => {
+        const hasImageFiles = parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image');
+        const hasImageUrl = message.role === "ASSISTANT" && message.content.startsWith('http') &&
+            (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/'));
+        return hasImageFiles || hasImageUrl;
+    };
+
+    // File display logic - optimized for images
     const FileDisplay = () => (
         <>
             {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
-                (message.role === "ASSISTANT" && message.content.startsWith('http') && (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')))) && (
+                (message.role === "ASSISTANT" && message.content.startsWith('http') &&
+                    (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
                     <div className="space-y-2 mt-4">
                         {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
                             <div key={index} className="relative">
-                                <img
-                                    src={
-                                        file.url.startsWith('data:image') || file.url.startsWith('http')
-                                            ? file.url
-                                            : `data:image/jpeg;base64,${file.url}`
-                                    }
-                                    alt="Generated image"
-                                    className="max-w-full h-auto rounded-lg max-h-[400px] object-contain"
-                                    loading="lazy"
-                                />
+                                {imageLoading[`file-${index}`] && (
+                                    <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+                                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                                    </div>
+                                )}
+                                {imageError[`file-${index}`] ? (
+                                    <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 text-center">
+                                        <p className="text-sm text-gray-500">Failed to load image</p>
+                                    </div>
+                                ) : (
+                                    <img
+                                        src={
+                                            file.url.startsWith('data:image') || file.url.startsWith('http')
+                                                ? file.url
+                                                : `data:image/jpeg;base64,${file.url}`
+                                        }
+                                        alt="Generated image"
+                                        className="max-w-full h-auto rounded-lg max-h-[400px] object-contain"
+                                        loading="lazy"
+                                        onLoad={() => {
+                                            setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
+                                        }}
+                                        onError={() => {
+                                            setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
+                                            setImageError(prev => ({ ...prev, [`file-${index}`]: true }));
+                                        }}
+                                    />
+                                )}
                             </div>
                         ))}
+                        {/* Handle direct image URLs in content - don't show base64 or long URLs */}
+                        {message.role === "ASSISTANT" && message.content.startsWith('http') &&
+                            (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')) && (
+                                <div className="relative">
+                                    {imageLoading['content-image'] && (
+                                        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+                                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                                        </div>
+                                    )}
+                                    {imageError['content-image'] ? (
+                                        <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 text-center">
+                                            <p className="text-sm text-gray-500">Failed to load image</p>
+                                        </div>
+                                    ) : (
+                                        <img
+                                            src={message.content}
+                                            alt="Generated image"
+                                            className="max-w-full h-auto rounded-lg max-h-[400px] object-contain"
+                                            loading="lazy"
+                                            onLoad={() => {
+                                                setImageLoading(prev => ({ ...prev, 'content-image': false }));
+                                            }}
+                                            onError={() => {
+                                                setImageLoading(prev => ({ ...prev, 'content-image': false }));
+                                                setImageError(prev => ({ ...prev, 'content-image': true }));
+                                            }}
+                                        />
+                                    )}
+                                </div>
+                            )}
                     </div>
                 )}
             {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type !== 'image') && (
@@ -291,28 +307,21 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         </>
     );
 
+
     return (
         <div className="flex gap-4 my-4">
-            {/* Avatar for Assistant */}
             {message.role === "ASSISTANT" && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
                     <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
                 </Avatar>
             )}
 
-            {/* Main content area */}
             <div className={`flex flex-col w-full ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
-
-                {/* USER Message in a Card */}
-
-                {/* NEw Code */}
                 {message.role === 'USER' && (
                     <Card className="group relative p-3 w-auto max-w-[85%] bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ">
                         {isEditing ? (
-                            // --- Edit Mode ka UI ---
                             <div className="space-y-2 w-full min-w-[400px]">
                                 <Textarea
-
                                     value={editedContent}
                                     onChange={(e) => setEditedContent(e.target.value)}
                                     className="min-h-[80px]"
@@ -323,9 +332,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 </div>
                             </div>
                         ) : (
-                            // --- Normal Display Mode ka UI ---
                             <>
-                                {/* Hover par dikhne wale buttons */}
                                 <div className="absolute top-1 right-1 hidden group-hover:flex items-center gap-1 bg-background/80 backdrop-blur-sm p-1 rounded-md border">
                                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard.writeText(message.content); toast.success("Copied!"); }} title="Copy">
                                         <Clipboard size={14} />
@@ -340,12 +347,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         )}
                     </Card>
                 )}
-                {/* ASSISTANT Message (clean text) */}
+
                 {message.role === 'ASSISTANT' && (
                     <div className="w-full max-w-[85%]">
                         <MessageContent />
                         <FileDisplay />
-                        {/* Global Copy Button - Sirf AI messages ke liye */}
                         <div className="mt-3 flex items-center gap-1">
                             <Button
                                 variant="ghost"
@@ -380,18 +386,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                // className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
                                 title="Dislike"
                                 className={`h-7 w-7 p-1  ${feedbackSent === 'disliked'
                                     ? 'bg-muted text-foreground text-red-500'
                                     : 'text-muted-foreground hover:text-foreground '
                                     }`}
-                                //  className={`h-7 w-7 p-1 ${feedbackSent === 'disliked' ? 'text-red-500' : ''}`} 
                                 onClick={() => handleFeedback('disliked')}
                             >
                                 <ThumbsDown size={16} />
                             </Button>
-
                             <Button
                                 variant="ghost"
                                 size="sm"
@@ -405,7 +408,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 variant="ghost"
                                 size="sm"
                                 className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                // onClick={handleEdit}
                                 title="Edit/Customize"
                             >
                                 <Wand2 size={16} />
@@ -428,10 +430,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 )}
             </div>
 
-            {/* Avatar for User */}
-            {message.role === "USER" && (
+            {message.role === "USER" && !isImageOnlyMessage() && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
-                    <AvatarImage src={user?.avatar || "/placeholder.svg"} />
                     <AvatarFallback className="text-xs">U</AvatarFallback>
                 </Avatar>
             )}

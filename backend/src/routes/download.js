@@ -104,26 +104,30 @@ function extractMathExamples(content) {
 
 // Utility function to detect table data from text
 function detectTableData(content) {
-    // First try to extract math examples
+    // First priority: Look for existing markdown tables in the response
+    const markdownTableRegex = /\|(.+)\|\s*\n\|[-\s|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/g;
+    const tableMatches = content.match(markdownTableRegex);
+
+    if (tableMatches && tableMatches.length > 0) {
+        // Use the first table found in the response (preserve original formatting)
+        const match = markdownTableRegex.exec(content);
+        if (match) {
+            const headerRow = match[1].split('|').map(cell => cell.trim()).filter(cell => cell);
+            const bodyRows = match[2].split('\n')
+                .filter(row => row.trim() && row.includes('|'))
+                .map(row => row.split('|').map(cell => cell.trim()).filter(cell => cell));
+
+            return {
+                headers: headerRow,
+                rows: bodyRows
+            };
+        }
+    }
+
+    // Second priority: Try to extract math examples
     const mathData = extractMathExamples(content);
     if (mathData) {
         return mathData;
-    }
-
-    // Look for markdown tables
-    const markdownTableRegex = /\|(.+)\|\s*\n\|[-\s|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/g;
-    const match = markdownTableRegex.exec(content);
-
-    if (match) {
-        const headerRow = match[1].split('|').map(cell => cleanContentForExport(cell.trim())).filter(cell => cell);
-        const bodyRows = match[2].split('\n')
-            .filter(row => row.trim() && row.includes('|'))
-            .map(row => row.split('|').map(cell => cleanContentForExport(cell.trim())).filter(cell => cell));
-
-        return {
-            headers: headerRow,
-            rows: bodyRows
-        };
     }
 
     // Look for simple structured data patterns
@@ -344,6 +348,139 @@ router.post(
         } catch (error) {
             console.error('Text file generation error:', error);
             res.status(500).json({ error: 'Failed to generate text file' });
+        }
+    }
+);
+
+// Generate Word document from message content
+router.post(
+    '/word',
+    [
+        body('messageId').notEmpty().withMessage('Message ID is required'),
+        body('filename').optional().isString()
+    ],
+    authenticateToken,
+    async (req, res) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+
+            const { messageId, filename } = req.body;
+            const userId = req.user.id;
+
+            // Get message from database
+            const message = await prisma.message.findFirst({
+                where: {
+                    id: messageId,
+                    chat: { userId }
+                },
+                include: { chat: true }
+            });
+
+            if (!message) {
+                return res.status(404).json({ error: 'Message not found' });
+            }
+
+            // Import docx here to avoid loading it globally
+            const { Document, Packer, Paragraph, Table, TableRow, TableCell, WidthType } = require('docx');
+
+            const docElements = [];
+
+            // Process content to handle tables and regular text
+            const content = message.content;
+            const tableRegex = /\|(.+)\|\s*\n\|[-\s|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/g;
+
+            let lastIndex = 0;
+            let match;
+
+            // Find all tables and process content between them
+            while ((match = tableRegex.exec(content)) !== null) {
+                // Add text before the table
+                const textBefore = content.substring(lastIndex, match.index);
+                if (textBefore.trim()) {
+                    const lines = textBefore.split('\n');
+                    lines.forEach(line => {
+                        docElements.push(new Paragraph({
+                            text: line || ' ',
+                            spacing: { after: 120 }
+                        }));
+                    });
+                }
+
+                // Process the table
+                const headerRow = match[1].split('|').map(cell => cell.trim()).filter(cell => cell);
+                const bodyRows = match[2].split('\n')
+                    .filter(row => row.trim() && row.includes('|'))
+                    .map(row => row.split('|').map(cell => cell.trim()).filter(cell => cell));
+
+                if (headerRow.length > 0 && bodyRows.length > 0) {
+                    const tableRows = [
+                        new TableRow({
+                            children: headerRow.map(header =>
+                                new TableCell({
+                                    children: [new Paragraph({ text: header, bold: true })],
+                                    width: { size: 100 / headerRow.length, type: WidthType.PERCENTAGE }
+                                })
+                            )
+                        }),
+                        ...bodyRows.map(row =>
+                            new TableRow({
+                                children: row.map(cell =>
+                                    new TableCell({
+                                        children: [new Paragraph({ text: cell })],
+                                        width: { size: 100 / row.length, type: WidthType.PERCENTAGE }
+                                    })
+                                )
+                            })
+                        )
+                    ];
+
+                    const table = new Table({
+                        rows: tableRows,
+                        width: { size: 100, type: WidthType.PERCENTAGE }
+                    });
+
+                    docElements.push(table);
+                }
+
+                lastIndex = tableRegex.lastIndex;
+            }
+
+            // Add remaining text after the last table
+            const remainingText = content.substring(lastIndex);
+            if (remainingText.trim()) {
+                const lines = remainingText.split('\n');
+                lines.forEach(line => {
+                    docElements.push(new Paragraph({
+                        text: line || ' ',
+                        spacing: { after: 120 }
+                    }));
+                });
+            }
+
+            // Create the document with all elements (text and tables)
+            const doc = new Document({
+                sections: [{ children: docElements }]
+            });
+
+            const docBuffer = await Packer.toBuffer(doc);
+
+            // Generate filename
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+            const finalFilename = filename || `ai-response-${timestamp}.docx`;
+
+            // Set headers for file download
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            res.setHeader('Content-Disposition', `attachment; filename="${finalFilename}"`);
+            res.setHeader('Content-Length', docBuffer.length);
+
+            res.send(docBuffer);
+
+        } catch (error) {
+            console.error('Word document generation error:', error);
+            res.status(500).json({ error: 'Failed to generate Word document' });
         }
     }
 );

@@ -73,15 +73,19 @@ export function detectTableData(content: string): TableData | null {
     };
   }
   
-  // Look for markdown tables
-  const tableMatch = content.match(/\|(.+)\|\s*\n\|[-\s|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/);
-  if (tableMatch) {
-    const headers = tableMatch[1].split('|').map(h => h.trim()).filter(h => h);
-    const rows = tableMatch[2].split('\n')
-      .filter(row => row.trim() && row.includes('|'))
-      .map(row => row.split('|').map(cell => cleanContentForExport(cell.trim())).filter(cell => cell));
-    
-    return { headers, rows };
+  // Look for markdown tables (prioritize existing tables in response)
+  const tableMatches = content.match(/\|(.+)\|\s*\n\|[-\s|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/g);
+  if (tableMatches && tableMatches.length > 0) {
+    // Use the first table found in the response
+    const tableMatch = tableMatches[0].match(/\|(.+)\|\s*\n\|[-\s|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/);
+    if (tableMatch) {
+      const headers = tableMatch[1].split('|').map(h => h.trim()).filter(h => h);
+      const rows = tableMatch[2].split('\n')
+        .filter(row => row.trim() && row.includes('|'))
+        .map(row => row.split('|').map(cell => cell.trim()).filter(cell => cell));
+      
+      return { headers, rows };
+    }
   }
   
   return null;
@@ -123,14 +127,17 @@ export function generateExcel(tableData: TableData): Blob {
 export async function generateWord(content: string, tableData?: TableData): Promise<Blob> {
   const paragraphs: Paragraph[] = [];
   
-  // Clean and split content
-  const cleanContent = cleanContentForExport(content);
-  const lines = cleanContent.split('\n').filter(line => line.trim());
+  // Preserve original formatting - split by lines but don't clean content
+  const lines = content.split('\n');
   
   lines.forEach(line => {
-    if (line.trim()) {
-      paragraphs.push(new Paragraph({ text: line.trim() }));
-    }
+    // Add each line as a paragraph, including empty lines for spacing
+    paragraphs.push(new Paragraph({ 
+      text: line || ' ', // Use space for empty lines to maintain spacing
+      spacing: {
+        after: 120 // Add some spacing after each paragraph
+      }
+    }));
   });
   
   // Add table if available
@@ -203,6 +210,12 @@ export function downloadExcel(tableData: TableData, filename: string = 'data.xls
 
 export async function downloadWord(content: string, filename: string = 'document.docx', tableData?: TableData) {
   const blob = await generateWord(content, tableData);
+  downloadFile(blob, filename);
+}
+
+export function downloadText(content: string, filename: string = 'document.txt') {
+  // Keep original formatting for text files
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   downloadFile(blob, filename);
 }
 
