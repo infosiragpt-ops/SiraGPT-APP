@@ -259,22 +259,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
                             <div key={index} className="relative">
                                 <img
-                                    src={file.url}
+                                    src={
+                                        file.url.startsWith('data:image') || file.url.startsWith('http')
+                                            ? file.url
+                                            : `data:image/jpeg;base64,${file.url}`
+                                    }
                                     alt="Generated image"
-                                    className="max-w-full h-auto rounded-lg"
+                                    className="max-w-full h-auto rounded-lg max-h-[400px] object-contain"
+                                    loading="lazy"
                                 />
                             </div>
                         ))}
-                        {/* {message.role === "ASSISTANT" && message.content.startsWith('http') &&
-                            (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle')) && (
-                                <div className="relative">
-                                    <img
-                                        src={message.content}
-                                        alt="Generated image"
-                                        className="max-w-full h-auto rounded-lg"
-                                    />
-                                </div>
-                            )} */}
                     </div>
                 )}
             {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type !== 'image') && (
@@ -424,10 +419,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             >
                                 <Share2 size={16} />
                             </Button>
-                            {/* <DownloadButtons
+                            <DownloadButtons
                                 content={message.content}
                                 messageId={message.id}
-                            /> */}
+                            />
                         </div>
                     </div>
                 )}

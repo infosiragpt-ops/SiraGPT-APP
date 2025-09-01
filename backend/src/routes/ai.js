@@ -8,10 +8,14 @@ const OpenAI = require('openai');
 const router = express.Router();
 
 // Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// const openai = new OpenAI({
+//   apiKey: process.env.GEMINI_API_KEY,
+//   baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
 
+// });
+// // const openai = new OpenAI({
+// //   apiKey: process.env.OPENAI_API_KEY
+// // });
 // ✅ Get available AI models
 router.get('/models', async (req, res) => {
   try {
@@ -227,13 +231,13 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
   }
 }
 
-
-// ✅ Generate AI text response with file support
 router.post(
   '/generate',
   [
     body('model').trim().notEmpty().withMessage('Model is required'),
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('provider').trim().notEmpty().withMessage('Provider is required'),
+
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
   ],
@@ -245,8 +249,24 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { model, prompt, chatId, files } = req.body;
+      const { model, prompt, chatId, files, provider } = req.body;
       const userId = req.user.id;
+
+      let openai;
+      if (provider === "Gemini") {
+        openai = new OpenAI({
+          apiKey: process.env.GEMINI_API_KEY,
+          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+
+        });
+
+      }
+      else {
+        openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY
+        });
+      }
+
 
       // ✅ Check monthly limit
       if (req.user.apiUsage >= req.user.monthlyLimit) {
@@ -337,7 +357,7 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
         role: 'user',
         content: finalPrompt
       });
-      console.log("working generates", model, " ", messages);
+      // console.log("working generates", model, " ", messages);
 
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
@@ -352,13 +372,13 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
 
 
       try {
-        console.log('Calling OpenAI with messages:', messages.length, 'messages');
-        
+
+
         const stream = await openai.chat.completions.create({
           model: model,
           messages: messages,
           stream: true,
-          max_tokens: 2000
+          max_tokens: 3000
         });
 
         content = '';
@@ -370,19 +390,23 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
             res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
           }
         }
+        console.log('OpenAI :', await stream,);
 
-        const finalCompletion = await stream.finalChatCompletion();
-        console.log('OpenAI response completed, tokens:', finalCompletion.usage?.total_tokens);
 
-        tokens = finalCompletion.usage?.total_tokens || 0;
+        // const finalCompletion = await stream.finalChatCompletion();
+
+        // console.log('OpenAI response completed, tokens:', finalCompletion.usage?.total_tokens);
+
+        tokens = fullResponseContent.length + prompt.length;
+        console.log("tokens", tokens);
 
       } catch (openaiError) {
         console.error('OpenAI API error:', openaiError);
         console.error('Error details:', openaiError.response?.data || openaiError.message);
-        
+
         // Send error to client
         res.write(`data: ${JSON.stringify({ error: 'AI service temporarily unavailable' })}\n\n`);
-        
+
         // Fallback to AI service
         const fileContext = processedFiles.length > 0
           ? '\n\nAttached files:\n' + processedFiles.map(f => `- ${f.name}: ${f.extractedText || '...'}`).join('\n')
@@ -404,12 +428,14 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
   }
 );
 
-// ✅ Generate AI image response
+// // ✅ Generate AI image response
 router.post(
   '/generate-image',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
+    body('provider').trim().notEmpty().withMessage('Provider is required'),
+    body('model').trim().notEmpty().withMessage('Model is required'),
   ],
   authenticateToken,
   async (req, res) => {
@@ -419,8 +445,23 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId } = req.body;
+
+      const { prompt, chatId, provider, model } = req.body;
       const userId = req.user.id;
+      let openai;
+      if (provider === "Gemini") {
+        openai = new OpenAI({
+          apiKey: process.env.GEMINI_API_KEY,
+          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+
+        });
+
+      }
+      else {
+        openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY
+        });
+      }
 
       // ✅ Check monthly limit
       if (req.user.apiUsage >= req.user.monthlyLimit) {
@@ -431,18 +472,28 @@ router.post(
       }
 
       // Generate image using OpenAI DALL-E
-      let imageUrl, tokens = 1000; // Fixed cost for image generation
+      let imageUrl, tokens = 1000;
 
       try {
-        const response = await openai.images.generate({
-          model: 'dall-e-3',
-          prompt: prompt,
-          n: 1,
-          size: '1024x1024',
-          quality: 'standard'
-        });
+        // const response = await openai.images.generate({
+        //   model: 'dall-e-3',
+        //   prompt: prompt,
+        //   n: 1,
+        //   size: '1024x1024',
+        //   quality: 'standard'
+        // });
 
-        imageUrl = response.data[0].url;
+        // imageUrl = response.data[0].url;
+        const response = await openai.images.generate(
+          {
+            model: "imagen-3.0-generate-002",
+            prompt: prompt,
+            response_format: "b64_json",
+            n: 1,
+          }
+        );
+        imageUrl = "data:image/png;base64," + response.data[0].b64_json
+
       } catch (openaiError) {
         console.error('OpenAI Image API error:', openaiError);
         return res.status(500).json({ error: 'Image generation failed. Please check your OpenAI API key.' });

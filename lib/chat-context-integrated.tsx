@@ -53,6 +53,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
   const [selectedModel, setSelectedModel] = useState("")
+  const [selectProvider, setSelectedProivder] = useState("")
   const [availableModels, setAvailableModels] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
@@ -71,11 +72,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     try {
       // Load available models first
       const modelsResponse = await apiClient.getAIModels()
+      console.log("modelsResponse", modelsResponse);
+
       setAvailableModels(modelsResponse.models)
 
       // Set default model
       if (modelsResponse.models.length > 0 && !selectedModel) {
+        console.log("SETSELECT MODEL", modelsResponse.models[0]);
+
         setSelectedModel(modelsResponse.models[0].name)
+        setSelectedProivder(modelsResponse.models[0].provider)
       }
 
       // Load chats
@@ -132,6 +138,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         // STEP 3: Nayi streaming API call karein
         await apiClient.generateAIStream(
           {
+            provider: selectProvider,
             model: selectedModel,
             prompt: content,
             chatId: activeChat.id,
@@ -504,6 +511,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Step 4: Call your streaming function
       await apiClient.generateAIStream(
         {
+          provider: selectProvider,
+
           model: selectedModel,
           prompt: originalUserMessage.content,
           chatId: currentChat.id,
@@ -621,6 +630,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     await apiClient.generateAIStream(
       {
+        provider: selectProvider,
+
         model: selectedModel,
         prompt: newContent,
         chatId: currentChat.id,

@@ -1258,7 +1258,9 @@ export default function ChatInterface() {
     try {
       const response = await apiClient.generateImage({
         prompt,
-        chatId: currentChat?.id
+        chatId: currentChat?.id,
+        provider: "Gemini",
+        model: selectedModel
       })
       await selectChat(currentChat?.id ?? "")
       toast.success('Image generated successfully!')
@@ -1355,6 +1357,71 @@ export default function ChatInterface() {
               <h1 className="text-3xl font-bold">Welcome to AI Chat</h1>
               <p className="text-muted-foreground">Ask anything or generate images with AI.</p>
             </div>
+            {/* Example prompts for downloadable data */}
+            {chatType === 'text' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
+                <Button
+                  variant="outline"
+                  className="p-4 h-auto text-left justify-start"
+                  onClick={() => setInput("Create a table of the top 10 countries by population with their capitals, population, and GDP")}
+                >
+                  <div>
+                    <div className="font-medium">Population Data</div>
+                    <div className="text-xs text-muted-foreground">Get downloadable country statistics</div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="p-4 h-auto text-left justify-start"
+                  onClick={() => setInput("List the Fortune 500 top 20 companies with their revenue, employees, and industry")}
+                >
+                  <div>
+                    <div className="font-medium">Company Rankings</div>
+                    <div className="text-xs text-muted-foreground">Generate business data tables</div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="p-4 h-auto text-left justify-start"
+                  onClick={() => setInput("Create a comparison table of programming languages with their features, performance, and use cases")}
+                >
+                  <div>
+                    <div className="font-medium">Tech Comparison</div>
+                    <div className="text-xs text-muted-foreground">Compare technologies in table format</div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="p-4 h-auto text-left justify-start"
+                  onClick={() => setInput("Generate a monthly budget template with categories, amounts, and percentages")}
+                >
+                  <div>
+                    <div className="font-medium">Budget Template</div>
+                    <div className="text-xs text-muted-foreground">Create downloadable financial data</div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="p-4 h-auto text-left justify-start"
+                  onClick={() => setInput("Show me examples of derivatives with formulas and explanations")}
+                >
+                  <div>
+                    <div className="font-medium">Math Examples</div>
+                    <div className="text-xs text-muted-foreground">Generate mathematical formulas and explanations</div>
+                  </div>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="p-4 h-auto text-left justify-start"
+                  onClick={() => setInput("Create a periodic table with element symbols, atomic numbers, and atomic masses")}
+                >
+                  <div>
+                    <div className="font-medium">Science Data</div>
+                    <div className="text-xs text-muted-foreground">Generate scientific reference tables</div>
+                  </div>
+                </Button>
+              </div>
+            )}
             <div className="space-y-3">
               {chatType === 'text' && (
                 <FileDisplay files={uploadedFiles} onRemove={removeFile} />

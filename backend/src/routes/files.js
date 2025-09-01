@@ -10,8 +10,13 @@ const OpenAI = require('openai');
 const router = express.Router();
 
 // Initialize OpenAI client
+// const openai = new OpenAI({
+//   apiKey: process.env.OPENAI_API_KEY
+// });
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.GEMINI_API_KEY,
+  baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+
 });
 
 // Upload files
@@ -27,15 +32,15 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
       try {
         // Process file content
         const result = await fileProcessor.processFile(file);
-        
+
         // Generate thumbnail for images
         const thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
-        
+
         // Upload to OpenAI Files API if it's a supported file type
         let openaiFileId = null;
-        if (file.mimetype === 'application/pdf' || 
-            file.mimetype.startsWith('text/') ||
-            file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        if (file.mimetype === 'application/pdf' ||
+          file.mimetype.startsWith('text/') ||
+          file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
           try {
             const fileStream = await fs.readFile(file.path);
             const openaiFile = await openai.files.create({
@@ -47,7 +52,7 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
             console.error('OpenAI file upload error:', openaiError);
           }
         }
-        
+
         // Save file record to database
         const fileRecord = await prisma.file.create({
           data: {

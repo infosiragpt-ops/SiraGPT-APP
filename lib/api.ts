@@ -206,8 +206,7 @@ class ApiClient {
 
   // ✅ YEH NAYA METHOD STREAMING KE LIYE HAI
   async generateAIStream(
-    data: { model: string; prompt: string; chatId?: string; files?: string[] },
-    // Yeh callback functions component se aayenge
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[] },
     onData: (chunk: string) => void, // Jab data ka naya tukra aaye
     onClose: () => void, // Jab stream band ho jaye
     onError: (error: Error) => void // Jab koi error aaye
@@ -271,7 +270,7 @@ class ApiClient {
       onError(error);
     }
   }
-  async generateImage(data: { prompt: string; chatId?: string }) {
+  async generateImage(data: { prompt: string; chatId?: string, provider: string; model: string; }) {
     const response = await this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -388,7 +387,7 @@ class ApiClient {
     };
 
     const response = await fetch(url, config);
-    
+
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
       throw new Error(error.error || `HTTP ${response.status}`);
@@ -409,7 +408,7 @@ class ApiClient {
     };
 
     const response = await fetch(url, config);
-    
+
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
       throw new Error(error.error || `HTTP ${response.status}`);
@@ -430,7 +429,7 @@ class ApiClient {
     };
 
     const response = await fetch(url, config);
-    
+
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
       throw new Error(error.error || `HTTP ${response.status}`);
@@ -451,7 +450,7 @@ class ApiClient {
     };
 
     const response = await fetch(url, config);
-    
+
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
       throw new Error(error.error || `HTTP ${response.status}`);
