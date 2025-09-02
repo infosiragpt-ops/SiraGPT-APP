@@ -270,19 +270,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                             <p className="text-sm text-gray-500">Failed to load image</p>
                                         </div>
                                     ) : (
-                                        <img
-                                            src={message.content}
-                                            alt="Generated image"
-                                            className="max-w-full h-auto rounded-lg max-h-[400px] object-contain"
-                                            loading="lazy"
-                                            onLoad={() => {
-                                                setImageLoading(prev => ({ ...prev, 'content-image': false }));
-                                            }}
-                                            onError={() => {
-                                                setImageLoading(prev => ({ ...prev, 'content-image': false }));
-                                                setImageError(prev => ({ ...prev, 'content-image': true }));
-                                            }}
-                                        />
+                                        <></>
                                     )}
                                 </div>
                             )}

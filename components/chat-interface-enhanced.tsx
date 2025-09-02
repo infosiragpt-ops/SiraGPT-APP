@@ -826,78 +826,9 @@ import {
 import MessageComponent from "./message-component"
 import { Message } from "react-hook-form"
 
-// API Keys Settings Dialog
-const ApiKeysDialog = () => {
-  const [isOpen, setIsOpen] = React.useState(false)
-  const [keys, setKeys] = React.useState({
-    openai: '',
-    anthropic: ''
-  })
-
-  React.useEffect(() => {
-    if (isOpen) {
-      setKeys({
-        openai: process.env.OPENAI_API_KEY || "",
-        anthropic: localStorage.getItem('anthropic_api_key') || ''
-      })
-    }
-  }, [isOpen])
-
-  const handleSave = () => {
-    if (keys.openai) {
-      aiService.setApiKey('ChatGPT', keys.openai)
-    }
-    if (keys.anthropic) {
-      aiService.setApiKey('Claude', keys.anthropic)
-    }
-    toast.success('API keys saved successfully')
-    setIsOpen(false)
-  }
-
-  return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <Settings className="h-4 w-4 mr-2" />
-          API Keys
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Configure AI API Keys</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="openai-key">OpenAI API Key</Label>
-            <Input
-              id="openai-key"
-              type="password"
-              placeholder="sk-..."
-              value={keys.openai}
-              onChange={(e) => setKeys({ ...keys, openai: e.target.value })}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="anthropic-key">Anthropic API Key</Label>
-            <Input
-              id="anthropic-key"
-              type="password"
-              placeholder="sk-ant-..."
-              value={keys.anthropic}
-              onChange={(e) => setKeys({ ...keys, anthropic: e.target.value })}
-            />
-          </div>
-          <Button onClick={handleSave} className="w-full">
-            Save API Keys
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 // Enhanced Model Selector
-const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels }: any) => {
+const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels, setSelectedProvider }: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
 
   return (
@@ -919,7 +850,13 @@ const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels 
         {availableModels.map((model: any) => (
           <DropdownMenuItem
             key={model.name}
-            onSelect={() => setSelectedModel(model.name)}
+            onSelect={() => {
+              setSelectedModel(model.name);
+              console.log("model", model.provider);
+
+              setSelectedProvider(model.provider)
+
+            }}
             className="flex items-center gap-2 py-2"
           >
             <Bot className="h-4 w-4 flex-shrink-0" />
@@ -1070,6 +1007,8 @@ export default function ChatInterface() {
     createNewChat,
     isLoading,
     setSelectedModel,
+    setSelectedProivder,
+    selectProvider,
     uploadedFiles,
     selectChat,
     setUploadedFiles,
@@ -1259,7 +1198,7 @@ export default function ChatInterface() {
       const response = await apiClient.generateImage({
         prompt,
         chatId: currentChat?.id,
-        provider: "Gemini",
+        provider: selectProvider,
         model: selectedModel
       })
       await selectChat(currentChat?.id ?? "")
@@ -1326,6 +1265,7 @@ export default function ChatInterface() {
               selectedModel={selectedModel}
               setSelectedModel={setSelectedModel}
               availableModels={availableModels}
+              setSelectedProvider={setSelectedProivder}
             />
             <div className="flex items-center gap-2 mt-2">
               <Badge variant={chatType === 'text' ? 'default' : 'outline'}>

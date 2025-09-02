@@ -36,6 +36,8 @@ interface ChatContextType {
   deleteChat: (chatId: string) => void
   selectedModel: string
   setSelectedModel: (model: string) => void
+  selectProvider: string
+  setSelectedProivder: (model: string) => void
   isLoading: boolean
   availableModels: any[]
   chatType: 'text' | 'image';
@@ -54,6 +56,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
   const [selectedModel, setSelectedModel] = useState("")
   const [selectProvider, setSelectedProivder] = useState("")
+
   const [availableModels, setAvailableModels] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
@@ -688,6 +691,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         deleteChat,
         selectedModel,
         setSelectedModel,
+        selectProvider,
+        setSelectedProivder,
         isLoading,
         uploadedFiles,
         chatType,
