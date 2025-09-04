@@ -68,11 +68,11 @@ const generationTypes = [
     badge: "Soon",
   },
   {
-    name: "Audio Generation",
+    name: "Voice Studio",
     icon: Mic,
-    description: "Generate speech and music",
-    available: false,
-    badge: "Soon",
+    description: "Text-to-Speech & Speech-to-Text",
+    available: true,
+    path: "/voice",
   },
   {
     name: "Video Generation",
@@ -158,8 +158,37 @@ export function AppSidebar() {
         </SidebarMenuButton>
       </div>
 
+      {/* Navigation Section */}
       <SidebarContent className="px-2">
-
+        <SidebarGroup>
+          <SidebarGroupLabel className={cn("px-3 py-2 text-sm text-muted-foreground", state === 'closed' && 'hidden')}>
+            Features
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton 
+                  onClick={() => router.push("/chat")} 
+                  className="w-full justify-start h-9 px-3"
+                  isActive={selectedType === "Text Chat"}
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  <span className={cn("ml-2", state === 'closed' && 'hidden')}>Text Chat</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton 
+                  onClick={() => router.push("/voice")} 
+                  className="w-full justify-start h-9 px-3"
+                >
+                  <Mic className="h-4 w-4" />
+                  <span className={cn("ml-2", state === 'closed' && 'hidden')}>Voice Studio</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
 
         <SidebarSeparator />
 
@@ -217,7 +246,6 @@ export function AppSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
         )}
-      </SidebarContent>
 
       <SidebarFooter className="border-t border-border/40 p-2">
         <SidebarMenu>
@@ -276,6 +304,6 @@ export function AppSidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
-    </Sidebar>
+    </Sidebar >
   )
 }

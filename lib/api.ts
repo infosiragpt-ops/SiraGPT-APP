@@ -17,12 +17,19 @@ class ApiClient {
   private async request(endpoint: string, options: RequestInit = {}) {
     const url = `${this.baseURL}${endpoint}`;
 
+    // Don't set Content-Type for FormData - let browser set it with boundary
+    const headers: Record<string, string> = {
+      ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      ...options.headers,
+    };
+
+    // Only set Content-Type for non-FormData requests
+    if (!(options.body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     const config: RequestInit = {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-        ...options.headers,
-      },
+      headers,
       credentials: 'include',
       ...options,
     };
@@ -40,6 +47,11 @@ class ApiClient {
       console.error('API request failed:', error);
       throw error;
     }
+  }
+
+  // Public getter for baseURL
+  get apiBaseURL() {
+    return this.baseURL;
   }
 
   setToken(token: string | null) {
@@ -477,6 +489,56 @@ class ApiClient {
       throw new Error(error.error || `HTTP ${response.status}`);
     }
 
+    return response.blob();
+  }
+
+  // ElevenLabs endpoints
+  async getVoices() {
+    return this.request('/elevenlabs/voices');
+  }
+
+  async textToSpeech(data: {
+    text: string;
+    voice_id?: string;
+    model_id?: string;
+    voice_settings?: {
+      stability?: number;
+      similarity_boost?: number;
+      style?: number;
+      use_speaker_boost?: boolean;
+    };
+  }) {
+    return this.request('/elevenlabs/text-to-speech', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async speechToText(audioFile: File, model_id?: string) {
+    const formData = new FormData();
+    formData.append('audio', audioFile);
+    if (model_id) {
+      formData.append('model_id', model_id);
+    }
+
+    return this.request('/elevenlabs/speech-to-text', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+
+
+  async getVoiceSettings(voiceId: string) {
+    return this.request(`/elevenlabs/voices/${voiceId}/settings`);
+  }
+
+  async getElevenLabsSubscription() {
+    return this.request('/elevenlabs/user/subscription');
+  }
+
+  async getAudioFile(filename: string) {
+    const response = await this.request(`/elevenlabs/audio/${filename}`);
     return response.blob();
   }
 }

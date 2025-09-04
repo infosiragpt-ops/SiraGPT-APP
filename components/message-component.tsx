@@ -21,16 +21,19 @@ import {
     RefreshCw,
     Wand2,
     Share2,
-    Pencil
+    Pencil,
+    Play,
+    Pause
 } from "lucide-react";
 import { DownloadButtons } from './download-buttons';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import apiClient from '@/lib/api';
 import { toast } from 'sonner';
 import { Textarea } from './ui/textarea';
+import { useVoiceControls } from './voice-controls';
 
 
 // Enhanced Message Component (Naya aur behtar version)
@@ -42,15 +45,31 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 }) => {
     const [isCopied, setIsCopied] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
+    const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
+    const [audioProgress, setAudioProgress] = useState(0);
+    const [audioDuration, setAudioDuration] = useState(0);
+    const [showAudioPlayer, setShowAudioPlayer] = useState(false);
+    const [isLoadingAudio, setIsLoadingAudio] = useState(false);
     const [feedbackSent, setFeedbackSent] = useState(message.feedback || null);
     const [isEditing, setIsEditing] = useState(false);
     const [editedContent, setEditedContent] = useState(message.content);
     const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>({});
     const [imageError, setImageError] = useState<{ [key: string]: boolean }>({});
+    const { handleTextToSpeech } = useVoiceControls();
 
     useEffect(() => {
         setEditedContent(message.content);
     }, [message.content]);
+
+    // Cleanup audio when component unmounts
+    useEffect(() => {
+        return () => {
+            if (currentAudio) {
+                currentAudio.pause();
+                setCurrentAudio(null);
+            }
+        };
+    }, [currentAudio]);
 
 
     //For Share Functioanlity
@@ -100,10 +119,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         }
     };
 
-    const handleSpeak = () => {
-        if (isSpeaking) {
-            window.speechSynthesis.cancel();
+    const handleSpeak = async () => {
+        if (isSpeaking && currentAudio) {
+            currentAudio.pause();
             setIsSpeaking(false);
+            setCurrentAudio(null);
             return;
         }
 
@@ -113,13 +133,89 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             .replace(/([_*#`~]|\\[*#`~])/g, '')
             .replace(/\[(.*?)\]\(.*?\)/g, '$1');
 
-        const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.onend = () => {
-            setIsSpeaking(false);
-        };
+        try {
+            setIsLoadingAudio(true);
+            setShowAudioPlayer(true);
+            // Try ElevenLabs TTS first
+            const audio = await handleTextToSpeech(textToSpeak);
+            setIsLoadingAudio(false);
+            if (audio) {
+                setCurrentAudio(audio);
 
-        window.speechSynthesis.speak(utterance);
-        setIsSpeaking(true);
+                // Set up audio event listeners
+                audio.onloadedmetadata = () => {
+                    setAudioDuration(audio.duration);
+                };
+
+                audio.ontimeupdate = () => {
+                    setAudioProgress((audio.currentTime / audio.duration) * 100);
+                };
+
+                audio.onended = () => {
+                    setIsSpeaking(false);
+                    setAudioProgress(0);
+                    setShowAudioPlayer(false);
+                    setCurrentAudio(null);
+                };
+
+                audio.onerror = () => {
+                    setIsSpeaking(false);
+                    setAudioProgress(0);
+                    setShowAudioPlayer(false);
+                    setCurrentAudio(null);
+                    setIsLoadingAudio(false);
+                    toast.error("Audio playback failed");
+                };
+
+                audio.onpause = () => {
+                    setIsSpeaking(false);
+                };
+
+                audio.onplay = () => {
+                    setIsSpeaking(true);
+                };
+            }
+        } catch (error) {
+            // Fallback to browser TTS
+            console.log('ElevenLabs TTS failed, using browser TTS:', error);
+            setIsLoadingAudio(false);
+            setShowAudioPlayer(false);
+            const utterance = new SpeechSynthesisUtterance(textToSpeak);
+            utterance.onend = () => {
+                setIsSpeaking(false);
+                setCurrentAudio(null);
+            };
+            window.speechSynthesis.speak(utterance);
+        }
+    };
+
+    const toggleAudioPlayback = () => {
+        if (currentAudio) {
+            if (isSpeaking) {
+                currentAudio.pause();
+            } else {
+                currentAudio.play();
+            }
+        }
+    };
+
+    const stopAudio = () => {
+        if (currentAudio) {
+            currentAudio.pause();
+            currentAudio.currentTime = 0;
+        }
+        setIsSpeaking(false);
+        setAudioProgress(0);
+        setShowAudioPlayer(false);
+        setCurrentAudio(null);
+        setIsLoadingAudio(false);
+    };
+
+    const formatTime = (seconds: number) => {
+        if (isNaN(seconds)) return "0:00";
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
     let parsedFiles = [];
@@ -355,9 +451,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 size="sm"
                                 className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
                                 onClick={handleSpeak}
-                                title={isSpeaking ? "Stop speaking" : "Read aloud"}
+                                title="Read aloud"
                             >
-                                {isSpeaking ? <Square size={16} /> : <Volume2 size={16} />}
+                                <Volume2 size={16} />
                             </Button>
                             <Button
                                 variant="ghost"
@@ -414,6 +510,77 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 messageId={message.id}
                             />
                         </div>
+
+                        {/* Audio Player UI */}
+                        {showAudioPlayer && (
+                            <Card className="mt-3 p-3 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/20 dark:to-purple-950/20 border-blue-200 dark:border-blue-800">
+                                <div className="flex items-center gap-3">
+                                    {/* Play/Pause/Loading Button */}
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-8 w-8 p-0 rounded-full bg-white dark:bg-gray-800 border-blue-300 dark:border-blue-700"
+                                        onClick={toggleAudioPlayback}
+                                        disabled={isLoadingAudio || !currentAudio}
+                                        title={isLoadingAudio ? "Loading..." : isSpeaking ? "Pause" : "Play"}
+                                    >
+                                        {isLoadingAudio ? (
+                                            <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500" />
+                                        ) : isSpeaking ? (
+                                            <Pause size={14} />
+                                        ) : (
+                                            <Play size={14} />
+                                        )}
+                                    </Button>
+
+                                    {/* Progress Bar */}
+                                    <div className="flex-1 space-y-1">
+                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                            <span className="flex items-center gap-1">
+                                                <Volume2 size={12} />
+                                                {isLoadingAudio ? "Generating audio..." : "Reading aloud..."}
+                                            </span>
+                                            {currentAudio && !isLoadingAudio && (
+                                                <span>
+                                                    {formatTime(currentAudio.currentTime)} / {formatTime(audioDuration)}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 relative overflow-hidden">
+                                            {isLoadingAudio ? (
+                                                <div className="w-full h-2 bg-gradient-to-r from-blue-300 to-purple-300 rounded-full animate-pulse" />
+                                            ) : (
+                                                <>
+                                                    <div
+                                                        className="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded-full transition-all duration-300 ease-out"
+                                                        style={{ width: `${audioProgress}%` }}
+                                                    />
+                                                    {/* Animated pulse effect */}
+                                                    {isSpeaking && (
+                                                        <div
+                                                            className="absolute top-0 h-2 w-4 bg-white/30 rounded-full animate-pulse"
+                                                            style={{ left: `${Math.max(0, audioProgress - 2)}%` }}
+                                                        />
+                                                    )}
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Stop Button */}
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                                        onClick={stopAudio}
+                                        disabled={isLoadingAudio}
+                                        title="Stop"
+                                    >
+                                        <Square size={14} />
+                                    </Button>
+                                </div>
+                            </Card>
+                        )}
                     </div>
                 )}
             </div>

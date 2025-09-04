@@ -824,6 +824,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import MessageComponent from "./message-component"
+import VoiceControls from "./voice-controls"
 import { Message } from "react-hook-form"
 
 
@@ -1460,17 +1461,10 @@ export default function ChatInterface() {
                   />
 
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                    {isSpeechSupported && (
-                      <Button
-                        onClick={handleMicClick}
-                        size="sm"
-                        variant={isRecording ? "destructive" : "outline"}
-                        className="h-8 w-8 p-0"
-                        title={isRecording ? "Stop and confirm" : "Start recording"}
-                      >
-                        {isRecording ? <Check className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                      </Button>
-                    )}
+                    <VoiceControls 
+                      onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                      className="flex items-center gap-1"
+                    />
                     <Button
                       onClick={handleSend}
                       disabled={!input.trim() || isLoading || isGeneratingImage || isUploading} // MODIFICATION: Button bhi disable hoga
