@@ -826,6 +826,9 @@ import {
 import MessageComponent from "./message-component"
 import VoiceControls from "./voice-controls"
 import { Message } from "react-hook-form"
+import ElevenLabsInterface from "./elevenlabs-interface"
+import SpeechToTextComponent from "./speech-to-text-component"
+import TextToSpeechComponent from "./text-to-speech-component"
 
 
 // Enhanced Model Selector
@@ -1031,6 +1034,10 @@ export default function ChatInterface() {
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
 
+  // Voice Studio panel state
+  const [showAudioPanel, setShowAudioPanel] = React.useState(false);
+  const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music'>("tts");
+
 
   // Speech-to-Text ke liye naye states 
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
@@ -1115,6 +1122,11 @@ export default function ChatInterface() {
 
     }
   }, [currentChat]);
+
+  // Hide audio panel when chat changes or a new chat is created/selected
+  React.useEffect(() => {
+    setShowAudioPanel(false);
+  }, [currentChat?.id]);
 
   React.useEffect(() => {
     if (currentChat || chatCreationInitiated.current) {
@@ -1234,7 +1246,7 @@ export default function ChatInterface() {
   //   })
   // }, [currentChat?.messages, isLoading])
 
-  const isInitial = !currentChat
+  const isInitial = !currentChat && !showAudioPanel
 
 
 
@@ -1262,31 +1274,39 @@ export default function ChatInterface() {
       <div className="border-b border-border/40 p-4">
         <div className="flex items-center justify-between">
           <div>
-            <NavbarModelSelector
-              selectedModel={selectedModel}
-              setSelectedModel={setSelectedModel}
-              availableModels={availableModels}
-              setSelectedProvider={setSelectedProivder}
-            />
-            <div className="flex items-center gap-2 mt-2">
-              <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
-                <MessageSquare className="h-3 w-3 mr-1" />
-                {chatType === 'text' ? 'Text Chat' : 'Image Generation'}
-              </Badge>
-              {chatType === 'image' && (
-                <Badge variant="secondary" className="text-xs">
-                  <Palette className="h-3 w-3 mr-1" />
-                  DALL-E 3
-                </Badge>
-              )}
-            </div>
+            {!showAudioPanel ? (
+              <>
+                <NavbarModelSelector
+                  selectedModel={selectedModel}
+                  setSelectedModel={setSelectedModel}
+                  availableModels={availableModels}
+                  setSelectedProvider={setSelectedProivder}
+                />
+                <div className="flex items-center gap-2 mt-2">
+                  <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
+                    <MessageSquare className="h-3 w-3 mr-1" />
+                    {chatType === 'text' ? 'Text Chat' : 'Image Generation'}
+                  </Badge>
+                  {chatType === 'image' && (
+                    <Badge variant="secondary" className="text-xs">
+                      <Palette className="h-3 w-3 mr-1" />
+                      DALL-E 3
+                    </Badge>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col">
+                <div className="text-lg font-semibold">Voice Studio</div>
+                <div className="text-xs text-muted-foreground">Text-to-Speech, Speech-to-Text, and Music</div>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            {/* <ApiKeysDialog /> */}
             <ThemeToggle />
-            <Button variant="outline" size="sm" onClick={clearCurrentChat}>
+            {!showAudioPanel ? <Button variant="outline" size="sm" onClick={clearCurrentChat}>
               Clear Chat
-            </Button>
+            </Button> : null}
           </div>
         </div>
       </div>
@@ -1403,6 +1423,16 @@ export default function ChatInterface() {
                   // MODIFICATION: Props ko update kiya gaya hai
                   <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
                 )}
+                {/* Audio toggle button */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
+                  className="flex items-center gap-2"
+                >
+                  <Mic className="h-4 w-4" />
+                  Voice Studio
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1424,89 +1454,148 @@ export default function ChatInterface() {
         </div>
       ) : (
         <>
-          {/* Messages */}
-          <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
-            <div className="space-y-4 max-w-4xl mx-auto">
-              {currentChat.messages.map((message) => (
-                <MessageComponent key={message.id} message={message} user={user}
-                  onRegenerate={regenerateLastMessage}
-                  updateMessageInChat={editAndRegenerate}
-                />
-              ))}
-            </div>
-          </ScrollArea>
-
-          {/* Input & Actions */}
-          <div className="border-t border-border/40 p-4">
-            <div className="max-w-4xl mx-auto space-y-3">
-              {/* File Display */}
-              {chatType === 'text' && (
-                <FileDisplay files={uploadedFiles} onRemove={removeFile} />
-              )}
-
-              {/* Input Area */}
-              <div className="bg-background">
-                <div className="flex-1 relative">
-                  <Textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder={
-                      chatType === 'image'
-                        ? "Describe the image you want to generate..."
-                        : "Type your message here..."
-                    }
-                    className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
-                    disabled={isLoading || isGeneratingImage || isUploading} // MODIFICATION: Textarea uploading ke time disable ho jayega
-                  />
-
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                    <VoiceControls 
-                      onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                      className="flex items-center gap-1"
-                    />
+          {showAudioPanel ? (
+            // Voice Studio inline view
+            <div className="flex flex-1">
+              {/* Inline sidebar */}
+              <div className="w-56 border-r border-border/40 p-4 space-y-4">
+                <div>
+                  <div className="text-sm font-medium mb-2">Voice Studio</div>
+                  <div className="space-y-2">
                     <Button
-                      onClick={handleSend}
-                      disabled={!input.trim() || isLoading || isGeneratingImage || isUploading} // MODIFICATION: Button bhi disable hoga
-                      size="sm"
-                      className="h-8 w-8 p-0"
+                      variant={audioTab === 'tts' ? 'default' : 'outline'}
+                      className="w-full justify-start"
+                      onClick={() => setAudioTab('tts')}
                     >
-                      {isGeneratingImage || isUploading ? ( // MODIFICATION
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4" />
-                      )}
+                      Text-to-Speech
+                    </Button>
+                    <Button
+                      variant={audioTab === 'stt' ? 'default' : 'outline'}
+                      className="w-full justify-start"
+                      onClick={() => setAudioTab('stt')}
+                    >
+                      Speech-to-Text
+                    </Button>
+                    <Button
+                      variant={audioTab === 'music' ? 'default' : 'outline'}
+                      className="w-full justify-start"
+                      onClick={() => setAudioTab('music')}
+                    >
+                      Music
                     </Button>
                   </div>
                 </div>
               </div>
-
-              {/* Function buttons row */}
-              <div className="flex flex-wrap items-center justify-start gap-2">
-                {chatType === 'text' && (
-                  // MODIFICATION: Props ko update kiya gaya hai
-                  <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
+              {/* Content area */}
+              <div className="flex-1 p-4">
+                {audioTab === 'tts' && (
+                  <TextToSpeechComponent />
                 )}
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={startNewImageChat}
-                  className="flex items-center gap-2"
-                >
-                  <Palette className="h-4 w-4" />
-                  {chatType === 'image' ? 'Image Generation' : 'New Image Chat'}
-                </Button>
+                {audioTab === 'stt' && (
+                  <SpeechToTextComponent />
+                )}
+                {audioTab === 'music' && (
+                  <div className="text-sm text-muted-foreground">Music generation coming soon.</div>
+                )}
               </div>
-
-              <p className="text-center text-xs text-muted-foreground">
-                {chatType === 'image'
-                  ? 'Press Enter to generate image, Shift+Enter for new line'
-                  : 'Press Enter to send, Shift+Enter for new line'
-                }
-              </p>
             </div>
-          </div>
+          ) : (
+            <>
+              {/* Messages */}
+              <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+                <div className="space-y-4 max-w-4xl mx-auto">
+                  {currentChat?.messages.map((message) => (
+                    <MessageComponent key={message.id} message={message} user={user}
+                      onRegenerate={regenerateLastMessage}
+                      updateMessageInChat={editAndRegenerate}
+                    />
+                  ))}
+                </div>
+              </ScrollArea>
+
+              {/* Input & Actions */}
+              <div className="border-t border-border/40 p-4">
+                <div className="max-w-4xl mx-auto space-y-3">
+                  {/* File Display */}
+                  {chatType === 'text' && (
+                    <FileDisplay files={uploadedFiles} onRemove={removeFile} />
+                  )}
+
+                  {/* Input Area */}
+                  <div className="bg-background">
+                    <div className="flex-1 relative">
+                      <Textarea
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyPress={handleKeyPress}
+                        placeholder={
+                          chatType === 'image'
+                            ? "Describe the image you want to generate..."
+                            : "Type your message here..."
+                        }
+                        className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
+                        disabled={isLoading || isGeneratingImage || isUploading}
+                      />
+
+                      <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                        <VoiceControls
+                          onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                          className="flex items-center gap-1"
+                        />
+                        <Button
+                          onClick={handleSend}
+                          disabled={!input.trim() || isLoading || isGeneratingImage || isUploading}
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                        >
+                          {isGeneratingImage || isUploading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Send className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Function buttons row */}
+                  <div className="flex flex-wrap items-center justify-start gap-2">
+                    {chatType === 'text' && (
+                      // MODIFICATION: Props ko update kiya gaya hai
+                      <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
+                    )}
+                    {/* Audio toggle button */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
+                      className="flex items-center gap-2"
+                    >
+                      <Mic className="h-4 w-4" />
+                      Voice Studio
+                    </Button>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={startNewImageChat}
+                      className="flex items-center gap-2"
+                    >
+                      <Palette className="h-4 w-4" />
+                      {chatType === 'image' ? 'Image Generation' : 'New Image Chat'}
+                    </Button>
+                  </div>
+
+                  <p className="text-center text-xs text-muted-foreground">
+                    {chatType === 'image'
+                      ? 'Press Enter to generate image, Shift+Enter for new line'
+                      : 'Press Enter to send, Shift+Enter for new line'
+                    }
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

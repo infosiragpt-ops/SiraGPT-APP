@@ -497,6 +497,9 @@ class ApiClient {
     return this.request('/elevenlabs/voices');
   }
 
+  async getModels() {
+    return this.request('/elevenlabs/models');
+  }
   async textToSpeech(data: {
     text: string;
     voice_id?: string;
