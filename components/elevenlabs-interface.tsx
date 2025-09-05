@@ -107,20 +107,20 @@ export default function ElevenLabsInterface() {
       if (audioRef.current.src !== expectedSrc) {
         audioRef.current.src = expectedSrc
       }
-      
+
       // Set up event listeners for synchronization
       const audio = audioRef.current
-      
+
       const handleEnded = () => setIsPlaying(false)
       const handlePause = () => setIsPlaying(false)
       const handlePlay = () => setIsPlaying(true)
       const handleLoadStart = () => setIsPlaying(false)
-      
+
       audio.addEventListener('ended', handleEnded)
       audio.addEventListener('pause', handlePause)
       audio.addEventListener('play', handlePlay)
       audio.addEventListener('loadstart', handleLoadStart)
-      
+
       return () => {
         audio.removeEventListener('ended', handleEnded)
         audio.removeEventListener('pause', handlePause)
@@ -209,7 +209,7 @@ export default function ElevenLabsInterface() {
             audioRef.current.onpause = () => setIsPlaying(false)
             audioRef.current.onplay = () => setIsPlaying(true)
             audioRef.current.onloadstart = () => setIsPlaying(false)
-            
+
             // Auto-play the generated audio
             audioRef.current.play()
             setIsPlaying(true)
@@ -279,7 +279,7 @@ export default function ElevenLabsInterface() {
     setIsLoading(true)
     try {
       const audioFile = new File([audioBlob], 'recording.webm', { type: 'audio/webm' })
-      
+
       // Create form data with additional options
       const formData = new FormData()
       formData.append('audio', audioFile)
@@ -291,18 +291,15 @@ export default function ElevenLabsInterface() {
       formData.append('diarize', diarize.toString())
 
       // Use ElevenLabs speech-to-text with options
-      const response = await apiClient.request('/elevenlabs/speech-to-text', {
-        method: 'POST',
-        body: formData,
-      })
+      const response = await apiClient.speechToText(audioFile, 'scribe_v1')
 
       if (response.text) {
         setTranscribedText(response.text)
         const isFallback = response.fallback || response.note
-        
+
         toast({
           title: "Success",
-          description: isFallback 
+          description: isFallback
             ? `Audio processed. ${response.note || 'ElevenLabs STT may require a subscription plan.'}`
             : `Audio transcribed successfully using ElevenLabs!`,
         })
@@ -347,7 +344,7 @@ export default function ElevenLabsInterface() {
           audioRef.current.onpause = () => setIsPlaying(false)
           audioRef.current.onplay = () => setIsPlaying(true)
         }
-        
+
         audioRef.current.play()
         setIsPlaying(true)
       }
@@ -518,9 +515,9 @@ export default function ElevenLabsInterface() {
                       )}
                     </div>
                     <div className="flex gap-2">
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
+                      <Button
+                        variant="outline"
+                        size="sm"
                         onClick={playAudio}
                         className={`${isPlaying ? 'bg-green-100 border-green-300 text-green-700' : ''}`}
                       >
