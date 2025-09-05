@@ -636,34 +636,46 @@ export default function TextToSpeechComponent() {
         }
     }
 
-    const downloadAudio = async () => {
-        if (!audioUrl) {
-            toast({ title: "Error", description: "No audio file to download.", variant: "destructive" });
-            return;
-        }
-        try {
+const downloadAudio = async () => {
+  if (!audioUrl) {
+    toast({ title: "Error", description: "No audio file to download.", variant: "destructive" });
+    return;
+  }
 
-            const filename = audioUrl.split('/').pop();
-            if (!filename) throw new Error("Invalid audio URL");
+  try {
+    const filename = audioUrl.split('/').pop();
+    if (!filename) throw new Error("Invalid audio URL");
 
-            toast({ title: "Downloading...", description: "Your audio is being prepared for download." });
+    toast({ title: "Downloading...", description: "Your audio is being prepared for download." });
 
-            const blob = await apiClient.getAudioFile(filename);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
+    // 🔹 Fetch the real audio file as blob
+    const res = await fetch(`${apiClient.apiBaseURL}${audioUrl}`, {
+      credentials: 'include', // only if needed
+    });
+    if (!res.ok) throw new Error("Failed to fetch audio file");
+    const blob = await res.blob();
 
-        } catch (error) {
-            console.error("Download error:", error);
-            toast({ title: "Download Failed", description: "Could not download the audio file.", variant: "destructive" });
-        }
-    };
+    // 🔹 Create a temp download link
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+
+    // cleanup
+    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+
+    toast({ title: "Success", description: "Your audio download has started." });
+
+  } catch (error) {
+    console.error("Download error:", error);
+    toast({ title: "Download Failed", description: "Could not download the audio file.", variant: "destructive" });
+  }
+};
+
 
     const handleShare = async () => {
         if (!audioUrl) return;

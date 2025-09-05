@@ -798,6 +798,7 @@ import {
   Plus,
   MessageSquare,
   Check,
+  Music
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -829,6 +830,7 @@ import { Message } from "react-hook-form"
 import ElevenLabsInterface from "./elevenlabs-interface"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
+import MusicGenerationComponent from "./MusicGenerationComponent"
 
 
 // Enhanced Model Selector
@@ -1467,6 +1469,7 @@ export default function ChatInterface() {
                       className="w-full justify-start"
                       onClick={() => setAudioTab('tts')}
                     >
+                      <Square className="h-4 w-4 mr-2" />
                       Text-to-Speech
                     </Button>
                     <Button
@@ -1474,6 +1477,7 @@ export default function ChatInterface() {
                       className="w-full justify-start"
                       onClick={() => setAudioTab('stt')}
                     >
+                      <Mic className="h-4 w-4 mr-2" />
                       Speech-to-Text
                     </Button>
                     <Button
@@ -1481,6 +1485,7 @@ export default function ChatInterface() {
                       className="w-full justify-start"
                       onClick={() => setAudioTab('music')}
                     >
+                      <Music className="h-4 w-4 mr-2" />
                       Music
                     </Button>
                   </div>
@@ -1495,7 +1500,7 @@ export default function ChatInterface() {
                   <SpeechToTextComponent />
                 )}
                 {audioTab === 'music' && (
-                  <div className="text-sm text-muted-foreground">Music generation coming soon.</div>
+                    <MusicGenerationComponent />
                 )}
               </div>
             </div>

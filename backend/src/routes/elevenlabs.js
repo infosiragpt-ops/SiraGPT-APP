@@ -412,5 +412,147 @@ router.get('/user/subscription', authenticateToken, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+// ...existing code...
+
+// Music Generation using ElevenLabs
+router.post('/generate-music', [
+  body('text').trim().notEmpty().withMessage('Text prompt is required'),
+  body('duration').optional().isNumeric().withMessage('Duration must be a number'),
+  // body('prompt_influence').optional().isNumeric().withMessage('Prompt influence must be a number')
+], authenticateToken, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+
+    const {
+      text,
+      duration = 10, // Default 10 seconds
+      // prompt_influence = 0.3, // Default prompt influence
+      // normalize_output = true
+           output_format = 'mp3_44100_128',
+      model_id = 'music_v1'
+    } = req.body;
+
+    console.log('Music generation request received:', { 
+      text: text.substring(0, 50) + '...', 
+      duration, 
+    });
+
+    // Generate music using ElevenLabs Music API
+    console.log('Calling ElevenLabs Music Generation API...');
+    
+    const musicResponse = await fetch('https://api.elevenlabs.io/v1/music', {
+      method: 'POST',
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      // body: JSON.stringify({
+      //   text,
+      //   duration_seconds: duration,
+      //   prompt_influence,
+      //   normalize_output
+      // })
+       body: JSON.stringify({
+        prompt: text,
+        music_length_ms: duration * 1000,  // convert seconds → ms
+        model_id,
+        output_format
+      })
+    });
+
+    if (!musicResponse.ok) {
+      const errorData = await musicResponse.text();
+      console.error('ElevenLabs Music API error:', musicResponse.status, errorData);
+      
+      if (musicResponse.status === 402) {
+        return res.status(402).json({ 
+          error: 'Insufficient credits for music generation. Please upgrade your ElevenLabs subscription.' 
+        });
+      } else if (musicResponse.status === 400) {
+        return res.status(400).json({ 
+          error: 'Invalid music generation parameters. Please check your input.' 
+        });
+      } else {
+        return res.status(musicResponse.status).json({ 
+          error: `Music generation failed: ${errorData}` 
+        });
+      }
+    }
+
+    console.log('Music generated successfully from ElevenLabs');
+
+    // Get the audio buffer from response
+    const audioBuffer = await musicResponse.arrayBuffer();
+    const musicBuffer = Buffer.from(audioBuffer);
+
+    // Generate unique filename
+    const filename = `music_${Date.now()}_${Math.random().toString(36).substring(2, 11)}.mp3`;
+    const filepath = path.join('uploads/audio', filename);
+
+    // Ensure directory exists
+    const dir = path.dirname(filepath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Save music file
+    fs.writeFileSync(filepath, musicBuffer);
+
+    // Track usage
+    await prisma.apiUsage.create({
+      data: {
+        userId: req.user.id,
+        model: 'elevenlabs-music',
+        tokens: text.length,
+        cost: duration * 0.01 // Approximate cost per second
+      }
+    });
+
+    res.json({
+      success: true,
+      audio_url: `/elevenlabs/audio/${filename}`,
+      filename,
+      duration: duration,
+      text_prompt: text,
+      // prompt_influence: prompt_influence
+    });
+
+  } catch (error) {
+    console.error('Music generation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get available music styles/genres (placeholder for future enhancement)
+router.get('/music-styles', authenticateToken, async (req, res) => {
+  try {
+    // For now, return predefined styles. In future, this could be dynamic from ElevenLabs
+    const styles = [
+      { id: 'ambient', name: 'Ambient', description: 'Atmospheric and peaceful sounds' },
+      { id: 'electronic', name: 'Electronic', description: 'Synthesized and digital sounds' },
+      { id: 'classical', name: 'Classical', description: 'Orchestral and traditional instruments' },
+      { id: 'jazz', name: 'Jazz', description: 'Smooth and improvised melodies' },
+      { id: 'rock', name: 'Rock', description: 'Energetic and guitar-driven' },
+      { id: 'pop', name: 'Pop', description: 'Catchy and mainstream melodies' },
+      { id: 'cinematic', name: 'Cinematic', description: 'Epic and dramatic soundscapes' },
+      { id: 'nature', name: 'Nature', description: 'Natural sounds and environments' }
+    ];
+
+    res.json({ styles });
+  } catch (error) {
+    console.error('Error fetching music styles:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ...existing code...
+
 
 module.exports = router;

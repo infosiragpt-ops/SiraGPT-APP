@@ -544,6 +544,26 @@ class ApiClient {
     const response = await this.request(`/elevenlabs/audio/${filename}`);
     return response.blob();
   }
+    // ...existing code...
+  
+    // ElevenLabs Music Generation
+    async generateMusic(data: {
+      text: string;
+      duration?: number;
+      prompt_influence?: number;
+      normalize_output?: boolean;
+    }) {
+      return this.request('/elevenlabs/generate-music', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+    }
+  
+    async getMusicStyles() {
+      return this.request('/elevenlabs/music-styles');
+    }
+  
+  // ...existing code...
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);
