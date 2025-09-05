@@ -64,6 +64,23 @@ router.get('/voices', authenticateToken, async (req, res) => {
   }
 });
 
+router.get('/models', authenticateToken, async (req, res) => {
+  try {
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+    console.log('Fetching models from ElevenLabs...');
+    const models = await elevenlabs.models.list();
+    console.log('Models fetched:', models?.length || 0);
+
+    // API seedha array return karti hai, hum use object mein wrap kar rahe hain
+    res.json({ models: models || [] });
+  } catch (error) {
+    console.error('Error fetching models:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Text-to-Speech
 router.post('/text-to-speech', [
   body('text').trim().notEmpty().withMessage('Text is required'),
@@ -178,19 +195,19 @@ router.post('/speech-to-text', upload.single('audio'), authenticateToken, async 
     // Use the official ElevenLabs client method
     try {
       console.log('Using ElevenLabs client speechToText.convert method...');
-      
+
       // Read the audio file and create a Blob
       const audioBuffer = fs.readFileSync(req.file.path);
-      const audioBlob = new Blob([audioBuffer], { 
-        type: req.file.mimetype || 'audio/webm' 
+      const audioBlob = new Blob([audioBuffer], {
+        type: req.file.mimetype || 'audio/webm'
       });
 
       // Get parameters from request body
-      const { 
-        model = 'scribe_v1', 
-        language = null, 
-        tagAudioEvents = true, 
-        diarize = false 
+      const {
+        model = 'scribe_v1',
+        language = null,
+        tagAudioEvents = true,
+        diarize = false
       } = req.body;
 
       console.log('ElevenLabs STT parameters:', {
@@ -250,7 +267,7 @@ router.post('/speech-to-text', upload.single('audio'), authenticateToken, async 
 
     } catch (clientError) {
       console.error('ElevenLabs client STT error:', clientError);
-      
+
       // Clean up uploaded file
       if (fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
@@ -267,7 +284,7 @@ router.post('/speech-to-text', upload.single('audio'), authenticateToken, async 
       )) {
         // Provide helpful fallback message
         const fallbackText = 'Audio received successfully. ElevenLabs Speech-to-Text requires a compatible subscription plan.';
-        
+
         // Track usage
         await prisma.apiUsage.create({
           data: {
@@ -288,7 +305,7 @@ router.post('/speech-to-text', upload.single('audio'), authenticateToken, async 
       }
 
       // For other errors, return error response
-      res.status(500).json({ 
+      res.status(500).json({
         error: `ElevenLabs STT error: ${clientError.message}`,
         details: clientError.toString()
       });

@@ -167,8 +167,8 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton 
-                  onClick={() => router.push("/chat")} 
+                <SidebarMenuButton
+                  onClick={() => router.push("/chat")}
                   className="w-full justify-start h-9 px-3"
                   isActive={selectedType === "Text Chat"}
                 >
@@ -177,8 +177,8 @@ export function AppSidebar() {
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton 
-                  onClick={() => router.push("/voice")} 
+                <SidebarMenuButton
+                  onClick={() => router.push("/voice")}
                   className="w-full justify-start h-9 px-3"
                 >
                   <Mic className="h-4 w-4" />
@@ -190,62 +190,62 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-        <SidebarSeparator />
+      <SidebarSeparator />
 
-        {/* Recent Chats - Only show for Text Chat */}
-        {selectedType === "Text Chat" && (
-          <SidebarGroup>
-            <SidebarGroupLabel className={cn("px-3 py-4 text-center text-sm text-muted-foreground", state === 'closed' && 'hidden')}>
-              Recent Chats
-            </SidebarGroupLabel>
-            <SidebarGroupContent className={cn(state === 'closed' && 'hidden')}>
-              <SidebarMenu>
-                {chats.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-                    No chats yet. Start a new conversation!
-                  </div>
-                ) : (
-                  chats.slice(0, 10).map((chat) => (
-                    <SidebarMenuItem key={chat.id}>
-                      <div className="flex items-center w-full group">
-                        <SidebarMenuButton
-                          isActive={currentChat?.id === chat.id}
-                          onClick={() => selectChat(chat.id)}
-                          className="flex-1 justify-start h-auto py-2 pr-8"
-                        >
+      {/* Recent Chats - Only show for Text Chat */}
+      {selectedType === "Text Chat" && (
+        <SidebarGroup>
+          <SidebarGroupLabel className={cn("px-3 py-4 text-center text-sm text-muted-foreground", state === 'closed' && 'hidden')}>
+            Recent Chats
+          </SidebarGroupLabel>
+          <SidebarGroupContent className={cn(state === 'closed' && 'hidden')}>
+            <SidebarMenu>
+              {chats.length === 0 ? (
+                <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                  No chats yet. Start a new conversation!
+                </div>
+              ) : (
+                chats.slice(0, 10).map((chat) => (
+                  <SidebarMenuItem key={chat.id}>
+                    <div className="flex items-center w-full group">
+                      <SidebarMenuButton
+                        isActive={currentChat?.id === chat.id}
+                        onClick={() => selectChat(chat.id)}
+                        className="flex-1 justify-start h-auto py-2 pr-8"
+                      >
 
-                          <History className="mr-2 h-4 w-4 flex-shrink-0" />
+                        <History className="mr-2 h-4 w-4 flex-shrink-0" />
 
-                          <div className="flex flex-col items-start min-w-0 flex-1">
-                            <span className="text-sm truncate w-full">{chat.title}</span>
-                            <span className="text-xs text-muted-foreground">{formatChatTime(chat.updatedAt)}</span>
-                          </div>
-                        </SidebarMenuButton>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2"
-                            >
-                              <MoreHorizontal className="h-3 w-3" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => deleteChat(chat.id)} className="text-red-600">
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </SidebarMenuItem>
-                  ))
-                )}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+                        <div className="flex flex-col items-start min-w-0 flex-1">
+                          <span className="text-sm truncate w-full">{chat.title}</span>
+                          <span className="text-xs text-muted-foreground">{formatChatTime(chat.updatedAt)}</span>
+                        </div>
+                      </SidebarMenuButton>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2"
+                          >
+                            <MoreHorizontal className="h-3 w-3" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => deleteChat(chat.id)} className="text-red-600">
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </SidebarMenuItem>
+                ))
+              )}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      )}
 
       <SidebarFooter className="border-t border-border/40 p-2">
         <SidebarMenu>
