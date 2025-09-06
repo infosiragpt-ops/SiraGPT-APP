@@ -831,6 +831,7 @@ import ElevenLabsInterface from "./elevenlabs-interface"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
+import { webSearchService } from "@/lib/web-search-service"
 
 
 // Enhanced Model Selector
@@ -1007,6 +1008,7 @@ export default function ChatInterface() {
   const { user } = useAuth()
   const {
     currentChat,
+    setCurrentChat,
     addMessage,
     clearCurrentChat,
     selectedModel,
@@ -1044,6 +1046,11 @@ export default function ChatInterface() {
   // Speech-to-Text ke liye naye states 
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
+
+
+  // In the ChatInterface component, add this state variable with other states:
+const [isWebSearching, setIsWebSearching] = React.useState(false)
+
 
   React.useEffect(() => {
     // Check if the browser supports Speech Recognition
@@ -1250,8 +1257,147 @@ export default function ChatInterface() {
 
   const isInitial = !currentChat && !showAudioPanel
 
+// Replace the existing handleWebSearch function with this corrected version:
 
+// const handleWebSearch = async () => {
+//   if (!input.trim()) {
+//     toast.error('Please enter a search query');
+//     return;
+//   }
 
+//   // Create new chat if none exists
+//   if (!currentChat?.id) {
+//     try {
+//       await createNewChat();
+//       // Wait a bit for the chat to be created
+//       await new Promise(resolve => setTimeout(resolve, 500));
+//     } catch (error) {
+//       toast.error('Failed to create chat');
+//       return;
+//     }
+//   }
+
+//   setIsWebSearching(true);
+  
+//   try {
+//     const searchQuery = input.trim();
+    
+//     // Perform web search (this will also save messages to backend)
+//     const response = await webSearchService.search(searchQuery, currentChat?.id);
+    
+//     // Reload the current chat to get the updated messages from backend
+//     if (currentChat?.id) {
+//       await selectChat(currentChat.id);
+//     }
+
+//     // Clear input
+//     setInput('');
+    
+//     // Scroll to bottom
+//     setTimeout(() => {
+//       if (scrollAreaRef.current) {
+//         const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
+//         if (scrollContainer) {
+//           scrollContainer.scrollTop = scrollContainer.scrollHeight;
+//         }
+//       }
+//     }, 100);
+
+//     toast.success(`Found ${response.results.length} search results`);
+//   } catch (error: any) {
+//     console.error('Web search failed:', error);
+//     toast.error(error.message || 'Web search failed');
+//   } finally {
+//     setIsWebSearching(false);
+//   }
+// };
+// Replace the handleWebSearch function:
+
+const handleWebSearch = async () => {
+  if (!input.trim()) {
+    toast.error('Please enter a search query');
+    return;
+  }
+
+  if (!currentChat?.id) {
+    try {
+      await createNewChat();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      toast.error('Failed to create chat');
+      return;
+    }
+  }
+
+  setIsWebSearching(true);
+  
+  try {
+    const searchQuery = input.trim();
+    
+    // Add user message immediately
+    const userMessage = {
+      id: `msg-user-${Date.now()}`,
+      chatId: currentChat?.id,
+      role: 'USER',
+      content: `🔍 Web Search: ${searchQuery}`,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Add AI placeholder for streaming
+    const aiMessage = {
+      id: `msg-ai-${Date.now()}`,
+      chatId: currentChat?.id,
+      role: 'ASSISTANT',
+      content: '',
+      timestamp: new Date().toISOString(),
+    };
+
+    // Update UI immediately
+    const updatedMessages = [...(currentChat?.messages || []), userMessage, aiMessage];
+    const updatedChat = { ...currentChat, messages: updatedMessages };
+    setCurrentChat(updatedChat);
+
+    let accumulatedContent = '';
+
+    // Start streaming search
+    await webSearchService.searchStream(
+      searchQuery,
+      currentChat?.id,
+      (content: string) => {
+        // Accumulate content for streaming effect
+        accumulatedContent += content;
+        
+        // Update the AI message with accumulated content
+        const newMessages = updatedMessages.map(msg => 
+          msg.id === aiMessage.id 
+            ? { ...msg, content: accumulatedContent }
+            : msg
+        );
+        
+        setCurrentChat(prev => prev ? { ...prev, messages: newMessages } : prev);
+      },
+      () => {
+        // On complete, reload chat to get saved version
+        selectChat(currentChat?.id || '');
+        setIsWebSearching(false);
+        toast.success('Web search completed');
+      },
+      (error: Error) => {
+        console.error('Web search failed:', error);
+        toast.error(error.message || 'Web search failed');
+        setIsWebSearching(false);
+      }
+    );
+
+    // Clear input
+    setInput('');
+
+  } catch (error: any) {
+    console.error('Web search failed:', error);
+    toast.error(error.message || 'Web search failed');
+    setIsWebSearching(false);
+  }
+};
 
   return (
     // MODIFICATION: Event handlers ko main div mein lagaya gaya hai
@@ -1425,6 +1571,23 @@ export default function ChatInterface() {
                   // MODIFICATION: Props ko update kiya gaya hai
                   <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
                 )}
+                 {/* Web Search button */}
+                     {chatType === 'text' && (
+  <Button
+    variant="outline"
+    size="sm"
+    onClick={handleWebSearch}
+    disabled={isWebSearching || !input.trim()}
+    className="flex items-center gap-2"
+  >
+    {isWebSearching ? (
+      <Loader2 className="h-4 w-4 animate-spin" />
+    ) : (
+      <Globe className="h-4 w-4" />
+    )}
+    {isWebSearching ? 'Searching...' : 'Web Search'}
+  </Button>
+  )}
                 {/* Audio toggle button */}
                 <Button
                   variant="outline"
@@ -1539,7 +1702,7 @@ export default function ChatInterface() {
                             : "Type your message here..."
                         }
                         className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
-                        disabled={isLoading || isGeneratingImage || isUploading}
+                        disabled={isLoading || isGeneratingImage || isUploading || isWebSearching}
                       />
 
                       <div className="absolute bottom-3 right-3 flex items-center gap-2">
@@ -1549,11 +1712,11 @@ export default function ChatInterface() {
                         />
                         <Button
                           onClick={handleSend}
-                          disabled={!input.trim() || isLoading || isGeneratingImage || isUploading}
+                          disabled={!input.trim() || isLoading || isGeneratingImage || isUploading || isWebSearching}
                           size="sm"
                           className="h-8 w-8 p-0"
                         >
-                          {isGeneratingImage || isUploading ? (
+                          {isGeneratingImage || isUploading || isWebSearching ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
                             <Send className="h-4 w-4" />
@@ -1569,6 +1732,23 @@ export default function ChatInterface() {
                       // MODIFICATION: Props ko update kiya gaya hai
                       <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
                     )}
+                             {/* Web Search button */}
+                                {chatType === 'text' && (
+  <Button
+    variant="outline"
+    size="sm"
+    onClick={handleWebSearch}
+    disabled={isWebSearching || !input.trim()}
+    className="flex items-center gap-2"
+  >
+    {isWebSearching ? (
+      <Loader2 className="h-4 w-4 animate-spin" />
+    ) : (
+      <Globe className="h-4 w-4" />
+    )}
+    {isWebSearching ? 'Searching...' : 'Web Search'}
+  </Button>
+   )}
                     {/* Audio toggle button */}
                     <Button
                       variant="outline"

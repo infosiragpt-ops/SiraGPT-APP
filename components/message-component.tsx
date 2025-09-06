@@ -296,7 +296,19 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium">{children}</th>,
                         td: ({ children }) => <td className="border border-muted px-3 py-2">{children}</td>,
                         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                        em: ({ children }) => <em className="italic">{children}</em>
+                        em: ({ children }) => <em className="italic">{children}</em>,
+                        a: ({ href, children, ...props }) => (
+    <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
+        {...props}
+    >
+        {children}
+    </a>
+    )
+
                     }}
                 >
                     {message.content}

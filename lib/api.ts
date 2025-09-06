@@ -562,8 +562,75 @@ class ApiClient {
     async getMusicStyles() {
       return this.request('/elevenlabs/music-styles');
     }
+
   
-  // ...existing code...
+  // // Web Search endpoints
+  // async webSearch(data: { query: string; chatId?: string }) {
+  //   return this.request('/search/web', {
+  //     method: 'POST',
+  //     body: JSON.stringify(data),
+  //   });
+  // }
+// Replace the webSearch method with this streaming version:
+
+// Web Search endpoints
+async webSearchStream(
+  data: { query: string; chatId?: string },
+  onData: (chunk: any) => void,
+  onComplete: () => void,
+  onError: (error: Error) => void
+) {
+  const url = `${this.baseURL}/search/web`;
+  const config: RequestInit = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(this.token && { Authorization: `Bearer ${this.token}` }),
+    },
+    body: JSON.stringify(data),
+  };
+
+  try {
+    const response = await fetch(url, config);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('No response body');
+    }
+
+    const decoder = new TextDecoder('utf-8');
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        onComplete();
+        break;
+      }
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n\n');
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const jsonData = JSON.parse(line.slice(6));
+            onData(jsonData);
+          } catch (e) {
+            // Skip invalid JSON
+          }
+        }
+      }
+    }
+  } catch (error: any) {
+    console.error('Web search stream failed:', error);
+    onError(error);
+  }
+}
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);

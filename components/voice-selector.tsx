@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import apiClient from '@/lib/api'
+import { useVoices } from '@/hooks/use-voices'
 
 interface Voice {
   voiceId: string
@@ -28,39 +29,10 @@ export default function VoiceSelector({
   label = "Voice",
   className = "" 
 }: VoiceSelectorProps) {
-  const [voices, setVoices] = useState<Voice[]>([])
+  const { voices, loading: voicesLoading } = useVoices()
+
   const [isLoading, setIsLoading] = useState(true)
 
-  useEffect(() => {
-    loadVoices()
-  }, [])
-
-  const loadVoices = async () => {
-    try {
-      setIsLoading(true)
-      const response = await apiClient.getVoices()
-      setVoices(response.voices || [])
-      
-      // Try to load saved voice from localStorage first
-      const savedVoiceId = typeof window !== 'undefined' ? localStorage.getItem('selectedVoiceId') : null
-      
-      if (savedVoiceId && response.voices?.find(v => v.voiceId === savedVoiceId)) {
-        // Use saved voice if it exists in the available voices
-        if (!selectedVoice) {
-          console.log('Loading saved voice from localStorage:', savedVoiceId)
-          onVoiceChange(savedVoiceId)
-        }
-      } else if (!selectedVoice && response.voices && response.voices.length > 0) {
-        // Auto-select first voice if none selected and no saved voice
-        console.log('Auto-selecting first voice:', response.voices[0].voiceId)
-        onVoiceChange(response.voices[0].voiceId)
-      }
-    } catch (error) {
-      console.error('Failed to load voices:', error)
-    } finally {
-      setIsLoading(false)
-    }
-  }
 
   return (
     <div className={`space-y-2 ${className}`}>
@@ -76,7 +48,7 @@ export default function VoiceSelector({
           }
           onVoiceChange(value)
         }}
-        disabled={isLoading}
+        disabled={voicesLoading}
       >
         <SelectTrigger>
           {selectedVoice ? (
@@ -84,7 +56,7 @@ export default function VoiceSelector({
               {voices.find((v) => v.voiceId === selectedVoice)?.name || 'Unknown Voice'}
             </span>
           ) : (
-            <SelectValue placeholder={isLoading ? "Loading voices..." : "Choose a voice"} />
+            <SelectValue placeholder={voicesLoading ? "Loading voices..." : "Choose a voice"} />
           )}
         </SelectTrigger>
         <SelectContent>

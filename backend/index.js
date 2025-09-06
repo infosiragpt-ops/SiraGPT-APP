@@ -19,6 +19,8 @@ const userRoutes = require('./src/routes/users');
 const publicRoutes = require('./src/routes/public');
 const downloadRoutes = require('./src/routes/download');
 const elevenlabsRoutes = require('./src/routes/elevenlabs');
+const searchRoutes = require('./src/routes/search');
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -110,6 +112,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/download', downloadRoutes);
 app.use('/api/elevenlabs', elevenlabsRoutes);
 
+app.use('/api/search', searchRoutes);
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error('Error:', err);
