@@ -14,7 +14,7 @@ async function performGoogleSearch(query, apiKey, searchEngineId) {
     );
 
     if (!response.ok) {
-      throw new Error(`Google Search API error: ${response.status}`);
+      throw new Error(`Google Search: ${response.status}`);
     }
 
     const data = await response.json();
@@ -174,8 +174,8 @@ router.post(
       const searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
 
       if (!googleApiKey || !searchEngineId) {
-        return res.status(500).json({ 
-          error: 'Google Search API not configured.' 
+        return res.status(500).json({
+          error: 'Google Search API not configured.'
         });
       }
 
@@ -210,30 +210,30 @@ router.post(
       // Stream title
       const title = `**Web Search Results for: "${query}"**\n\n`;
       res.write(`data: ${JSON.stringify({ type: 'content', content: title })}\n\n`);
-console.log('Search Results:', searchResults);
+      console.log('Search Results:', searchResults);
       // Stream each result with delay for typing effect
-     for (let i = 0; i < searchResults.length; i++) {
-  const result = searchResults[i];
-  let resultText = `**${i + 1}. [${result.title}](${result.url})**\n${result.snippet}\nSource: ${result.displayLink}`;
-  
-  if (result.image) {
-    resultText += `\n![preview](${result.image})`; // ✅ render preview image (Markdown)
-  }
-  if (result.date) {
-    resultText += `\n🗓️ Published: ${result.date}`;
-  }
-  if (result.author) {
-    resultText += `\n✍️ Author: ${result.author}`;
-  }
-  if (result.rating) {
-    resultText += `\n⭐ Rating: ${result.rating}`;
-  }
+      for (let i = 0; i < searchResults.length; i++) {
+        const result = searchResults[i];
+        let resultText = `**${i + 1}. [${result.title}](${result.url})**\n${result.snippet}\nSource: ${result.displayLink}`;
 
-  resultText += '\n\n';
+        if (result.image) {
+          resultText += `\n![preview](${result.image})`; // ✅ render preview image (Markdown)
+        }
+        if (result.date) {
+          resultText += `\n🗓️ Published: ${result.date}`;
+        }
+        if (result.author) {
+          resultText += `\n✍️ Author: ${result.author}`;
+        }
+        if (result.rating) {
+          resultText += `\n⭐ Rating: ${result.rating}`;
+        }
 
-  res.write(`data: ${JSON.stringify({ type: 'content', content: resultText })}\n\n`);
-  await new Promise(resolve => setTimeout(resolve, 300));
-}
+        resultText += '\n\n';
+
+        res.write(`data: ${JSON.stringify({ type: 'content', content: resultText })}\n\n`);
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
 
 
       // Stream completion
@@ -241,8 +241,8 @@ console.log('Search Results:', searchResults);
       res.write(`data: ${JSON.stringify({ type: 'content', content: footer })}\n\n`);
 
       // Final message
-      const fullContent = title + 
-        searchResults.map((result, index) => 
+      const fullContent = title +
+        searchResults.map((result, index) =>
           `**${index + 1}. [${result.title}](${result.url})**\n${result.snippet}\nSource: ${result.displayLink}\n`
         ).join('\n') + footer;
 
@@ -251,10 +251,10 @@ console.log('Search Results:', searchResults);
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (chat) {
           await prisma.message.create({
-            data: { 
-              chatId, 
-              role: 'ASSISTANT', 
-              content: fullContent, 
+            data: {
+              chatId,
+              role: 'ASSISTANT',
+              content: fullContent,
               tokens: 50,
               timestamp: new Date(),
             }
