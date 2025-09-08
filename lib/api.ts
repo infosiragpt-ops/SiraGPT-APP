@@ -562,8 +562,40 @@ class ApiClient {
     async getMusicStyles() {
       return this.request('/elevenlabs/music-styles');
     }
-  
-  // ...existing code...
+
+
+// Update the video generation method
+async generateVideo(data: {
+  prompt: string;
+  aspect_ratio?: '16:9' | '9:16' | '1:1';
+  negative_prompt?: string;
+}) {
+  return this.request('/video/generate', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+async getVideoStatus(operationId: string) {
+  return this.request(`/video/status/${operationId}`);
+}
+
+
+async getVideoHistory(params?: {
+  page?: number;
+  limit?: number;
+}) {
+  const query = new URLSearchParams(params as any).toString();
+  return this.request(`/video/history${query ? `?${query}` : ''}`);
+}
+
+async getVideoFile(filename: string) {
+  return `${this.apiBaseURL}/video/watch/${filename}`;
+}
+
+async downloadVideo(filename: string) {
+  return `${this.apiBaseURL}/video/download/${filename}`;
+}
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);

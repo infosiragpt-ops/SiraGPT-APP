@@ -831,6 +831,7 @@ import ElevenLabsInterface from "./elevenlabs-interface"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
+import VideoGenerationComponent from "./VideoGenerationComponent"
 
 
 // Enhanced Model Selector
@@ -1038,7 +1039,8 @@ export default function ChatInterface() {
 
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
-  const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music'>("tts");
+  const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
+
 
 
   // Speech-to-Text ke liye naye states 
@@ -1488,6 +1490,14 @@ export default function ChatInterface() {
                       <Music className="h-4 w-4 mr-2" />
                       Music
                     </Button>
+                     <Button
+                      variant={audioTab === 'video' ? 'default' : 'outline'}
+                      className="w-full justify-start"
+                      onClick={() => setAudioTab('video')}
+                    >
+                      <Video className="h-4 w-4 mr-2" />
+                      Video
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -1501,6 +1511,9 @@ export default function ChatInterface() {
                 )}
                 {audioTab === 'music' && (
                     <MusicGenerationComponent />
+                )}
+                 {audioTab === 'video' && (
+                  <VideoGenerationComponent />
                 )}
               </div>
             </div>
