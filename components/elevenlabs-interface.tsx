@@ -26,6 +26,7 @@ import {
   FileAudio,
   MessageSquare
 } from 'lucide-react'
+import { useVoices } from '@/hooks/use-voices'
 
 interface Voice {
   voiceId: string
@@ -45,9 +46,9 @@ interface VoiceSettings {
 
 export default function ElevenLabsInterface() {
   const { toast } = useToast()
+const { voices, loading: voicesLoading } = useVoices()
 
   // State management
-  const [voices, setVoices] = useState<Voice[]>([])
   const [selectedVoice, setSelectedVoice] = useState<string>('')
   const [text, setText] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -75,9 +76,6 @@ export default function ElevenLabsInterface() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   // Load voices on component mount
-  useEffect(() => {
-    loadVoices()
-  }, [])
 
   // Recording timer
   useEffect(() => {
@@ -139,26 +137,6 @@ export default function ElevenLabsInterface() {
       }
     }
   }, [])
-
-  const loadVoices = async () => {
-    try {
-      console.log('Loading voices...')
-      const response = await apiClient.getVoices()
-      console.log('Voices response:', response)
-      setVoices(response.voices || [])
-      if (response.voices && response.voices.length > 0) {
-        setSelectedVoice(response.voices[0].voiceId)
-        console.log('Selected voice:', response.voices[0].voiceId)
-      }
-    } catch (error) {
-      console.error('Error loading voices:', error)
-      toast({
-        title: "Error",
-        description: "Failed to load voices. Please check your ElevenLabs API key.",
-        variant: "destructive"
-      })
-    }
-  }
 
   const handleTextToSpeech = async () => {
     console.log("Starting TTS with:", { text, selectedVoice, voiceSettings })

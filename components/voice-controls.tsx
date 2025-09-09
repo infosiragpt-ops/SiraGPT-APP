@@ -17,6 +17,7 @@ import {
   Loader2,
   Square
 } from 'lucide-react'
+import { useVoices } from '@/hooks/use-voices'
 
 interface Voice {
   voiceId: string
@@ -42,7 +43,9 @@ interface VoiceControlsProps {
 export default function VoiceControls({ onTranscription, className = "" }: VoiceControlsProps) {
   const { toast } = useToast()
 
-  const [voices, setVoices] = useState<Voice[]>([])
+// In the component, replace the voices state and loadVoices logic:
+const { voices, loading: voicesLoading } = useVoices()
+
   const [selectedVoice, setSelectedVoice] = useState<string>('')
   const [isLoading, setIsLoading] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
@@ -62,10 +65,6 @@ export default function VoiceControls({ onTranscription, className = "" }: Voice
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
-    loadVoices()
-  }, [])
-
-  useEffect(() => {
     if (isRecording) {
       recordingIntervalRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1)
@@ -83,21 +82,12 @@ export default function VoiceControls({ onTranscription, className = "" }: Voice
       }
     }
   }, [isRecording])
-
-  const loadVoices = async () => {
-    try {
-      console.log('Loading voices in voice controls...')
-      const response = await apiClient.getVoices()
-      console.log('Voice controls response:', response)
-      setVoices(response.voices || [])
-      if (response.voices && response.voices.length > 0) {
-        setSelectedVoice(response.voices[0].voiceId)
-        console.log('Voice controls selected voice:', response.voices[0].voiceId)
-      }
-    } catch (error) {
-      console.error('Failed to load voices:', error)
-    }
+useEffect(() => {
+  if (voices.length > 0 && !selectedVoice) {
+    setSelectedVoice(voices[0].voiceId)
+    console.log('Voice controls selected voice:', voices[0].voiceId)
   }
+}, [voices, selectedVoice])
 
   const startRecording = async () => {
     try {
@@ -361,26 +351,6 @@ export const VoiceProvider = ({ children }: { children: React.ReactNode }) => {
   const [selectedVoice, setSelectedVoice] = React.useState<string>('')
   const [voices, setVoices] = React.useState<Voice[]>([])
 
-  React.useEffect(() => {
-    const loadVoices = async () => {
-      try {
-        const response = await apiClient.getVoices()
-        if (response.voices && response.voices.length > 0) {
-          setVoices(response.voices)
-          if (!selectedVoice) {
-            setSelectedVoice(response.voices[0].voiceId)
-            console.log('VoiceProvider default voice:', response.voices[0].voiceId)
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load voices in VoiceProvider:', error)
-      }
-    }
-
-    if (voices.length === 0) {
-      loadVoices()
-    }
-  }, [voices.length, selectedVoice])
 
   return (
     <VoiceContext.Provider value={{ selectedVoice, setSelectedVoice, voices }}>
@@ -403,26 +373,6 @@ export const useVoiceControls = () => {
   const [defaultVoiceId, setDefaultVoiceId] = React.useState<string>('')
   const [voices, setVoices] = React.useState<Voice[]>([])
 
-  // Load voices and set default
-  React.useEffect(() => {
-    const loadVoices = async () => {
-      try {
-        const response = await apiClient.getVoices()
-        if (response.voices && response.voices.length > 0) {
-          setVoices(response.voices)
-          setDefaultVoiceId(response.voices[0].voiceId)
-          console.log('useVoiceControls loaded voices:', response.voices.length)
-          console.log('useVoiceControls default voice:', response.voices[0].voiceId)
-        }
-      } catch (error) {
-        console.error('Failed to load voices in useVoiceControls:', error)
-      }
-    }
-
-    if (voices.length === 0) {
-      loadVoices()
-    }
-  }, [voices.length])
 
   const handleTextToSpeech = React.useCallback(async (text: string, voiceId?: string) => {
     try {

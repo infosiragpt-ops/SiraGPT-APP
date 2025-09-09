@@ -467,6 +467,9 @@ import {
     Copy,
     Volume2
 } from 'lucide-react'
+import { useVoices } from '@/hooks/use-voices'
+
+
 
 // Interfaces
 interface Voice {
@@ -487,9 +490,9 @@ interface VoiceSettings {
 
 export default function TextToSpeechComponent() {
     const { toast } = useToast()
-
+// In the component, replace the voices loading logic:
+const { voices, loading: voicesLoading } = useVoices()
     // State management
-    const [voices, setVoices] = useState<Voice[]>([])
     const [models, setModels] = useState<Model[]>([])
     const [selectedVoice, setSelectedVoice] = useState<string>('')
     const [selectedModel, setSelectedModel] = useState<string>('eleven_multilingual_v2')
@@ -517,7 +520,6 @@ export default function TextToSpeechComponent() {
     // Load voices and models only once on component mount
     useEffect(() => {
         if (!dataLoaded.current.voices) {
-            loadVoices()
             dataLoaded.current.voices = true;
         }
         if (!dataLoaded.current.models) {
@@ -551,18 +553,6 @@ export default function TextToSpeechComponent() {
         }
     }, [audioUrl])
 
-    const loadVoices = async () => {
-        try {
-            const response = await apiClient.getVoices()
-            setVoices(response.voices || [])
-            if (response.voices && response.voices.length > 0) {
-                setSelectedVoice(response.voices[0].voiceId)
-            }
-        } catch (error) {
-            console.error('Error loading voices:', error)
-            toast({ title: "Error", description: "Failed to load voices.", variant: "destructive" })
-        }
-    }
 
     const loadModels = async () => {
         try {
