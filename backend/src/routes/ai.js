@@ -682,12 +682,14 @@ router.post(
 
       // ✅ Make internal API call to video service using axios
       const axios = require('axios');
-      
+
       try {
         console.log('📡 Calling internal video service...');
-        
+
         // Make call to the video generation service
-        const videoResponse = await axios.post('http://localhost:5000/api/video/generate', {
+        const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+        let video_url = `${baseUrl}/api/video/generate`;
+        const videoResponse = await axios.post(video_url, {
           prompt,
           aspect_ratio,
           negative_prompt
@@ -710,9 +712,9 @@ router.post(
 
           // Save assistant message with video operation data
           const assistantMessage = await prisma.message.create({
-            data: { 
-              chatId, 
-              role: 'ASSISTANT', 
+            data: {
+              chatId,
+              role: 'ASSISTANT',
               content: `Generating video: "${prompt}"...`,
               tokens: 1000, // Fixed token count for video generation
               // Store video data in files field as JSON
@@ -765,25 +767,25 @@ router.post(
 
       } catch (videoServiceError) {
         console.error('❌ Video service error:', videoServiceError.response?.data || videoServiceError.message);
-        
+
         // Handle specific video service errors
         if (videoServiceError.code === 'ECONNREFUSED') {
-          return res.status(503).json({ 
-            error: 'Video generation service is not available. Please try again later.' 
+          return res.status(503).json({
+            error: 'Video generation service is not available. Please try again later.'
           });
         }
-        
+
         if (videoServiceError.response?.status === 400) {
-          return res.status(400).json({ 
-            error: videoServiceError.response.data.error || 'Invalid video generation parameters' 
+          return res.status(400).json({
+            error: videoServiceError.response.data.error || 'Invalid video generation parameters'
           });
         } else if (videoServiceError.response?.status === 429) {
-          return res.status(429).json({ 
-            error: videoServiceError.response.data.error || 'Video generation rate limit exceeded' 
+          return res.status(429).json({
+            error: videoServiceError.response.data.error || 'Video generation rate limit exceeded'
           });
         } else {
-          return res.status(500).json({ 
-            error: 'Video generation service temporarily unavailable' 
+          return res.status(500).json({
+            error: 'Video generation service temporarily unavailable'
           });
         }
       }
@@ -799,14 +801,15 @@ router.post(
 router.get('/video-status/:operationId', authenticateToken, async (req, res) => {
   try {
     const { operationId } = req.params;
-    
+
     console.log('📊 Checking video status for operation:', operationId);
-    
+
     // ✅ Make internal API call to video service
     const axios = require('axios');
-    
+    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+    let video_url = `${baseUrl}/api/video/status/${operationId}`;
     try {
-      const statusResponse = await axios.get(`http://localhost:5000/api/video/status/${operationId}`, {
+      const statusResponse = await axios.get(video_url, {
         headers: {
           'Authorization': req.headers.authorization
         },
@@ -816,155 +819,155 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
       console.log('✅ Video status response:', statusResponse.data.status);
 
       // If video is completed, update the message in the database
-   // ...inside router.get('/video-status/:operationId', authenticateToken, async (req, res) => { ... })
-// After you parse statusResponse from the internal /api/video/status call:
+      // ...inside router.get('/video-status/:operationId', authenticateToken, async (req, res) => { ... })
+      // After you parse statusResponse from the internal /api/video/status call:
 
 
-// if (statusResponse.data.status === 'completed' && statusResponse.data.filename) {
-//   try {
-//     const { operationId } = req.params;
+      // if (statusResponse.data.status === 'completed' && statusResponse.data.filename) {
+      //   try {
+      //     const { operationId } = req.params;
 
-//     // Fetch recent assistant messages for this user (no JSON null filter in Prisma)
-//     const candidates = await prisma.message.findMany({
-//       where: {
-//         role: 'ASSISTANT',
-//         chat: { userId: req.user.id }
-//       },
-//       orderBy: { timestamp: 'desc' }, // If your schema uses createdAt, switch to { createdAt: 'desc' }
-//       take: 200,
-//       select: { id: true, content: true, files: true }
-//     });
+      //     // Fetch recent assistant messages for this user (no JSON null filter in Prisma)
+      //     const candidates = await prisma.message.findMany({
+      //       where: {
+      //         role: 'ASSISTANT',
+      //         chat: { userId: req.user.id }
+      //       },
+      //       orderBy: { timestamp: 'desc' }, // If your schema uses createdAt, switch to { createdAt: 'desc' }
+      //       take: 200,
+      //       select: { id: true, content: true, files: true }
+      //     });
 
-//     // Find the message whose files JSON contains this operationId
-//     const target = candidates.find(m => {
-//       try {
-//         const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
-//         return Array.isArray(files) && files.some(f => f && f.operationId === operationId);
-//       } catch {
-//         return false;
-//       }
-//     });
+      //     // Find the message whose files JSON contains this operationId
+      //     const target = candidates.find(m => {
+      //       try {
+      //         const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+      //         return Array.isArray(files) && files.some(f => f && f.operationId === operationId);
+      //       } catch {
+      //         return false;
+      //       }
+      //     });
 
-//     if (target) {
-//       let files = [];
-//       try {
-//         files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
-//       } catch {
-//         files = [];
-//       }
+      //     if (target) {
+      //       let files = [];
+      //       try {
+      //         files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
+      //       } catch {
+      //         files = [];
+      //       }
 
-//       // Update the matching video entry in files
-//       const updatedFiles = Array.isArray(files)
-//         ? files.map(f =>
-//             f && f.operationId === operationId
-//               ? { ...f, status: 'completed', filename: statusResponse.data.filename }
-//               : f
-//           )
-//         : files;
+      //       // Update the matching video entry in files
+      //       const updatedFiles = Array.isArray(files)
+      //         ? files.map(f =>
+      //             f && f.operationId === operationId
+      //               ? { ...f, status: 'completed', filename: statusResponse.data.filename }
+      //               : f
+      //           )
+      //         : files;
 
-//       await prisma.message.update({
-//         where: { id: target.id },
-//         data: {
-//           content: `Video generated successfully: "${statusResponse.data.prompt || 'Video content'}"`,
-//           files: JSON.stringify(updatedFiles)
-//         }
-//       });
-//       console.log('💾 Message updated with completed video');
-//     }
-//   } catch (dbError) {
-//     console.error('❌ Database update error:', dbError);
-//   }
-// }
+      //       await prisma.message.update({
+      //         where: { id: target.id },
+      //         data: {
+      //           content: `Video generated successfully: "${statusResponse.data.prompt || 'Video content'}"`,
+      //           files: JSON.stringify(updatedFiles)
+      //         }
+      //       });
+      //       console.log('💾 Message updated with completed video');
+      //     }
+      //   } catch (dbError) {
+      //     console.error('❌ Database update error:', dbError);
+      //   }
+      // }
 
-// res.json(statusResponse.data);
-// ...inside router.get('/video-status/:operationId', ...) after a successful statusResponse...
+      // res.json(statusResponse.data);
+      // ...inside router.get('/video-status/:operationId', ...) after a successful statusResponse...
 
-if (statusResponse.data.status === 'completed' && statusResponse.data.filename) {
-  try {
-    const { operationId } = req.params;
+      if (statusResponse.data.status === 'completed' && statusResponse.data.filename) {
+        try {
+          const { operationId } = req.params;
 
-    const candidates = await prisma.message.findMany({
-      where: {
-        role: 'ASSISTANT',
-        chat: { userId: req.user.id }
-      },
-      orderBy: { timestamp: 'desc' },
-      take: 200,
-      select: { id: true, content: true, files: true }
-    });
+          const candidates = await prisma.message.findMany({
+            where: {
+              role: 'ASSISTANT',
+              chat: { userId: req.user.id }
+            },
+            orderBy: { timestamp: 'desc' },
+            take: 200,
+            select: { id: true, content: true, files: true }
+          });
 
-    const target = candidates.find(m => {
-      try {
-        const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
-        return Array.isArray(files) && files.some(f => f && f.operationId === operationId);
-      } catch {
-        return false;
-      }
-    });
+          const target = candidates.find(m => {
+            try {
+              const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+              return Array.isArray(files) && files.some(f => f && f.operationId === operationId);
+            } catch {
+              return false;
+            }
+          });
 
-    if (target) {
-      let files = [];
-      try {
-        files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
-      } catch {
-        files = [];
-      }
+          if (target) {
+            let files = [];
+            try {
+              files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
+            } catch {
+              files = [];
+            }
 
-      const result = statusResponse.data.result || {};
-      const finalFilename = statusResponse.data.filename;
-      const video_url = result.video_url || `/video/watch/${finalFilename}`;
-      const download_url = result.download_url || `/video/download/${finalFilename}`;
+            const result = statusResponse.data.result || {};
+            const finalFilename = statusResponse.data.filename;
+            const video_url = result.video_url || `/video/watch/${finalFilename}`;
+            const download_url = result.download_url || `/video/download/${finalFilename}`;
 
-      const updatedFiles = Array.isArray(files)
-        ? files.map(f =>
-            f && f.operationId === operationId
-              ? {
-                  ...f,
-                  status: 'completed',
-                  filename: finalFilename,
-                  // enrich with completion metadata
-                  video_url,
-                  download_url,
-                  duration: result.duration || statusResponse.data.duration,
-                  file_size: result.file_size,
-                  resolution: result.resolution,
-                  aspect_ratio: result.aspect_ratio || statusResponse.data.aspect_ratio,
-                  fal_video_url: result.fal_video_url,
-                  fal_request_id: result.fal_request_id
-                }
-              : f
-          )
-        : files;
+            const updatedFiles = Array.isArray(files)
+              ? files.map(f =>
+                f && f.operationId === operationId
+                  ? {
+                    ...f,
+                    status: 'completed',
+                    filename: finalFilename,
+                    // enrich with completion metadata
+                    video_url,
+                    download_url,
+                    duration: result.duration || statusResponse.data.duration,
+                    file_size: result.file_size,
+                    resolution: result.resolution,
+                    aspect_ratio: result.aspect_ratio || statusResponse.data.aspect_ratio,
+                    fal_video_url: result.fal_video_url,
+                    fal_request_id: result.fal_request_id
+                  }
+                  : f
+              )
+              : files;
 
-      await prisma.message.update({
-        where: { id: target.id },
-        data: {
-          content: `Video generated successfully: "${statusResponse.data.prompt || 'Video content'}"`,
-          files: JSON.stringify(updatedFiles)
+            await prisma.message.update({
+              where: { id: target.id },
+              data: {
+                content: `Video generated successfully: "${statusResponse.data.prompt || 'Video content'}"`,
+                files: JSON.stringify(updatedFiles)
+              }
+            });
+            console.log('💾 Message updated with completed video');
+          }
+        } catch (dbError) {
+          console.error('❌ Database update error:', dbError);
         }
-      });
-      console.log('💾 Message updated with completed video');
-    }
-  } catch (dbError) {
-    console.error('❌ Database update error:', dbError);
-  }
-}
+      }
 
-res.json(statusResponse.data);
+      res.json(statusResponse.data);
     } catch (videoServiceError) {
       console.error('❌ Video status service error:', videoServiceError.response?.data || videoServiceError.message);
-      
+
       if (videoServiceError.code === 'ECONNREFUSED') {
         return res.status(503).json({ error: 'Video status service is not available' });
       }
-      
+
       if (videoServiceError.response?.status === 404) {
         return res.status(404).json({ error: 'Video operation not found' });
       } else {
         return res.status(500).json({ error: 'Video status service temporarily unavailable' });
       }
     }
-    
+
   } catch (error) {
     console.error('🚨 Video status check error:', error);
     res.status(500).json({ error: error.message || 'Failed to check video status' });

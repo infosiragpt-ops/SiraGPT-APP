@@ -56,10 +56,22 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // Body parsing middleware
+// app.use(compression({
+//     filter: (req, res) => {
+//         // Agar response 'text/event-stream' hai, to usse compress mat karo
+//         if (res.getHeader('Content-Type') === 'text/event-stream') {
+//             return false;
+//         }
+//         // Baaki sab responses ko compress karo
+//         return compression.filter(req, res);
+//     }
+// }));
+
 app.use(compression({
     filter: (req, res) => {
-        // Agar response 'text/event-stream' hai, to usse compress mat karo
-        if (res.getHeader('Content-Type') === 'text/event-stream') {
+        // Agar response 'text/event-stream' ya 'video/mp4' hai, to usse compress mat karo
+        const contentType = res.getHeader('Content-Type');
+        if (contentType === 'text/event-stream' || contentType === 'video/mp4') {
             return false;
         }
         // Baaki sab responses ko compress karo
