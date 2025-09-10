@@ -578,125 +578,125 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   //     setIsLoading(false)
   //   }
   // }, [currentChat, user])
-// Replace the addVideoMessage function with this corrected version:
+  // Replace the addVideoMessage function with this corrected version:
 
-// ...existing imports and code...
-const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
-  const interval = setInterval(async () => {
-    try {
-      const statusResponse = await apiClient.getVideoStatus(operationId);
+  // ...existing imports and code...
+  const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const statusResponse = await apiClient.getVideoStatus(operationId);
 
-      // Normalize status casing
-      const status = (statusResponse.status || '').toLowerCase();
+        // Normalize status casing
+        const status = (statusResponse.status || '').toLowerCase();
 
-      if (status === 'completed' || status === 'failed') {
+        if (status === 'completed' || status === 'failed') {
+          clearInterval(interval);
+          setPollingIntervals(prev => {
+            const n = new Map(prev);
+            n.delete(operationId);
+            return n;
+          });
+
+          // Refresh chat from DB so the assistant message has updated files/filename
+          if (currentChat?.id) {
+            await selectChat(currentChat.id);
+          }
+
+        } else {
+          // Optional: show "processing" in UI by updating that one message
+          setCurrentChat(prev => {
+            if (!prev) return prev;
+            const updated = prev.messages.map(m => {
+              if (m.id !== messageId) return m;
+              // no DB changes yet; keep content but mark a client-side hint if you want
+              return m;
+            });
+            return { ...prev, messages: updated };
+          });
+        }
+      } catch (error) {
+        console.error('Error polling video status:', error);
         clearInterval(interval);
         setPollingIntervals(prev => {
           const n = new Map(prev);
           n.delete(operationId);
           return n;
         });
-
-        // Refresh chat from DB so the assistant message has updated files/filename
-        if (currentChat?.id) {
-          await selectChat(currentChat.id);
-        }
-
-      } else {
-        // Optional: show "processing" in UI by updating that one message
-        setCurrentChat(prev => {
-          if (!prev) return prev;
-          const updated = prev.messages.map(m => {
-            if (m.id !== messageId) return m;
-            // no DB changes yet; keep content but mark a client-side hint if you want
-            return m;
-          });
-          return { ...prev, messages: updated };
-        });
       }
-    } catch (error) {
-      console.error('Error polling video status:', error);
-      clearInterval(interval);
-      setPollingIntervals(prev => {
-        const n = new Map(prev);
-        n.delete(operationId);
-        return n;
+    }, 10000);
+
+    setPollingIntervals(prev => {
+      const n = new Map(prev);
+      n.set(operationId, interval);
+      return n;
+    });
+  }, [currentChat?.id, selectChat, setCurrentChat]);
+  const addVideoMessage = useCallback(async (prompt: string) => {
+    if (!currentChat || !user) return;
+
+    setIsLoading(true);
+    try {
+      // 1) Save user's message
+      await apiClient.addMessage(currentChat.id, {
+        role: 'USER',
+        content: prompt
       });
-    }
-  }, 5000);
 
-  setPollingIntervals(prev => {
-    const n = new Map(prev);
-    n.set(operationId, interval);
-    return n;
-  });
-}, [currentChat?.id, selectChat, setCurrentChat]);
-const addVideoMessage = useCallback(async (prompt: string) => {
-  if (!currentChat || !user) return;
+      // 2) Kick off video generation
+      const videoResponse = await apiClient.generateVideo({
+        prompt,
+        aspect_ratio: '16:9',
+        chatId: currentChat.id
+      });
 
-  setIsLoading(true);
-  try {
-    // 1) Save user's message
-    await apiClient.addMessage(currentChat.id, {
-      role: 'USER',
-      content: prompt
-    });
+      // 3) Reload chat so we get the assistant placeholder saved by backend
+      await selectChat(currentChat.id);
 
-    // 2) Kick off video generation
-    const videoResponse = await apiClient.generateVideo({
-      prompt,
-      aspect_ratio: '16:9',
-      chatId: currentChat.id
-    });
-
-    // 3) Reload chat so we get the assistant placeholder saved by backend
-    await selectChat(currentChat.id);
-
-    // 4) Find the assistant message with this operationId inside files JSON
-    const findAssistantByOperation = (chat: any, opId: string) => {
-      if (!chat?.messages) return null;
-      for (const m of chat.messages) {
-        if (m.role !== 'ASSISTANT' || !m.files) continue;
-        try {
-          const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
-          if (Array.isArray(files) && files.some((f: any) => f?.type === 'video' && f?.operationId === opId)) {
-            return m;
+      // 4) Find the assistant message with this operationId inside files JSON
+      const findAssistantByOperation = (chat: any, opId: string) => {
+        if (!chat?.messages) return null;
+        for (const m of chat.messages) {
+          if (m.role !== 'ASSISTANT' || !m.files) continue;
+          try {
+            const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+            if (Array.isArray(files) && files.some((f: any) => f?.type === 'video' && f?.operationId === opId)) {
+              return m;
+            }
+          } catch {
+            // ignore bad JSON
           }
-        } catch {
-          // ignore bad JSON
         }
+        return null;
+      };
+
+      // Use the latest currentChat from state
+      let targetMessage = findAssistantByOperation(currentChat, videoResponse.operationId);
+      if (!targetMessage) {
+        // state race: fetch directly and search
+        const fresh = await apiClient.getChat(currentChat.id);
+        targetMessage = findAssistantByOperation(fresh.chat, videoResponse.operationId);
+        if (fresh?.chat) setCurrentChat(fresh.chat);
       }
-      return null;
-    };
 
-    // Use the latest currentChat from state
-    let targetMessage = findAssistantByOperation(currentChat, videoResponse.operationId);
-    if (!targetMessage) {
-      // state race: fetch directly and search
-      const fresh = await apiClient.getChat(currentChat.id);
-      targetMessage = findAssistantByOperation(fresh.chat, videoResponse.operationId);
-      if (fresh?.chat) setCurrentChat(fresh.chat);
+      // 5) Start polling using the actual assistant message id if found
+      const messageId = targetMessage?.id || videoResponse.operationId; // fallback
+      pollVideoStatus(videoResponse.operationId, messageId);
+    } catch (error) {
+      console.error("❌ Failed to generate video:", error);
+      throw error;
+    } finally {
+      setIsLoading(false);
     }
+  }, [currentChat, user, selectChat, setCurrentChat, pollVideoStatus]);
 
-    // 5) Start polling using the actual assistant message id if found
-    const messageId = targetMessage?.id || videoResponse.operationId; // fallback
-    pollVideoStatus(videoResponse.operationId, messageId);
-  } catch (error) {
-    console.error("❌ Failed to generate video:", error);
-    throw error;
-  } finally {
-    setIsLoading(false);
-  }
-}, [currentChat, user, selectChat, setCurrentChat, pollVideoStatus]);
-
-// ...later...
+  // ...later...
 
 
   // const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
   //   const interval = setInterval(async () => {
   //     try {
   //       const statusResponse = await apiClient.getVideoStatus(operationId)
-        
+
   //       if (statusResponse.status === 'completed' || statusResponse.status === 'failed') {
   //         // Clear interval
   //         clearInterval(interval)
@@ -710,7 +710,7 @@ const addVideoMessage = useCallback(async (prompt: string) => {
   //         if (currentChat) {
   //           setCurrentChat(prevChat => {
   //             if (!prevChat) return prevChat
-              
+
   //             const updatedMessages = prevChat.messages.map(msg => {
   //               if (msg.id === messageId) {
   //                 return {
@@ -758,7 +758,7 @@ const addVideoMessage = useCallback(async (prompt: string) => {
   const updateMessageInChat = useCallback((messageId: string, newContent: string) => {
     setCurrentChat(prevChat => {
       if (!prevChat) return prevChat
-      
+
       const updatedMessages = prevChat.messages.map(msg => {
         if (msg.id === messageId) {
           return { ...msg, content: newContent }

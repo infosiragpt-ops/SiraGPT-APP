@@ -64,9 +64,20 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 
 
 // Enhanced Model Selector
-const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels, setSelectedProvider }: any) => {
+const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels, setSelectedProvider, chatTypes, }: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
-
+  if (chatTypes === "video") {
+    // 👇 Just return static model name without dropdown
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
+        <Bot className="h-4 w-4" />
+        <span className="text-sm font-medium">Google Veo 3</span>
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
+        </div>
+      </div>
+    );
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
@@ -364,7 +375,7 @@ export default function ChatInterface() {
           msg.videoData && (msg.videoData.status === 'completed' || msg.videoData.status === 'processing' || msg.videoData.status === 'failed')
         );
 
-        if (hasVideoMessages) {
+        if (chatType === "video") {
           setChatType('video');
         } else if (hasImageMessages) {
           setChatType('image');
@@ -483,27 +494,27 @@ export default function ChatInterface() {
     }
   }
 
-// Update the handleVideoGeneration function:
+  // Update the handleVideoGeneration function:
 
-const handleVideoGeneration = async (prompt: string) => {
-  setIsGeneratingVideo(true)
-  try {
-    if (!currentChat) {
-      await createNewChat('video', prompt)
-    } else {
-      await addVideoMessage(prompt)
+  const handleVideoGeneration = async (prompt: string) => {
+    setIsGeneratingVideo(true)
+    try {
+      if (!currentChat) {
+        await createNewChat('video', prompt)
+      } else {
+        await addVideoMessage(prompt)
+      }
+      // Only show success toast if no error occurred
+      toast.success('Video generation started! This may take 2-5 minutes.')
+    } catch (error: any) {
+      console.error('Video generation failed:', error)
+      // Show specific error message
+      const errorMessage = error.message || 'Video generation failed. Please try again.';
+      toast.error(errorMessage)
+    } finally {
+      setIsGeneratingVideo(false)
     }
-    // Only show success toast if no error occurred
-    toast.success('Video generation started! This may take 2-5 minutes.')
-  } catch (error: any) {
-    console.error('Video generation failed:', error)
-    // Show specific error message
-    const errorMessage = error.message || 'Video generation failed. Please try again.';
-    toast.error(errorMessage)
-  } finally {
-    setIsGeneratingVideo(false)
   }
-}
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -706,6 +717,7 @@ const handleVideoGeneration = async (prompt: string) => {
                   setSelectedModel={setSelectedModel}
                   availableModels={availableModels}
                   setSelectedProvider={setSelectedProivder}
+                  chatTypes={chatType}
                 />
                 <div className="flex items-center gap-2 mt-2">
                   <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
@@ -840,8 +852,8 @@ const handleVideoGeneration = async (prompt: string) => {
                       chatType === 'image'
                         ? "Describe the image you want to generate..."
                         : chatType === 'video'
-                        ? "Describe the video you want to create..."
-                        : "Type your message here..."
+                          ? "Describe the video you want to create..."
+                          : "Type your message here..."
                     }
                     className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
                     disabled={isLoading || isGeneratingImage || isGeneratingVideo}
@@ -910,8 +922,8 @@ const handleVideoGeneration = async (prompt: string) => {
                 {chatType === 'image'
                   ? 'Press Enter to generate image, Shift+Enter for new line'
                   : chatType === 'video'
-                  ? 'Press Enter to generate video, Shift+Enter for new line'
-                  : 'Press Enter to send, Shift+Enter for new line'
+                    ? 'Press Enter to generate video, Shift+Enter for new line'
+                    : 'Press Enter to send, Shift+Enter for new line'
                 }
               </p>
             </div>
@@ -984,9 +996,9 @@ const handleVideoGeneration = async (prompt: string) => {
               <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
                 <div className="space-y-4 max-w-4xl mx-auto">
                   {currentChat?.messages.map((message) => (
-                    <MessageComponent 
-                      key={message.id} 
-                      message={message} 
+                    <MessageComponent
+                      key={message.id}
+                      message={message}
                       user={user}
                       onRegenerate={regenerateLastMessage}
                       updateMessageInChat={updateMessageInChat}
@@ -1014,8 +1026,8 @@ const handleVideoGeneration = async (prompt: string) => {
                           chatType === 'image'
                             ? "Describe the image you want to generate..."
                             : chatType === 'video'
-                            ? "Describe the video you want to create..."
-                            : "Type your message here..."
+                              ? "Describe the video you want to create..."
+                              : "Type your message here..."
                         }
                         className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
                         disabled={isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
@@ -1093,8 +1105,8 @@ const handleVideoGeneration = async (prompt: string) => {
                     {chatType === 'image'
                       ? 'Press Enter to generate image, Shift+Enter for new line'
                       : chatType === 'video'
-                      ? 'Press Enter to generate video, Shift+Enter for new line'
-                      : 'Press Enter to send, Shift+Enter for new line'
+                        ? 'Press Enter to generate video, Shift+Enter for new line'
+                        : 'Press Enter to send, Shift+Enter for new line'
                     }
                   </p>
                 </div>
