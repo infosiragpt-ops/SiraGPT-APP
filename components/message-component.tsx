@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect } from "react"
+import { useState, useEffect,useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -263,17 +263,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-  let parsedFiles: any[] = [];
-    if (message.files) {
-        try {
-            parsedFiles = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
-        } catch (e) {
-            console.error("Failed to parse files:", e);
-            parsedFiles = [];
-        }
+  const parsedFiles: any[] = useMemo(() => {
+    if (!message.files) return []
+    try {
+      return typeof message.files === 'string' ? JSON.parse(message.files) : message.files
+    } catch (e) {
+      console.error("Failed to parse files:", e)
+      return []
     }
-
-
+  }, [message.files])
 
     // Markdown ke andar code blocks ko render karne ke liye custom component
     const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
@@ -362,8 +360,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         );
     };
 
-const videoEntry = parsedFiles.find((f: any) => f?.type === 'video');
-const isVideoMessage = !!videoEntry;
+  const videoEntry = useMemo(
+    () => parsedFiles.find((f: any) => f?.type === 'video'),
+    [parsedFiles]
+  )
+  const isVideoMessage = !!videoEntry
+
 
     // Check if this is an image-only message
     const isImageOnlyMessage = () => {
@@ -372,78 +374,70 @@ const isVideoMessage = !!videoEntry;
             (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/'));
         return hasImageFiles || hasImageUrl;
     };
-const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename); // returns full URL string
-const getDownloadUrl = (filename: string) => apiClient.downloadVideo(filename); // returns full URL string
+  const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename)
+  const getDownloadUrl = (filename: string) => apiClient.downloadVideo(filename)
 
-    // Video Display Component
   const VideoDisplay = () => {
-  if (!isVideoMessage) return null;
+    if (!isVideoMessage) return null
 
-  const status = String(videoEntry.status || '').toLowerCase();
-  const filename = videoEntry.filename;
+    const status = String(videoEntry.status || '').toLowerCase()
+    const filename = videoEntry.filename
 
-  return (
-    <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
-      <div className="flex items-center gap-2 text-sm">
-        <VideoIcon className="h-4 w-4" />
-        <span className="font-medium">AI Video</span>
-      </div>
-
-      {status === 'processing' || status === 'in_progress' ? (
-        <div className="mt-2 flex items-center gap-2 text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <span>Generating video… This may take 2–5 minutes.</span>
+    return (
+      <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
+        <div className="flex items-center gap-2 text-sm">
+          <VideoIcon className="h-4 w-4" />
+          <span className="font-medium">AI Video</span>
         </div>
-      ) : null}
 
-      {status === 'failed' ? (
-        <div className="mt-2 text-red-500 text-sm">
-          Generation failed. Please try again with a shorter prompt.
-        </div>
-      ) : null}
-
-      {status === 'completed' && filename ? (
-        <div className="mt-3 space-y-2">
-          {/* <video
-            ref={videoRef}
-            className="w-full rounded-md"
-            controls
-            src={getWatchUrl(filename)}
-            onTimeUpdate={handleVideoTimeUpdate}
-            onLoadedMetadata={handleVideoLoadedMetadata}
-          /> */}
-<video
-  ref={videoRef}
-  className="w-full rounded-md"
-  controls
-  preload="auto"
-  playsInline
-  crossOrigin="anonymous"
-  src={getWatchUrl(filename)}
-  onLoadedMetadata={handleVideoLoadedMetadata}
-  onError={(e) => {
-    console.error('Video error', e);
-    toast.error('Failed to play video inline. Try “Open in new tab”.');
-  }}
-/>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" asChild>
-              <a href={getDownloadUrl(filename)} download>
-                <Download className="h-4 w-4 mr-1" />
-                Download
-              </a>
-            </Button>
-            <Button size="sm" variant="outline" asChild>
-              <a href={getWatchUrl(filename)} target="_blank" rel="noopener noreferrer">
-                Open in new tab
-              </a>
-            </Button>
+        {status === 'processing' || status === 'in_progress' ? (
+          <div className="mt-2 flex items-center gap-2 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Generating video… This may take 2–5 minutes.</span>
           </div>
-        </div>
-      ) : null}
-    </div>
-  );
-};
+        ) : null}
+
+        {status === 'failed' ? (
+          <div className="mt-2 text-red-500 text-sm">
+            Generation failed. Please try again with a shorter prompt.
+          </div>
+        ) : null}
+
+        {status === 'completed' && filename ? (
+          <div className="mt-3 space-y-2">
+            <video
+              key={filename}             // don’t remount unless the file changes
+              ref={videoRef}
+              className="w-full rounded-md"
+              controls
+              preload="auto"
+              playsInline
+              src={getWatchUrl(filename)}
+              // Removed onTimeUpdate/onLoadedMetadata to avoid frequent re-renders
+              onError={(e) => {
+                console.error('Video error', e)
+                toast.error('Failed to play video inline. Try “Open in new tab”.')
+              }}
+            />
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" asChild>
+                <a href={getDownloadUrl(filename)} download>
+                  <Download className="h-4 w-4 mr-1" />
+                  Download
+                </a>
+              </Button>
+              <Button size="sm" variant="outline" asChild>
+                <a href={getWatchUrl(filename)} target="_blank" rel="noopener noreferrer">
+                  Open in new tab
+                </a>
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
     // File display logic - optimized for images
     const FileDisplay = () => (
         <>
@@ -660,5 +654,18 @@ const getDownloadUrl = (filename: string) => apiClient.downloadVideo(filename); 
         </div>
     );
 };
+const areMessagePropsEqual = (prev: any, next: any) => {
+  const a = prev.message
+  const b = next.message
+  if (a.id !== b.id) return false
+  if (a.content !== b.content) return false
 
-export default MessageComponent;
+  const af = typeof a.files === 'string' ? a.files : JSON.stringify(a.files || [])
+  const bf = typeof b.files === 'string' ? b.files : JSON.stringify(b.files || [])
+  if (af !== bf) return false
+
+  // Ignore parent re-renders from user, callbacks (they’re stable from context)
+  return true
+}
+
+export default React.memo(MessageComponent, areMessagePropsEqual)
