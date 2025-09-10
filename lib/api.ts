@@ -632,22 +632,29 @@ async webSearchStream(
   }
 }
 // Update the video generation method
+// Update the generateVideo method:
+
 async generateVideo(data: {
   prompt: string;
   aspect_ratio?: '16:9' | '9:16' | '1:1';
   negative_prompt?: string;
+  chatId?: string;  // Add chatId parameter
 }) {
-  return this.request('/video/generate', {
+  return this.request('/ai/generate-video', {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
+// async getVideoStatus(operationId: string) {
+//   return this.request(`/video/status/${operationId}`);
+// }
+
+// ...existing code...
 async getVideoStatus(operationId: string) {
-  return this.request(`/video/status/${operationId}`);
+  // Was: return this.request(`/video/status/${operationId}`);
+  return this.request(`/ai/video-status/${operationId}`);
 }
-
-
 async getVideoHistory(params?: {
   page?: number;
   limit?: number;
@@ -656,11 +663,11 @@ async getVideoHistory(params?: {
   return this.request(`/video/history${query ? `?${query}` : ''}`);
 }
 
-async getVideoFile(filename: string) {
+ getVideoFile(filename: string) {
   return `${this.apiBaseURL}/video/watch/${filename}`;
 }
 
-async downloadVideo(filename: string) {
+ downloadVideo(filename: string) {
   return `${this.apiBaseURL}/video/download/${filename}`;
 }
 }

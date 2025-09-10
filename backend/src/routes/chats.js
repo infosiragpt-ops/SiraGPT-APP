@@ -200,7 +200,7 @@ router.post('/:id/messages', [
         role,
         content,
         tokens,
-        tools: [{ "type": "image_generation" }],
+        // tools: [{ "type": "image_generation" }],
 
         files: files || null
       }

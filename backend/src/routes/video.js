@@ -163,11 +163,16 @@ router.post('/generate', [
 });
 
 // Async video generation function with correct Fal.ai parameters
+// ...existing code...
+
+// Async video generation function with retries on transient network failures
 async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId) {
-  try {
+  const maxRetries = 3;
+  const baseDelayMs = 4000;
+
+  const tryOnce = async () => {
     console.log(`🎬 Starting video generation for operation: ${operationId}`);
-    
-    // Update operation status
+
     const operationData = activeOperations.get(operationId);
     if (operationData) {
       operationData.status = 'processing';
@@ -175,121 +180,109 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       activeOperations.set(operationId, operationData);
     }
 
-    // Prepare input according to Fal.ai Veo3 API documentation
     const apiInput = {
-      prompt: prompt,
+      prompt,
       aspect_ratio: aspectRatio || "16:9",
-      duration: "8s", // Always 8s for Fal.ai
+      duration: "8s",
       enhance_prompt: true,
       auto_fix: true,
       resolution: "720p",
-      generate_audio: true
+      generate_audio: true,
     };
-
-    // Add negative prompt only if provided and not empty
     if (negativePrompt && negativePrompt.trim() !== '') {
       apiInput.negative_prompt = negativePrompt;
     }
 
     console.log(`🔧 Calling Fal.ai API with input:`, JSON.stringify(apiInput, null, 2));
 
-    // Call Fal.ai Veo3 API with correct parameters
-    const result = await fal.subscribe('fal-ai/veo3/fast', {
+    // This may take minutes; subscribe returns when done or throws
+    return await fal.subscribe('fal-ai/veo3/fast', {
       input: apiInput,
       logs: true,
       onQueueUpdate: (update) => {
-        console.log(`🔄 Queue update for ${operationId}:`, update);
-        
-        // Update operation with queue info
-        if (operationData) {
-          operationData.queuePosition = update.queue_position || 0;
-          operationData.status = update.status === 'COMPLETED' ? 'processing' : (update.status || 'processing');
-          operationData.lastChecked = new Date().toISOString();
-          
-          // Add metrics if available
-          if (update.metrics) {
-            operationData.metrics = update.metrics;
-          }
-          
-          activeOperations.set(operationId, operationData);
+        // keep status fresh for pollers
+        const d = activeOperations.get(operationId);
+        if (d) {
+          d.queuePosition = update.queue_position || 0;
+          d.status = update.status === 'COMPLETED' ? 'processing' : (update.status || 'processing');
+          d.lastChecked = new Date().toISOString();
+          if (update.metrics) d.metrics = update.metrics;
+          activeOperations.set(operationId, d);
         }
       },
     });
+  };
 
-    console.log(`✅ Video generation API completed for ${operationId}:`, result);
+  const isConnectTimeout = (err) =>
+    err?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT' ||
+    err?.code === 'UND_ERR_CONNECT_TIMEOUT' ||
+    /connect timeout/i.test(err?.message || '');
 
-    // The response structure should be result.data.video.url according to Fal.ai docs
-    if (result.data && result.data.video && result.data.video.url) {
-      console.log(`📥 Downloading video from: ${result.data.video.url}`);
-      
-      // Download and save video file
-      const videoResponse = await fetch(result.data.video.url);
-      if (!videoResponse.ok) {
-        throw new Error(`Failed to download video: ${videoResponse.status} ${videoResponse.statusText}`);
+  try {
+    let result;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        result = await tryOnce();
+        break; // success
+      } catch (err) {
+        console.error(`❌ Fal.ai subscribe error (attempt ${attempt}/${maxRetries}):`, err);
+        if (attempt < maxRetries && isConnectTimeout(err)) {
+          const delay = baseDelayMs * attempt;
+          console.log(`⏳ Retry in ${delay}ms due to network timeout...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw err; // non-retryable or exhausted
       }
-      
-      const videoBuffer = await videoResponse.arrayBuffer();
-      
-      // Save video file
-      const videosDir = path.join('uploads', 'videos');
-      if (!fs.existsSync(videosDir)) {
-        fs.mkdirSync(videosDir, { recursive: true });
-      }
-      
-      const videoPath = path.join(videosDir, filename);
-      fs.writeFileSync(videoPath, Buffer.from(videoBuffer));
+    }
 
-      console.log(`📁 Video saved successfully: ${filename} (${videoBuffer.byteLength} bytes)`);
-
-      // Update operation status
-      if (operationData) {
-        operationData.status = 'completed';
-        operationData.result = {
-          video_url: `/video/watch/${filename}`,
-          download_url: `/video/download/${filename}`,
-          filename: filename,
-          duration: "8s",
-          file_size: videoBuffer.byteLength,
-          resolution: "720p",
-          aspect_ratio: aspectRatio,
-          fal_video_url: result.data.video.url,
-          fal_request_id: result.requestId || null
-        };
-        operationData.updatedAt = new Date().toISOString();
-        activeOperations.set(operationId, operationData);
-      }
-
-    } else {
-      console.error('❌ Invalid response structure:', result);
+    // Download and save the video
+    if (!(result?.data?.video?.url)) {
       throw new Error('No video URL found in API response');
     }
+    console.log(`📥 Downloading video from: ${result.data.video.url}`);
+
+    const resp = await fetch(result.data.video.url);
+    if (!resp.ok) throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
+    const videoBuffer = await resp.arrayBuffer();
+
+    const videosDir = path.join('uploads', 'videos');
+    if (!fs.existsSync(videosDir)) fs.mkdirSync(videosDir, { recursive: true });
+    const videoPath = path.join(videosDir, filename);
+    fs.writeFileSync(videoPath, Buffer.from(videoBuffer));
+
+    console.log(`📁 Video saved successfully: ${filename} (${videoBuffer.byteLength} bytes)`);
+
+    const d = activeOperations.get(operationId) || {};
+    d.status = 'completed';
+    d.result = {
+      video_url: `/video/watch/${filename}`,
+      download_url: `/video/download/${filename}`,
+      filename,
+      duration: "8s",
+      file_size: videoBuffer.byteLength,
+      resolution: "720p",
+      aspect_ratio: aspectRatio,
+      fal_video_url: result.data.video.url,
+      fal_request_id: result.requestId || null,
+    };
+    d.updatedAt = new Date().toISOString();
+    activeOperations.set(operationId, d);
 
   } catch (error) {
     console.error(`❌ Video generation failed for ${operationId}:`, error);
-    
-    // Log detailed error information for debugging
-    if (error.body) {
-      console.error('API Error Body:', error.body);
-    }
-    if (error.status) {
-      console.error('API Error Status:', error.status);
-    }
-    
-    // Update operation status with error
-    const operationData = activeOperations.get(operationId);
-    if (operationData) {
-      operationData.status = 'failed';
-      operationData.error = error.message;
-      operationData.errorDetails = {
-        status: error.status,
-        body: error.body
-      };
-      operationData.updatedAt = new Date().toISOString();
-      activeOperations.set(operationId, operationData);
-    }
+
+    const d = activeOperations.get(operationId) || {};
+    d.status = 'failed';
+    d.error = error?.message || 'Video generation failed';
+    d.errorDetails = {
+      code: error?.code || error?.cause?.code || null,
+      name: error?.name || null,
+    };
+    d.updatedAt = new Date().toISOString();
+    activeOperations.set(operationId, d);
   }
 }
-
 // Check video generation status - THIS WAS MISSING!
 router.get('/status/:operationId', authenticateToken, async (req, res) => {
   try {

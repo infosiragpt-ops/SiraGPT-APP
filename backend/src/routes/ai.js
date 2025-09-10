@@ -645,5 +645,330 @@ router.post(
     }
   }
 );
+// Add this route after the existing generate-image route (around line 580)
+
+// ✅ Generate AI video response (New Video Generation Route)
+// Replace the existing video generation route with this corrected version:
+
+// ✅ Generate AI video response (Fixed Version)
+router.post(
+  '/generate-video',
+  [
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('chatId').optional().isString(),
+    body('aspect_ratio').optional().isIn(['16:9', '9:16', '1:1']).withMessage('Invalid aspect ratio'),
+    body('negative_prompt').optional().isString(),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { prompt, chatId, aspect_ratio = '16:9', negative_prompt } = req.body;
+      const userId = req.user.id;
+
+      console.log('🎬 Video generation request:', { prompt, aspect_ratio, userId, chatId });
+
+      // ✅ Check monthly limit
+      if (req.user.apiUsage >= req.user.monthlyLimit) {
+        return res.status(429).json({
+          error: 'Monthly video generation limit exceeded',
+          usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit }
+        });
+      }
+
+      // ✅ Make internal API call to video service using axios
+      const axios = require('axios');
+      
+      try {
+        console.log('📡 Calling internal video service...');
+        
+        // Make call to the video generation service
+        const videoResponse = await axios.post('http://localhost:5000/api/video/generate', {
+          prompt,
+          aspect_ratio,
+          negative_prompt
+        }, {
+          headers: {
+            'Authorization': req.headers.authorization,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000 // 30 second timeout
+        });
+
+        console.log('✅ Video service response:', videoResponse.data);
+
+        // ✅ Save assistant message with video operation data if chatId provided
+        if (chatId) {
+          const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
+          if (!chat) {
+            return res.status(404).json({ error: 'Chat not found' });
+          }
+
+          // Save assistant message with video operation data
+          const assistantMessage = await prisma.message.create({
+            data: { 
+              chatId, 
+              role: 'ASSISTANT', 
+              content: `Generating video: "${prompt}"...`,
+              tokens: 1000, // Fixed token count for video generation
+              // Store video data in files field as JSON
+              files: JSON.stringify([{
+                type: 'video',
+                operationId: videoResponse.data.operationId,
+                status: 'processing',
+                filename: videoResponse.data.filename,
+                prompt: prompt,
+                aspect_ratio: aspect_ratio
+              }])
+            }
+          });
+
+          // Update chat title and timestamp
+          await prisma.chat.update({
+            where: { id: chatId },
+            data: {
+              updatedAt: new Date(),
+              title: chat.title === 'New Chat'
+                ? `Video: ${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}`
+                : chat.title
+            }
+          });
+
+          console.log('💾 Chat updated with video generation request');
+        }
+
+        // ✅ Track usage
+        const tokens = 1000; // Fixed token count for video generation
+        await prisma.apiUsage.create({
+          data: { userId, model: 'veo-3.0', tokens, cost: tokens * 0.001 }
+        });
+
+        const updatedUser = await prisma.user.update({
+          where: { id: userId },
+          data: { apiUsage: { increment: tokens } }
+        });
+
+        console.log('📊 Usage tracked for video generation');
+
+        res.json({
+          operationId: videoResponse.data.operationId,
+          filename: videoResponse.data.filename,
+          status: 'processing',
+          message: 'Video generation started successfully',
+          tokens,
+          usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
+        });
+
+      } catch (videoServiceError) {
+        console.error('❌ Video service error:', videoServiceError.response?.data || videoServiceError.message);
+        
+        // Handle specific video service errors
+        if (videoServiceError.code === 'ECONNREFUSED') {
+          return res.status(503).json({ 
+            error: 'Video generation service is not available. Please try again later.' 
+          });
+        }
+        
+        if (videoServiceError.response?.status === 400) {
+          return res.status(400).json({ 
+            error: videoServiceError.response.data.error || 'Invalid video generation parameters' 
+          });
+        } else if (videoServiceError.response?.status === 429) {
+          return res.status(429).json({ 
+            error: videoServiceError.response.data.error || 'Video generation rate limit exceeded' 
+          });
+        } else {
+          return res.status(500).json({ 
+            error: 'Video generation service temporarily unavailable' 
+          });
+        }
+      }
+
+    } catch (error) {
+      console.error('🚨 Video generation error:', error);
+      res.status(500).json({ error: error.message || 'Video generation failed' });
+    }
+  }
+);
+
+// ✅ Check video generation status (Fixed)
+router.get('/video-status/:operationId', authenticateToken, async (req, res) => {
+  try {
+    const { operationId } = req.params;
+    
+    console.log('📊 Checking video status for operation:', operationId);
+    
+    // ✅ Make internal API call to video service
+    const axios = require('axios');
+    
+    try {
+      const statusResponse = await axios.get(`http://localhost:5000/api/video/status/${operationId}`, {
+        headers: {
+          'Authorization': req.headers.authorization
+        },
+        timeout: 10000 // 10 second timeout
+      });
+
+      console.log('✅ Video status response:', statusResponse.data.status);
+
+      // If video is completed, update the message in the database
+   // ...inside router.get('/video-status/:operationId', authenticateToken, async (req, res) => { ... })
+// After you parse statusResponse from the internal /api/video/status call:
+
+
+// if (statusResponse.data.status === 'completed' && statusResponse.data.filename) {
+//   try {
+//     const { operationId } = req.params;
+
+//     // Fetch recent assistant messages for this user (no JSON null filter in Prisma)
+//     const candidates = await prisma.message.findMany({
+//       where: {
+//         role: 'ASSISTANT',
+//         chat: { userId: req.user.id }
+//       },
+//       orderBy: { timestamp: 'desc' }, // If your schema uses createdAt, switch to { createdAt: 'desc' }
+//       take: 200,
+//       select: { id: true, content: true, files: true }
+//     });
+
+//     // Find the message whose files JSON contains this operationId
+//     const target = candidates.find(m => {
+//       try {
+//         const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+//         return Array.isArray(files) && files.some(f => f && f.operationId === operationId);
+//       } catch {
+//         return false;
+//       }
+//     });
+
+//     if (target) {
+//       let files = [];
+//       try {
+//         files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
+//       } catch {
+//         files = [];
+//       }
+
+//       // Update the matching video entry in files
+//       const updatedFiles = Array.isArray(files)
+//         ? files.map(f =>
+//             f && f.operationId === operationId
+//               ? { ...f, status: 'completed', filename: statusResponse.data.filename }
+//               : f
+//           )
+//         : files;
+
+//       await prisma.message.update({
+//         where: { id: target.id },
+//         data: {
+//           content: `Video generated successfully: "${statusResponse.data.prompt || 'Video content'}"`,
+//           files: JSON.stringify(updatedFiles)
+//         }
+//       });
+//       console.log('💾 Message updated with completed video');
+//     }
+//   } catch (dbError) {
+//     console.error('❌ Database update error:', dbError);
+//   }
+// }
+
+// res.json(statusResponse.data);
+// ...inside router.get('/video-status/:operationId', ...) after a successful statusResponse...
+
+if (statusResponse.data.status === 'completed' && statusResponse.data.filename) {
+  try {
+    const { operationId } = req.params;
+
+    const candidates = await prisma.message.findMany({
+      where: {
+        role: 'ASSISTANT',
+        chat: { userId: req.user.id }
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 200,
+      select: { id: true, content: true, files: true }
+    });
+
+    const target = candidates.find(m => {
+      try {
+        const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+        return Array.isArray(files) && files.some(f => f && f.operationId === operationId);
+      } catch {
+        return false;
+      }
+    });
+
+    if (target) {
+      let files = [];
+      try {
+        files = typeof target.files === 'string' ? JSON.parse(target.files) : target.files;
+      } catch {
+        files = [];
+      }
+
+      const result = statusResponse.data.result || {};
+      const finalFilename = statusResponse.data.filename;
+      const video_url = result.video_url || `/video/watch/${finalFilename}`;
+      const download_url = result.download_url || `/video/download/${finalFilename}`;
+
+      const updatedFiles = Array.isArray(files)
+        ? files.map(f =>
+            f && f.operationId === operationId
+              ? {
+                  ...f,
+                  status: 'completed',
+                  filename: finalFilename,
+                  // enrich with completion metadata
+                  video_url,
+                  download_url,
+                  duration: result.duration || statusResponse.data.duration,
+                  file_size: result.file_size,
+                  resolution: result.resolution,
+                  aspect_ratio: result.aspect_ratio || statusResponse.data.aspect_ratio,
+                  fal_video_url: result.fal_video_url,
+                  fal_request_id: result.fal_request_id
+                }
+              : f
+          )
+        : files;
+
+      await prisma.message.update({
+        where: { id: target.id },
+        data: {
+          content: `Video generated successfully: "${statusResponse.data.prompt || 'Video content'}"`,
+          files: JSON.stringify(updatedFiles)
+        }
+      });
+      console.log('💾 Message updated with completed video');
+    }
+  } catch (dbError) {
+    console.error('❌ Database update error:', dbError);
+  }
+}
+
+res.json(statusResponse.data);
+    } catch (videoServiceError) {
+      console.error('❌ Video status service error:', videoServiceError.response?.data || videoServiceError.message);
+      
+      if (videoServiceError.code === 'ECONNREFUSED') {
+        return res.status(503).json({ error: 'Video status service is not available' });
+      }
+      
+      if (videoServiceError.response?.status === 404) {
+        return res.status(404).json({ error: 'Video operation not found' });
+      } else {
+        return res.status(500).json({ error: 'Video status service temporarily unavailable' });
+      }
+    }
+    
+  } catch (error) {
+    console.error('🚨 Video status check error:', error);
+    res.status(500).json({ error: error.message || 'Failed to check video status' });
+  }
+});
 
 module.exports = router;

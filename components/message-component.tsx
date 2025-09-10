@@ -1,42 +1,28 @@
 "use client"
 
-// Zaroori cheezein import karein
-import React, { useEffect, useState } from 'react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex'; // Import rehype-katex
-import 'katex/dist/katex.min.css'; // Import KaTeX CSS
-
+import * as React from "react"
+import { useState, useEffect } from "react"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { Textarea } from "@/components/ui/textarea"
 import {
-    FileText,
-    Clipboard,
-    Check,
-    Volume2,
-    Square,
-    ThumbsUp,
-    ThumbsDown,
-    RefreshCw,
-    Wand2,
-    Share2,
-    Pencil,
-    Play,
-    Pause
-} from "lucide-react";
-import { DownloadButtons } from './download-buttons';
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import apiClient from '@/lib/api';
-import { toast } from 'sonner';
-import { Textarea } from './ui/textarea';
+  Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX, 
+  ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
+  Loader2, Video, AlertCircle, CheckCircle, RefreshCw,Wand2,Video as VideoIcon
+} from "lucide-react"
+import { toast } from "sonner"
+import { apiClient } from "@/lib/api"
 import { useVoiceControls } from './voice-controls';
-
-
-// Enhanced Message Component (Naya aur behtar version)
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
+import { DownloadButtons } from './download-buttons';
+// Enhanced Message Component with Video Support
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
     message: any;
     user: any;
@@ -55,6 +41,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     const [editedContent, setEditedContent] = useState(message.content);
     const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>({});
     const [imageError, setImageError] = useState<{ [key: string]: boolean }>({});
+    
+    // Video-specific states
+    const [videoLoading, setVideoLoading] = useState(false);
+    const [videoError, setVideoError] = useState(false);
+    const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+    const [videoProgress, setVideoProgress] = useState(0);
+    const [videoDuration, setVideoDuration] = useState(0);
+    
+    const videoRef = React.useRef<HTMLVideoElement>(null);
     const { handleTextToSpeech } = useVoiceControls();
 
     useEffect(() => {
@@ -71,8 +66,58 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         };
     }, [currentAudio]);
 
+    // Video event handlers
+    const handleVideoPlay = () => {
+        if (videoRef.current) {
+            videoRef.current.play();
+            setIsVideoPlaying(true);
+        }
+    };
 
-    //For Share Functioanlity
+    const handleVideoPause = () => {
+        if (videoRef.current) {
+            videoRef.current.pause();
+            setIsVideoPlaying(false);
+        }
+    };
+
+    const handleVideoTimeUpdate = () => {
+        if (videoRef.current) {
+            const progress = (videoRef.current.currentTime / videoRef.current.duration) * 100;
+            setVideoProgress(progress);
+        }
+    };
+
+    const handleVideoLoadedMetadata = () => {
+        if (videoRef.current) {
+            setVideoDuration(videoRef.current.duration);
+        }
+    };
+
+    const downloadVideo = async () => {
+        if (message.videoData?.filename) {
+            try {
+                setVideoLoading(true);
+                const blob = await apiClient.downloadVideo(message.videoData.filename);
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = message.videoData.filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                toast.success('Video downloaded successfully!');
+            } catch (error) {
+                console.error('Download failed:', error);
+                toast.error('Failed to download video');
+            } finally {
+                setVideoLoading(false);
+            }
+        }
+    };
+
+    // For Share Functioanlity
     const handleShare = async () => {
         try {
             const response = await apiClient.handleShare(message.chatId);
@@ -218,7 +263,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    let parsedFiles = [];
+  let parsedFiles: any[] = [];
     if (message.files) {
         try {
             parsedFiles = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
@@ -273,7 +318,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     // Message content ko render karne ke liye alag se component banaya taaki code saaf rahe
     const MessageContent = () => {
         // Don't render markdown for image-only messages to improve performance
-        if (isImageOnlyMessage()) {
+        if (isImageOnlyMessage() || isVideoMessage) {
             return null;
         }
 
@@ -317,6 +362,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         );
     };
 
+const videoEntry = parsedFiles.find((f: any) => f?.type === 'video');
+const isVideoMessage = !!videoEntry;
+
     // Check if this is an image-only message
     const isImageOnlyMessage = () => {
         const hasImageFiles = parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image');
@@ -324,7 +372,78 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/'));
         return hasImageFiles || hasImageUrl;
     };
+const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename); // returns full URL string
+const getDownloadUrl = (filename: string) => apiClient.downloadVideo(filename); // returns full URL string
 
+    // Video Display Component
+  const VideoDisplay = () => {
+  if (!isVideoMessage) return null;
+
+  const status = String(videoEntry.status || '').toLowerCase();
+  const filename = videoEntry.filename;
+
+  return (
+    <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
+      <div className="flex items-center gap-2 text-sm">
+        <VideoIcon className="h-4 w-4" />
+        <span className="font-medium">AI Video</span>
+      </div>
+
+      {status === 'processing' || status === 'in_progress' ? (
+        <div className="mt-2 flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Generating video… This may take 2–5 minutes.</span>
+        </div>
+      ) : null}
+
+      {status === 'failed' ? (
+        <div className="mt-2 text-red-500 text-sm">
+          Generation failed. Please try again with a shorter prompt.
+        </div>
+      ) : null}
+
+      {status === 'completed' && filename ? (
+        <div className="mt-3 space-y-2">
+          {/* <video
+            ref={videoRef}
+            className="w-full rounded-md"
+            controls
+            src={getWatchUrl(filename)}
+            onTimeUpdate={handleVideoTimeUpdate}
+            onLoadedMetadata={handleVideoLoadedMetadata}
+          /> */}
+<video
+  ref={videoRef}
+  className="w-full rounded-md"
+  controls
+  preload="auto"
+  playsInline
+  crossOrigin="anonymous"
+  src={getWatchUrl(filename)}
+  onLoadedMetadata={handleVideoLoadedMetadata}
+  onError={(e) => {
+    console.error('Video error', e);
+    toast.error('Failed to play video inline. Try “Open in new tab”.');
+  }}
+/>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" asChild>
+              <a href={getDownloadUrl(filename)} download>
+                <Download className="h-4 w-4 mr-1" />
+                Download
+              </a>
+            </Button>
+            <Button size="sm" variant="outline" asChild>
+              <a href={getWatchUrl(filename)} target="_blank" rel="noopener noreferrer">
+                Open in new tab
+              </a>
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+};
     // File display logic - optimized for images
     const FileDisplay = () => (
         <>
@@ -447,159 +566,95 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 {message.role === 'ASSISTANT' && (
                     <div className="w-full max-w-[85%]">
                         <MessageContent />
+                        <VideoDisplay />
                         <FileDisplay />
-                        <div className="mt-3 flex items-center gap-1">
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                onClick={handleGlobalCopy}
-                                title="Copy response"
-                            >
-                                {isCopied ? <Check size={16} /> : <Clipboard size={16} />}
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                onClick={handleSpeak}
-                                title="Read aloud"
-                            >
-                                <Volume2 size={16} />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                title="Like"
-                                onClick={() => handleFeedback('liked')}
-                                className={`h-7 w-7 p-1  ${feedbackSent === 'liked'
-                                    ? 'bg-muted text-foreground'
-                                    : 'text-muted-foreground hover:text-foreground'
-                                    }`}
-                            >
-                                <ThumbsUp size={16} />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                title="Dislike"
-                                className={`h-7 w-7 p-1  ${feedbackSent === 'disliked'
-                                    ? 'bg-muted text-foreground text-red-500'
-                                    : 'text-muted-foreground hover:text-foreground '
-                                    }`}
-                                onClick={() => handleFeedback('disliked')}
-                            >
-                                <ThumbsDown size={16} />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                title="Regenerate"
-                                onClick={onRegenerate}
-                            >
-                                <RefreshCw size={16} />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                title="Edit/Customize"
-                            >
-                                <Wand2 size={16} />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                onClick={handleShare}
-                                title="Share"
-                            >
-                                <Share2 size={16} />
-                            </Button>
-                            <DownloadButtons
-                                content={message.content}
-                                messageId={message.id}
-                            />
-                        </div>
-
-                        {/* Audio Player UI */}
-                        {showAudioPlayer && (
-                            <Card className="mt-3 p-3 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/20 dark:to-purple-950/20 border-blue-200 dark:border-blue-800">
-                                <div className="flex items-center gap-3">
-                                    {/* Play/Pause/Loading Button */}
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-8 w-8 p-0 rounded-full bg-white dark:bg-gray-800 border-blue-300 dark:border-blue-700"
-                                        onClick={toggleAudioPlayback}
-                                        disabled={isLoadingAudio || !currentAudio}
-                                        title={isLoadingAudio ? "Loading..." : isSpeaking ? "Pause" : "Play"}
-                                    >
-                                        {isLoadingAudio ? (
-                                            <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500" />
-                                        ) : isSpeaking ? (
-                                            <Pause size={14} />
-                                        ) : (
-                                            <Play size={14} />
-                                        )}
-                                    </Button>
-
-                                    {/* Progress Bar */}
-                                    <div className="flex-1 space-y-1">
-                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                            <span className="flex items-center gap-1">
-                                                <Volume2 size={12} />
-                                                {isLoadingAudio ? "Generating audio..." : "Reading aloud..."}
-                                            </span>
-                                            {currentAudio && !isLoadingAudio && (
-                                                <span>
-                                                    {formatTime(currentAudio.currentTime)} / {formatTime(audioDuration)}
-                                                </span>
-                                            )}
-                                        </div>
-                                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 relative overflow-hidden">
-                                            {isLoadingAudio ? (
-                                                <div className="w-full h-2 bg-gradient-to-r from-blue-300 to-purple-300 rounded-full animate-pulse" />
-                                            ) : (
-                                                <>
-                                                    <div
-                                                        className="bg-gradient-to-r from-blue-500 to-purple-500 h-2 rounded-full transition-all duration-300 ease-out"
-                                                        style={{ width: `${audioProgress}%` }}
-                                                    />
-                                                    {/* Animated pulse effect */}
-                                                    {isSpeaking && (
-                                                        <div
-                                                            className="absolute top-0 h-2 w-4 bg-white/30 rounded-full animate-pulse"
-                                                            style={{ left: `${Math.max(0, audioProgress - 2)}%` }}
-                                                        />
-                                                    )}
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Stop Button */}
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-                                        onClick={stopAudio}
-                                        disabled={isLoadingAudio}
-                                        title="Stop"
-                                    >
-                                        <Square size={14} />
-                                    </Button>
-                                </div>
-                            </Card>
+                        
+                        {/* Action buttons for assistant messages */}
+                        {!isVideoMessage && (
+                            <div className="flex items-center gap-2 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                    onClick={handleGlobalCopy}
+                                    title="Copy response"
+                                >
+                                    {isCopied ? <Check size={16} /> : <Clipboard size={16} />}
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                    onClick={handleSpeak}
+                                    title="Read aloud"
+                                >
+                                    <Volume2 size={16} />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    title="Like"
+                                    onClick={() => handleFeedback('liked')}
+                                    className={`h-7 w-7 p-1  ${feedbackSent === 'liked'
+                                        ? 'bg-muted text-foreground'
+                                        : 'text-muted-foreground hover:text-foreground'
+                                        }`}
+                                >
+                                    <ThumbsUp size={16} />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    title="Dislike"
+                                    className={`h-7 w-7 p-1  ${feedbackSent === 'disliked'
+                                        ? 'bg-muted text-foreground text-red-500'
+                                        : 'text-muted-foreground hover:text-foreground '
+                                        }`}
+                                    onClick={() => handleFeedback('disliked')}
+                                >
+                                    <ThumbsDown size={16} />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                    title="Regenerate"
+                                    onClick={onRegenerate}
+                                >
+                                    <RefreshCw size={16} />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                    title="Edit/Customize"
+                                >
+                                    <Wand2 size={16} />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
+                                    onClick={handleShare}
+                                    title="Share"
+                                >
+                                    <Share2 size={16} />
+                                </Button>
+                                <DownloadButtons
+                                    content={message.content}
+                                    messageId={message.id}
+                                />
+                            </div>
                         )}
                     </div>
                 )}
             </div>
 
-            {message.role === "USER" && !isImageOnlyMessage() && (
+            {message.role === "USER" && !isImageOnlyMessage() && !isVideoMessage && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
-                    <AvatarFallback className="text-xs">U</AvatarFallback>
+                    <AvatarFallback className="bg-muted text-muted-foreground text-xs">
+                        {user?.name?.[0]?.toUpperCase() || 'U'}
+                    </AvatarFallback>
                 </Avatar>
             )}
         </div>

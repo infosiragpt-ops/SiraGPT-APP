@@ -12,7 +12,14 @@ interface Message {
   content: string
   tokens?: number
   timestamp: string
-  files?: any[],
+  files?: any[]
+  videoData?: {
+    operationId: string
+    status: 'processing' | 'completed' | 'failed'
+    filename?: string
+    prompt?: string
+    error?: string
+  }
 }
 
 interface Chat {
@@ -29,9 +36,10 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
-  createNewChat: (type?: 'text' | 'image', initialContent?: string) => void
+  createNewChat: (type?: 'text' | 'image' | 'video', initialContent?: string) => void
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[]) => Promise<void>
+  addVideoMessage: (prompt: string) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => void
   selectedModel: string
@@ -40,12 +48,14 @@ interface ChatContextType {
   setSelectedProivder: (model: string) => void
   isLoading: boolean
   availableModels: any[]
-  chatType: 'text' | 'image';
+  chatType: 'text' | 'image' | 'video'
   uploadedFiles: any[]
-  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image'>>;
-  setUploadedFiles: (files: any[]) => void;
+  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video'>>
+  setUploadedFiles: (files: any[]) => void
   regenerateLastMessage: () => void
   editAndRegenerate: (messageId: string, newContent: string) => void
+  updateMessageInChat: (messageId: string, newContent: string) => void
+  pollVideoStatus: (operationId: string, messageId: string) => void
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined)
@@ -56,12 +66,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
   const [selectedModel, setSelectedModel] = useState("")
   const [selectProvider, setSelectedProivder] = useState("")
-
   const [availableModels, setAvailableModels] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [hasInitialized, setHasInitialized] = useState(false)
-  const [chatType, setChatType] = useState<'text' | 'image'>('text');
+  const [chatType, setChatType] = useState<'text' | 'image' | 'video'>('text')
+  const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
+
   // Load user's chats
   useEffect(() => {
     if (user && token) {
@@ -198,7 +209,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     },
     [currentChat, user, token, selectedModel, uploadedFiles]
   );
-  const createNewChat = useCallback(async (type: 'text' | 'image' = 'text', initialContent?: string) => {
+  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' = 'text', initialContent?: string) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
@@ -253,156 +264,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [],
   )
 
-  // const addMessage = useCallback(
-  //   async (content: string, fileIds?: string[]) => {
-  //     if (!currentChat || !user || !token) return
-
-  //     setIsLoading(true)
-
-  //     try {
-  //       const userMessage: Message = {
-  //         id: `msg-${Date.now()}`,
-  //         chatId: currentChat.id,
-  //         role: "USER",
-  //         content,
-  //         timestamp: new Date().toDateString(),
-  //         files: fileIds && fileIds.length > 0 ? fileIds : undefined,
-  //       };
-
-  //       {
-  //         const updatedMessages = [...currentChat.messages, userMessage]
-  //         const updatedChat = {
-  //           ...currentChat,
-  //           messages: updatedMessages,
-  //           title: '',
-  //           updatedAt: new Date().toDateString(),
-  //         }
-
-  //         setCurrentChat(updatedChat)
-
-  //         setChats((prev) => prev.map((chat) => (chat.id === currentChat.id ? updatedChat : chat)))
-  //       }
-  //       // Generate AI response with file context
-  //       const response = await apiClient.generateAI({
-  //         model: selectedModel,
-  //         prompt: content,
-  //         chatId: currentChat.id,
-  //         files: fileIds || [],
-  //       })
-
-  //       // Reload the chat to get updated messages including the AI response
-  //       const chatResponse = await apiClient.getChat(currentChat.id)
-  //       const updatedChat = chatResponse.chat
-
-  //       setCurrentChat(updatedChat)
-  //       setChats((prev) => prev.map((chat) =>
-  //         chat.id === currentChat.id ? updatedChat : chat
-  //       ))
-
-  //       // Clear uploaded files after sending message
-  //       setUploadedFiles([])
-  //     } catch (error) {
-  //       console.error("Failed to generate AI response:", error)
-  //       // On error, reload the chat to ensure we have the latest state
-  //       try {
-  //         const chatResponse = await apiClient.getChat(currentChat.id)
-  //         const updatedChat = chatResponse.chat
-  //         setCurrentChat(updatedChat)
-  //         setChats((prev) => prev.map((chat) =>
-  //           chat.id === currentChat.id ? updatedChat : chat
-  //         ))
-  //       } catch (reloadError) {
-  //         console.error("Failed to reload chat after error:", reloadError)
-  //       }
-  //     } finally {
-  //       setIsLoading(false)
-  //     }
-  //   },
-  //   [currentChat, user, token, selectedModel],
-  // )
-  // ✅ YEH SAHI STREAMING WALA addMessage FUNCTION HAI
-
-
-  // const addMessage = useCallback(
-  //   async (content: string, fileIds?: string[]) => {
-  //     // 1. Shuruaati checks
-  //     console.log('log working');
-
-  //     if (!currentChat || !user || !token || !content.trim()) return;
-
-  //     setIsLoading(true);
-  //     const chatId = currentChat.id;
-
-  //     // 2. User ka naya message object banayein (for Optimistic UI)
-  //     // Isse user ka message turant screen par dikh jaata hai.
-  //     const userMessage: Message = {
-  //       id: `user-msg-${Date.now()}`,
-  //       role: 'USER',
-  //       content: content,
-  //       timestamp: new Date().toISOString(),
-  //       chatId: chatId,
-  //       // tokens: 0, // Agar Message type mein hai to add karein
-  //     };
-
-  //     // 3. UI ko turant update karein
-  //     setCurrentChat((prevChat) => ({
-  //       ...prevChat!,
-  //       messages: [...prevChat!.messages, userMessage],
-  //     }));
-
-  //     // 4. API ke liye poori chat history taiyar karein
-  //     // Yahi sabse zaroori hissa hai context ke liye.
-  //     const apiMessages = [...currentChat.messages, userMessage].map(msg => ({
-  //       role: msg.role === 'USER' ? 'user' : 'assistant',
-  //       content: msg.content,
-  //     }));
-
-  //     try {
-  //       // 5. Backend ko EK hi API call karein, lekin is baar poori history ke saath
-  //       // Hum ab 'prompt' nahi, balki 'messages' array bhejenge.
-  //       const aiResponse = await apiClient.generateAI({
-  //         model: selectedModel,
-  //         chatId: chatId,
-  //         messages: apiMessages, // <-- BADLAV #1: 'prompt' ke bajaye 'messages'
-  //         files: fileIds || uploadedFiles.map(f => f.id),
-  //       });
-
-  //       // 6. AI ka jawab object banayein
-  //       // Man lete hain ki `generateAI` ab AI ka message return karta hai
-  //       const aiMessage: Message = {
-  //         id: aiResponse.messageId || `ai-msg-${Date.now()}`,
-  //         role: 'ASSISTANT',
-  //         content: aiResponse.content,
-  //         tokens: aiResponse.tokens,
-  //         timestamp: new Date().toISOString(),
-  //         chatId: chatId,
-  //       };
-
-  //       // 7. Final state ko update karein. DOBARA FETCH KARNE KI ZAROORAT NAHI.
-  //       // BADLAV #2: apiClient.getChat() ko hata diya gaya hai.
-  //       setCurrentChat((prevChat) => ({
-  //         ...prevChat!,
-  //         messages: [...prevChat!.messages, aiMessage],
-  //       }));
-
-  //       setChats((prev) =>
-  //         prev.map((chat) => (chat.id === chatId ? { ...chat, messages: [...chat.messages, aiMessage] } : chat))
-  //       );
-
-  //       setUploadedFiles([]);
-
-  //     } catch (error) {
-  //       console.error("Failed to generate AI response:", error);
-  //       setCurrentChat((prevChat) => ({
-  //         ...prevChat!,
-  //         messages: prevChat!.messages.filter(msg => msg.id !== userMessage.id),
-  //       }));
-  //     } finally {
-  //       setIsLoading(false);
-  //     }
-  //   },
-  //   [currentChat, user, token, selectedModel, uploadedFiles, setCurrentChat, setChats, setUploadedFiles],
-  // );
   const clearCurrentChat = useCallback(async () => {
     if (!currentChat || !token) return
 
@@ -677,35 +538,275 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   };
 
+  // const addVideoMessage = useCallback(async (prompt: string) => {
+  //   if (!currentChat || !user) return
 
-  return (
-    <ChatContext.Provider
-      value={{
-        chats,
-        setCurrentChat,
-        currentChat,
-        createNewChat,
-        selectChat,
-        addMessage,
-        clearCurrentChat,
-        deleteChat,
-        selectedModel,
-        setSelectedModel,
-        selectProvider,
-        setSelectedProivder,
-        isLoading,
-        uploadedFiles,
-        chatType,
-        setChatType,
-        setUploadedFiles,
-        availableModels,
-        regenerateLastMessage,
-        editAndRegenerate,
-      }}
-    >
-      {children}
-    </ChatContext.Provider>
-  )
+  //   setIsLoading(true)
+  //   try {
+  //     // Add user message
+  //     const userMessageResponse = await apiClient.addMessage(currentChat.id, {
+  //       role: 'USER',
+  //       content: prompt
+  //     })
+
+  //     // Generate video
+  //     const videoResponse = await apiClient.generateVideo({
+  //       prompt,
+  //       aspect_ratio: '16:9'
+  //     })
+
+  //     // Add assistant message with video operation data
+  //     const assistantMessageResponse = await apiClient.addMessage(currentChat.id, {
+  //       role: 'ASSISTANT',
+  //       content: `Generating video: "${prompt}"...`,
+  //       videoData: {
+  //         operationId: videoResponse.operationId,
+  //         status: 'processing',
+  //         filename: videoResponse.filename,
+  //         prompt
+  //       }
+  //     })
+
+  //     // Start polling for video status
+  //     pollVideoStatus(videoResponse.operationId, assistantMessageResponse.message.id)
+
+  //     // Refresh current chat
+  //     await selectChat(currentChat.id)
+  //   } catch (error) {
+  //     console.error("Failed to generate video:", error)
+  //   } finally {
+  //     setIsLoading(false)
+  //   }
+  // }, [currentChat, user])
+// Replace the addVideoMessage function with this corrected version:
+
+// ...existing imports and code...
+const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
+  const interval = setInterval(async () => {
+    try {
+      const statusResponse = await apiClient.getVideoStatus(operationId);
+
+      // Normalize status casing
+      const status = (statusResponse.status || '').toLowerCase();
+
+      if (status === 'completed' || status === 'failed') {
+        clearInterval(interval);
+        setPollingIntervals(prev => {
+          const n = new Map(prev);
+          n.delete(operationId);
+          return n;
+        });
+
+        // Refresh chat from DB so the assistant message has updated files/filename
+        if (currentChat?.id) {
+          await selectChat(currentChat.id);
+        }
+
+      } else {
+        // Optional: show "processing" in UI by updating that one message
+        setCurrentChat(prev => {
+          if (!prev) return prev;
+          const updated = prev.messages.map(m => {
+            if (m.id !== messageId) return m;
+            // no DB changes yet; keep content but mark a client-side hint if you want
+            return m;
+          });
+          return { ...prev, messages: updated };
+        });
+      }
+    } catch (error) {
+      console.error('Error polling video status:', error);
+      clearInterval(interval);
+      setPollingIntervals(prev => {
+        const n = new Map(prev);
+        n.delete(operationId);
+        return n;
+      });
+    }
+  }, 5000);
+
+  setPollingIntervals(prev => {
+    const n = new Map(prev);
+    n.set(operationId, interval);
+    return n;
+  });
+}, [currentChat?.id, selectChat, setCurrentChat]);
+const addVideoMessage = useCallback(async (prompt: string) => {
+  if (!currentChat || !user) return;
+
+  setIsLoading(true);
+  try {
+    // 1) Save user's message
+    await apiClient.addMessage(currentChat.id, {
+      role: 'USER',
+      content: prompt
+    });
+
+    // 2) Kick off video generation
+    const videoResponse = await apiClient.generateVideo({
+      prompt,
+      aspect_ratio: '16:9',
+      chatId: currentChat.id
+    });
+
+    // 3) Reload chat so we get the assistant placeholder saved by backend
+    await selectChat(currentChat.id);
+
+    // 4) Find the assistant message with this operationId inside files JSON
+    const findAssistantByOperation = (chat: any, opId: string) => {
+      if (!chat?.messages) return null;
+      for (const m of chat.messages) {
+        if (m.role !== 'ASSISTANT' || !m.files) continue;
+        try {
+          const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+          if (Array.isArray(files) && files.some((f: any) => f?.type === 'video' && f?.operationId === opId)) {
+            return m;
+          }
+        } catch {
+          // ignore bad JSON
+        }
+      }
+      return null;
+    };
+
+    // Use the latest currentChat from state
+    let targetMessage = findAssistantByOperation(currentChat, videoResponse.operationId);
+    if (!targetMessage) {
+      // state race: fetch directly and search
+      const fresh = await apiClient.getChat(currentChat.id);
+      targetMessage = findAssistantByOperation(fresh.chat, videoResponse.operationId);
+      if (fresh?.chat) setCurrentChat(fresh.chat);
+    }
+
+    // 5) Start polling using the actual assistant message id if found
+    const messageId = targetMessage?.id || videoResponse.operationId; // fallback
+    pollVideoStatus(videoResponse.operationId, messageId);
+  } catch (error) {
+    console.error("❌ Failed to generate video:", error);
+    throw error;
+  } finally {
+    setIsLoading(false);
+  }
+}, [currentChat, user, selectChat, setCurrentChat, pollVideoStatus]);
+
+// ...later...
+
+
+  // const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
+  //   const interval = setInterval(async () => {
+  //     try {
+  //       const statusResponse = await apiClient.getVideoStatus(operationId)
+        
+  //       if (statusResponse.status === 'completed' || statusResponse.status === 'failed') {
+  //         // Clear interval
+  //         clearInterval(interval)
+  //         setPollingIntervals(prev => {
+  //           const newMap = new Map(prev)
+  //           newMap.delete(operationId)
+  //           return newMap
+  //         })
+
+  //         // Update message in current chat
+  //         if (currentChat) {
+  //           setCurrentChat(prevChat => {
+  //             if (!prevChat) return prevChat
+              
+  //             const updatedMessages = prevChat.messages.map(msg => {
+  //               if (msg.id === messageId) {
+  //                 return {
+  //                   ...msg,
+  //                   content: statusResponse.status === 'completed' 
+  //                     ? `Video generated successfully: "${statusResponse.prompt}"`
+  //                     : `Video generation failed: ${statusResponse.error}`,
+  //                   videoData: {
+  //                     ...msg.videoData!,
+  //                     status: statusResponse.status,
+  //                     filename: statusResponse.filename,
+  //                     error: statusResponse.error
+  //                   }
+  //                 }
+  //               }
+  //               return msg
+  //             })
+
+  //             return {
+  //               ...prevChat,
+  //               messages: updatedMessages
+  //             }
+  //           })
+  //         }
+  //       }
+  //     } catch (error) {
+  //       console.error('Error polling video status:', error)
+  //       clearInterval(interval)
+  //       setPollingIntervals(prev => {
+  //         const newMap = new Map(prev)
+  //         newMap.delete(operationId)
+  //         return newMap
+  //       })
+  //     }
+  //   }, 5000) // Poll every 5 seconds
+
+  //   // Store interval for cleanup
+  //   setPollingIntervals(prev => {
+  //     const newMap = new Map(prev)
+  //     newMap.set(operationId, interval)
+  //     return newMap
+  //   })
+  // }, [currentChat])
+
+  const updateMessageInChat = useCallback((messageId: string, newContent: string) => {
+    setCurrentChat(prevChat => {
+      if (!prevChat) return prevChat
+      
+      const updatedMessages = prevChat.messages.map(msg => {
+        if (msg.id === messageId) {
+          return { ...msg, content: newContent }
+        }
+        return msg
+      })
+
+      return {
+        ...prevChat,
+        messages: updatedMessages
+      }
+    })
+  }, [])
+
+  // Cleanup polling intervals on unmount
+  useEffect(() => {
+    return () => {
+      pollingIntervals.forEach(interval => clearInterval(interval))
+    }
+  }, [pollingIntervals])
+
+  const value: ChatContextType = {
+    chats,
+    currentChat,
+    setCurrentChat,
+    createNewChat,
+    selectChat,
+    addMessage,
+    addVideoMessage,
+    clearCurrentChat,
+    deleteChat,
+    selectedModel,
+    setSelectedModel,
+    selectProvider,
+    setSelectedProivder,
+    isLoading,
+    availableModels,
+    chatType,
+    setChatType,
+    uploadedFiles,
+    setUploadedFiles,
+    regenerateLastMessage,
+    editAndRegenerate,
+    updateMessageInChat,
+    pollVideoStatus
+  }
+
+  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
 }
 
 export function useChat() {
