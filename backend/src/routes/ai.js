@@ -4,7 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const aiService = require('../services/ai-service');
 const OpenAI = require('openai');
-
+const usageService = require("../services/usage-service");
 const router = express.Router();
 
 // Initialize OpenAI client
@@ -183,6 +183,12 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
   try {
     console.log("Background task: Saving to database...");
 
+
+    // ✅ Token calculation with tiktoken
+    const promptTokens = usageService.calculateTextTokens(prompt, model);
+    const responseTokens = usageService.calculateTextTokens(fullResponseContent, model);
+    const totalTokens = promptTokens + responseTokens;
+
     // ✅ Save messages if chatId provided
     if (chatId) {
       const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
@@ -216,14 +222,15 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
     }
 
     // ✅ Track usage
-    await prisma.apiUsage.create({
-      data: { userId, model, tokens, cost: tokens * 0.001 }
-    });
+    // await prisma.apiUsage.create({
+    //   data: { userId, model, tokens, cost: tokens * 0.001 }
+    // });
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: { apiUsage: { increment: tokens } }
-    });
+    // await prisma.user.update({
+    //   where: { id: userId },
+    //   data: { apiUsage: { increment: tokens } }
+    // });
+    await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
 
     console.log("Background task: Database save complete.");
   } catch (dbError) {
@@ -482,7 +489,7 @@ router.post(
         try {
           // Add timeout to prevent hanging
           const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Image generation timeout')), 30000); // 30 second timeout
+            setTimeout(() => reject(new Error('Image generation timeout')), 50000); // 30 second timeout
           });
 
 
@@ -499,6 +506,12 @@ router.post(
 
           // Convert base64 to file and serve as URL to avoid large data in response
           const base64Data = response.data[0].b64_json;
+          const data = {
+            ...response.data[0],
+            b64_json: "",
+          };
+
+          console.log("data for Image", data);
 
           // Check if base64 data is too large (more than 10MB)
           if (base64Data.length > 10 * 1024 * 1024) {
@@ -529,6 +542,7 @@ router.post(
           // Return full URL instead of base64 data
           const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
           imageUrl = `${baseUrl}/uploads/images/${filename}`;
+          console.log("baseUrl", baseUrl, imageUrl);
 
           // Optional: Clean up old images (older than 24 hours) to save disk space
           try {
@@ -687,9 +701,11 @@ router.post(
         console.log('📡 Calling internal video service...');
 
         // Make call to the video generation service
+
         const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-        let video_url = `${baseUrl}/api/video/generate`;
-        const videoResponse = await axios.post(video_url, {
+        let url = `${baseUrl}/api/video/generate`;
+
+        const videoResponse = await axios.post(url, {
           prompt,
           aspect_ratio,
           negative_prompt
@@ -770,6 +786,8 @@ router.post(
 
         // Handle specific video service errors
         if (videoServiceError.code === 'ECONNREFUSED') {
+          console.log("videoServiceError", videoServiceError);
+
           return res.status(503).json({
             error: 'Video generation service is not available. Please try again later.'
           });
@@ -807,9 +825,10 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
     // ✅ Make internal API call to video service
     const axios = require('axios');
     const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-    let video_url = `${baseUrl}/api/video/status/${operationId}`;
+    let url = `${baseUrl}/api/video/status/${operationId}`;
+
     try {
-      const statusResponse = await axios.get(video_url, {
+      const statusResponse = await axios.get(url, {
         headers: {
           'Authorization': req.headers.authorization
         },
