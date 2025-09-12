@@ -223,22 +223,32 @@ class ApiClient {
     onClose: () => void, // Jab stream band ho jaye
     onError: (error: Error) => void // Jab koi error aaye
   ) {
-    const url = `${this.baseURL}/ai/generate`;
-    const config: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
-      body: JSON.stringify(data),
-    };
+let anonId = localStorage.getItem('anon_id');
+if (!anonId) {
+  anonId = crypto.randomUUID?.() || Math.random().toString(36).slice(2);
+  localStorage.setItem('anon_id', anonId);
+}
+const url = `${this.baseURL}/ai/generate`;
+const config: RequestInit = {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    ...(this.token && { Authorization: `Bearer ${this.token}` }),
+    'X-Anon-Id': anonId
+  },
+  body: JSON.stringify(data),
+  credentials: 'include'
+};
 
     try {
       const response = await fetch(url, config);
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Network error' }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+          if (!response.ok) {
+        let details: any = {};
+        try { details = await response.json(); } catch {}
+        const error: any = new Error(details.error || `HTTP ${response.status}`);
+        if (details.code) error.code = details.code;
+        throw error;
       }
 
       // response.body ek ReadableStream hai, hum isko padhenge
@@ -670,6 +680,16 @@ class ApiClient {
   downloadVideo(filename: string) {
     return `${this.apiBaseURL}/video/download/${filename}`;
   }
+  async getAnonQuota() {
+  const res = await fetch(`${this.apiBaseURL}/ai/anon-quota`, {
+    method: 'GET',
+    credentials: 'include'
+  });
+  if (!res.ok) {
+    throw new Error('Failed to fetch anonymous quota');
+  }
+  return res.json();
+}
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);
