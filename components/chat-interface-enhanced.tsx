@@ -985,14 +985,14 @@ export default function ChatInterface() {
                       <Music className="h-4 w-4 mr-2" />
                       Music
                     </Button>
-                    <Button
+                    {/* <Button
                       variant={audioTab === 'video' ? 'default' : 'outline'}
                       className="w-full justify-start"
                       onClick={() => setAudioTab('video')}
                     >
                       <Video className="h-4 w-4 mr-2" />
                       Video
-                    </Button>
+                    </Button> */}
                   </div>
                 </div>
               </div>
