@@ -135,7 +135,7 @@ if (!user) {
         isAnon: true,
         anonRemaining: data.remaining,
         anonLimit: data.limit,
-        anonBlocked: data.remaining === 0
+        anonBlocked: false
       }));
       localStorage.setItem(ANON_LS_KEY, JSON.stringify({
         remaining: data.remaining,
@@ -260,12 +260,12 @@ if (!user) {
           setAnonState(s => {
             if (s.anonRemaining === data.remaining && s.anonLimit === data.limit) return s;
             return {
-              ...s,
-              isAnon: true,
-              anonRemaining: data.remaining,
-              anonLimit: data.limit,
-              anonBlocked: data.remaining === 0
-            };
+          ...s,
+            isAnon: true,
+            anonRemaining: data.remaining,
+            anonLimit: data.limit,
+            anonBlocked: s.anonBlocked // preserve existing (only flips true on error)
+        };
           });
         }
       } catch (e) {

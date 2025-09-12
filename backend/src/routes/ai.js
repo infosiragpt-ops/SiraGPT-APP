@@ -282,7 +282,7 @@ router.post(
 
 
       // ✅ Check monthly limit
-      if (req.user.apiUsage >= req.user.monthlyLimit) {
+     if (isAuth && req.user.apiUsage >= req.user.monthlyLimit) {
         return res.status(429).json({
           error: 'Monthly API limit exceeded',
           usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
