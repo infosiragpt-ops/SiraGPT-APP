@@ -40,7 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (savedToken) {
           setToken(savedToken)
           apiClient.setToken(savedToken)
-
+          
           const response = await apiClient.getCurrentUser()
           setUser(response.user)
         }
