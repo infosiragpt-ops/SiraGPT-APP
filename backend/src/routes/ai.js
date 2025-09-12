@@ -5,8 +5,11 @@ const prisma = require('../config/database');
 const aiService = require('../services/ai-service');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
+const { optionalAuth } = require('../middleware/optionalAuth');
+const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const router = express.Router();
-
+const cookie = require('cookie');
+const crypto = require('crypto');
 // Initialize OpenAI client
 // const openai = new OpenAI({
 //   apiKey: process.env.GEMINI_API_KEY,
@@ -248,7 +251,8 @@ router.post(
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
   ],
-  authenticateToken,
+  optionalAuth,      // try to attach user if token exists
+  trackAnonUsage,    // only applies if not authenticated
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -257,7 +261,9 @@ router.post(
       }
 
       const { model, prompt, chatId, files, provider } = req.body;
-      const userId = req.user.id;
+      const isAuth = !!req.user;
+      const userId = isAuth ? req.user.id : null;
+      const canPersist = isAuth && !!chatId;
 
       let openai;
       if (provider === "Gemini") {
@@ -286,7 +292,7 @@ router.post(
       // ✅ Process attached files
       let processedFiles = [];
       let openaiFiles = [];
-      if (files && files.length > 0) {
+      if (isAuth &&files && files.length > 0) {
         processedFiles = await Promise.all(
           files.map(async (fileId) => {
             const file = await prisma.file.findFirst({
@@ -322,23 +328,25 @@ You have a MathJax render environment.
 Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
       };
       // Step 1: get previous chat history from DB
-      const history = await prisma.message.findMany({
-        where: { chatId },
-        orderBy: { timestamp: 'asc' }
-      });
+// Build history only if authenticated & chatId provided
+      let historyMessages = [];
+      if (canPersist) {
+        historyMessages = await prisma.message.findMany({
+          where: { chatId },
+          orderBy: { timestamp: 'asc' },
+          select: { role: true, content: true }
+        });
+      }
 
-
-      const historyMessages = history.map(m => ({
-        role: m.role === 'USER' ? 'user' : 'assistant',
-        content: m.content
-      }));
-
-      // ✅ NAYI TABDEELI: Step 4 - Final messages array banayein, sab se pehle system message daalein
-      const messages = [
-        latexSystemInstruction,
-        ...historyMessages
-      ];
-
+      const messages = [latexSystemInstruction];
+      if (historyMessages.length) {
+        messages.push(
+          ...historyMessages.map(m => ({
+            role: m.role === 'USER' ? 'user' : 'assistant',
+            content: m.content
+          }))
+        );
+      }
       // Add file context to the user prompt if files are present
       let finalPrompt = prompt;
       if (processedFiles.length > 0) {
@@ -372,6 +380,11 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
 
+
+         // Send anonymous quota meta early (if anon)
+      if (req.anonymous) {
+        res.write(`data: ${JSON.stringify({ type: 'meta', anon: { remaining: req.anonymous.remaining, limit: req.anonymous.limit } })}\n\n`);
+      }
       // Call OpenAI API
       let fullResponseContent = '';
       let tokens = 0;
@@ -422,7 +435,10 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
         tokens = content.length + prompt.length;
       }
 
-      saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
+         // Persist only if authenticated
+      if (isAuth) {
+        saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, fullResponseContent, tokens, model, processedFiles);
+      }
 
 
     } catch (error) {
@@ -990,6 +1006,52 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
   } catch (error) {
     console.error('🚨 Video status check error:', error);
     res.status(500).json({ error: error.message || 'Failed to check video status' });
+  }
+});
+// ADD helper (place above router.post('/generate', or near top)
+async function resolveAnonQuota(req, res) {
+  const DEFAULT_LIMIT = parseInt(process.env.ANON_FREE_QUERIES || '5', 10);
+  const anonCookieName = 'anon_id';
+
+  // Parse cookie header manually (in case cookie-parser not yet applied)
+  let cookies = {};
+  try {
+    if (req.headers.cookie) cookies = cookie.parse(req.headers.cookie);
+  } catch {}
+
+  const headerAnon = req.get('x-anon-id');
+  let anonId = cookies[anonCookieName] || headerAnon || null;
+
+  if (!anonId) {
+    // Not yet created; user hasn’t sent a message
+    return { anonId: null, used: 0, remaining: DEFAULT_LIMIT, limit: DEFAULT_LIMIT };
+  }
+
+  const record = await prisma.anonymousUsage.findUnique({ where: { anonId } });
+  if (!record) {
+    return { anonId, used: 0, remaining: DEFAULT_LIMIT, limit: DEFAULT_LIMIT };
+  }
+  const remaining = Math.max(DEFAULT_LIMIT - record.usedQueries, 0);
+  return { anonId, used: record.usedQueries, remaining, limit: DEFAULT_LIMIT };
+}
+
+// ADD new route (before module.exports)
+router.get('/anon-quota', optionalAuth, async (req, res) => {
+  if (req.user) {
+    // Authenticated users do not use anon quota
+    return res.json({ isAnon: false });
+  }
+  try {
+    const info = await resolveAnonQuota(req, res);
+    res.json({
+      isAnon: true,
+      remaining: info.remaining,
+      limit: info.limit,
+      used: info.limit - info.remaining
+    });
+  } catch (e) {
+    console.error('Anon quota fetch error:', e);
+    res.status(500).json({ error: 'Failed to fetch anonymous quota' });
   }
 });
 

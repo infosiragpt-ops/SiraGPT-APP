@@ -14,6 +14,9 @@ export default function Home() {
             <h1 className="text-2xl font-bold">OpenWebUI</h1>
           </div>
           <div className="flex items-center space-x-4">
+             <Link href="/chat">
+              <Button variant="outline">Try Free Chat (5)</Button>
+            </Link>
             <ThemeToggle />
             <Link href="/auth/login">
               <Button variant="outline">Login</Button>
@@ -34,17 +37,25 @@ export default function Home() {
             integration.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link href="/auth/register">
+            <Link href="/chat">
+                <Button size="lg" className="w-full sm:w-auto">
+                  Open Chat (Guest Mode)
+                </Button>
+              </Link>
+            {/* <Link href="/auth/register">
               <Button size="lg" className="w-full sm:w-auto">
                 Start Chatting
               </Button>
-            </Link>
+            </Link> */}
             <Link href="/auth/login">
               <Button variant="outline" size="lg" className="w-full sm:w-auto">
                 Sign In
               </Button>
             </Link>
           </div>
+           <p className="mt-4 text-sm text-muted-foreground">
+              Free guest usage: 5 messages • Upgrade anytime for history, files & advanced features.
+            </p>
         </div>
       </section>
        {/* Features */}

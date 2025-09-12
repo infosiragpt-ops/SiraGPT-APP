@@ -51,6 +51,7 @@ import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter } from "next/navigation"
 
 import { cn } from "@/lib/utils"
+import Link from "next/link"
 
 // Generation Types with enhanced functionality
 const generationTypes = [
@@ -94,7 +95,7 @@ export function AppSidebar() {
 
 
     logout()
-    router.push("/auth/login")
+    router.push("/")
   }
 
   const handleNewChat = () => {
@@ -120,6 +121,8 @@ export function AppSidebar() {
     if (diffInHours < 48) return "Yesterday"
     return `${Math.floor(diffInHours / 24)}d ago`
   }
+
+  const isAnon = !user
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -160,7 +163,13 @@ export function AppSidebar() {
 
       <SidebarContent className="px-2">
 
-
+{isAnon && (
+  <div className="px-3 py-2 mb-2">
+    <span className="text-xs rounded bg-muted px-2 py-1">
+      Free messages left: { (useChat().anonRemaining ?? '—') }
+    </span>
+  </div>
+)}
         <SidebarSeparator />
 
         {/* Recent Chats - Only show for Text Chat */}
@@ -221,6 +230,19 @@ export function AppSidebar() {
 
       <SidebarFooter className="border-t border-border/40 p-2">
         <SidebarMenu>
+            {!user ? (
+            <div className="flex flex-col gap-2 w-full">
+              <div className="text-xs text-muted-foreground px-1">
+                Guest Mode (no history saved)
+              </div>
+              <Link href="/auth/login">
+                <Button size="sm" className="w-full">Login</Button>
+              </Link>
+              <Link href="/auth/register">
+                <Button size="sm" variant="outline" className="w-full">Create Account</Button>
+              </Link>
+            </div>
+          ) : (
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -274,6 +296,7 @@ export function AppSidebar() {
               </DropdownMenuContent>
             </DropdownMenu>
           </SidebarMenuItem>
+          )}
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
