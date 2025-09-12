@@ -25,7 +25,8 @@ function AuthCallbackContent() {
 
         try {
           // Verify token by getting user info
-          const response = await fetch('/api/auth/me', {
+          const apiUrl = `${process.env.NEXT_PUBLIC_API_URL}/auth/me`;
+          const response = await fetch(apiUrl, {
             headers: {
               'Authorization': `Bearer ${token}`
             }

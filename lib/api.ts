@@ -544,24 +544,24 @@ class ApiClient {
     const response = await this.request(`/elevenlabs/audio/${filename}`);
     return response.blob();
   }
-    // ...existing code...
-  
-    // ElevenLabs Music Generation
-    async generateMusic(data: {
-      text: string;
-      duration?: number;
-      prompt_influence?: number;
-      normalize_output?: boolean;
-    }) {
-      return this.request('/elevenlabs/generate-music', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    }
-  
-    async getMusicStyles() {
-      return this.request('/elevenlabs/music-styles');
-    }
+  // ...existing code...
+
+  // ElevenLabs Music Generation
+  async generateMusic(data: {
+    text: string;
+    duration?: number;
+    prompt_influence?: number;
+    normalize_output?: boolean;
+  }) {
+    return this.request('/elevenlabs/generate-music', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getMusicStyles() {
+    return this.request('/elevenlabs/music-styles');
+  }
 
 
   // // Web Search endpoints
@@ -571,105 +571,105 @@ class ApiClient {
   //     body: JSON.stringify(data),
   //   });
   // }
-// Replace the webSearch method with this streaming version:
+  // Replace the webSearch method with this streaming version:
 
-// Web Search endpoints
-async webSearchStream(
-  data: { query: string; chatId?: string },
-  onData: (chunk: any) => void,
-  onComplete: () => void,
-  onError: (error: Error) => void
-) {
-  const url = `${this.baseURL}/search/web`;
-  const config: RequestInit = {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(this.token && { Authorization: `Bearer ${this.token}` }),
-    },
-    body: JSON.stringify(data),
-  };
+  // Web Search endpoints
+  async webSearchStream(
+    data: { query: string; chatId?: string },
+    onData: (chunk: any) => void,
+    onComplete: () => void,
+    onError: (error: Error) => void
+  ) {
+    const url = `${this.baseURL}/search/web`;
+    const config: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+      body: JSON.stringify(data),
+    };
 
-  try {
-    const response = await fetch(url, config);
+    try {
+      const response = await fetch(url, config);
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('No response body');
-    }
-
-    const decoder = new TextDecoder('utf-8');
-
-    while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) {
-        onComplete();
-        break;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
       }
 
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n\n');
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body');
+      }
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const jsonData = JSON.parse(line.slice(6));
-            onData(jsonData);
-          } catch (e) {
-            // Skip invalid JSON
+      const decoder = new TextDecoder('utf-8');
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          onComplete();
+          break;
+        }
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonData = JSON.parse(line.slice(6));
+              onData(jsonData);
+            } catch (e) {
+              // Skip invalid JSON
+            }
           }
         }
       }
+    } catch (error: any) {
+      console.error('Web search stream failed:', error);
+      onError(error);
     }
-  } catch (error: any) {
-    console.error('Web search stream failed:', error);
-    onError(error);
   }
-}
-// Update the video generation method
-// Update the generateVideo method:
+  // Update the video generation method
+  // Update the generateVideo method:
 
-async generateVideo(data: {
-  prompt: string;
-  aspect_ratio?: '16:9' | '9:16' | '1:1';
-  negative_prompt?: string;
-  chatId?: string;  // Add chatId parameter
-}) {
-  return this.request('/ai/generate-video', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
+  async generateVideo(data: {
+    prompt: string;
+    aspect_ratio?: '16:9' | '9:16' | '1:1';
+    negative_prompt?: string;
+    chatId?: string;  // Add chatId parameter
+  }) {
+    return this.request('/ai/generate-video', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
 
-// async getVideoStatus(operationId: string) {
-//   return this.request(`/video/status/${operationId}`);
-// }
+  // async getVideoStatus(operationId: string) {
+  //   return this.request(`/video/status/${operationId}`);
+  // }
 
-// ...existing code...
-async getVideoStatus(operationId: string) {
-  // Was: return this.request(`/video/status/${operationId}`);
-  return this.request(`/ai/video-status/${operationId}`);
-}
-async getVideoHistory(params?: {
-  page?: number;
-  limit?: number;
-}) {
-  const query = new URLSearchParams(params as any).toString();
-  return this.request(`/video/history${query ? `?${query}` : ''}`);
-}
+  // ...existing code...
+  async getVideoStatus(operationId: string) {
+    // Was: return this.request(`/video/status/${operationId}`);
+    return this.request(`/ai/video-status/${operationId}`);
+  }
+  async getVideoHistory(params?: {
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/video/history${query ? `?${query}` : ''}`);
+  }
 
- getVideoFile(filename: string) {
-  return `${this.apiBaseURL}/video/watch/${filename}`;
-}
+  getVideoFile(filename: string) {
+    return `${this.apiBaseURL}/video/watch/${filename}`;
+  }
 
- downloadVideo(filename: string) {
-  return `${this.apiBaseURL}/video/download/${filename}`;
-}
+  downloadVideo(filename: string) {
+    return `${this.apiBaseURL}/video/download/${filename}`;
+  }
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);
