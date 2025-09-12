@@ -44,7 +44,7 @@ interface ChatContextType {
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
   createNewChat: (type?: 'text' | 'image' | 'video', initialContent?: string) => void
   selectChat: (chatId: string) => void
-  addMessage: (content: string, files?: string[]) => Promise<void>
+  addMessage: (content: string, files?: string[], forcedChat?: Chat) => Promise<void>
   addVideoMessage: (prompt: string) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => void
@@ -180,7 +180,7 @@ if (!user) {
   }
 
    const addMessage = useCallback(
-    async (content: string, fileIds?: string[]) => {
+    async (content: string, fileIds?: string[], forcedChat?: Chat) => {
       const trimmed = content.trim();
       if (!trimmed) return;
 
@@ -196,9 +196,12 @@ if (!user) {
         }
       }
 
-      let activeChat = currentChat;
+      // Prefer a provided chat to avoid creating duplicates during the same tick
+      let activeChat = forcedChat || currentChat;
+      let createdEphemeral = false;
       if (!activeChat) {
         activeChat = makeEphemeralChat(selectedModel);
+        createdEphemeral = true;
         setCurrentChat(activeChat);
         setChats(prev => [activeChat!, ...prev]);
       }
@@ -297,7 +300,7 @@ if (!user) {
         toast.error(err.message || 'Failed to start stream');
       }
     },
-    [currentChat, user, selectedModel, selectProvider, availableModels,uploadedFiles]
+    [currentChat, user, selectedModel, selectProvider, availableModels, uploadedFiles]
   );
     const createNewChat = useCallback(
     async (type: 'text' | 'image' | 'video' = 'text', initialContent?: string) => {
@@ -317,8 +320,10 @@ if (!user) {
         const eph = makeEphemeralChat(selectedModel || availableModels[0]?.name);
         setChats(prev => [eph, ...prev]);
         setCurrentChat(eph);
-        if (initialContent) {
-          await addMessage(initialContent, []);
+        setUploadedFiles([]);
+        // Only send initial content for text chats; pass the chat to avoid duplication
+        if (initialContent && type === 'text') {
+          await addMessage(initialContent, [], eph);
         }
         return;
       }
@@ -334,14 +339,15 @@ if (!user) {
         localStorage.setItem('currentChatId', newChat.id);
         setCurrentChat(newChat);
         setUploadedFiles([]);
-        if (initialContent) {
-          await addMessage(initialContent, []);
+        // Only send initial content for text chats; pass the chat to avoid duplication
+        if (initialContent && type === 'text') {
+          await addMessage(initialContent, [], newChat);
         }
       } catch (e) {
         console.error('Failed to create chat:', e);
       }
     },
-    [user, token, selectedModel, availableModels,setChatType, addMessage]
+    [user, token, selectedModel, availableModels, setChatType, addMessage]
   );
 
   const selectChat = useCallback(
