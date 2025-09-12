@@ -11,7 +11,7 @@ export default function ChatLayout({
   children: React.ReactNode
 }) {
   return (
-    <AuthGuard>
+    <AuthGuard allowAnonymous>
       <ChatProvider>
         <SidebarProvider defaultOpen={true}>
           <div className="flex h-screen w-full">
