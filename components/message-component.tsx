@@ -565,7 +565,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         
                         {/* Action buttons for assistant messages */}
                         {!isVideoMessage && (
-                            <div className="flex items-center gap-2 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="mt-3 flex items-center gap-1">
                                 <Button
                                     variant="ghost"
                                     size="sm"
