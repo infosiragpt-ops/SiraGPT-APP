@@ -1,16 +1,16 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect,useMemo } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import {
-  Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX, 
-  ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
-  Loader2, Video, AlertCircle, CheckCircle, RefreshCw,Wand2,Video as VideoIcon
+    Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
+    ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
+    Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon
 } from "lucide-react"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
@@ -41,14 +41,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     const [editedContent, setEditedContent] = useState(message.content);
     const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>({});
     const [imageError, setImageError] = useState<{ [key: string]: boolean }>({});
-    
+
     // Video-specific states
     const [videoLoading, setVideoLoading] = useState(false);
     const [videoError, setVideoError] = useState(false);
     const [isVideoPlaying, setIsVideoPlaying] = useState(false);
     const [videoProgress, setVideoProgress] = useState(0);
     const [videoDuration, setVideoDuration] = useState(0);
-    
+
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const { handleTextToSpeech } = useVoiceControls();
 
@@ -263,15 +263,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-  const parsedFiles: any[] = useMemo(() => {
-    if (!message.files) return []
-    try {
-      return typeof message.files === 'string' ? JSON.parse(message.files) : message.files
-    } catch (e) {
-      console.error("Failed to parse files:", e)
-      return []
-    }
-  }, [message.files])
+    const parsedFiles: any[] = useMemo(() => {
+        if (!message.files) return []
+        try {
+            return typeof message.files === 'string' ? JSON.parse(message.files) : message.files
+        } catch (e) {
+            console.error("Failed to parse files:", e)
+            return []
+        }
+    }, [message.files])
 
     // Markdown ke andar code blocks ko render karne ke liye custom component
     const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
@@ -341,16 +341,16 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
                         em: ({ children }) => <em className="italic">{children}</em>,
                         a: ({ href, children, ...props }) => (
-    <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
-        {...props}
-    >
-        {children}
-    </a>
-    )
+                            <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
+                                {...props}
+                            >
+                                {children}
+                            </a>
+                        )
 
                     }}
                 >
@@ -360,11 +360,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         );
     };
 
-  const videoEntry = useMemo(
-    () => parsedFiles.find((f: any) => f?.type === 'video'),
-    [parsedFiles]
-  )
-  const isVideoMessage = !!videoEntry
+    const videoEntry = useMemo(
+        () => parsedFiles.find((f: any) => f?.type === 'video'),
+        [parsedFiles]
+    )
+    const isVideoMessage = !!videoEntry
 
 
     // Check if this is an image-only message
@@ -374,69 +374,69 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/'));
         return hasImageFiles || hasImageUrl;
     };
-  const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename)
-  const getDownloadUrl = (filename: string) => apiClient.downloadVideo(filename)
+    const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename)
+    const getDownloadUrl = (filename: string) => apiClient.downloadVideo(filename)
 
-  const VideoDisplay = () => {
-    if (!isVideoMessage) return null
+    const VideoDisplay = () => {
+        if (!isVideoMessage) return null
 
-    const status = String(videoEntry.status || '').toLowerCase()
-    const filename = videoEntry.filename
+        const status = String(videoEntry.status || '').toLowerCase()
+        const filename = videoEntry.filename
 
-    return (
-      <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
-        <div className="flex items-center gap-2 text-sm">
-          <VideoIcon className="h-4 w-4" />
-          <span className="font-medium">AI Video</span>
-        </div>
+        return (
+            <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
+                <div className="flex items-center gap-2 text-sm">
+                    <VideoIcon className="h-4 w-4" />
+                    <span className="font-medium">AI Video</span>
+                </div>
 
-        {status === 'processing' || status === 'in_progress' ? (
-          <div className="mt-2 flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Generating video… This may take 2–5 minutes.</span>
-          </div>
-        ) : null}
+                {status === 'processing' || status === 'in_progress' ? (
+                    <div className="mt-2 flex items-center gap-2 text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Generating video… This may take 2–5 minutes.</span>
+                    </div>
+                ) : null}
 
-        {status === 'failed' ? (
-          <div className="mt-2 text-red-500 text-sm">
-            Generation failed. Please try again with a shorter prompt.
-          </div>
-        ) : null}
+                {status === 'failed' ? (
+                    <div className="mt-2 text-red-500 text-sm">
+                        Generation failed. Please try again with a shorter prompt.
+                    </div>
+                ) : null}
 
-        {status === 'completed' && filename ? (
-          <div className="mt-3 space-y-2">
-            <video
-              key={filename}             // don’t remount unless the file changes
-              ref={videoRef}
-              className="w-full rounded-md"
-              controls
-              preload="auto"
-              playsInline
-              src={getWatchUrl(filename)}
-              // Removed onTimeUpdate/onLoadedMetadata to avoid frequent re-renders
-              onError={(e) => {
-                console.error('Video error', e)
-                toast.error('Failed to play video inline. Try “Open in new tab”.')
-              }}
-            />
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" asChild>
-                <a href={getDownloadUrl(filename)} download>
-                  <Download className="h-4 w-4 mr-1" />
-                  Download
-                </a>
-              </Button>
-              <Button size="sm" variant="outline" asChild>
-                <a href={getWatchUrl(filename)} target="_blank" rel="noopener noreferrer">
-                  Open in new tab
-                </a>
-              </Button>
+                {status === 'completed' && filename ? (
+                    <div className="mt-3 space-y-2">
+                        <video
+                            key={filename}             // don’t remount unless the file changes
+                            ref={videoRef}
+                            className="w-full rounded-md"
+                            controls
+                            preload="auto"
+                            playsInline
+                            src={getWatchUrl(filename)}
+                            // Removed onTimeUpdate/onLoadedMetadata to avoid frequent re-renders
+                            onError={(e) => {
+                                console.error('Video error', e)
+                                toast.error('Failed to play video inline. Try “Open in new tab”.')
+                            }}
+                        />
+                        <div className="flex gap-2">
+                            <Button size="sm" variant="outline" asChild>
+                                <a href={getDownloadUrl(filename)} download>
+                                    <Download className="h-4 w-4 mr-1" />
+                                    Download
+                                </a>
+                            </Button>
+                            <Button size="sm" variant="outline" asChild>
+                                <a href={getWatchUrl(filename)} target="_blank" rel="noopener noreferrer">
+                                    Open in new tab
+                                </a>
+                            </Button>
+                        </div>
+                    </div>
+                ) : null}
             </div>
-          </div>
-        ) : null}
-      </div>
-    )
-  }
+        )
+    }
 
     // File display logic - optimized for images
     const FileDisplay = () => (
@@ -447,6 +447,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                     <div className="space-y-2 mt-4">
                         {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
                             <div key={index} className="relative">
+
                                 {imageLoading[`file-${index}`] && (
                                     <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
                                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
@@ -457,6 +458,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                         <p className="text-sm text-gray-500">Failed to load image</p>
                                     </div>
                                 ) : (
+
                                     <img
                                         src={
                                             file.url.startsWith('data:image') || file.url.startsWith('http')
@@ -562,7 +564,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         <MessageContent />
                         <VideoDisplay />
                         <FileDisplay />
-                        
+
                         {/* Action buttons for assistant messages */}
                         {!isVideoMessage && (
                             <div className="mt-3 flex items-center gap-1">
@@ -617,14 +619,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 >
                                     <RefreshCw size={16} />
                                 </Button>
-                                <Button
+                                {/* <Button
                                     variant="ghost"
                                     size="sm"
                                     className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
                                     title="Edit/Customize"
                                 >
                                     <Wand2 size={16} />
-                                </Button>
+                                </Button> */}
                                 <Button
                                     variant="ghost"
                                     size="sm"
@@ -634,10 +636,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 >
                                     <Share2 size={16} />
                                 </Button>
-                                <DownloadButtons
+                                {/* <DownloadButtons
                                     content={message.content}
                                     messageId={message.id}
-                                />
+                                /> */}
                             </div>
                         )}
                     </div>
@@ -655,17 +657,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     );
 };
 const areMessagePropsEqual = (prev: any, next: any) => {
-  const a = prev.message
-  const b = next.message
-  if (a.id !== b.id) return false
-  if (a.content !== b.content) return false
+    const a = prev.message
+    const b = next.message
+    if (a.id !== b.id) return false
+    if (a.content !== b.content) return false
 
-  const af = typeof a.files === 'string' ? a.files : JSON.stringify(a.files || [])
-  const bf = typeof b.files === 'string' ? b.files : JSON.stringify(b.files || [])
-  if (af !== bf) return false
+    const af = typeof a.files === 'string' ? a.files : JSON.stringify(a.files || [])
+    const bf = typeof b.files === 'string' ? b.files : JSON.stringify(b.files || [])
+    if (af !== bf) return false
 
-  // Ignore parent re-renders from user, callbacks (they’re stable from context)
-  return true
+    // Ignore parent re-renders from user, callbacks (they’re stable from context)
+    return true
 }
 
 export default React.memo(MessageComponent, areMessagePropsEqual)

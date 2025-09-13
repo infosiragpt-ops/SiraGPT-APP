@@ -7,14 +7,14 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 export default function Home() {
   return (
     <div className="min-h-screen bg-background antialiased">
-       <header className="border-b">
+      <header className="border-b">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <Bot className="h-8 w-8 text-primary" />
             <h1 className="text-2xl font-bold">OpenWebUI</h1>
           </div>
           <div className="flex items-center space-x-4">
-             <Link href="/chat">
+            <Link href="/chat">
               <Button variant="outline">Try Free Chat (5)</Button>
             </Link>
             <ThemeToggle />
@@ -28,7 +28,7 @@ export default function Home() {
         </div>
       </header>
 
-       {/* Hero Section */}
+      {/* Hero Section */}
       <section className="container mx-auto px-4 py-20 text-center">
         <div className="max-w-3xl mx-auto">
           <h2 className="text-4xl md:text-6xl font-bold mb-6">AI-Powered Chat Platform</h2>
@@ -38,10 +38,10 @@ export default function Home() {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/chat">
-                <Button size="lg" className="w-full sm:w-auto">
-                  Open Chat (Guest Mode)
-                </Button>
-              </Link>
+              <Button size="lg" className="w-full sm:w-auto">
+                Start Chatting
+              </Button>
+            </Link>
             {/* <Link href="/auth/register">
               <Button size="lg" className="w-full sm:w-auto">
                 Start Chatting
@@ -53,12 +53,12 @@ export default function Home() {
               </Button>
             </Link>
           </div>
-           <p className="mt-4 text-sm text-muted-foreground">
-              Free guest usage: 5 messages • Upgrade anytime for history, files & advanced features.
-            </p>
+          <p className="mt-4 text-sm text-muted-foreground">
+            Free guest usage: 5 messages • Upgrade anytime for history, files & advanced features.
+          </p>
         </div>
       </section>
-       {/* Features */}
+      {/* Features */}
       <section className="container mx-auto px-4 py-20 ">
         <div className="text-center mb-12">
           <h3 className="text-3xl font-bold mb-4">Powerful Features</h3>
@@ -96,7 +96,7 @@ export default function Home() {
         </div>
       </section>
 
-      
+
       {/* Footer */}
       {/* <footer className="border-t flex justify-end items-end h-20">
         <div className="container mx-auto px-4 py-8 text-center text-muted-foreground">
