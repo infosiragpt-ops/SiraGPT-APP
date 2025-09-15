@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const prisma = require('../config/database');
 
 const ANON_COOKIE = 'anon_id';
-const DEFAULT_LIMIT = parseInt(process.env.ANON_FREE_QUERIES || '5', 10);
+const DEFAULT_LIMIT = parseInt(process.env.ANON_FREE_QUERIES || '2', 10);
 
 async function trackAnonUsage(req, res, next) {
   // Skip if authenticated

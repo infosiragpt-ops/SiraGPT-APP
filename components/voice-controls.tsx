@@ -263,7 +263,7 @@ useEffect(() => {
       </Button>
 
       {/* Voice Settings Popover */}
-      <Popover>
+      {/* <Popover>
         <PopoverTrigger asChild>
           <Button variant="outline" size="sm">
             <Settings className="w-4 h-4" />
@@ -306,7 +306,7 @@ useEffect(() => {
             </div>
           </div>
         </PopoverContent>
-      </Popover>
+      </Popover> */}
 
       {/* Playback Control - show when we have recorded audio or TTS audio */}
       {(recordedAudio || audioRef.current) && (

@@ -162,14 +162,6 @@ export function AppSidebar() {
       </div>
 
       <SidebarContent className="px-2">
-
-{isAnon && (
-  <div className="px-3 py-2 mb-2">
-    <span className="text-xs rounded bg-muted px-2 py-1">
-      Free messages left: { (useChat().anonRemaining ?? '—') }
-    </span>
-  </div>
-)}
         <SidebarSeparator />
 
         {/* Recent Chats - Only show for Text Chat */}
@@ -230,7 +222,7 @@ export function AppSidebar() {
 
       <SidebarFooter className="border-t border-border/40 p-2">
         <SidebarMenu>
-            {!user ? (
+            {/* {!user ? (
             <div className="flex flex-col gap-2 w-full">
               <div className="text-xs text-muted-foreground px-1">
                 Guest Mode (no history saved)
@@ -242,7 +234,7 @@ export function AppSidebar() {
                 <Button size="sm" variant="outline" className="w-full">Create Account</Button>
               </Link>
             </div>
-          ) : (
+          ) : ( */}
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -296,7 +288,7 @@ export function AppSidebar() {
               </DropdownMenuContent>
             </DropdownMenu>
           </SidebarMenuItem>
-          )}
+          {/* )} */}
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>

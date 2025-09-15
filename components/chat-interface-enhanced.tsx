@@ -61,7 +61,6 @@ import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import { webSearchService } from "@/lib/web-search-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
-import { useRouter } from "next/navigation"
 
 
 // Enhanced Model Selector
@@ -286,8 +285,6 @@ export default function ChatInterface() {
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
 
-  const { isAnon, anonRemaining, anonLimit, anonBlocked } = useChat();
-  const router = useRouter();
 
   // Speech-to-Text ke liye naye states 
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
@@ -750,24 +747,7 @@ export default function ChatInterface() {
             )}
           </div>
           <div className="flex items-center gap-2">
-              {isAnon && anonRemaining != null && (
-              <div className="flex items-center gap-2">
-                <span
-                  className={`text-xs px-2 py-1 rounded-full border ${
-                    anonBlocked
-                      ? 'bg-red-50 border-red-200 text-red-700'
-                      : anonRemaining <= 1
-                        ? 'bg-amber-50 border-amber-200 text-amber-700'
-                        : 'bg-muted border-border/50 text-foreground/70'
-                  }`}
-                  title={`Free anonymous messages remaining: ${anonRemaining}/${anonLimit}`}
-                >
-                  {anonBlocked
-                    ? 'Limit reached'
-                    : `Free ${anonRemaining}/${anonLimit}`}
-                </span>
-              </div>
-            )}
+            
             <ThemeToggle />
             {!showAudioPanel && (
               <Button variant="outline" size="sm" onClick={clearCurrentChat}>
@@ -895,7 +875,6 @@ export default function ChatInterface() {
                   </div>
                 </div>
               </div>
-              {!isAnon && (
               <div className="flex flex-wrap items-center justify-center gap-2">
                 {chatType === 'text' && (
                   <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
@@ -939,7 +918,6 @@ export default function ChatInterface() {
                   {chatType === 'video' ? 'Video Generation' : 'New Video Chat'}
                 </Button>
               </div>
-              )}
               <p className="text-center text-xs text-muted-foreground">
                 {chatType === 'image'
                   ? 'Press Enter to generate image, Shift+Enter for new line'
@@ -1077,7 +1055,7 @@ export default function ChatInterface() {
                   </div>
 
                   {/* Function buttons row */}
-                  {!isAnon && (
+
                   <div className="flex flex-wrap items-center justify-start gap-2">
                     {chatType === 'text' && (
                       <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
@@ -1123,7 +1101,7 @@ export default function ChatInterface() {
                       {chatType === 'video' ? 'Video Generation' : 'New Video Chat'}
                     </Button>
                   </div>
-)}
+
                   <p className="text-center text-xs text-muted-foreground">
                     {chatType === 'image'
                       ? 'Press Enter to generate image, Shift+Enter for new line'
@@ -1133,7 +1111,7 @@ export default function ChatInterface() {
                     }
                   </p>
                   
-                  {isAnon && anonBlocked && (
+                  {/* {isAnon && anonBlocked && (
   <div className="absolute inset-0 z-50 backdrop-blur-sm bg-background/80 flex flex-col items-center justify-center gap-6 p-6">
     <div className="max-w-sm text-center space-y-3">
       <h3 className="text-xl font-semibold">Free trial limit reached</h3>
@@ -1146,7 +1124,7 @@ export default function ChatInterface() {
       </div>
     </div>
   </div>
-)}
+)} */}
                 </div>
               </div>
             </>

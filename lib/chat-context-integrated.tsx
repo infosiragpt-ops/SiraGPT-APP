@@ -4,8 +4,7 @@ import type React from "react"
 import { createContext, useContext, useState, useCallback, useEffect } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
-import { useRouter } from "next/navigation";
-import { toast } from "sonner"
+
 interface Message {
   id: string
   chatId: string
@@ -32,19 +31,14 @@ interface Chat {
   updatedAt: string
   messages: Message[]
 }
-interface AnonState {
-  isAnon: boolean;
-  anonRemaining: number | null;
-  anonLimit: number | null;
-  anonBlocked: boolean;
-}
+
 interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
   createNewChat: (type?: 'text' | 'image' | 'video', initialContent?: string) => void
   selectChat: (chatId: string) => void
-  addMessage: (content: string, files?: string[], forcedChat?: Chat) => Promise<void>
+  addMessage: (content: string, files?: string[]) => Promise<void>
   addVideoMessage: (prompt: string) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => void
@@ -62,27 +56,10 @@ interface ChatContextType {
   editAndRegenerate: (messageId: string, newContent: string) => void
   updateMessageInChat: (messageId: string, newContent: string) => void
   pollVideoStatus: (operationId: string, messageId: string) => void
-  isAnon: boolean;
-  anonRemaining: number | null;
-  anonLimit: number | null;
-  anonBlocked: boolean;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined)
 
-// Add helper to generate ephemeral chat
-function makeEphemeralChat(model: string): Chat {
-  const now = new Date().toISOString();
-  return {
-    id: `ephemeral-${Date.now()}`,
-    userId: 'anon',
-    title: 'Guest Chat',
-    model,
-    createdAt: now,
-    updatedAt: now,
-    messages: []
-  };
-}
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const { user, token } = useAuth()
   const [chats, setChats] = useState<Chat[]>([])
@@ -95,81 +72,39 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [hasInitialized, setHasInitialized] = useState(false)
   const [chatType, setChatType] = useState<'text' | 'image' | 'video'>('text')
   const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
-  const router = useRouter();
-  const [anonState, setAnonState] = useState<AnonState>({
-    isAnon: false,
-    anonRemaining: null,
-    anonLimit: null,
-    anonBlocked: false
-  });
 
-  const ANON_LS_KEY = 'anon_quota_cache'; 
   // Load user's chats
-  // REMOVE the old effect that only ran initializeChat() when (user && token)
-
-useEffect(() => {
-  if (hasInitialized) return;
-
-  const init = async () => {
-    try {
-      const modelsResponse = await apiClient.getAIModels();
-      setAvailableModels(modelsResponse.models);
-
-      if (modelsResponse.models.length > 0) {
-        setSelectedModel(prev => prev || modelsResponse.models[0].name);
-        setSelectedProivder(prev => prev || modelsResponse.models[0].provider);
-      }
-
-      if (user && token) {
-        await loadUserChats();
-        setAnonState(s => ({ ...s, isAnon: false }));
-      } else {
-        setAnonState(s => ({ ...s, isAnon: true }));
-// Inside init() after setting isAnon true
-if (!user) {
-  try {
-    const data = await apiClient.getAnonQuota();
-    if (data.isAnon) {
-      setAnonState(s => ({
-        ...s,
-        isAnon: true,
-        anonRemaining: data.remaining,
-        anonLimit: data.limit,
-        anonBlocked: false
-      }));
-      localStorage.setItem(ANON_LS_KEY, JSON.stringify({
-        remaining: data.remaining,
-        limit: data.limit,
-        timestamp: Date.now()
-      }));
-    }
-  } catch (e) {
-    console.warn('Anon quota fetch failed', e);
-  }
-}
-      }
-      setHasInitialized(true);
-    } catch (e) {
-      console.error("Init failed:", e);
-    }
-  };
-
-  init();
-}, [user, token, hasInitialized]);
-
-  // If user logs in after anonymous usage, load chats once
   useEffect(() => {
-    if (user && token && hasInitialized && anonState.isAnon) {
-      (async () => {
-        try {
-          await loadUserChats();
-          setAnonState(s => ({ ...s, isAnon: false }));
-        } catch (e) {
-          console.error("Post-login chat load failed:", e);
-        }
-      })();
+    if (user && token) {
+      initializeChat()
     }
-  }, [user, token, hasInitialized, anonState.isAnon]);
+  }, [user, token])
+
+  const initializeChat = async () => {
+    if (hasInitialized) return
+
+    try {
+      // Load available models first
+      const modelsResponse = await apiClient.getAIModels()
+      console.log("modelsResponse", modelsResponse);
+
+      setAvailableModels(modelsResponse.models)
+
+      // Set default model
+      if (modelsResponse.models.length > 0 && !selectedModel) {
+        console.log("SETSELECT MODEL", modelsResponse.models[0]);
+
+        setSelectedModel(modelsResponse.models[0].name)
+        setSelectedProivder(modelsResponse.models[0].provider)
+      }
+
+      // Load chats
+      await loadUserChats()
+      setHasInitialized(true)
+    } catch (error) {
+      console.error("Failed to initialize chat:", error)
+    }
+  }
   const loadUserChats = async () => {
     try {
       const response = await apiClient.getChats()
@@ -179,176 +114,130 @@ if (!user) {
     }
   }
 
-   const addMessage = useCallback(
-    async (content: string, fileIds?: string[], forcedChat?: Chat) => {
-      const trimmed = content.trim();
-      if (!trimmed) return;
+  const addMessage = useCallback(
+    async (content: string, fileIds?: string[], chat?: any) => { // Added optional 'chat' parameter
+      const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
+      if (!activeChat || !user || !token) return;
 
-      // Auto-select a model if not yet set but models loaded
-      if (!selectedModel) {
-        if (availableModels.length > 0) {
-          const first = availableModels[0];
-            setSelectedModel(first.name);
-            setSelectedProivder(first.provider);
-        } else {
-          toast.error('Models still loading. Please wait a moment.');
-          return;
-        }
-      }
-
-      // Prefer a provided chat to avoid creating duplicates during the same tick
-      let activeChat = forcedChat || currentChat;
-      let createdEphemeral = false;
-      if (!activeChat) {
-        activeChat = makeEphemeralChat(selectedModel);
-        createdEphemeral = true;
-        setCurrentChat(activeChat);
-        setChats(prev => [activeChat!, ...prev]);
-      }
-
+      // STEP 1: User ka message foran UI mein dikhayein
       const userMessage: Message = {
-        id: `user-${Date.now()}`,
+        id: `msg-user-${Date.now()}`,
         chatId: activeChat.id,
         role: 'USER',
-        content: trimmed,
-        timestamp: new Date().toISOString(),
-        files: fileIds?.length ? fileIds : undefined
+        content,
+        timestamp: new Date().toISOString(), // Use ISOString for consistency
+        files: fileIds?.length ? fileIds : undefined,
       };
 
-      const assistantPlaceholder: Message = {
-        id: `ai-${Date.now()}`,
+      // STEP 2: AI ke jawab ke liye ek khaali placeholder banayein
+      // Isse UI mein "AI is typing..." jaisa effect aayega
+      const aiMessagePlaceholder: Message = {
+        id: `msg-ai-${Date.now()}`,
         chatId: activeChat.id,
         role: 'ASSISTANT',
-        content: '',
-        timestamp: new Date().toISOString()
+        content: '', // Shuru mein content khaali hoga
+        timestamp: new Date().toISOString(),
       };
 
-      const updated = {
-        ...activeChat,
-        messages: [...activeChat.messages, userMessage, assistantPlaceholder],
-        updatedAt: new Date().toISOString()
-      };
-      setCurrentChat(updated);
-      setChats(prev => prev.map(c => (c.id === updated.id ? updated : c)));
-      setUploadedFiles([]);
-      setIsLoading(true);
+      // Foran UI ko user ke message aur AI ke placeholder ke saath update karein
+      const updatedMessages = [...activeChat.messages, userMessage, aiMessagePlaceholder];
+      const updatedChat = { ...activeChat, messages: updatedMessages };
+
+      setCurrentChat(updatedChat);
+      setChats((prev) => prev.map((c) => (c.id === activeChat.id ? updatedChat : c)));
+      setUploadedFiles([]); // Uploaded files clear kar dein
+      setIsLoading(true); // Loading state start karein
 
       try {
+        // STEP 3: Nayi streaming API call karein
         await apiClient.generateAIStream(
           {
-            provider: selectProvider || 'OpenAI',
+            provider: selectProvider,
             model: selectedModel,
-            prompt: trimmed,
-            chatId: user ? activeChat.id : undefined,
-            files: user ? (fileIds || []) : undefined
+            prompt: content,
+            chatId: activeChat.id,
+            files: fileIds || [],
           },
           (chunk) => {
-            setCurrentChat(prev => {
-              if (!prev) return prev;
-              const msgs = prev.messages.map(m =>
-                m.id === assistantPlaceholder.id
-                  ? { ...m, content: m.content + chunk }
-                  : m
-              );
-              return { ...prev, messages: msgs };
+            // onData: Jab bhi backend se naya text aaye
+            // Hum state mein AI message ke content ko update karte rahenge
+            setCurrentChat((prevChat) => {
+              if (!prevChat) return prevChat;
+
+              const newMessages = prevChat.messages.map((msg) => {
+                if (msg.id === aiMessagePlaceholder.id) {
+                  // Placeholder ke content mein naya chunk jodein
+                  return { ...msg, content: msg.content + chunk };
+                }
+                return msg;
+              });
+              return { ...prevChat, messages: newMessages };
             });
           },
-          async () => {
+          () => {
+            // onClose: Jab stream khatam ho jaye
             setIsLoading(false);
-               if (!user) {
-      // Soft refresh of quota after stream to ensure final server value
-      try {
-        const data = await apiClient.getAnonQuota();
-        if (data.isAnon) {
-          setAnonState(s => {
-            if (s.anonRemaining === data.remaining && s.anonLimit === data.limit) return s;
-            return {
-          ...s,
-            isAnon: true,
-            anonRemaining: data.remaining,
-            anonLimit: data.limit,
-            anonBlocked: s.anonBlocked // preserve existing (only flips true on error)
-        };
-          });
-        }
-      } catch (e) {
-        // Ignore silent fetch failure
-      }
-    }
+            // Yahan hum chat list (sidebar) ko bhi update kar sakte hain
+            // Taake poora message save ho jaye
+            // if (currentChat) {
+            //   // We can trigger a final state update to ensure everything is synced
+            //   selectChat(currentChat.id)
+            // }
           },
           (error) => {
+            // onError: Agar koi error aaye
+            console.error("Streaming failed:", error);
             setIsLoading(false);
-            if ((error as any).code === 'ANON_LIMIT_REACHED') {
-              setAnonState(s => ({ ...s, anonBlocked: true, anonRemaining: 0 }));
-              toast.error('Free trial limit reached. Login to continue.');
-            } else {
-              toast.error(error.message || 'Streaming error');
-            }
-            setCurrentChat(prev => {
-              if (!prev) return prev;
-              const msgs = prev.messages.map(m =>
-                m.id === assistantPlaceholder.id
-                  ? { ...m, content: m.content || 'Error occurred.' }
-                  : m
-              );
-              return { ...prev, messages: msgs };
+            // UI mein error message dikhayein
+            setCurrentChat((prevChat) => {
+              if (!prevChat) return prevChat;
+              const newMessages = prevChat.messages.map((msg) => {
+                if (msg.id === aiMessagePlaceholder.id) {
+                  return { ...msg, content: "Sorry, an error occurred. Please try again." };
+                }
+                return msg;
+              });
+              return { ...prevChat, messages: newMessages };
             });
           }
         );
-      } catch (err: any) {
+      } catch (error) {
+        console.error("Failed to start AI stream:", error);
         setIsLoading(false);
-        toast.error(err.message || 'Failed to start stream');
-      }
-    },
-    [currentChat, user, selectedModel, selectProvider, availableModels, uploadedFiles]
-  );
-    const createNewChat = useCallback(
-    async (type: 'text' | 'image' | 'video' = 'text', initialContent?: string) => {
-      setChatType(type);
-
-      if (!user) {
-        if (!selectedModel) {
-          if (availableModels.length > 0) {
-            const first = availableModels[0];
-            setSelectedModel(first.name);
-            setSelectedProivder(first.provider);
-          } else {
-            toast.error('Models still loading.');
-            return;
-          }
-        }
-        const eph = makeEphemeralChat(selectedModel || availableModels[0]?.name);
-        setChats(prev => [eph, ...prev]);
-        setCurrentChat(eph);
-        setUploadedFiles([]);
-        // Only send initial content for text chats; pass the chat to avoid duplication
-        if (initialContent && type === 'text') {
-          await addMessage(initialContent, [], eph);
-        }
-        return;
       }
 
-      if (!token || !selectedModel) return;
-      try {
-        const response = await apiClient.createChat({
-          title: initialContent ? initialContent.substring(0, 30) : 'New Chat',
-          model: selectedModel
-        });
-        const newChat = { ...response.chat, messages: [] as Message[] };
-        setChats(prev => [newChat, ...prev]);
-        localStorage.setItem('currentChatId', newChat.id);
-        setCurrentChat(newChat);
-        setUploadedFiles([]);
-        // Only send initial content for text chats; pass the chat to avoid duplication
-        if (initialContent && type === 'text') {
-          await addMessage(initialContent, [], newChat);
-        }
-      } catch (e) {
-        console.error('Failed to create chat:', e);
-      }
     },
-    [user, token, selectedModel, availableModels, setChatType, addMessage]
+    [currentChat, user, token, selectedModel, uploadedFiles]
   );
+  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' = 'text', initialContent?: string) => {
+    if (!user || !token || !selectedModel) return;
+    setChatType(type);
+    try {
+      const response = await apiClient.createChat({
+        title: initialContent ? initialContent.substring(0, 30) : "New Chat", // Use first 30 chars of initialContent as title
+        model: selectedModel,
+      });
+      const newChat = response.chat;
+
+      // Initialize messages array
+      let messages: Message[] = [];
+
+
+      newChat.messages = messages;
+
+      setChats((prev) => [newChat, ...prev]);
+      localStorage.setItem('currentChatId', newChat.id);
+      setCurrentChat(newChat);
+      setUploadedFiles([]); // Clear uploaded files for new chat
+
+      // If initialContent is provided, immediately call addMessage to get AI response
+      if (initialContent) {
+        await addMessage(initialContent, [], newChat); // Pass newChat as the third parameter
+      }
+    } catch (error) {
+      console.error("Failed to create chat:", error);
+    }
+  }, [user, token, selectedModel, availableModels, setChatType, addMessage]);
 
   const selectChat = useCallback(
     async (chatId: string) => {
@@ -914,11 +803,7 @@ if (!user) {
     regenerateLastMessage,
     editAndRegenerate,
     updateMessageInChat,
-    pollVideoStatus,
-    isAnon: anonState.isAnon,
-    anonRemaining: anonState.anonRemaining,
-    anonLimit: anonState.anonLimit,
-    anonBlocked: anonState.anonBlocked,
+    pollVideoStatus
   }
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>

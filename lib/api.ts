@@ -223,21 +223,21 @@ class ApiClient {
     onClose: () => void, // Jab stream band ho jaye
     onError: (error: Error) => void // Jab koi error aaye
   ) {
-let anonId = localStorage.getItem('anon_id');
-if (!anonId) {
-  anonId = crypto.randomUUID?.() || Math.random().toString(36).slice(2);
-  localStorage.setItem('anon_id', anonId);
-}
+// let anonId = localStorage.getItem('anon_id');
+// if (!anonId) {
+//   anonId = crypto.randomUUID?.() || Math.random().toString(36).slice(2);
+//   localStorage.setItem('anon_id', anonId);
+// }
 const url = `${this.baseURL}/ai/generate`;
 const config: RequestInit = {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
     ...(this.token && { Authorization: `Bearer ${this.token}` }),
-    'X-Anon-Id': anonId
+    // 'X-Anon-Id': anonId
   },
   body: JSON.stringify(data),
-  credentials: 'include'
+  // credentials: 'include'
 };
 
     try {

@@ -251,8 +251,7 @@ router.post(
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
   ],
-  optionalAuth,      // try to attach user if token exists
-  trackAnonUsage,    // only applies if not authenticated
+  authenticateToken,
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -382,9 +381,9 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
 
 
          // Send anonymous quota meta early (if anon)
-      if (req.anonymous) {
-        res.write(`data: ${JSON.stringify({ type: 'meta', anon: { remaining: req.anonymous.remaining, limit: req.anonymous.limit } })}\n\n`);
-      }
+      // if (req.anonymous) {
+      //   res.write(`data: ${JSON.stringify({ type: 'meta', anon: { remaining: req.anonymous.remaining, limit: req.anonymous.limit } })}\n\n`);
+      // }
       // Call OpenAI API
       let fullResponseContent = '';
       let tokens = 0;
@@ -1010,7 +1009,7 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
 });
 // ADD helper (place above router.post('/generate', or near top)
 async function resolveAnonQuota(req, res) {
-  const DEFAULT_LIMIT = parseInt(process.env.ANON_FREE_QUERIES || '5', 10);
+  const DEFAULT_LIMIT = parseInt(process.env.ANON_FREE_QUERIES || '2', 10);
   const anonCookieName = 'anon_id';
 
   // Parse cookie header manually (in case cookie-parser not yet applied)
