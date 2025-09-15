@@ -719,7 +719,7 @@ export default function ChatInterface() {
                   chatTypes={chatType}
                 />
                 <div className="flex items-center gap-2 mt-2">
-                  <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
+                  {/* <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
                     <MessageSquare className="h-3 w-3 mr-1" />
                     {chatType === 'text' && 'Text Chat'}
                     {chatType === 'image' && 'Image Generation'}
@@ -736,7 +736,7 @@ export default function ChatInterface() {
                       <Film className="h-3 w-3 mr-1" />
                       Veo-3
                     </Badge>
-                  )}
+                  )} */}
                 </div>
               </>
             ) : (
@@ -749,11 +749,11 @@ export default function ChatInterface() {
           <div className="flex items-center gap-2">
             
             <ThemeToggle />
-            {!showAudioPanel && (
+            {/* {!showAudioPanel && (
               <Button variant="outline" size="sm" onClick={clearCurrentChat}>
                 Clear Chat
               </Button>
-            )}
+            )} */}
           </div>
         </div>
       </div>
