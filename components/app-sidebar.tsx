@@ -337,7 +337,7 @@ export function AppSidebar() {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              
+
               {/* Upgrade button for FREE users - only visible when sidebar is open */}
               {isFreeUser && state === "open" && (
                 <Button
