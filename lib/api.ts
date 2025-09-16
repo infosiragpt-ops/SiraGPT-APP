@@ -243,10 +243,23 @@ const config: RequestInit = {
     try {
       const response = await fetch(url, config);
 
-          if (!response.ok) {
+      // inside generateAIStream, where response is checked:
+
+      if (!response.ok) {
         let details: any = {};
         try { details = await response.json(); } catch {}
-        const error: any = new Error(details.error || `HTTP ${response.status}`);
+        const message = details.error || `HTTP ${response.status}`;
+
+        // Notify UI to open upgrade modal if the message indicates exhaustion
+        try {
+          if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+            window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
+          }
+        } catch (e) {
+          console.warn('Failed to dispatch open-upgrade-modal event', e);
+        }
+
+        const error: any = new Error(message);
         if (details.code) error.code = details.code;
         throw error;
       }

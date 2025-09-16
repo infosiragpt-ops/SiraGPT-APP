@@ -1,5 +1,4 @@
 "use client"
-
 import * as React from "react"
 import {
   Bot,
@@ -20,7 +19,6 @@ import {
   ChevronDown,
   PanelLeft,
 } from "lucide-react"
-
 import {
   Sidebar,
   SidebarContent,
@@ -49,9 +47,9 @@ import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter } from "next/navigation"
-
 import { cn } from "@/lib/utils"
 import Link from "next/link"
+import UpgradeModal from "./UpgradeModal"
 
 // Generation Types with enhanced functionality
 const generationTypes = [
@@ -86,14 +84,22 @@ const generationTypes = [
 
 export function AppSidebar() {
   const { user, logout } = useAuth()
-  const { chats, currentChat, createNewChat, selectChat, deleteChat, selectedModel, setSelectedModel } = useChat()
+  const {
+    chats,
+    currentChat,
+    createNewChat,
+    selectChat,
+    deleteChat,
+    selectedModel,
+    setSelectedModel,
+  } = useChat()
   const router = useRouter()
   const [selectedType, setSelectedType] = React.useState("Text Chat")
   const { state, toggleSidebar } = useSidebar()
+  const [upgradeOpen, setUpgradeOpen] = React.useState(false)
+
   const handleLogout = () => {
-    localStorage.setItem('currentChatId', "")
-
-
+    localStorage.setItem("currentChatId", "")
     logout()
     router.push("/")
   }
@@ -114,7 +120,9 @@ export function AppSidebar() {
   const formatChatTime = (dateString: string) => {
     const date = new Date(dateString)
     const now = new Date()
-    const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60))
+    const diffInHours = Math.floor(
+      (now.getTime() - date.getTime()) / (1000 * 60 * 60)
+    )
 
     if (diffInHours < 1) return "Just now"
     if (diffInHours < 24) return `${diffInHours}h ago`
@@ -123,12 +131,29 @@ export function AppSidebar() {
   }
 
   const isAnon = !user
+  const isFreeUser = user?.plan?.toLowerCase() === "free"
+
+  const handleUpgradeClick = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setUpgradeOpen(true)
+  }
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
-      <SidebarHeader className={cn("border-b border-border/40 transition-all", state === 'open' ? 'p-4' : 'p-2')}>
+      <SidebarHeader
+        className={cn(
+          "border-b border-border/40 transition-all",
+          state === "open" ? "p-4" : "p-2"
+        )}
+      >
         {/* Jab sidebar open ho to yeh layout dikhega */}
-        <div className={cn("flex items-center justify-between", state === 'closed' && 'hidden')}>
+        <div
+          className={cn(
+            "flex items-center justify-between",
+            state === "closed" && "hidden"
+          )}
+        >
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
               <Bot className="h-4 w-4 text-primary-foreground" />
@@ -140,21 +165,30 @@ export function AppSidebar() {
           </div>
           <SidebarTrigger />
         </div>
-
         {/* Jab sidebar close ho to sirf yeh logo dikhega (hover effect ke saath) */}
-        <div className={cn("relative", state === 'open' && 'hidden')}>
-          <div className="group flex h-8 w-8 items-center justify-center rounded-lg bg-primary cursor-pointer" onClick={toggleSidebar}>
+        <div className={cn("relative", state === "open" && "hidden")}>
+          <div
+            className="group flex h-8 w-8 items-center justify-center rounded-lg bg-primary cursor-pointer"
+            onClick={toggleSidebar}
+          >
             <Bot className="h-4 w-4 text-primary-foreground transition-opacity group-hover:opacity-0" />
             <PanelLeft className="h-4 w-4 text-primary-foreground absolute opacity-0 transition-opacity group-hover:opacity-100" />
           </div>
         </div>
       </SidebarHeader>
 
-
-
-
-      <div className={cn("transition-all", state === 'open' ? 'p-4 pt-2' : 'p-2', "mt-4")}>
-        <SidebarMenuButton onClick={() => createNewChat()} className="w-full justify-start h-9 px-3" variant="outline">
+      <div
+        className={cn(
+          "transition-all",
+          state === "open" ? "p-4 pt-2" : "p-2",
+          "mt-4"
+        )}
+      >
+        <SidebarMenuButton
+          onClick={() => createNewChat()}
+          className="w-full justify-start h-9 px-3"
+          variant="outline"
+        >
           <Plus className="h-4 w-4" />
           {/* Yeh text bhi sirf open state mein dikhega */}
           <span className="group-data-[state=closed]:hidden ml-2">New Chat</span>
@@ -167,10 +201,17 @@ export function AppSidebar() {
         {/* Recent Chats - Only show for Text Chat */}
         {selectedType === "Text Chat" && (
           <SidebarGroup>
-            <SidebarGroupLabel className={cn("px-3 py-4 text-center text-sm text-muted-foreground", state === 'closed' && 'hidden')}>
+            <SidebarGroupLabel
+              className={cn(
+                "px-3 py-4 text-center text-sm text-muted-foreground",
+                state === "closed" && "hidden"
+              )}
+            >
               Recent Chats
             </SidebarGroupLabel>
-            <SidebarGroupContent className={cn(state === 'closed' && 'hidden')}>
+            <SidebarGroupContent
+              className={cn(state === "closed" && "hidden")}
+            >
               <SidebarMenu>
                 {chats.length === 0 ? (
                   <div className="px-3 py-4 text-center text-sm text-muted-foreground">
@@ -185,12 +226,14 @@ export function AppSidebar() {
                           onClick={() => selectChat(chat.id)}
                           className="flex-1 justify-start h-auto py-2 pr-8"
                         >
-
                           <History className="mr-2 h-4 w-4 flex-shrink-0" />
-
                           <div className="flex flex-col items-start min-w-0 flex-1">
-                            <span className="text-sm truncate w-full">{chat.title}</span>
-                            <span className="text-xs text-muted-foreground">{formatChatTime(chat.updatedAt)}</span>
+                            <span className="text-sm truncate w-full">
+                              {chat.title}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {formatChatTime(chat.updatedAt)}
+                            </span>
                           </div>
                         </SidebarMenuButton>
                         <DropdownMenu>
@@ -204,7 +247,10 @@ export function AppSidebar() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => deleteChat(chat.id)} className="text-red-600">
+                            <DropdownMenuItem
+                              onClick={() => deleteChat(chat.id)}
+                              className="text-red-600"
+                            >
                               <Trash2 className="mr-2 h-4 w-4" />
                               Delete
                             </DropdownMenuItem>
@@ -222,75 +268,99 @@ export function AppSidebar() {
 
       <SidebarFooter className="border-t border-border/40 p-2">
         <SidebarMenu>
-            {/* {!user ? (
-            <div className="flex flex-col gap-2 w-full">
-              <div className="text-xs text-muted-foreground px-1">
-                Guest Mode (no history saved)
-              </div>
-              <Link href="/auth/login">
-                <Button size="sm" className="w-full">Login</Button>
-              </Link>
-              <Link href="/auth/register">
-                <Button size="sm" variant="outline" className="w-full">Create Account</Button>
-              </Link>
-            </div>
-          ) : ( */}
           <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton className="w-full justify-start h-auto py-3">
-                  <Avatar className={state === 'closed' && 'hidden' ? "h-6 w-6" : "h-9 w-9"}>
-                    <AvatarImage src={user?.avatar || "/placeholder.svg"} />
-                    <AvatarFallback>
-                      {user?.name
-                        ?.split(" ")
-                        .map((n) => n[0])
-                        .join("") || "U"}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className={cn("flex flex-col items-start min-w-0 flex-1 ml-2", state === 'closed' && 'hidden')}>
-                    <span className="text-sm font-medium truncate">{user?.name || "Admin User"}</span>
-                    <span className="text-xs text-muted-foreground">{user?.plan || "Enterprise Plan"}</span>
-                  </div>
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" className="w-56">
-                <DropdownMenuItem onClick={() => router.push("/profile")}>
-                  <User className="mr-2 h-4 w-4" />
-                  Profile
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Crown className="mr-2 h-4 w-4" />
-                  Upgrade to Pro
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <CreditCard className="mr-2 h-4 w-4" />
-                  Billing
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Settings className="mr-2 h-4 w-4" />
-                  Settings
-                </DropdownMenuItem>
-                {user?.isAdmin && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => router.push("/admin")}>
-                      <Settings className="mr-2 h-4 w-4" />
-                      Admin Panel
-                    </DropdownMenuItem>
-                  </>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem className="text-red-600" onClick={handleLogout}>
-                  <LogOut className="mr-2 h-4 w-4" />
-                  Logout
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <div className="flex items-center w-full">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <SidebarMenuButton className="flex-1 justify-start h-auto py-3">
+                    <Avatar
+                      className={
+                        state === "closed" && "hidden" ? "h-6 w-6" : "h-9 w-9"
+                      }
+                    >
+                      <AvatarImage src={user?.avatar || "/placeholder.svg"} />
+                      <AvatarFallback>
+                        {user?.name
+                          ?.split(" ")
+                          .map((n) => n[0])
+                          .join("") || "U"}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div
+                      className={cn(
+                        "flex flex-col items-start min-w-0 flex-1 ml-2",
+                        state === "closed" && "hidden"
+                      )}
+                    >
+                      <span className="text-sm font-medium truncate">
+                        {user?.name || "Admin User"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {user?.plan || "Enterprise Plan"}
+                      </span>
+                    </div>
+                  </SidebarMenuButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="top" className="w-56">
+                  <DropdownMenuItem onClick={() => router.push("/profile")}>
+                    <User className="mr-2 h-4 w-4" />
+                    Profile
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <Crown className="mr-2 h-4 w-4" />
+                    Upgrade to Pro
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <CreditCard className="mr-2 h-4 w-4" />
+                    Billing
+                  </DropdownMenuItem>
+                  <DropdownMenuItem>
+                    <Settings className="mr-2 h-4 w-4" />
+                    Settings
+                  </DropdownMenuItem>
+                  {user?.isAdmin && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => router.push("/admin")}>
+                        <Settings className="mr-2 h-4 w-4" />
+                        Admin Panel
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-red-600"
+                    onClick={handleLogout}
+                  >
+                    <LogOut className="mr-2 h-4 w-4" />
+                    Logout
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              
+              {/* Upgrade button for FREE users - only visible when sidebar is open */}
+              {isFreeUser && state === "open" && (
+                <Button
+                  onClick={handleUpgradeClick}
+                  size="sm"
+                  variant="outline"
+                  className="ml-2 h-7 px-2 text-xs border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+                >
+                  <Crown className="h-3 w-3 mr-1" />
+                  Upgrade
+                </Button>
+              )}
+            </div>
           </SidebarMenuItem>
-          {/* )} */}
         </SidebarMenu>
       </SidebarFooter>
+
+      {/* Shared Upgrade modal */}
+      <UpgradeModal
+        open={upgradeOpen}
+        onOpenChange={setUpgradeOpen}
+        user={user}
+      />
     </Sidebar>
   )
 }

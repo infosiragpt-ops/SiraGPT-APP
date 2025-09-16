@@ -78,7 +78,8 @@ router.post('/register', [
         plan: 'FREE',
         isAdmin: false,
         apiUsage: 0,
-        monthlyLimit: 10000
+        monthlyCallLimit: 3,   // <-- new: 3 queries/month for Free
+        monthlyLimit: 10000 
       }
     });
 

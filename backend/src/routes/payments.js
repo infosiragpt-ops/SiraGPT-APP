@@ -46,7 +46,8 @@ router.post('/stripe', [
           where: { id: req.user.id },
           data: {
             plan,
-            monthlyLimit: plan === 'PRO' ? 50000 : 100000
+            monthlyLimit: plan === 'PRO' ? 50000 : 100000,
+            monthlyCallLimit: 0 
           }
         });
       } catch (error) {

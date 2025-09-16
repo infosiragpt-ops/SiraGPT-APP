@@ -20,7 +20,8 @@ model User {
   plan         Plan     @default(FREE)
   isAdmin      Boolean  @default(false)
   apiUsage     Int      @default(0)
-  monthlyLimit Int      @default(10000)
+  monthlyCallLimit Int  @default(3)        // NEW: counts number of generate calls / month
+  monthlyLimit Int      @default(10000) 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -156,6 +157,8 @@ model SystemSettings {
 
 enum Plan {
   FREE
+  BASIC
+  STANDARD
   PRO
   ENTERPRISE
 }

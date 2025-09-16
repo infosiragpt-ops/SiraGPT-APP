@@ -26,7 +26,8 @@ import {
   MessageSquare,
   Check,
   Music,
-  Film
+  Film,
+  Bolt
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -61,6 +62,7 @@ import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import { webSearchService } from "@/lib/web-search-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
+import UpgradeModal from "./UpgradeModal"
 
 
 // Enhanced Model Selector
@@ -294,8 +296,91 @@ export default function ChatInterface() {
   // In the ChatInterface component, add this state variable with other states:
   const [isWebSearching, setIsWebSearching] = React.useState(false)
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
+const [subscribeOpen, setSubscribeOpen] = React.useState(false);
+const [isSubscribing, setIsSubscribing] = React.useState(false);
+const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
 
 
+// Instant (demo) upgrade call
+const instantUpgrade = async (plan: 'BASIC' | 'STANDARD' | 'ENTERPRISE') => {
+  try {
+    setIsSubscribing(true);
+
+    // plan -> monthlyLimit mapping
+    const planMap: Record<string, { monthlyLimit: number; price?: number }> = {
+      BASIC: { monthlyLimit: 10000, price: 5 },
+      STANDARD: { monthlyLimit: 30000, price: 15 },
+      ENTERPRISE: { monthlyLimit: 0, price: 99 }, // 0 => treated as "unlimited" on server
+    };
+
+    const payload = {
+      plan,
+      monthlyLimit: planMap[plan].monthlyLimit,
+      price: planMap[plan].price ?? 0,
+    };
+
+    // Try to call backend instant endpoint (recommended)
+    const res = await fetch('/api/payments/instant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      // backend not available or returned error -> fallback to client-only update
+      const body = await res.json().catch(() => ({}));
+      console.warn('instantUpgrade backend failed:', body);
+      // FALLBACK: simulate success only in UI (DB not updated)
+      const simulatedUser = {
+        ...(currentUserInfo || user || {}),
+        plan,
+        monthlyLimit: payload.monthlyLimit,
+      };
+      setCurrentUserInfo(simulatedUser);
+      toast.success('Subscribed (UI only). Backend update not available — implement /api/payments/instant to persist.');
+      setSubscribeOpen(false);
+      return;
+    }
+
+    // Success: refresh user info from server
+    toast.success('Subscription applied — plan updated');
+    setSubscribeOpen(false);
+  } catch (err: any) {
+    console.error('instantUpgrade error', err);
+    // Network or unexpected error -> fallback to UI-only simulation
+    const planMap: Record<string, { monthlyLimit: number }> = {
+      BASIC: { monthlyLimit: 10000 },
+      STANDARD: { monthlyLimit: 30000 },
+      ENTERPRISE: { monthlyLimit: 0 },
+    };
+    const simulatedUser = {
+      ...(currentUserInfo || user || {}),
+      plan,
+      monthlyLimit: planMap[plan].monthlyLimit,
+    };
+    setCurrentUserInfo(simulatedUser);
+    toast.success('Subscribed (UI only). Backend update not available.');
+  } finally {
+    setIsSubscribing(false);
+  }
+};
+// ...inside ChatInterface component, after you declare subscribeOpen and setSubscribeOpen...
+
+React.useEffect(() => {
+  function handleOpenUpgrade(e: any) {
+    // Optionally inspect e.detail.message if you want to customize UX
+    setSubscribeOpen(true);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('open-upgrade-modal', handleOpenUpgrade);
+  }
+  return () => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('open-upgrade-modal', handleOpenUpgrade);
+    }
+  };
+}, [setSubscribeOpen]);
   React.useEffect(() => {
     // Check if the browser supports Speech Recognition
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -457,6 +542,7 @@ export default function ChatInterface() {
 
     const msg = input.trim()
     setInput("")
+    try {
     if (isWebSearchActive) {
       handleWebSearch();
     } else {
@@ -470,7 +556,18 @@ export default function ChatInterface() {
         await addMessage(msg, uploadedFiles.map(f => f.id))
       }
     }
-
+} catch (err: any) {
+    console.error('Send error', err);
+    // If backend returned a quota error (429) open subscribe modal
+    const message = (err && (err.message || '')) as string;
+    const status = err?.status || err?.statusCode || (err?.response && err.response.status);
+    if (status === 429 || message.toLowerCase().includes('monthly') || message.toLowerCase().includes('limit')) {
+      setSubscribeOpen(true);
+      toast.error('You reached your free quota — subscribe to continue.');
+      return;
+    }
+    toast.error(err?.message || 'Send failed');
+  }
   }
 
 
@@ -685,6 +782,21 @@ export default function ChatInterface() {
       setIsWebSearching(false);
     }
   };
+// Minimal FeatureRow component — paste near top of file once
+function FeatureRow({ icon, title, desc, included = true }: { icon: React.ReactNode; title: string; desc: string; included?: boolean }) {
+  return (
+    <div className={`flex items-start gap-3 ${included ? '' : 'opacity-60'}`}>
+      <div className="w-8 h-8 rounded-md bg-muted/20 flex items-center justify-center text-muted-foreground">
+        {icon}
+      </div>
+      <div>
+        <div className="font-medium text-sm">{title}</div>
+        <div className="text-xs text-muted-foreground">{desc}</div>
+      </div>
+    </div>
+  );
+}
+const currentPlan = user?.plan || user?.plan || 'FREE';
 
   return (
     // MODIFICATION: Event handlers ko main div mein lagaya gaya hai
@@ -749,6 +861,21 @@ export default function ChatInterface() {
           <div className="flex items-center gap-2">
             
             <ThemeToggle />
+            <Button variant="outline" size="sm" onClick={() => setSubscribeOpen(true)}>
+              {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
+            </Button>
+<UpgradeModal
+  open={subscribeOpen}
+  onOpenChange={setSubscribeOpen}
+  user={currentUserInfo || user}
+  onSubscribe={async (plan) => {
+    // forward to your existing handler
+    await instantUpgrade(plan as "BASIC" | "STANDARD" | "ENTERPRISE")
+  }}
+  isSubscribing={isSubscribing}
+/>
+
+
             {/* {!showAudioPanel && (
               <Button variant="outline" size="sm" onClick={clearCurrentChat}>
                 Clear Chat
