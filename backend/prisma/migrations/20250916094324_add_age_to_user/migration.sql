@@ -1,5 +1,5 @@
 -- CreateEnum
-CREATE TYPE "Plan" AS ENUM ('FREE', 'PRO', 'ENTERPRISE');
+CREATE TYPE "Plan" AS ENUM ('FREE', 'BASIC', 'STANDARD', 'PRO', 'ENTERPRISE');
 
 -- CreateEnum
 CREATE TYPE "MessageRole" AS ENUM ('USER', 'ASSISTANT');
@@ -21,6 +21,7 @@ CREATE TABLE "users" (
     "plan" "Plan" NOT NULL DEFAULT 'FREE',
     "isAdmin" BOOLEAN NOT NULL DEFAULT false,
     "apiUsage" INTEGER NOT NULL DEFAULT 0,
+    "monthlyCallLimit" INTEGER NOT NULL DEFAULT 3,
     "monthlyLimit" INTEGER NOT NULL DEFAULT 10000,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -62,6 +63,8 @@ CREATE TABLE "chats" (
     "model" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "isShared" BOOLEAN NOT NULL DEFAULT false,
+    "shareId" TEXT,
 
     CONSTRAINT "chats_pkey" PRIMARY KEY ("id")
 );
@@ -75,6 +78,7 @@ CREATE TABLE "messages" (
     "tokens" INTEGER,
     "timestamp" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "files" JSONB,
+    "feedback" TEXT,
 
     CONSTRAINT "messages_pkey" PRIMARY KEY ("id")
 );
@@ -133,6 +137,19 @@ CREATE TABLE "system_settings" (
     CONSTRAINT "system_settings_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "anonymous_usage" (
+    "id" TEXT NOT NULL,
+    "anonId" TEXT NOT NULL,
+    "usedQueries" INTEGER NOT NULL DEFAULT 0,
+    "ipAddress" TEXT,
+    "userAgent" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "anonymous_usage_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
@@ -146,7 +163,13 @@ CREATE UNIQUE INDEX "ai_models_name_key" ON "ai_models"("name");
 CREATE UNIQUE INDEX "sessions_token_key" ON "sessions"("token");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "chats_shareId_key" ON "chats"("shareId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "system_settings_key_key" ON "system_settings"("key");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "anonymous_usage_anonId_key" ON "anonymous_usage"("anonId");
 
 -- AddForeignKey
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
