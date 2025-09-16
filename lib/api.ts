@@ -223,31 +223,24 @@ class ApiClient {
     onClose: () => void, // Jab stream band ho jaye
     onError: (error: Error) => void // Jab koi error aaye
   ) {
-// let anonId = localStorage.getItem('anon_id');
-// if (!anonId) {
-//   anonId = crypto.randomUUID?.() || Math.random().toString(36).slice(2);
-//   localStorage.setItem('anon_id', anonId);
-// }
-const url = `${this.baseURL}/ai/generate`;
-const config: RequestInit = {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    ...(this.token && { Authorization: `Bearer ${this.token}` }),
-    // 'X-Anon-Id': anonId
-  },
-  body: JSON.stringify(data),
-  // credentials: 'include'
-};
+
+    const url = `${this.baseURL}/ai/generate`;
+    const config: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+      body: JSON.stringify(data),
+      // credentials: 'include'
+    };
 
     try {
       const response = await fetch(url, config);
 
-      // inside generateAIStream, where response is checked:
-
       if (!response.ok) {
         let details: any = {};
-        try { details = await response.json(); } catch {}
+        try { details = await response.json(); } catch { }
         const message = details.error || `HTTP ${response.status}`;
 
         // Notify UI to open upgrade modal if the message indicates exhaustion
@@ -263,6 +256,7 @@ const config: RequestInit = {
         if (details.code) error.code = details.code;
         throw error;
       }
+
 
       // response.body ek ReadableStream hai, hum isko padhenge
       const reader = response.body?.getReader();
@@ -285,8 +279,6 @@ const config: RequestInit = {
         const lines = chunk.split('\n\n');
 
         for (const line of lines) {
-
-
           if (line.startsWith('data: ')) {
             try {
               const jsonData = JSON.parse(line.substring(6));
@@ -321,8 +313,12 @@ const config: RequestInit = {
     });
   }*/
 
-  async getAIModels() {
-    return this.request('/ai/models');
+  // async getAIModels() {
+  //   return this.request('/ai/models');
+  // }
+  async getAIModels(type?: 'TEXT' | 'IMAGE') { // type ko optional parameter banayein
+    const endpoint = type ? `/ai/models?type=${type}` : '/ai/models';
+    return this.request(endpoint);
   }
 
   // Payment endpoints
@@ -694,15 +690,17 @@ const config: RequestInit = {
     return `${this.apiBaseURL}/video/download/${filename}`;
   }
   async getAnonQuota() {
-  const res = await fetch(`${this.apiBaseURL}/ai/anon-quota`, {
-    method: 'GET',
-    credentials: 'include'
-  });
-  if (!res.ok) {
-    throw new Error('Failed to fetch anonymous quota');
+    localStorage.setItem('currentChatId', "")
+
+    const res = await fetch(`${this.apiBaseURL}/ai/anon-quota`, {
+      method: 'GET',
+      credentials: 'include'
+    });
+    if (!res.ok) {
+      throw new Error('Failed to fetch anonymous quota');
+    }
+    return res.json();
   }
-  return res.json();
-}
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);

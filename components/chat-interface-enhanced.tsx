@@ -63,6 +63,7 @@ import MusicGenerationComponent from "./MusicGenerationComponent"
 import { webSearchService } from "@/lib/web-search-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
+import { IconProvider } from "./icon-provider"
 
 
 // Enhanced Model Selector
@@ -83,7 +84,8 @@ const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels,
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
-        <Bot className="h-4 w-4" />
+        {/* <Bot className="h-4 w-4" /> */}
+        {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4" />}
         <span className="text-sm font-medium">{selectedModelData?.displayName || selectedModel}</span>
         <div className="flex items-center gap-1">
           {aiService.hasApiKey(selectedModel) ? (
@@ -108,7 +110,8 @@ const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels,
             }}
             className="flex items-center gap-2 py-2"
           >
-            <Bot className="h-4 w-4 flex-shrink-0" />
+            {/* <Bot className="h-4 w-4 flex-shrink-0" /> */}
+            <IconProvider name={model.icon} className="h-5 w-5 flex-shrink-0" />
             <div className="flex flex-col flex-1">
               <span className="text-sm">{model.displayName}</span>
               <span className="text-xs text-muted-foreground">{model.description}</span>
@@ -1170,6 +1173,15 @@ export default function ChatInterface() {
                               ? "Describe the video you want to create..."
                               : "Type your message here..."
                         }
+                        className="min-h-[60px] max-h-[350px] resize-none pr-20 py-4 transition-all duration-200"
+                        style={{
+                          overflowY: input.split('\n').length > 2 ? 'auto' : 'hidden',
+                          minHeight: '60px',
+                          maxHeight: '350px',
+                          height: 'auto',
+                          padding: '1rem',
+                        }}
+                        rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
                         className="min-h-[60px] max-h-[350px] resize-none pr-20 py-4 transition-all duration-200"
                         style={{
                           overflowY: input.split('\n').length > 2 ? 'auto' : 'hidden',

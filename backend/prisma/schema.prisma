@@ -31,6 +31,7 @@ model User {
   apiUsages ApiUsage[]
   sessions  Session[]
   files     File[]
+  createdGpts CustomGpt[]
 
   @@map("users")
 }
@@ -42,6 +43,8 @@ model AiModel {
   provider    String
   description String?
   apiKey      String?
+  type        ModelType    @default(TEXT) // <-- NAYA: Model ki type (TEXT/IMAGE)
+  icon        String? 
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -111,6 +114,9 @@ model File {
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  customGptId String?
+  customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id])
+
   @@map("files")
 }
 
@@ -154,6 +160,17 @@ model SystemSettings {
 
   @@map("system_settings")
 }
+enum ProviderType {
+  OpenAI
+  Gemini
+  OpenRouter
+  Groq
+  Custom // Mustaqbil ke liye
+}
+enum ModelType {
+  TEXT
+  IMAGE
+}
 
 enum Plan {
   FREE
@@ -190,4 +207,50 @@ model AnonymousUsage {
   updatedAt   DateTime @updatedAt
 
   @@map("anonymous_usage")
+}
+
+enum GptVisibility {
+  PRIVATE
+  UNLISTED
+  PUBLIC
+}
+
+model CustomGpt {
+  id          String      @id @default(cuid())
+  creatorId   String
+  creator     User        @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  
+  // Basic Info
+  name        String
+  description String?     @db.Text
+  iconUrl     String?     // Icon/Avatar ka URL
+  
+  // Behavior Configuration
+  instructions        String      @db.Text // System Prompt
+  greetingMessage     String?     @db.Text // Pehla message jo GPT bhejega
+  
+  // Model Parameters
+  modelName           String      @default("gpt-3.5-turbo")
+  temperature         Float       @default(0.7)
+  maxTokens           Int?
+
+  // Knowledge (RAG ke liye) - Hum File model se iska rishta jorenge
+  knowledgeFiles      File[]      @relation("GptKnowledgeFiles")
+
+  // Actions (Advanced - Step 2 mein implement karenge)
+  actions             Json?       // [{ name, description, schema, endpoint }]
+
+  // Conversation Starters (Example Prompts)
+  conversationStarters Json?      // ["Explain quantum computing", "What is a neural network?"]
+  
+  // Publishing
+  visibility          GptVisibility @default(PRIVATE)
+  shareId             String      @unique @default(cuid()) // Public link ke liye
+
+  category    String?  // Jaise "Writing", "Productivity", "Education"
+  isFeatured  Boolean  @default(false) // Featured section mein dikhane ke liye
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("custom_gpts")
 }

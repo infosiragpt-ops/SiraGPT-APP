@@ -35,14 +35,40 @@ const usageService = {
      * Calculates tokens for text-based AI models (Gemini, OpenAI).
      * Uses tiktoken for accurate calculation.
      */
-    calculateTextTokens(text, model = "gpt-3.5-turbo") {
+    // calculateTextTokens(text, model = "gpt-3.5-turbo") {
+    //     try {
+    //         const enc = encoding_for_model(model);
+    //         const tokens = enc.encode(text);
+    //         enc.free(); // cleanup
+    //         return tokens.length;
+    //     } catch (err) {
+    //         console.error("Error calculating tokens:", err);
+    //         // fallback to rough estimate
+    //         return Math.ceil(text.length / 4);
+    //     }
+    // },
+
+     calculateTextTokens(text, modelName = "gpt-3.5-turbo") {
+        // YAHAN PAR TABDEELI HAI
+        let modelForTiktoken;
+
+        if (modelName.includes('/')) {
+            modelForTiktoken = 'gpt-4';
+        } else {
+            // Agar yeh normal OpenAI model hai, to usko waise hi istemal karen.
+            modelForTiktoken = modelName;
+        }
+
         try {
-            const enc = encoding_for_model(model);
+            // Ab hum hamesha ek valid model name istemal kar rahe hain.
+            const enc = encoding_for_model(modelForTiktoken);
             const tokens = enc.encode(text);
             enc.free(); // cleanup
             return tokens.length;
         } catch (err) {
-            console.error("Error calculating tokens:", err);
+            // Agar phir bhi koi error aaye (e.g., naya OpenAI model jo tiktoken mein nahi hai),
+            // to fallback istemal karen.
+            console.warn(`Tiktoken model '${modelForTiktoken}' (from '${modelName}') not found. Using fallback calculation.`);
             // fallback to rough estimate
             return Math.ceil(text.length / 4);
         }
