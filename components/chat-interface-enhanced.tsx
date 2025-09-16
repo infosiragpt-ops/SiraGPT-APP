@@ -296,91 +296,91 @@ export default function ChatInterface() {
   // In the ChatInterface component, add this state variable with other states:
   const [isWebSearching, setIsWebSearching] = React.useState(false)
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
-const [subscribeOpen, setSubscribeOpen] = React.useState(false);
-const [isSubscribing, setIsSubscribing] = React.useState(false);
-const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
+  const [subscribeOpen, setSubscribeOpen] = React.useState(false);
+  const [isSubscribing, setIsSubscribing] = React.useState(false);
+  const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
 
 
-// Instant (demo) upgrade call
-const instantUpgrade = async (plan: 'BASIC' | 'STANDARD' | 'ENTERPRISE') => {
-  try {
-    setIsSubscribing(true);
+  // Instant (demo) upgrade call
+  const instantUpgrade = async (plan: 'BASIC' | 'STANDARD' | 'ENTERPRISE') => {
+    try {
+      setIsSubscribing(true);
 
-    // plan -> monthlyLimit mapping
-    const planMap: Record<string, { monthlyLimit: number; price?: number }> = {
-      BASIC: { monthlyLimit: 10000, price: 5 },
-      STANDARD: { monthlyLimit: 30000, price: 15 },
-      ENTERPRISE: { monthlyLimit: 0, price: 99 }, // 0 => treated as "unlimited" on server
-    };
+      // plan -> monthlyLimit mapping
+      const planMap: Record<string, { monthlyLimit: number; price?: number }> = {
+        BASIC: { monthlyLimit: 10000, price: 5 },
+        STANDARD: { monthlyLimit: 30000, price: 15 },
+        ENTERPRISE: { monthlyLimit: 0, price: 99 }, // 0 => treated as "unlimited" on server
+      };
 
-    const payload = {
-      plan,
-      monthlyLimit: planMap[plan].monthlyLimit,
-      price: planMap[plan].price ?? 0,
-    };
+      const payload = {
+        plan,
+        monthlyLimit: planMap[plan].monthlyLimit,
+        price: planMap[plan].price ?? 0,
+      };
 
-    // Try to call backend instant endpoint (recommended)
-    const res = await fetch('/api/payments/instant', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(payload),
-    });
+      // Try to call backend instant endpoint (recommended)
+      const res = await fetch('/api/payments/instant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
 
-    if (!res.ok) {
-      // backend not available or returned error -> fallback to client-only update
-      const body = await res.json().catch(() => ({}));
-      console.warn('instantUpgrade backend failed:', body);
-      // FALLBACK: simulate success only in UI (DB not updated)
+      if (!res.ok) {
+        // backend not available or returned error -> fallback to client-only update
+        const body = await res.json().catch(() => ({}));
+        console.warn('instantUpgrade backend failed:', body);
+        // FALLBACK: simulate success only in UI (DB not updated)
+        const simulatedUser = {
+          ...(currentUserInfo || user || {}),
+          plan,
+          monthlyLimit: payload.monthlyLimit,
+        };
+        setCurrentUserInfo(simulatedUser);
+        toast.success('Subscribed (UI only). Backend update not available — implement /api/payments/instant to persist.');
+        setSubscribeOpen(false);
+        return;
+      }
+
+      // Success: refresh user info from server
+      toast.success('Subscription applied — plan updated');
+      setSubscribeOpen(false);
+    } catch (err: any) {
+      console.error('instantUpgrade error', err);
+      // Network or unexpected error -> fallback to UI-only simulation
+      const planMap: Record<string, { monthlyLimit: number }> = {
+        BASIC: { monthlyLimit: 10000 },
+        STANDARD: { monthlyLimit: 30000 },
+        ENTERPRISE: { monthlyLimit: 0 },
+      };
       const simulatedUser = {
         ...(currentUserInfo || user || {}),
         plan,
-        monthlyLimit: payload.monthlyLimit,
+        monthlyLimit: planMap[plan].monthlyLimit,
       };
       setCurrentUserInfo(simulatedUser);
-      toast.success('Subscribed (UI only). Backend update not available — implement /api/payments/instant to persist.');
-      setSubscribeOpen(false);
-      return;
-    }
-
-    // Success: refresh user info from server
-    toast.success('Subscription applied — plan updated');
-    setSubscribeOpen(false);
-  } catch (err: any) {
-    console.error('instantUpgrade error', err);
-    // Network or unexpected error -> fallback to UI-only simulation
-    const planMap: Record<string, { monthlyLimit: number }> = {
-      BASIC: { monthlyLimit: 10000 },
-      STANDARD: { monthlyLimit: 30000 },
-      ENTERPRISE: { monthlyLimit: 0 },
-    };
-    const simulatedUser = {
-      ...(currentUserInfo || user || {}),
-      plan,
-      monthlyLimit: planMap[plan].monthlyLimit,
-    };
-    setCurrentUserInfo(simulatedUser);
-    toast.success('Subscribed (UI only). Backend update not available.');
-  } finally {
-    setIsSubscribing(false);
-  }
-};
-// ...inside ChatInterface component, after you declare subscribeOpen and setSubscribeOpen...
-
-React.useEffect(() => {
-  function handleOpenUpgrade(e: any) {
-    // Optionally inspect e.detail.message if you want to customize UX
-    setSubscribeOpen(true);
-  }
-  if (typeof window !== 'undefined') {
-    window.addEventListener('open-upgrade-modal', handleOpenUpgrade);
-  }
-  return () => {
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('open-upgrade-modal', handleOpenUpgrade);
+      toast.success('Subscribed (UI only). Backend update not available.');
+    } finally {
+      setIsSubscribing(false);
     }
   };
-}, [setSubscribeOpen]);
+  // ...inside ChatInterface component, after you declare subscribeOpen and setSubscribeOpen...
+
+  React.useEffect(() => {
+    function handleOpenUpgrade(e: any) {
+      // Optionally inspect e.detail.message if you want to customize UX
+      setSubscribeOpen(true);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('open-upgrade-modal', handleOpenUpgrade);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('open-upgrade-modal', handleOpenUpgrade);
+      }
+    };
+  }, [setSubscribeOpen]);
   React.useEffect(() => {
     // Check if the browser supports Speech Recognition
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -543,31 +543,31 @@ React.useEffect(() => {
     const msg = input.trim()
     setInput("")
     try {
-    if (isWebSearchActive) {
-      handleWebSearch();
-    } else {
-      if (!currentChat) {
-        await createNewChat(chatType, msg)
-      } else if (chatType === 'image') {
-        await handleImageGeneration(msg)
-      } else if (chatType === 'video') {
-        await handleVideoGeneration(msg)
+      if (isWebSearchActive) {
+        handleWebSearch();
       } else {
-        await addMessage(msg, uploadedFiles.map(f => f.id))
+        if (!currentChat) {
+          await createNewChat(chatType, msg)
+        } else if (chatType === 'image') {
+          await handleImageGeneration(msg)
+        } else if (chatType === 'video') {
+          await handleVideoGeneration(msg)
+        } else {
+          await addMessage(msg, uploadedFiles.map(f => f.id))
+        }
       }
+    } catch (err: any) {
+      console.error('Send error', err);
+      // If backend returned a quota error (429) open subscribe modal
+      const message = (err && (err.message || '')) as string;
+      const status = err?.status || err?.statusCode || (err?.response && err.response.status);
+      if (status === 429 || message.toLowerCase().includes('monthly') || message.toLowerCase().includes('limit')) {
+        setSubscribeOpen(true);
+        toast.error('You reached your free quota — subscribe to continue.');
+        return;
+      }
+      toast.error(err?.message || 'Send failed');
     }
-} catch (err: any) {
-    console.error('Send error', err);
-    // If backend returned a quota error (429) open subscribe modal
-    const message = (err && (err.message || '')) as string;
-    const status = err?.status || err?.statusCode || (err?.response && err.response.status);
-    if (status === 429 || message.toLowerCase().includes('monthly') || message.toLowerCase().includes('limit')) {
-      setSubscribeOpen(true);
-      toast.error('You reached your free quota — subscribe to continue.');
-      return;
-    }
-    toast.error(err?.message || 'Send failed');
-  }
   }
 
 
@@ -782,21 +782,21 @@ React.useEffect(() => {
       setIsWebSearching(false);
     }
   };
-// Minimal FeatureRow component — paste near top of file once
-function FeatureRow({ icon, title, desc, included = true }: { icon: React.ReactNode; title: string; desc: string; included?: boolean }) {
-  return (
-    <div className={`flex items-start gap-3 ${included ? '' : 'opacity-60'}`}>
-      <div className="w-8 h-8 rounded-md bg-muted/20 flex items-center justify-center text-muted-foreground">
-        {icon}
+  // Minimal FeatureRow component — paste near top of file once
+  function FeatureRow({ icon, title, desc, included = true }: { icon: React.ReactNode; title: string; desc: string; included?: boolean }) {
+    return (
+      <div className={`flex items-start gap-3 ${included ? '' : 'opacity-60'}`}>
+        <div className="w-8 h-8 rounded-md bg-muted/20 flex items-center justify-center text-muted-foreground">
+          {icon}
+        </div>
+        <div>
+          <div className="font-medium text-sm">{title}</div>
+          <div className="text-xs text-muted-foreground">{desc}</div>
+        </div>
       </div>
-      <div>
-        <div className="font-medium text-sm">{title}</div>
-        <div className="text-xs text-muted-foreground">{desc}</div>
-      </div>
-    </div>
-  );
-}
-const currentPlan = user?.plan || user?.plan || 'FREE';
+    );
+  }
+  const currentPlan = user?.plan || user?.plan || 'FREE';
 
   return (
     // MODIFICATION: Event handlers ko main div mein lagaya gaya hai
@@ -859,21 +859,21 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
             )}
           </div>
           <div className="flex items-center gap-2">
-            
+
             <ThemeToggle />
             <Button variant="outline" size="sm" onClick={() => setSubscribeOpen(true)}>
               {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
             </Button>
-<UpgradeModal
-  open={subscribeOpen}
-  onOpenChange={setSubscribeOpen}
-  user={currentUserInfo || user}
-  onSubscribe={async (plan) => {
-    // forward to your existing handler
-    await instantUpgrade(plan as "BASIC" | "STANDARD" | "ENTERPRISE")
-  }}
-  isSubscribing={isSubscribing}
-/>
+            <UpgradeModal
+              open={subscribeOpen}
+              onOpenChange={setSubscribeOpen}
+              user={currentUserInfo || user}
+              onSubscribe={async (plan) => {
+                // forward to your existing handler
+                await instantUpgrade(plan as "BASIC" | "STANDARD" | "ENTERPRISE")
+              }}
+              isSubscribing={isSubscribing}
+            />
 
 
             {/* {!showAudioPanel && (
@@ -971,6 +971,7 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
               )}
               <div className="bg-background">
                 <div className="flex-1 relative">
+
                   <Textarea
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
@@ -982,9 +983,18 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
                           ? "Describe the video you want to create..."
                           : "Type your message here..."
                     }
-                    className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
+                    className="min-h-[60px] max-h-[350px] resize-none pr-20 py-4 transition-all duration-200"
+                    style={{
+                      overflowY: input.split('\n').length > 2 ? 'auto' : 'hidden',
+                      minHeight: '60px',
+                      maxHeight: '350px',
+                      height: 'auto',
+                      padding: '1rem',
+                    }}
+                    rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
                     disabled={isLoading || isGeneratingImage || isGeneratingVideo}
                   />
+
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
 
                     <Button
@@ -1020,6 +1030,8 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
                 <Button
                   variant="outline"
                   size="sm"
+                  disabled={currentPlan === "FREE"}
+
                   onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
                   className="flex items-center gap-2"
                 >
@@ -1027,6 +1039,7 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
                   Voice Studio
                 </Button>
                 <Button
+                  disabled={currentPlan === "FREE"}
                   variant="outline"
                   size="sm"
                   onClick={startNewImageChat}
@@ -1037,6 +1050,7 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
                 </Button>
                 <Button
                   variant="outline"
+                  disabled={currentPlan === "FREE"}
                   size="sm"
                   onClick={startNewVideoChat}
                   className="flex items-center gap-2"
@@ -1156,9 +1170,18 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
                               ? "Describe the video you want to create..."
                               : "Type your message here..."
                         }
-                        className="min-h-[60px] max-h-[200px] resize-none pr-20 py-4"
+                        className="min-h-[60px] max-h-[350px] resize-none pr-20 py-4 transition-all duration-200"
+                        style={{
+                          overflowY: input.split('\n').length > 2 ? 'auto' : 'hidden',
+                          minHeight: '60px',
+                          maxHeight: '350px',
+                          height: 'auto',
+                          padding: '1rem',
+                        }}
+                        rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
                         disabled={isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
                       />
+
 
                       <div className="absolute bottom-3 right-3 flex items-center gap-2">
                         <VoiceControls
@@ -1201,6 +1224,7 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
                     <Button
                       variant="outline"
                       size="sm"
+                      disabled={currentPlan === "FREE"}
                       onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
                       className="flex items-center gap-2"
                     >
@@ -1210,6 +1234,8 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
 
                     <Button
                       variant="outline"
+                      disabled={currentPlan === "FREE"}
+
                       size="sm"
                       onClick={startNewImageChat}
                       className="flex items-center gap-2"
@@ -1219,6 +1245,8 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
                     </Button>
 
                     <Button
+                      disabled={currentPlan === "FREE"}
+
                       variant="outline"
                       size="sm"
                       onClick={startNewVideoChat}
@@ -1237,7 +1265,7 @@ const currentPlan = user?.plan || user?.plan || 'FREE';
                         : 'Press Enter to send, Shift+Enter for new line'
                     }
                   </p>
-                  
+
                   {/* {isAnon && anonBlocked && (
   <div className="absolute inset-0 z-50 backdrop-blur-sm bg-background/80 flex flex-col items-center justify-center gap-6 p-6">
     <div className="max-w-sm text-center space-y-3">
