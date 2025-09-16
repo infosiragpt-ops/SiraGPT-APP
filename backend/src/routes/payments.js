@@ -175,6 +175,65 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
+// Instant (demo) subscription - frontend calls /api/payments/instant
+router.post(
+  '/instant',
+  authenticateToken,
+  [
+    // optional validators: monthlyLimit if provided must be integer
+    body('plan')
+      .isIn(['BASIC', 'STANDARD', 'ENTERPRISE'])
+      .withMessage('Invalid plan (allowed: BASIC, STANDARD, ENTERPRISE)'),
+    body('monthlyLimit').optional().isInt({ min: 0 }).withMessage('monthlyLimit must be an integer >= 0'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { plan, monthlyLimit } = req.body;
+
+      // Default plan credits (used when monthlyLimit isn't supplied)
+      const planCredits = {
+        BASIC: 10000,
+        STANDARD: 30000,
+        ENTERPRISE: 10000000,
+      };
+
+      const add = typeof monthlyLimit !== 'undefined' && monthlyLimit !== null
+        ? Number(monthlyLimit)
+        : (planCredits[plan] || 0);
+
+      // Load current user
+      const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+      if (!dbUser) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      // Append credits to existing monthlyLimit
+      const newMonthlyLimit = (dbUser.monthlyLimit ?? 0) + add;
+
+      const updated = await prisma.user.update({
+        where: { id: req.user.id },
+        data: {
+          plan,
+          monthlyLimit: newMonthlyLimit,
+          // If you use monthlyCallLimit only for free users, keep this 0 for paid plans
+          monthlyCallLimit: 0,
+        },
+      });
+
+      // Return updated user (omit sensitive fields if needed)
+      return res.json({ user: updated });
+    } catch (error) {
+      console.error('Instant subscription error:', error);
+      return res.status(500).json({ error: 'Failed to apply instant subscription' });
+    }
+  }
+);
+
 // Webhook handlers would go here for real payment providers
 // router.post('/stripe/webhook', ...)
 // router.post('/paypal/webhook', ...)

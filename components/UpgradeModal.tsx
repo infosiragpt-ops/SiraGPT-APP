@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {toast} from "sonner"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/lib/auth-context-integrated"
+import { apiClient } from "@/lib/api"
 
 type Plan = "FREE" | "BASIC" | "STANDARD" | "ENTERPRISE"
 
@@ -46,6 +48,9 @@ function FeatureRow({ icon, title, desc, included = true }: { icon: React.ReactN
 export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, isSubscribing }: UpgradeModalProps) {
   const [loadingPlan, setLoadingPlan] = React.useState<Plan | null>(null)
 
+  // Use auth context update helper
+  const { updateUser } = useAuth()
+
   const currentPlan = user?.plan || "FREE"
   const apiUsage = user?.apiUsage ?? 0
 
@@ -61,21 +66,51 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
       if (onSubscribe) {
         await onSubscribe(plan)
       } else {
-        // Default fallback: call backend instant endpoint
+        // Default behaviour: attempt server call, fallback to local update
+        const add = planMeta[plan].monthlyLimit || 0
+
+        if (!user) {
+          toast.error("Please sign in to subscribe")
+          return
+        }
+
         const payload = {
           plan,
           monthlyLimit: planMeta[plan].monthlyLimit,
           price: planMeta[plan].price,
         }
-        const res = await fetch("/api/payments/instant", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          throw new Error(body?.message || "Subscription failed")
+
+        let serverUpdatedUser: any = null
+        try {
+          const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null
+          const res = await fetch(`${apiClient.apiBaseURL}/payments/instant`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            credentials: 'include',
+            body: JSON.stringify(payload),
+          })
+
+          if (res.ok) {
+            const body = await res.json().catch(() => ({}))
+            serverUpdatedUser = body?.user ?? null
+          } else {
+            const errBody = await res.json().catch(() => ({}))
+            console.warn("payments/instant returned non-OK:", errBody)
+          }
+        } catch (err) {
+          console.warn("payments/instant call failed (network or CORS):", err)
+        }
+
+        if (serverUpdatedUser) {
+          updateUser(serverUpdatedUser)
+        } else {
+          updateUser({
+            plan,
+            monthlyLimit: (user?.monthlyLimit ?? 0) + add,
+          })
         }
       }
 
@@ -148,12 +183,13 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                 {currentPlan === "FREE" ? (
                   <Button size="sm" variant="outline" disabled className="w-full">Current Plan</Button>
                 ) : (
-                  <Button size="sm" onClick={() => subscribe("BASIC")} disabled={isSubscribing || !!loadingPlan} className="w-full">
-                    Subscribe
+                  // Free plan is not a "subscribe" option. Show informative disabled button.
+                  <Button size="sm" variant="ghost" disabled className="w-full text-muted-foreground">
+                    Free (default)
                   </Button>
                 )}
                 <div className="text-xs text-muted-foreground text-center">
-                  Upgrade to unlock more features
+                  Free tier is the default for new users — it's not a paid subscription.
                 </div>
               </div>
             </div>

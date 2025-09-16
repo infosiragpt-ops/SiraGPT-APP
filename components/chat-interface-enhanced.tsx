@@ -871,11 +871,6 @@ export default function ChatInterface() {
               open={subscribeOpen}
               onOpenChange={setSubscribeOpen}
               user={currentUserInfo || user}
-              onSubscribe={async (plan) => {
-                // forward to your existing handler
-                await instantUpgrade(plan as "BASIC" | "STANDARD" | "ENTERPRISE")
-              }}
-              isSubscribing={isSubscribing}
             />
 
 

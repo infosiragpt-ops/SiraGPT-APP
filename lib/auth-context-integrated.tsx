@@ -25,6 +25,11 @@ interface AuthContextType {
   isLoading: boolean
   token: string | null
   loginWithToken: (token: string) => Promise<boolean>
+  /**
+   * Patch the current user locally. Useful for UI-only updates (e.g. a local fallback when
+   * backend subscription endpoint is not yet implemented).
+   */
+  updateUser: (update: Partial<User>) => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -131,8 +136,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // New helper: locally patch the user object
+  const updateUser = (update: Partial<User>) => {
+    setUser((prev) => {
+      if (!prev) return prev
+      return { ...prev, ...update }
+    })
+  }
+
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, isLoading, token, loginWithToken }}>
+    <AuthContext.Provider value={{ user, login, register, logout, isLoading, token, loginWithToken, updateUser }}>
       {children}
     </AuthContext.Provider>
   )
