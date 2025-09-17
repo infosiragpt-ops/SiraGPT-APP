@@ -85,7 +85,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     try {
       // Load available models first
-      const modelsResponse = await apiClient.getAIModels()
+      const modelsResponse = await apiClient.getAIModels(
+        chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE'
+      )
       console.log("modelsResponse", modelsResponse);
 
       setAvailableModels(modelsResponse.models)
@@ -105,6 +107,41 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       console.error("Failed to initialize chat:", error)
     }
   }
+
+  useEffect(() => {
+    const loadModelsForType = async () => {
+      // Agar setup hi mukammal nahi hua to kuch na karein
+      if (!hasInitialized) return;
+
+      console.log(`>>> CHAT TYPE BADAL GAYA! Naye models fetch kar raha hoon: ${chatType.toUpperCase()}`);
+
+      try {
+        const modelsResponse = await apiClient.getAIModels(
+          chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE'
+
+
+        );
+
+        if (modelsResponse.models && modelsResponse.models.length > 0) {
+          setAvailableModels(modelsResponse.models);
+          console.log(`>>> ${modelsResponse.models.length} models load ho gaye.`, modelsResponse.models);
+
+          // Pehla model by default select karein
+          setSelectedModel(modelsResponse.models[0].name);
+          setSelectedProivder(modelsResponse.models[0].provider);
+        } else {
+          setAvailableModels([]);
+          setSelectedModel("");
+          console.warn(`>>> Is type (${chatType}) ke liye koi models nahi mile.`);
+        }
+      } catch (e) {
+        console.error(">>> Models load karte waqt error:", chatType, e);
+      }
+    };
+
+    loadModelsForType();
+  }, [chatType, hasInitialized]);
+
   const loadUserChats = async () => {
     try {
       const response = await apiClient.getChats()
