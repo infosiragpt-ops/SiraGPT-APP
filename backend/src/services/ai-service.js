@@ -1,452 +1,77 @@
+// file: services/ai-service.js
 
-// const prisma = require('../config/database');
-// const { GoogleGenerativeAI } = require('@google/generative-ai');
-// class OpenAIProvider {
-//     constructor() {
-//         this.name = "OpenAI";
-//         this.models = ["gpt-4", "gpt-4.1"];
-//         this.imageModels = ["dall-e-3"];
-//     }
-
-//     async generateText(prompt, model, apiKey, chatId) {
-//         try {
-//             // Step 1: get previous chat history from DB
-//             const history = await prisma.message.findMany({
-//                 where: { chatId },
-//                 orderBy: { timestamp: 'asc' }
-//             });
-
-//             // Step 2: convert DB messages to OpenAI format
-//             const messages = history.map(m => ({
-//                 role: m.role === 'USER' ? 'user' : 'assistant',
-//                 content: m.content
-//             }));
-
-//             console.log("AI Service", messages);
-
-//             // Step 3: add current prompt at the end
-//             messages.push({ role: "user", content: prompt });
-
-//             // Step 4: call OpenAI API with full conversation
-//             const response = await fetch("https://api.openai.com/v1/chat/completions", {
-//                 method: "POST",
-//                 headers: {
-//                     "Content-Type": "application/json",
-//                     Authorization: `Bearer ${apiKey}`,
-//                 },
-//                 body: JSON.stringify({
-//                     model: model,
-//                     messages: messages,
-//                     max_tokens: 1000,
-//                     stream:true
-//                 }),
-//             });
-
-//             console.log("OpenAI API response status:", response.status);
-
-//             if (!response.ok) {
-//                 throw new Error(`OpenAI API error: ${response.statusText}`);
-//             }
-
-//             const data = await response.json();
-//             return data.choices[0].message.content;
-//         } catch (error) {
-//             console.error("OpenAI API errors:", error);
-//             return "I apologize, but I'm having trouble connecting to OpenAI right now. Please try again later.";
-//         }
-//     }
-
-//     async generateImage(prompt, model, apiKey) {
-
-//         try {
-//             const response = await fetch("https://api.openai.com/v1/images/generations", {
-//                 method: "POST",
-//                 headers: {
-//                     "Content-Type": "application/json",
-//                     Authorization: `Bearer ${apiKey}`,
-//                 },
-//                 body: JSON.stringify({
-//                     model: model,
-//                     prompt: prompt,
-//                     n: 1,
-//                     size: "1024x1024",
-
-//                 }),
-//             });
-
-
-//             console.log(JSON.stringify({
-//                 model: model,
-//                 prompt: prompt,
-//                 n: 1,
-//                 size: "1024x1024",
-//             }));
-//             if (!response.ok) {
-//                 throw new Error(`OpenAI Image API error: ${response.statusText}`);
-//             }
-
-//             const data = await response.json();
-//             return data.data[0].url;
-//         } catch (error) {
-//             console.error("OpenAI Image API error:", error);
-//             return "Maaf kijiye, abhi OpenAI se image banane mein samasya aa rahi hai. Kripya baad mein prayas karein.";
-//         }
-//     }
-// }
-
-// class AnthropicProvider {
-//     constructor() {
-//         this.name = "Anthropic";
-//         this.models = ["claude-3-opus", "claude-3-sonnet"];
-//     }
-
-//     async generateText(prompt, model, apiKey) {
-//         try {
-//             const response = await fetch("https://api.anthropic.com/v1/messages", {
-//                 method: "POST",
-//                 headers: {
-//                     "Content-Type": "application/json",
-//                     "x-api-key": apiKey,
-//                     "anthropic-version": "2023-06-01",
-//                 },
-//                 body: JSON.stringify({
-//                     model: model,
-//                     max_tokens: 1000,
-//                     messages: [{ role: "user", content: prompt }],
-//                 }),
-//             });
-
-//             if (!response.ok) {
-//                 throw new Error(`Anthropic API error: ${response.statusText}`);
-//             }
-
-//             const data = await response.json();
-//             return data.content[0].text;
-//         } catch (error) {
-//             console.error("Anthropic API error:", error);
-//             return "I apologize, but I'm having trouble connecting to Claude right now. Please try again later.";
-//         }
-//     }
-// }
-
-// class GroqProvider {
-//     constructor() {
-//         this.name = "Grok";
-//         this.models = ["llama2-70b-4096", "mixtral-8x7b-32768"];
-//     }
-
-//     async generateText(prompt, model, apiKey) {
-//         try {
-//             const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-//                 method: "POST",
-//                 headers: {
-//                     "Content-Type": "application/json",
-//                     Authorization: `Bearer ${apiKey}`,
-//                 },
-//                 body: JSON.stringify({
-//                     model: model,
-//                     messages: [{ role: "user", content: prompt }],
-//                     max_tokens: 1000,
-//                 }),
-//             });
-
-//             if (!response.ok) {
-//                 throw new Error(`Groq API error: ${response.statusText}`);
-//             }
-
-//             const data = await response.json();
-//             return data.choices[0].message.content;
-//         } catch (error) {
-//             console.error("Groq API error:", error);
-//             return "I apologize, but I'm having trouble connecting to Groq right now. Please try again later.";
-//         }
-//     }
-// }
-
-// class SimulatedProvider {
-//     constructor(name, models) {
-//         this.name = name;
-//         this.models = models;
-//     }
-
-//     async generateText(prompt, model) {
-//         await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
-//         const responses = [
-//             `Hello! I'm ${this.name} (${model}). I understand you're asking about: "${prompt.slice(0, 50)}${prompt.length > 50 ? "..." : ""}". Here's my response based on my training data.`,
-//             `That's an interesting question! As ${this.name}, I can help you with that. Let me provide you with a comprehensive answer.`,
-//             `Great question! Using ${model}, I can analyze this topic and provide you with detailed insights.`,
-//             `I'd be happy to help you with that inquiry. Based on my knowledge as ${this.name}, here's what I can tell you.`,
-//             `Thank you for your question. As an AI assistant powered by ${model}, I'll do my best to provide you with accurate information.`,
-//         ];
-//         return responses[Math.floor(Math.random() * responses.length)];
-//     }
-// }
-
-// class AIService {
-//     constructor() {
-//         this.providers = new Map();
-//         this.apiKeys = new Map();
-//         this.providers.set("ChatGPT", new OpenAIProvider());
-//         this.providers.set("Claude", new AnthropicProvider());
-//         this.providers.set("Grok", new GroqProvider());
-//         this.providers.set("DeepSeek", new SimulatedProvider("DeepSeek", ["deepseek-chat", "deepseek-coder"]));
-//         this.providers.set("Gemini", new SimulatedProvider("Gemini", ["gemini-pro", "gemini-pro-vision"]));
-//     }
-
-//     setApiKey(provider, apiKey) {
-//         this.apiKeys.set(provider, apiKey);
-//     }
-
-//     async generateResponse(provider, model, prompt, chatId) {
-//         const aiProvider = this.providers.get(provider);
-//         if (!aiProvider) {
-//             throw new Error(`Provider ${provider} not found`);
-//         }
-//         const apiKey = process.env.OPENAI_API_KEY;
-//         // const apiKey = this.apiKeys.get(provider) || "";
-
-//         if (!apiKey && (provider === "ChatGPT" || provider === "Claude" || provider === "Grok")) {
-//             const simulatedProvider = new SimulatedProvider(provider, aiProvider.models);
-//             return simulatedProvider.generateText(prompt, model);
-//         }
-//         return aiProvider.generateText(prompt, model, apiKey, chatId);
-//     }
-
-//     async generateImageResponse(provider, model, prompt) {
-//         const aiProvider = this.providers.get(provider);
-//         if (!aiProvider || !aiProvider.generateImage) {
-//             throw new Error(`Provider ${provider} does not support image generation`);
-//         }
-//         const apiKey = this.apiKeys.get(provider) || "";
-//         return aiProvider.generateImage(prompt, model, apiKey);
-//     }
-
-//     getAvailableProviders() {
-//         return Array.from(this.providers.keys());
-//     }
-
-//     getModelsForProvider(provider) {
-//         const aiProvider = this.providers.get(provider);
-//         return aiProvider ? aiProvider.models : [];
-//     }
-
-//     getImageModelsForProvider(provider) {
-//         const aiProvider = this.providers.get(provider);
-//         return aiProvider && aiProvider.imageModels ? aiProvider.imageModels : [];
-//     }
-// }
-
-// module.exports = new AIService();
-
+const OpenAI = require('openai');
 const prisma = require('../config/database');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-
-class OpenAIProvider {
-    constructor() {
-        this.name = "OpenAI";
-        this.models = ["gpt-4", "gpt-4o", "gpt-3.5-turbo"];
-        this.imageModels = ["dall-e-3"];
-    }
-
-    async generateText(prompt, model, apiKey, chatId) {
-        try {
-            // Fetch chat history from DB
-            const history = await prisma.message.findMany({
-                where: { chatId },
-                orderBy: { timestamp: 'asc' }
-            });
-
-            // Convert DB messages to OpenAI format
-            const messages = [
-                {
-                    role: 'system',
-                    content: `You are an expert AI assistant. Respond accurately and concisely.`
-                },
-                ...history.map(m => ({
-                    role: m.role === 'USER' ? 'user' : 'assistant',
-                    content: m.content
-                })),
-                { role: "user", content: prompt }
-            ];
-
-            // Call OpenAI API with streaming
-            const response = await fetch("https://api.openai.com/v1/chat/completions", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${apiKey}`,
-                },
-                body: JSON.stringify({
-                    model: model,
-                    messages: messages,
-                    max_tokens: 2000,
-                    stream: true
-                }),
-            });
-
-            if (!response.ok) {
-                throw new Error(`OpenAI API error: ${response.statusText}`);
-            }
-
-            return response; // Return streaming response
-        } catch (error) {
-            console.error("OpenAI API error:", error);
-            throw new Error("Failed to connect to OpenAI.");
-        }
-    }
-
-    async generateImage(prompt, model, apiKey) {
-        try {
-            const response = await fetch("https://api.openai.com/v1/images/generations", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${apiKey}`,
-                },
-                body: JSON.stringify({
-                    model: model,
-                    prompt: prompt,
-                    n: 1,
-                    size: "1024x1024",
-                }),
-            });
-
-            if (!response.ok) {
-                throw new Error(`OpenAI Image API error: ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            return data.data[0].url;
-        } catch (error) {
-            console.error("OpenAI Image API error:", error);
-            throw new Error("Failed to generate image with OpenAI.");
-        }
-    }
-}
-
-class GeminiProvider {
-    constructor() {
-        this.name = "Gemini";
-        this.models = ["gemini-1.5-pro", "gemini-1.0-pro"];
-        this.imageModels = ["gemini-2.5-flash-image"];
-    }
-
-    async generateText(prompt, model, apiKey, chatId) {
-        try {
-            const genAI = new GoogleGenerativeAI(apiKey);
-            const geminiModel = genAI.getGenerativeModel({ model: model });
-
-            // Fetch chat history from DB
-            const history = await prisma.message.findMany({
-                where: { chatId },
-                orderBy: { timestamp: 'asc' }
-            });
-
-            // Convert history to Gemini format
-            const geminiHistory = history.map(m => ({
-                role: m.role === 'USER' ? 'user' : 'model',
-                parts: [{ text: m.content }]
-            }));
-
-            // Start a chat session with history
-            const chat = geminiModel.startChat({
-                history: geminiHistory,
-                generationConfig: {
-                    maxOutputTokens: 2000,
-                },
-            });
-
-            // Generate response with streaming
-            const result = await chat.sendMessageStream(prompt);
-            console.log("stream ", result.stream);
-
-            return result.stream;
-        } catch (error) {
-            console.error("Gemini API error:", error);
-            throw new Error("Failed to connect to Gemini.");
-        }
-    }
-
-    async generateImage(prompt, model, apiKey) {
-        try {
-            const genAI = new GoogleGenerativeAI(apiKey);
-            const geminiModel = genAI.getGenerativeModel({ model: model });
-
-            // Generate image with Gemini-2.5-flash-image
-            const result = await geminiModel.generateContent([
-                {
-                    text: prompt
-                }
-            ]);
-
-            const imageData = result.response.candidates[0].content.parts[0].inlineData?.data;
-            if (!imageData) {
-                throw new Error("No image data returned from Gemini.");
-            }
-
-            // Convert base64 image data to a URL (for simplicity, assuming you save it or use a data URL)
-            const imageUrl = `data:image/png;base64,${imageData}`;
-            return imageUrl;
-        } catch (error) {
-            console.error("Gemini Image API error:", error);
-            throw new Error("Failed to generate image with Gemini.");
-        }
-    }
-}
 
 class AIService {
-    constructor() {
-        this.providers = new Map();
-        this.providers.set("OpenAI", new OpenAIProvider());
-        this.providers.set("Gemini", new GeminiProvider());
-    }
-
-    setApiKey(provider, apiKey) {
-        this.apiKeys = this.apiKeys || new Map();
-        this.apiKeys.set(provider, apiKey);
-    }
-
-    async generateResponse(providerName, model, prompt, chatId) {
-        const provider = this.providers.get(providerName);
-        if (!provider) {
-            throw new Error(`Provider ${providerName} not found`);
+    /**
+     * Provider ke naam ke hisab se sahi configured AI client return karta hai.
+     * @param {string} provider - Provider ka naam (e.g., "OpenAI", "Gemini", "OpenRouter")
+     * @returns {OpenAI} - OpenAI client ka instance
+     */
+    getClient(provider) {
+        if (provider === "Gemini") {
+            return new OpenAI({
+                apiKey: process.env.GEMINI_API_KEY,
+                baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+            });
         }
 
-        const apiKey = process.env[`${providerName.toUpperCase()}_API_KEY`] || this.apiKeys?.get(providerName);
-        if (!apiKey) {
-            throw new Error(`API key for ${providerName} not found`);
+        if (provider === "OpenRouter") {
+            return new OpenAI({
+                apiKey: process.env.OPENROUTER_API_KEY,
+                baseURL: "https://openrouter.ai/api/v1",
+            });
         }
 
-        return provider.generateText(prompt, model, apiKey, chatId);
+        // Default provider OpenAI hai
+        return new OpenAI({
+            apiKey: process.env.OPENAI_API_KEY,
+        });
     }
 
-    async generateImageResponse(providerName, model, prompt) {
-        const provider = this.providers.get(providerName);
-        if (!provider || !provider.generateImage) {
-            throw new Error(`Provider ${providerName} does not support image generation`);
+    /**
+     * AI se response generate karta hai aur client ko stream karta hai.
+     * @param {object} options - Options ka object
+     * @param {string} options.provider - Istemaal hone wala provider
+     * @param {string} options.model - Istemaal hone wala model
+     * @param {Array<object>} options.messages - AI ko bhejne ke liye messages ka array
+     * @param {import('express').Response} options.res - Express response object jis par stream likha jayega
+     * @returns {Promise<string>} - Poora generate kiya hua content
+     */
+    async generateStream({ provider, model, messages, res }) {
+        let fullResponseContent = '';
+        try {
+            const client = this.getClient(provider);
+
+            const stream = await client.chat.completions.create({
+                model: model,
+                messages: messages,
+                stream: true,
+                max_completion_tokens: 4000, // Aap isko adjust kar sakte hain
+                
+            });
+
+            // Stream se data parhein aur client ko bhejein
+            for await (const chunk of stream) {
+                const contentChunk = chunk.choices[0]?.delta?.content || '';
+                if (contentChunk) {
+                    fullResponseContent += contentChunk;
+                    // Client ko data chunk bhejein
+                    res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+                }
+            }
+
+            return fullResponseContent;
+        } catch (apiError) {
+            console.error(`Error from ${provider} API:`, apiError);
+            // Client ko error ka message bhejein
+            res.write(`data: ${JSON.stringify({ error: `AI service (${provider}) is temporarily unavailable.` })}\n\n`);
+            // Error ko aage pass karein takay route handler usko log kar sake
+            throw apiError;
         }
-
-        const apiKey = process.env[`${providerName.toUpperCase()}_API_KEY`] || this.apiKeys?.get(providerName);
-        if (!apiKey) {
-            throw new Error(`API key for ${providerName} not found`);
-        }
-
-        return provider.generateImage(prompt, model, apiKey);
-    }
-
-    getAvailableProviders() {
-        return Array.from(this.providers.keys());
-    }
-
-    getModelsForProvider(providerName) {
-        const provider = this.providers.get(providerName);
-        return provider ? [...provider.models, ...(provider.imageModels || [])] : [];
-    }
-
-    getImageModelsForProvider(providerName) {
-        const provider = this.providers.get(providerName);
-        return provider && provider.imageModels ? provider.imageModels : [];
     }
 }
 
+// Service ka ek hi instance banayein aur export karein
 module.exports = new AIService();

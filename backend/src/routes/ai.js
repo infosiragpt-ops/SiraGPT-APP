@@ -10,6 +10,12 @@ const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
+
+
+// Dependencies ko file ke top par import karen
+const fs = require('fs').promises;
+const path = require('path');
+
 // Initialize OpenAI client
 // const openai = new OpenAI({
 //   apiKey: process.env.GEMINI_API_KEY,
@@ -22,14 +28,27 @@ const crypto = require('crypto');
 // ✅ Get available AI models
 router.get('/models', async (req, res) => {
   try {
+    const { type } = req.query; // Query se 'type' hasil karein (e.g., ?type=TEXT)
+
+    const whereClause = {
+      isActive: true,
+    };
+
+    if (type && (type === 'TEXT' || type === 'IMAGE')) {
+      whereClause.type = type; // Agar type di gai hai to us par filter karein
+    }
+
+
     const models = await prisma.aiModel.findMany({
-      where: { isActive: true },
+      where: whereClause,
       select: {
         id: true,
         name: true,
         displayName: true,
         provider: true,
-        description: true
+        description: true,
+        type: true, // Type bhi select karein
+        icon: true  // Icon bhi select karein
       },
       orderBy: { createdAt: 'asc' }
     });
@@ -294,6 +313,11 @@ router.post(
 
         });
 
+      } else if (provider === "OpenRouter") {
+        openai = new OpenAI({
+          apiKey: process.env.OPENROUTER_API_KEY,
+          baseURL: "https://openrouter.ai/api/v1",
+        });
       }
       else {
         openai = new OpenAI({
@@ -303,56 +327,56 @@ router.post(
 
 
       // ✅ Check monthly limit
-// inside POST '/generate' handler, after you determine isAuth and userId:
-// Example: inside POST '/generate' handler after determining isAuth and userId
+      // inside POST '/generate' handler, after you determine isAuth and userId:
+      // Example: inside POST '/generate' handler after determining isAuth and userId
 
-if (isAuth) {
-  if (req.user.plan === 'FREE') {
-    //if want to use api usage for free plan
+      if (isAuth) {
+        if (req.user.plan === 'FREE') {
+          //if want to use api usage for free plan
 
-    // Enforce per-month call limit (completed ApiUsage rows)
-    
-    // const monthlyCalls = await countMonthlyApiCalls(userId);
-    // const allowedCalls = req.user.monthlyCallLimit ?? 3; // fallback
-    // if (allowedCalls > 0 && monthlyCalls >= allowedCalls) {
-    //   return res.status(429).json({
-    //     error: 'Monthly API call limit exceeded for Free plan',
-    //     usage: { current: monthlyCalls, limit: allowedCalls }
-    //   });
-    // }
-    const result = await prisma.user.updateMany({
-      where: {
-        id: userId,
-        monthlyCallLimit: { gt: 0 }
-      },
-      data: {
-        monthlyCallLimit: { decrement: 1 }
+          // Enforce per-month call limit (completed ApiUsage rows)
+
+          // const monthlyCalls = await countMonthlyApiCalls(userId);
+          // const allowedCalls = req.user.monthlyCallLimit ?? 3; // fallback
+          // if (allowedCalls > 0 && monthlyCalls >= allowedCalls) {
+          //   return res.status(429).json({
+          //     error: 'Monthly API call limit exceeded for Free plan',
+          //     usage: { current: monthlyCalls, limit: allowedCalls }
+          //   });
+          // }
+          const result = await prisma.user.updateMany({
+            where: {
+              id: userId,
+              monthlyCallLimit: { gt: 0 }
+            },
+            data: {
+              monthlyCallLimit: { decrement: 1 }
+            }
+          });
+
+          if (!result || result.count === 0) {
+            // No remaining free calls
+            return res.status(429).json({
+              error: 'Free monthly queries exhausted. Please upgrade to continue.',
+              remaining: 0
+            });
+          }
+
+        } else {
+          // Paid plans: enforce token-based monthlyLimit as before
+          if (req.user.apiUsage >= req.user.monthlyLimit) {
+            return res.status(429).json({
+              error: 'Monthly API limit exceeded',
+              usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
+            });
+          }
+        }
       }
-    });
-
-    if (!result || result.count === 0) {
-      // No remaining free calls
-      return res.status(429).json({
-        error: 'Free monthly queries exhausted. Please upgrade to continue.',
-        remaining: 0
-      });
-    }
-
-  } else {
-    // Paid plans: enforce token-based monthlyLimit as before
-    if (req.user.apiUsage >= req.user.monthlyLimit) {
-      return res.status(429).json({
-        error: 'Monthly API limit exceeded',
-        usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-      });
-    }
-  }
-}
 
       // ✅ Process attached files
       let processedFiles = [];
       let openaiFiles = [];
-      if (isAuth &&files && files.length > 0) {
+      if (isAuth && files && files.length > 0) {
         processedFiles = await Promise.all(
           files.map(async (fileId) => {
             const file = await prisma.file.findFirst({
@@ -388,7 +412,7 @@ You have a MathJax render environment.
 Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
       };
       // Step 1: get previous chat history from DB
-// Build history only if authenticated & chatId provided
+      // Build history only if authenticated & chatId provided
       let historyMessages = [];
       if (canPersist) {
         historyMessages = await prisma.message.findMany({
@@ -441,61 +465,74 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
       res.flushHeaders();
 
 
-         // Send anonymous quota meta early (if anon)
+      // Send anonymous quota meta early (if anon)
       // if (req.anonymous) {
       //   res.write(`data: ${JSON.stringify({ type: 'meta', anon: { remaining: req.anonymous.remaining, limit: req.anonymous.limit } })}\n\n`);
       // }
       // Call OpenAI API
+      // let fullResponseContent = '';
+      // let tokens = 0;
+      // // console.log("messages", messages);
+
+
+      // try {
+
+
+      //   const stream = await openai.chat.completions.create({
+      //     model: model,
+      //     messages: messages,
+      //     stream: true,
+      //     max_tokens: 3000
+      //   });
+
+      //   content = '';
+      //   // Stream se data parhein aur client ko bhejein
+      //   for await (const chunk of stream) {
+      //     const contentChunk = chunk.choices[0]?.delta?.content || '';
+      //     if (contentChunk) {
+      //       fullResponseContent += contentChunk;
+      //       res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+      //     }
+      //   }
+      //   console.log('OpenAI :', await stream,);
+
+
+      //   // const finalCompletion = await stream.finalChatCompletion();
+
+      //   // console.log('OpenAI response completed, tokens:', finalCompletion.usage?.total_tokens);
+
+      //   tokens = fullResponseContent.length + prompt.length;
+      //   console.log("tokens", tokens);
+
+      // } catch (openaiError) {
+      //   console.error('OpenAI API error:', openaiError);
+      //   console.error('Error details:', openaiError.response?.data || openaiError.message);
+
+      //   // Send error to client
+      //   res.write(`data: ${JSON.stringify({ error: 'AI service temporarily unavailable' })}\n\n`);
+
+      //   // Fallback to AI service
+      //   const fileContext = processedFiles.length > 0
+      //     ? '\n\nAttached files:\n' + processedFiles.map(f => `- ${f.name}: ${f.extractedText || '...'}`).join('\n')
+      //     : '';
+      //   content = await aiService.generateResponse('ChatGPT', model, prompt + fileContext, chatId);
+      //   tokens = content.length + prompt.length;
+      // }
       let fullResponseContent = '';
-      let tokens = 0;
-      // console.log("messages", messages);
-
-
       try {
-
-
-        const stream = await openai.chat.completions.create({
-          model: model,
-          messages: messages,
-          stream: true,
-          max_tokens: 3000
+        fullResponseContent = await aiService.generateStream({
+          provider,
+          model,
+          messages,
+          res, // Response object pass karein takay service stream likh sake
         });
-
-        content = '';
-        // Stream se data parhein aur client ko bhejein
-        for await (const chunk of stream) {
-          const contentChunk = chunk.choices[0]?.delta?.content || '';
-          if (contentChunk) {
-            fullResponseContent += contentChunk;
-            res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
-          }
-        }
-        console.log('OpenAI :', await stream,);
-
-
-        // const finalCompletion = await stream.finalChatCompletion();
-
-        // console.log('OpenAI response completed, tokens:', finalCompletion.usage?.total_tokens);
-
-        tokens = fullResponseContent.length + prompt.length;
-        console.log("tokens", tokens);
-
-      } catch (openaiError) {
-        console.error('OpenAI API error:', openaiError);
-        console.error('Error details:', openaiError.response?.data || openaiError.message);
-
-        // Send error to client
-        res.write(`data: ${JSON.stringify({ error: 'AI service temporarily unavailable' })}\n\n`);
-
-        // Fallback to AI service
-        const fileContext = processedFiles.length > 0
-          ? '\n\nAttached files:\n' + processedFiles.map(f => `- ${f.name}: ${f.extractedText || '...'}`).join('\n')
-          : '';
-        content = await aiService.generateResponse('ChatGPT', model, prompt + fileContext, chatId);
-        tokens = content.length + prompt.length;
+      } catch (apiError) {
+        // Error pehle hi service mein handle ho chuka hai, yahan sirf log kar sakte hain
+        console.error('AI Service stream failed in route:', apiError.message);
       }
 
-         // Persist only if authenticated
+      const tokens = fullResponseContent.length + prompt.length; // Simple token calculation
+      // Persist only if authenticated
       if (isAuth) {
         saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, fullResponseContent, tokens, model, processedFiles);
       }
@@ -727,6 +764,197 @@ router.post(
         imageUrl,
         tokens,
         usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
+      });
+
+    } catch (error) {
+      console.error('Image generation error:', error);
+      res.status(500).json({ error: error.message || 'Image generation failed' });
+    }
+  }
+);
+
+
+// Helper function to save a base64 encoded image to the filesystem
+async function saveBase64Image(base64Data) {
+  if (!base64Data) {
+    throw new Error('No base64 data provided to save.');
+  }
+
+
+  if (base64Data.length > 10 * 1024 * 1024) {
+    throw new Error('Generated image is too large');
+  }
+
+
+  const uploadsDir = path.join(__dirname, '../../uploads/images');
+  await fs.mkdir(uploadsDir, { recursive: true });
+
+
+  const timestamp = Date.now();
+  const filename = `generated-${timestamp}-${Math.random().toString(36).substr(2, 9)}.png`;
+  const filepath = path.join(uploadsDir, filename);
+
+
+  const imageBuffer = Buffer.from(base64Data, 'base64');
+  await fs.writeFile(filepath, imageBuffer);
+
+
+  const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+  const imageUrl = `${baseUrl}/uploads/images/${filename}`;
+
+  console.log("Image saved locally. URL:", imageUrl);
+  return imageUrl;
+}
+
+router.post(
+  '/generate-image-new',
+  [
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('chatId').optional().isString(),
+    body('provider').trim().notEmpty().withMessage('Provider is required'),
+    body('model').trim().notEmpty().withMessage('Model is required'),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { prompt, chatId, provider, model } = req.body;
+      const userId = req.user.id;
+
+      let openai;
+      if (provider === "Gemini") {
+        openai = new OpenAI({
+          apiKey: process.env.GEMINI_API_KEY,
+          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+        });
+      } else { // This will now handle OpenAI
+        openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY
+        });
+      }
+
+      // ✅ Check monthly limit (logic is fine)
+      if (req.user.apiUsage >= req.user.monthlyLimit) {
+        return res.status(429).json({
+          error: 'Monthly API limit exceeded',
+          usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
+        });
+      }
+
+      let imageUrl;
+      const tokens = 1000; // Note: Token calculation should ideally be dynamic based on provider and resolution
+
+      try {
+        let response;
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Image generation timeout')), 50000);
+        });
+
+        if (provider === "Gemini") {
+          const imagePromise = openai.images.generate({
+            model: "imagen-3.0-generate-002",
+            prompt: prompt,
+            response_format: "b64_json",
+            n: 1,
+            size: "1024x1024"
+          });
+          response = await Promise.race([imagePromise, timeoutPromise]);
+        } else { // Provider is OpenAI (DALL-E)
+          // YAHAN PAR TABDEELI HAI: Hum ab URL ke bajaye b64_json request kar rahe hain
+          const imagePromise = openai.images.generate({
+            model: 'dall-e-3',
+            prompt: prompt,
+            n: 1,
+            size: '1024x1024',
+            quality: 'standard',
+            response_format: 'b64_json', // IMPORTANT CHANGE
+          });
+          response = await Promise.race([imagePromise, timeoutPromise]);
+        }
+
+        const base64Data = response.data[0].b64_json;
+
+        // YAHAN PAR TABDEELI HAI: Hum ab naye helper function ka istemal kar rahe hain
+        imageUrl = await saveBase64Image(base64Data);
+      } catch (apiError) {
+        console.error(`${provider} Image API error:`, apiError);
+        if (apiError.message === 'Image generation timeout') {
+          return res.status(408).json({ error: 'Image generation timed out. Please try again.' });
+        }
+        return res.status(500).json({
+          error: 'Image generation failed. Please try again.',
+          details: apiError.message
+        });
+      }
+
+      // ✅ Save messages and track usage (Baaqi code theek hai)
+      if (chatId) {
+        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
+        if (!chat) {
+          return res.status(404).json({ error: 'Chat not found' });
+        }
+
+        try {
+          await prisma.$transaction([
+            // Operation 1: USER ka message create karen
+            prisma.message.create({
+              data: {
+                chatId,
+                role: 'USER',
+                content: prompt,
+              }
+            }),
+
+            // Operation 2: ASSISTANT ka image message create karen
+            prisma.message.create({
+              data: {
+                chatId,
+                role: 'ASSISTANT',
+                content: imageUrl,
+                tokens,
+                files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt }])
+              }
+            }),
+
+            // Operation 3: Chat ko update karen
+            prisma.chat.update({
+              where: { id: chatId },
+              data: {
+                updatedAt: new Date(),
+                title: chat.title === 'New Chat'
+                  ? `Image: ${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}`
+                  : chat.title
+              }
+            })
+          ]);
+
+        } catch (error) {
+          console.error("Transaction failed:", error);
+          // Transaction fail hone par user ko error bhej sakte hain
+          return res.status(500).json({ error: "Failed to save chat history." });
+        }
+
+      }
+
+      // ✅ Track usage
+      await prisma.apiUsage.create({
+        data: { userId, model, tokens, cost: tokens * 0.001 } // Model name ko dynamic kar den
+      });
+
+      const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: { apiUsage: { increment: tokens } }
+      });
+
+      res.json({
+        imageUrl,
+        tokens,
+        usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
+
       });
 
     } catch (error) {
@@ -1077,7 +1305,7 @@ async function resolveAnonQuota(req, res) {
   let cookies = {};
   try {
     if (req.headers.cookie) cookies = cookie.parse(req.headers.cookie);
-  } catch {}
+  } catch { }
 
   const headerAnon = req.get('x-anon-id');
   let anonId = cookies[anonCookieName] || headerAnon || null;

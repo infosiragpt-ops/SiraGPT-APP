@@ -2,12 +2,18 @@ const express = require('express');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const prisma = require('../config/database');
 const { body, validationResult } = require('express-validator');
-
+const { ProviderType, ModelType } = require('@prisma/client'); // Enums ko import karein
 const router = express.Router();
 
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
 
+
+router.get('/providers', (req, res) => {
+  // Prisma se ProviderType enum ki values hasil karein
+  const providers = Object.keys(ProviderType);
+  res.json({ providers });
+});
 // AI Models Management
 router.get('/models', async (req, res) => {
   try {
@@ -24,7 +30,9 @@ router.get('/models', async (req, res) => {
 router.post('/models', [
   body('name').trim().isLength({ min: 1 }).withMessage('Name is required'),
   body('displayName').trim().isLength({ min: 1 }).withMessage('Display name is required'),
-  body('provider').trim().isLength({ min: 1 }).withMessage('Provider is required')
+  body('provider').isIn(Object.keys(ProviderType)).withMessage('Invalid provider'), // <-- Provider ko validate karein
+  body('type').isIn(Object.keys(ModelType)).withMessage('Invalid model type'),
+  body('icon').optional().trim()
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -32,13 +40,15 @@ router.post('/models', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, displayName, provider, description, apiKey } = req.body;
+    const { name, displayName, provider, type, icon, description, apiKey } = req.body;
 
     const model = await prisma.aiModel.create({
       data: {
         name,
         displayName,
         provider,
+        type,
+        icon,
         description,
         apiKey
       }
@@ -56,7 +66,9 @@ router.post('/models', [
 
 router.put('/models/:id', [
   body('displayName').optional().trim().isLength({ min: 1 }),
-  body('provider').optional().trim().isLength({ min: 1 })
+  body('provider').optional().isIn(Object.keys(ProviderType)),
+  body('type').optional().isIn(Object.keys(ModelType)),
+  body('icon').optional({ nullable: true }).trim(),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -64,11 +76,13 @@ router.put('/models/:id', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { displayName, provider, description, apiKey, isActive } = req.body;
+    const { displayName, provider, type, icon, description, apiKey, isActive } = req.body;
     const updateData = {};
 
     if (displayName) updateData.displayName = displayName;
     if (provider) updateData.provider = provider;
+    if (type) updateData.type = type;
+    if (icon !== undefined) updateData.icon = icon;
     if (description !== undefined) updateData.description = description;
     if (apiKey !== undefined) updateData.apiKey = apiKey;
     if (typeof isActive === 'boolean') updateData.isActive = isActive;

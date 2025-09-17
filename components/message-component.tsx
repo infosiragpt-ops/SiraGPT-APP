@@ -10,7 +10,8 @@ import { Textarea } from "@/components/ui/textarea"
 import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
-    Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon
+    Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
+    Sparkles
 } from "lucide-react"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
@@ -116,7 +117,25 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             }
         }
     };
+    const ShimmerContent = () => {
+        return (
+            <div className="animate-pulse">
+                <div className="flex items-center gap-2 mb-3">
+                    <Sparkles className="h-4 w-4 text-muted-foreground" />
+                    <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-1/4"></div>
+                </div>
+                <div className="space-y-2">
+                    <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-full"></div>
+                    <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-5/6"></div>
+                </div>
+            </div>
+        );
+    };
+    const isAssistant = message.role === "ASSISTANT";
+    const isUser = message.role === "USER";
 
+    // Ahem Condition: Kya yeh ek khali AI message hai?
+    const isThinking = isAssistant && !message.content;
     // For Share Functioanlity
     const handleShare = async () => {
         try {
@@ -561,9 +580,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 
                 {message.role === 'ASSISTANT' && (
                     <div className="w-full max-w-[85%]">
-                        <MessageContent />
-                        <VideoDisplay />
-                        <FileDisplay />
+                        {isThinking ? (
+                            <ShimmerContent /> // Agar soch raha hai, to shimmer dikhayein
+                        ) : (<>
+                            <MessageContent />
+                            <VideoDisplay />
+                            <FileDisplay />
+                        </>)}
+
 
                         {/* Action buttons for assistant messages */}
                         {!isVideoMessage && (

@@ -63,6 +63,7 @@ import MusicGenerationComponent from "./MusicGenerationComponent"
 import { webSearchService } from "@/lib/web-search-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
+import { IconProvider } from "./icon-provider"
 
 
 // Enhanced Model Selector
@@ -83,7 +84,8 @@ const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels,
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
-        <Bot className="h-4 w-4" />
+        {/* <Bot className="h-4 w-4" /> */}
+        {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4" />}
         <span className="text-sm font-medium">{selectedModelData?.displayName || selectedModel}</span>
         <div className="flex items-center gap-1">
           {aiService.hasApiKey(selectedModel) ? (
@@ -95,31 +97,38 @@ const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels,
         </div>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-56">
-        {availableModels.map((model: any) => (
-          <DropdownMenuItem
-            key={model.name}
-            onSelect={() => {
-              setSelectedModel(model.name);
-              console.log("model", model.provider);
+      <DropdownMenuContent align="end"
+        className="w-56" >
+        <ScrollArea
+          style={{ height: '300px' }}
+        >
+          {availableModels.map((model: any) => (
+            <DropdownMenuItem
+              key={model.name}
+              onSelect={() => {
+                setSelectedModel(model.name);
+                console.log("model", model);
 
-              setSelectedProvider(model.provider)
 
-            }}
-            className="flex items-center gap-2 py-2"
-          >
-            <Bot className="h-4 w-4 flex-shrink-0" />
-            <div className="flex flex-col flex-1">
-              <span className="text-sm">{model.displayName}</span>
-              <span className="text-xs text-muted-foreground">{model.description}</span>
-            </div>
-            {aiService.hasApiKey(model.name) ? (
-              <div className="w-2 h-2 bg-green-500 rounded-full" />
-            ) : (
-              <div className="w-2 h-2 bg-red-500 rounded-full" />
-            )}
-          </DropdownMenuItem>
-        ))}
+                setSelectedProvider(model.provider)
+
+              }}
+              className="flex items-center gap-2 py-2"
+            >
+              {/* <Bot className="h-4 w-4 flex-shrink-0" /> */}
+              <IconProvider name={model.icon} className="h-5 w-5 flex-shrink-0" />
+              <div className="flex flex-col flex-1">
+                <span className="text-sm">{model.displayName}</span>
+                <span className="text-xs text-muted-foreground">{model.name}</span>
+              </div>
+              {aiService.hasApiKey(model.name) ? (
+                <div className="w-2 h-2 bg-green-500 rounded-full" />
+              ) : (
+                <div className="w-2 h-2 bg-red-500 rounded-full" />
+              )}
+            </DropdownMenuItem>
+          ))}
+        </ScrollArea>
       </DropdownMenuContent>
     </DropdownMenu>
   );
