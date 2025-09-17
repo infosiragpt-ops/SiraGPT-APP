@@ -4,6 +4,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarInset } from "@/components/ui/sidebar"
 import { AuthGuard } from "@/components/auth-guard"
 import { ChatProvider } from "@/lib/chat-context-integrated"
+import WhatsAppButton from "@/components/WhatsAppButton"
 
 export default function ChatLayout({
   children,
@@ -16,7 +17,7 @@ export default function ChatLayout({
         <SidebarProvider defaultOpen={true}>
           <div className="flex h-screen w-full">
             <AppSidebar />
-            <SidebarInset className="flex-1">{children}</SidebarInset>
+            <SidebarInset className="flex-1">{children}  <WhatsAppButton  message="Hi 👋, I’m interested in SiraGPT. Could you share more about its features and pricing?"/></SidebarInset>
           </div>
         </SidebarProvider>
       </ChatProvider>
