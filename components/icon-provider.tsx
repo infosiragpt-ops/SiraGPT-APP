@@ -26,6 +26,8 @@ import {
 import * as React from "react";
 import Image from "next/image";
 
+import { useTheme } from "next-themes";
+
 interface IconConfig {
     type: 'svg' | 'png';
     component?: React.ElementType<LucideProps>;
@@ -36,8 +38,8 @@ export const iconMap: { [key: string]: IconConfig } = {
     // --- Default ---
     Bot: { type: 'svg', component: Bot },
 
-    
-    Sparkles: { type: 'svg', component: Sparkles }, 
+
+    Sparkles: { type: 'svg', component: Sparkles },
     Zap: { type: 'svg', component: Zap },           // OpenAI fallback
     ToyBrick: { type: 'svg', component: ToyBrick }, // Meta (Llama)
     MessageSquare: { type: 'svg', component: MessageSquare }, // xAI fallback
@@ -77,6 +79,9 @@ interface IconProviderProps extends Omit<LucideProps, 'name'> {
 }
 
 export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) => {
+
+    const { theme } = useTheme();
+
     if (!name || !iconMap[name]) {
         return <Bot size={size} {...props} />; // Default Bot icon if not found
     }
@@ -91,7 +96,10 @@ export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) =
                     alt={name}
                     width={size}
                     height={size}
-                    style={{ objectFit: 'contain' }}
+                    style={{
+                        objectFit: "contain",
+                        filter: theme === "light" ? "invert(1)" : "invert(0)",
+                    }}
                 />
             </div>
         );

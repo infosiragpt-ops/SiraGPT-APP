@@ -83,6 +83,7 @@
     "sonner": "latest",
     "stripe": "^18.3.0",
     "tailwind-merge": "^2.5.5",
+    "tailwind-scrollbar": "^3.0.0",
     "tailwindcss-animate": "^1.0.7",
     "tesseract.js": "^5.0.4",
     "vaul": "^0.9.6",

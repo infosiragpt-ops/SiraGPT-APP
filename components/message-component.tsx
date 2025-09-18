@@ -140,7 +140,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     const handleShare = async () => {
         try {
             const response = await apiClient.handleShare(message.chatId);
-            navigator.clipboard.writeText(process.env.NEXT_PUBLIC_API_URL + response.shareableLink);
+            const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
+            let url = `${baseUrl}/${response.shareableLink}`;
+            navigator.clipboard.writeText(url);
             toast.success("Shareable link copied to clipboard!");
         } catch (error) {
             toast.error(`Failed to create share link. ${error}`);
@@ -354,7 +356,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         h2: ({ children }) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
                         h3: ({ children }) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
                         blockquote: ({ children }) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-                        table: ({ children }) => <table className="border-collapse border border-muted mb-3 w-full">{children}</table>,
+                        table: ({ children }) => <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600">
+                            <table className="border-collapse border border-muted mb-3 min-w-[1000px]">
+                                {children}
+                            </table>
+                        </div>,
                         th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium">{children}</th>,
                         td: ({ children }) => <td className="border border-muted px-3 py-2">{children}</td>,
                         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
@@ -579,7 +585,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 )}
 
                 {message.role === 'ASSISTANT' && (
-                    <div className="w-full max-w-[85%]">
+                    <div className="w-full max-w-[90%]">
                         {isThinking ? (
                             <ShimmerContent /> // Agar soch raha hai, to shimmer dikhayein
                         ) : (<>

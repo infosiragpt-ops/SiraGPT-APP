@@ -392,6 +392,13 @@ class ApiClient {
     return this.request(`/admin/users/${id}`, { method: 'DELETE' });
   }
 
+async createUserAdmin(data: { name: string; email: string; password: string; plan?: string; isAdmin?: boolean; monthlyLimit?: number }) {
+  // Calls admin POST /admin/users - requires admin session token
+  return this.request('/admin/users', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
   async getAnalytics() {
     return this.request('/admin/analytics');
   }

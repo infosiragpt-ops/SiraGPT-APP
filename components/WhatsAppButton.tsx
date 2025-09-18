@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { MessageCircle } from "lucide-react" // WhatsApp-like icon
+import { MessageCircle, } from "lucide-react" // WhatsApp-like icon
 
 type Props = {
   number?: string
@@ -21,8 +21,8 @@ const WhatsAppButton: React.FC<Props> = ({ number, message, className = "" }) =>
 
   const isMobileDevice =
     typeof navigator !== "undefined"
-      ? navigator.userAgentData?.mobile ||
-        /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent)
+      ? (navigator as any).userAgentData?.mobile ||
+      /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent)
       : false
 
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
