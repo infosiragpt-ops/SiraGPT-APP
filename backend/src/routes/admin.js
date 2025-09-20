@@ -31,7 +31,7 @@ router.get('/models', async (req, res) => {
 router.post('/models', [
   body('name').trim().isLength({ min: 1 }).withMessage('Name is required'),
   body('displayName').trim().isLength({ min: 1 }).withMessage('Display name is required'),
-  body('provider').isIn(Object.keys(ProviderType)).withMessage('Invalid provider'), // <-- Provider ko validate karein
+  body('provider').isIn(Object.values(ProviderType)).withMessage('Invalid provider'), // <-- Provider ko validate karein
   body('type').isIn(Object.keys(ModelType)).withMessage('Invalid model type'),
   body('icon').optional().trim()
 ], async (req, res) => {

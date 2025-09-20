@@ -22,6 +22,8 @@ interface Message {
   }
 }
 
+// Update the Chat interface around line 24
+
 interface Chat {
   id: string
   userId: string
@@ -30,6 +32,23 @@ interface Chat {
   createdAt: string
   updatedAt: string
   messages: Message[]
+  customGptId?: string
+  customGpt?: {
+    id: string
+    name: string
+    description?: string
+    iconUrl?: string
+    instructions?: string
+    greetingMessage?: string
+    conversationStarters?: string[]
+    modelName?: string
+    temperature?: number
+    knowledgeFiles?: Array<{
+      id: string
+      originalName: string
+      extractedText?: string
+    }>
+  }
 }
 
 interface ChatContextType {
@@ -276,30 +295,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user, token, selectedModel, availableModels, setChatType, addMessage]);
 
-  const selectChat = useCallback(
-    async (chatId: string) => {
+const selectChat = useCallback(
+  async (chatId: string) => {
+    try {
+      const response = await apiClient.getChat(chatId)
+      const chat = response.chat
+      setCurrentChat(chat)
 
+      // Update the chats list to ensure consistency and add new chat if needed
+      setChats((prev) => {
+        // Check if chat already exists
+        const existingIndex = prev.findIndex(c => c.id === chatId)
+        if (existingIndex >= 0) {
+          // Update existing chat
+          return prev.map((c) => c.id === chatId ? chat : c)
+        } else {
+          // Add new chat at the beginning
+          return [chat, ...prev]
+        }
+      })
 
-      try {
-        const response = await apiClient.getChat(chatId)
-        const chat = response.chat
-        setCurrentChat(chat)
+      // Store the current chat ID in localStorage
+      localStorage.setItem('currentChatId', chatId)
 
-        // Update the chats list to ensure consistency
-        setChats((prev) => prev.map((c) =>
-          c.id === chatId ? chat : c
-        ))
-
-        // Store the current chat ID in localStorage
-        localStorage.setItem('currentChatId', chatId)
-
-        setUploadedFiles([]) // Clear uploaded files when switching chats
-      } catch (error) {
-        console.error("Failed to load chat:", error)
-      }
-    },
-    [],
-  )
+      setUploadedFiles([]) // Clear uploaded files when switching chats
+    } catch (error) {
+      console.error("Failed to load chat:", error)
+    }
+  },
+  [],
+)
 
   const clearCurrentChat = useCallback(async () => {
     if (!currentChat || !token) return

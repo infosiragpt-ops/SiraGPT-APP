@@ -67,10 +67,19 @@ import { IconProvider } from "./icon-provider"
 
 
 // Enhanced Model Selector
-const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels, setSelectedProvider, chatTypes, }: any) => {
+// Enhanced Model Selector with Custom GPT support
+const NavbarModelSelector = ({ 
+  selectedModel, 
+  setSelectedModel, 
+  availableModels, 
+  setSelectedProvider, 
+  chatTypes, 
+  currentChat 
+}: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
+  
+  // If this is a video chat type, show video model
   if (chatTypes === "video") {
-    // 👇 Just return static model name without dropdown
     return (
       <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
         <Bot className="h-4 w-4" />
@@ -81,10 +90,42 @@ const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels,
       </div>
     );
   }
+  
+  // If this chat is associated with a custom GPT, show GPT info instead of model selector
+  if (currentChat?.customGptId || currentChat?.customGpt) {
+    const customGptName = currentChat?.customGpt?.name || currentChat?.title || "Custom GPT";
+    const customGptIcon = currentChat?.customGpt?.iconUrl;
+    
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background">
+        {customGptIcon ? (
+          customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img 
+              src={customGptIcon} 
+              alt="GPT icon" 
+              className="w-4 h-4 rounded-full object-cover" 
+            />
+          ) : (
+            <div className="w-4 h-4 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-xs">
+              {customGptIcon}
+            </div>
+          )
+        ) : (
+          <Bot className="h-4 w-4 text-purple-600" />
+        )}
+        <span className="text-sm font-medium">{customGptName}</span>
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 bg-purple-500 rounded-full" title="Custom GPT" />
+        </div>
+      </div>
+    );
+  }
+  
+  // Default model selector for regular chats
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
-        {/* <Bot className="h-4 w-4" /> */}
         {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4" />}
         <span className="text-sm font-medium">{selectedModelData?.displayName || selectedModel}</span>
         <div className="flex items-center gap-1">
@@ -97,25 +138,18 @@ const NavbarModelSelector = ({ selectedModel, setSelectedModel, availableModels,
         </div>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end"
-        className="w-56" >
-        <ScrollArea
-          style={{ height: '300px' }}
-        >
+      <DropdownMenuContent align="end" className="w-56">
+        <ScrollArea style={{ height: '300px' }}>
           {availableModels.map((model: any) => (
             <DropdownMenuItem
               key={model.name}
               onSelect={() => {
                 setSelectedModel(model.name);
                 console.log("model", model);
-
-
                 setSelectedProvider(model.provider)
-
               }}
               className="flex items-center gap-2 py-2"
             >
-              {/* <Bot className="h-4 w-4 flex-shrink-0" /> */}
               <IconProvider name={model.icon} className="h-5 w-5 flex-shrink-0" />
               <div className="flex flex-col flex-1">
                 <span className="text-sm">{model.displayName}</span>
@@ -838,6 +872,7 @@ export default function ChatInterface() {
                   availableModels={availableModels}
                   setSelectedProvider={setSelectedProivder}
                   chatTypes={chatType}
+                  currentChat={currentChat}
                 />
                 <div className="flex items-center gap-2 mt-2">
                   {/* <Badge variant={chatType === 'text' ? 'default' : 'outline'}>

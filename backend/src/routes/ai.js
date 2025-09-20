@@ -306,44 +306,27 @@ router.post(
       const canPersist = isAuth && !!chatId;
 
       let openai;
+      let actualProvider = provider; // ✅ NEW: track actual provider
+
       if (provider === "Gemini") {
         openai = new OpenAI({
           apiKey: process.env.GEMINI_API_KEY,
           baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-
         });
-
       } else if (provider === "OpenRouter") {
         openai = new OpenAI({
           apiKey: process.env.OPENROUTER_API_KEY,
           baseURL: "https://openrouter.ai/api/v1",
         });
-      }
-      else {
+      } else {
         openai = new OpenAI({
           apiKey: process.env.OPENAI_API_KEY
         });
       }
 
-
       // ✅ Check monthly limit
-      // inside POST '/generate' handler, after you determine isAuth and userId:
-      // Example: inside POST '/generate' handler after determining isAuth and userId
-
       if (isAuth) {
         if (req.user.plan === 'FREE') {
-          //if want to use api usage for free plan
-
-          // Enforce per-month call limit (completed ApiUsage rows)
-
-          // const monthlyCalls = await countMonthlyApiCalls(userId);
-          // const allowedCalls = req.user.monthlyCallLimit ?? 3; // fallback
-          // if (allowedCalls > 0 && monthlyCalls >= allowedCalls) {
-          //   return res.status(429).json({
-          //     error: 'Monthly API call limit exceeded for Free plan',
-          //     usage: { current: monthlyCalls, limit: allowedCalls }
-          //   });
-          // }
           const result = await prisma.user.updateMany({
             where: {
               id: userId,
@@ -355,7 +338,6 @@ router.post(
           });
 
           if (!result || result.count === 0) {
-            // No remaining free calls
             return res.status(429).json({
               error: 'Free monthly queries exhausted. Please upgrade to continue.',
               remaining: 0
@@ -363,7 +345,6 @@ router.post(
           }
 
         } else {
-          // Paid plans: enforce token-based monthlyLimit as before
           if (req.user.apiUsage >= req.user.monthlyLimit) {
             return res.status(429).json({
               error: 'Monthly API limit exceeded',
@@ -399,20 +380,98 @@ router.post(
         ).then(results => results.filter(Boolean));
       }
 
-      // Prepare messages for OpenAI
+      // ✅ NEW: Check if chat is associated with a custom GPT
+      let customGpt = null;
+      let actualModel = model;
+      let actualTemperature = 0.7;
 
-      const latexSystemInstruction = {
-        role: 'system',
-        content: `You are an expert AI assistant.
+      if (canPersist) {
+        const chat = await prisma.chat.findUnique({
+          where: { id: chatId },
+          include: {
+            customGpt: {
+              include: {
+                knowledgeFiles: true
+              }
+            }
+          }
+        });
+
+        if (chat && chat.customGpt) {
+          customGpt = chat.customGpt;
+          actualModel = customGpt.modelName || model;
+          actualTemperature = customGpt.temperature || 0.7;
+
+          // ✅ Provider detection logic merged here
+          if (actualModel.includes('x-ai/') || actualModel.includes('openrouter/') || actualModel.includes('anthropic/') || actualModel.includes('meta-llama/') ||actualModel.includes("deepseek/") ||
+  actualModel.includes("meta-llama/") || actualModel.includes("/gpt-oss")
+) {
+            actualProvider = 'OpenRouter';
+          } else if (actualModel.includes('gemini') || actualModel.includes('imagen')) {
+            actualProvider = 'Gemini';
+          } else {
+            actualProvider = 'OpenAI';
+          }
+
+          console.log(`🤖 Using Custom GPT: ${customGpt.name} with model: ${actualModel} via ${actualProvider}`);
+        }
+      }
+
+      // ✅ Re-initialize OpenAI client with actualProvider
+      if (actualProvider === "Gemini") {
+        openai = new OpenAI({
+          apiKey: process.env.GEMINI_API_KEY,
+          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+        });
+      } else if (actualProvider === "OpenRouter") {
+        openai = new OpenAI({
+          apiKey: process.env.OPENROUTER_API_KEY,
+          baseURL: "https://openrouter.ai/api/v1",
+        });
+      } else {
+        openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY
+        });
+      }
+
+      // ✅ Prepare system instruction - Custom GPT or Default
+      let systemInstruction;
+      if (customGpt) {
+        let customSystemPrompt = `You are "${customGpt.name}".\n\n${customGpt.instructions}`;
+
+        if (customGpt.knowledgeFiles && customGpt.knowledgeFiles.length > 0) {
+          const knowledgeContext = customGpt.knowledgeFiles
+            .map(file => `Knowledge: ${file.originalName}\n${file.extractedText || ''}`)
+            .join('\n\n');
+
+          customSystemPrompt += `\n\nKnowledge Base:\n${knowledgeContext}`;
+          console.log(`📚 Added knowledge base with ${customGpt.knowledgeFiles.length} files`);
+        }
+
+        if (customGpt.conversationStarters && customGpt.conversationStarters.length > 0) {
+          customSystemPrompt += `\n\nSuggested conversation topics: ${customGpt.conversationStarters.join(', ')}`;
+        }
+
+        systemInstruction = {
+          role: 'system',
+          content: customSystemPrompt
+        };
+
+        console.log(`📝 Custom GPT system prompt length: ${customSystemPrompt.length} characters`);
+      } else {
+        systemInstruction = {
+          role: 'system',
+          content: `You are an expert AI assistant.
 Writing math formulas:
 You have a MathJax render environment.
 - Any LaTeX text between single dollar sign ($) will be rendered as a TeX formula;
 - Use $(tex_formula)$ in-line delimiters to display equations instead of backslash;
 - The render environment only uses $ (single dollarsign) as a container delimiter, never output $$.
 Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
-      };
-      // Step 1: get previous chat history from DB
-      // Build history only if authenticated & chatId provided
+        };
+      }
+
+      // Step 1: get previous chat history
       let historyMessages = [];
       if (canPersist) {
         historyMessages = await prisma.message.findMany({
@@ -422,7 +481,7 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
         });
       }
 
-      const messages = [latexSystemInstruction];
+      const messages = [systemInstruction];
       if (historyMessages.length) {
         messages.push(
           ...historyMessages.map(m => ({
@@ -431,32 +490,21 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
           }))
         );
       }
-      // Add file context to the user prompt if files are present
+
       let finalPrompt = prompt;
       if (processedFiles.length > 0) {
-        console.log('Processing files for AI:', processedFiles.map(f => ({
-          name: f.name,
-          hasText: !!f.extractedText,
-          textLength: f.extractedText ? f.extractedText.length : 0,
-          mimeType: f.mimeType
-        })));
-
         const fileContext = processedFiles.map(f => {
           const content = f.extractedText || 'Binary file - content not available';
-          console.log(`File ${f.name}: ${content.substring(0, 100)}...`);
           return `File: ${f.name}\nContent: ${content}`;
         }).join('\n\n');
 
         finalPrompt = `${prompt}\n\nAttached files:\n${fileContext}`;
-        console.log('Final prompt length:', finalPrompt.length);
       }
 
-      // Add user message with file context
       messages.push({
         role: 'user',
         content: finalPrompt
       });
-      // console.log("working generates", model, " ", messages);
 
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
@@ -464,79 +512,24 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
 
-
-      // Send anonymous quota meta early (if anon)
-      // if (req.anonymous) {
-      //   res.write(`data: ${JSON.stringify({ type: 'meta', anon: { remaining: req.anonymous.remaining, limit: req.anonymous.limit } })}\n\n`);
-      // }
-      // Call OpenAI API
-      // let fullResponseContent = '';
-      // let tokens = 0;
-      // // console.log("messages", messages);
-
-
-      // try {
-
-
-      //   const stream = await openai.chat.completions.create({
-      //     model: model,
-      //     messages: messages,
-      //     stream: true,
-      //     max_tokens: 3000
-      //   });
-
-      //   content = '';
-      //   // Stream se data parhein aur client ko bhejein
-      //   for await (const chunk of stream) {
-      //     const contentChunk = chunk.choices[0]?.delta?.content || '';
-      //     if (contentChunk) {
-      //       fullResponseContent += contentChunk;
-      //       res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
-      //     }
-      //   }
-      //   console.log('OpenAI :', await stream,);
-
-
-      //   // const finalCompletion = await stream.finalChatCompletion();
-
-      //   // console.log('OpenAI response completed, tokens:', finalCompletion.usage?.total_tokens);
-
-      //   tokens = fullResponseContent.length + prompt.length;
-      //   console.log("tokens", tokens);
-
-      // } catch (openaiError) {
-      //   console.error('OpenAI API error:', openaiError);
-      //   console.error('Error details:', openaiError.response?.data || openaiError.message);
-
-      //   // Send error to client
-      //   res.write(`data: ${JSON.stringify({ error: 'AI service temporarily unavailable' })}\n\n`);
-
-      //   // Fallback to AI service
-      //   const fileContext = processedFiles.length > 0
-      //     ? '\n\nAttached files:\n' + processedFiles.map(f => `- ${f.name}: ${f.extractedText || '...'}`).join('\n')
-      //     : '';
-      //   content = await aiService.generateResponse('ChatGPT', model, prompt + fileContext, chatId);
-      //   tokens = content.length + prompt.length;
-      // }
       let fullResponseContent = '';
       try {
         fullResponseContent = await aiService.generateStream({
-          provider,
-          model,
+          provider: actualProvider, // ✅ updated
+          model: actualModel,       // ✅ updated
           messages,
-          res, // Response object pass karein takay service stream likh sake
+          res,
+          temperature: actualTemperature
         });
       } catch (apiError) {
-        // Error pehle hi service mein handle ho chuka hai, yahan sirf log kar sakte hain
         console.error('AI Service stream failed in route:', apiError.message);
       }
 
-      const tokens = fullResponseContent.length + prompt.length; // Simple token calculation
-      // Persist only if authenticated
-      if (isAuth) {
-        saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, fullResponseContent, tokens, model, processedFiles);
-      }
+      const tokens = fullResponseContent.length + prompt.length;
 
+      if (isAuth) {
+        saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, fullResponseContent, tokens, actualModel, processedFiles);
+      }
 
     } catch (error) {
       console.error('AI generation error:', error);
@@ -547,6 +540,7 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
     }
   }
 );
+
 
 // // ✅ Generate AI image response
 router.post(

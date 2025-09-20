@@ -1,4 +1,10 @@
 -- CreateEnum
+CREATE TYPE "ProviderType" AS ENUM ('OpenAI', 'Gemini', 'OpenRouter', 'Groq', 'Custom');
+
+-- CreateEnum
+CREATE TYPE "ModelType" AS ENUM ('TEXT', 'IMAGE');
+
+-- CreateEnum
 CREATE TYPE "Plan" AS ENUM ('FREE', 'BASIC', 'STANDARD', 'PRO', 'ENTERPRISE');
 
 -- CreateEnum
@@ -9,6 +15,9 @@ CREATE TYPE "PaymentStatus" AS ENUM ('PENDING', 'COMPLETED', 'FAILED', 'CANCELLE
 
 -- CreateEnum
 CREATE TYPE "PaymentProvider" AS ENUM ('STRIPE', 'PAYPAL', 'MERCADOPAGO');
+
+-- CreateEnum
+CREATE TYPE "GptVisibility" AS ENUM ('PRIVATE', 'UNLISTED', 'PUBLIC');
 
 -- CreateTable
 CREATE TABLE "users" (
@@ -37,6 +46,8 @@ CREATE TABLE "ai_models" (
     "provider" TEXT NOT NULL,
     "description" TEXT,
     "apiKey" TEXT,
+    "type" "ModelType" NOT NULL DEFAULT 'TEXT',
+    "icon" TEXT,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -65,6 +76,7 @@ CREATE TABLE "chats" (
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "isShared" BOOLEAN NOT NULL DEFAULT false,
     "shareId" TEXT,
+    "customGptId" TEXT,
 
     CONSTRAINT "chats_pkey" PRIMARY KEY ("id")
 );
@@ -95,6 +107,7 @@ CREATE TABLE "files" (
     "extractedText" TEXT,
     "openaiFileId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "customGptId" TEXT,
 
     CONSTRAINT "files_pkey" PRIMARY KEY ("id")
 );
@@ -150,6 +163,30 @@ CREATE TABLE "anonymous_usage" (
     CONSTRAINT "anonymous_usage_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "custom_gpts" (
+    "id" TEXT NOT NULL,
+    "creatorId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "description" TEXT,
+    "iconUrl" TEXT,
+    "instructions" TEXT NOT NULL,
+    "greetingMessage" TEXT,
+    "modelName" TEXT NOT NULL DEFAULT 'gpt-3.5-turbo',
+    "temperature" DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+    "maxTokens" INTEGER,
+    "actions" JSONB,
+    "conversationStarters" JSONB,
+    "visibility" "GptVisibility" NOT NULL DEFAULT 'PRIVATE',
+    "shareId" TEXT NOT NULL,
+    "category" TEXT,
+    "isFeatured" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "custom_gpts_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
@@ -171,8 +208,14 @@ CREATE UNIQUE INDEX "system_settings_key_key" ON "system_settings"("key");
 -- CreateIndex
 CREATE UNIQUE INDEX "anonymous_usage_anonId_key" ON "anonymous_usage"("anonId");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "custom_gpts_shareId_key" ON "custom_gpts"("shareId");
+
 -- AddForeignKey
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "chats" ADD CONSTRAINT "chats_customGptId_fkey" FOREIGN KEY ("customGptId") REFERENCES "custom_gpts"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "chats" ADD CONSTRAINT "chats_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -184,7 +227,13 @@ ALTER TABLE "messages" ADD CONSTRAINT "messages_chatId_fkey" FOREIGN KEY ("chatI
 ALTER TABLE "files" ADD CONSTRAINT "files_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "files" ADD CONSTRAINT "files_customGptId_fkey" FOREIGN KEY ("customGptId") REFERENCES "custom_gpts"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "payments" ADD CONSTRAINT "payments_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "api_usage" ADD CONSTRAINT "api_usage_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "custom_gpts" ADD CONSTRAINT "custom_gpts_creatorId_fkey" FOREIGN KEY ("creatorId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;

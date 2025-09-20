@@ -76,6 +76,10 @@ model Chat {
   isShared  Boolean  @default(false)
   shareId   String?  @unique 
 
+// GPT Integration
+  customGptId String?
+  customGpt   CustomGpt? @relation(fields: [customGptId], references: [id], onDelete: SetNull)
+
   // Relations
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages Message[]
@@ -115,7 +119,7 @@ model File {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   customGptId String?
-  customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id])
+  customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id],onDelete: SetNull)
 
   @@map("files")
 }
@@ -223,34 +227,34 @@ model CustomGpt {
   // Basic Info
   name        String
   description String?     @db.Text
-  iconUrl     String?     // Icon/Avatar ka URL
+  iconUrl     String?     
   
   // Behavior Configuration
-  instructions        String      @db.Text // System Prompt
-  greetingMessage     String?     @db.Text // Pehla message jo GPT bhejega
+  instructions        String      @db.Text
+  greetingMessage     String?     @db.Text
   
   // Model Parameters
   modelName           String      @default("gpt-3.5-turbo")
   temperature         Float       @default(0.7)
   maxTokens           Int?
 
-  // Knowledge (RAG ke liye) - Hum File model se iska rishta jorenge
+  // Knowledge Files
   knowledgeFiles      File[]      @relation("GptKnowledgeFiles")
 
-  // Actions (Advanced - Step 2 mein implement karenge)
-  actions             Json?       // [{ name, description, schema, endpoint }]
+  // 🔹 Add this line (reverse relation for Chat)
+  chats               Chat[]
 
-  // Conversation Starters (Example Prompts)
-  conversationStarters Json?      // ["Explain quantum computing", "What is a neural network?"]
-  
+  // Actions
+  actions             Json?
+  conversationStarters Json?      
+
   // Publishing
   visibility          GptVisibility @default(PRIVATE)
-  shareId             String      @unique @default(cuid()) // Public link ke liye
-
-  category    String?  // Jaise "Writing", "Productivity", "Education"
-  isFeatured  Boolean  @default(false) // Featured section mein dikhane ke liye
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  shareId             String      @unique @default(cuid())
+  category            String?
+  isFeatured          Boolean     @default(false) 
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
   @@map("custom_gpts")
 }

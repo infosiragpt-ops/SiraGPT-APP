@@ -1,6 +1,6 @@
 import type React from "react"
 
-export default function ChatLayout({
+export default function GPTsLayout({
   children,
 }: {
   children: React.ReactNode

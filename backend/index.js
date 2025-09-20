@@ -21,6 +21,7 @@ const downloadRoutes = require('./src/routes/download');
 const elevenlabsRoutes = require('./src/routes/elevenlabs');
 const searchRoutes = require('./src/routes/search');
 const videoRoutes = require('./src/routes/video');
+const gptsRoutes = require('./src/routes/gpts'); // Add GPTs routes
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -56,17 +57,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // Body parsing middleware
-// app.use(compression({
-//     filter: (req, res) => {
-//         // Agar response 'text/event-stream' hai, to usse compress mat karo
-//         if (res.getHeader('Content-Type') === 'text/event-stream') {
-//             return false;
-//         }
-//         // Baaki sab responses ko compress karo
-//         return compression.filter(req, res);
-//     }
-// }));
-
 app.use(compression({
     filter: (req, res) => {
         // Agar response 'text/event-stream' ya 'video/mp4' hai, to usse compress mat karo
@@ -125,6 +115,8 @@ app.use('/api/download', downloadRoutes);
 app.use('/api/elevenlabs', elevenlabsRoutes);
 app.use('/api/video', videoRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/gpts', gptsRoutes); // Add GPTs API routes
+
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error('Error:', err);

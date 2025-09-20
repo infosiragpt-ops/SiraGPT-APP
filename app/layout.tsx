@@ -5,7 +5,9 @@ import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/lib/auth-context-integrated"
 import { Toaster } from "@/components/ui/sonner"
+import { AppWrapper } from "@/components/app-wrapper"
 import 'katex/dist/katex.min.css';
+
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
@@ -33,7 +35,9 @@ export default function RootLayout({
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <AuthProvider>
-            {children}
+            <AppWrapper>
+              {children}
+            </AppWrapper>
             <Toaster />
           </AuthProvider>
         </ThemeProvider>

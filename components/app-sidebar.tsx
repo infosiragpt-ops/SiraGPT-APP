@@ -18,6 +18,10 @@ import {
   MoreHorizontal,
   ChevronDown,
   PanelLeft,
+  Search,
+  Library,
+  Images,
+  LayoutGrid,
 } from "lucide-react"
 import {
   Sidebar,
@@ -46,7 +50,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
-import { useRouter } from "next/navigation"
+import { useRouter, usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
@@ -94,6 +98,7 @@ export function AppSidebar() {
     setSelectedModel,
   } = useChat()
   const router = useRouter()
+  const pathname = usePathname()
   const [selectedType, setSelectedType] = React.useState("Text Chat")
   const { state, toggleSidebar } = useSidebar()
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
@@ -106,6 +111,10 @@ export function AppSidebar() {
 
   const handleNewChat = () => {
     createNewChat()
+    // Navigate to chat if not already there
+    if (!pathname.startsWith('/chat')) {
+      router.push('/chat')
+    }
   }
 
   const handleTypeChange = (typeName: string) => {
@@ -138,6 +147,21 @@ export function AppSidebar() {
     e.stopPropagation()
     setUpgradeOpen(true)
   }
+
+  const handleGPTsClick = () => {
+    router.push("/gpts")
+  }
+
+  const handleChatClick = (chatId: string) => {
+    selectChat(chatId)
+    // Navigate to chat page if not already there
+    if (!pathname.startsWith('/chat')) {
+      router.push(`/chat?id=${chatId}`)
+    }
+  }
+
+  // Check if we're on GPTs page
+  const isOnGPTsPage = pathname.startsWith('/gpts')
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -177,15 +201,16 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
 
+      {/* New Chat, Search, and Library buttons */}
       <div
         className={cn(
-          "transition-all",
+          "transition-all flex flex-col gap-2",
           state === "open" ? "p-4 pt-2" : "p-2",
           "mt-4"
         )}
       >
         <SidebarMenuButton
-          onClick={() => createNewChat()}
+          onClick={handleNewChat}
           className="w-full justify-start h-9 px-3"
           variant="outline"
         >
@@ -193,9 +218,40 @@ export function AppSidebar() {
           {/* Yeh text bhi sirf open state mein dikhega */}
           <span className="group-data-[state=closed]:hidden ml-2">New Chat</span>
         </SidebarMenuButton>
+        
+        {/* Search button */}
+        <SidebarMenuButton
+          className="w-full justify-start h-9 px-3"
+          variant="ghost"
+        >
+          <Search className="h-4 w-4" />
+          <span className="group-data-[state=closed]:hidden ml-2">Search chats</span>
+        </SidebarMenuButton>
+        
+        {/* Library button */}
+        <SidebarMenuButton
+          className="w-full justify-start h-9 px-3"
+          variant="ghost"
+        >
+          <Images className="h-4 w-4" />
+          <span className="group-data-[state=closed]:hidden ml-2">Library</span>
+        </SidebarMenuButton>
+        
+        {/* GPTs button - Updated with active state */}
+        <SidebarMenuButton
+          onClick={handleGPTsClick}
+          className={cn(
+            "w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors",
+            isOnGPTsPage && "bg-accent text-accent-foreground"
+          )}
+          variant="ghost"
+        >
+         <LayoutGrid className="h-4 w-4" />
+          <span className="group-data-[state=closed]:hidden ml-2">GPTs</span>
+        </SidebarMenuButton>
       </div>
 
-      <SidebarContent className="px-2">
+      <SidebarContent className="px-2 overflow-y-auto custom-scrollbar flex-1">
         <SidebarSeparator />
 
         {/* Recent Chats - Only show for Text Chat */}
@@ -218,12 +274,12 @@ export function AppSidebar() {
                     No chats yet. Start a new conversation!
                   </div>
                 ) : (
-                  chats.slice(0, 10).map((chat) => (
+                  chats.slice(0, 50).map((chat) => (
                     <SidebarMenuItem key={chat.id}>
                       <div className="flex items-center w-full group">
                         <SidebarMenuButton
-                          isActive={currentChat?.id === chat.id}
-                          onClick={() => selectChat(chat.id)}
+                          isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
+                          onClick={() => handleChatClick(chat.id)}
                           className="flex-1 justify-start h-auto py-2 pr-8"
                         >
                           <History className="mr-2 h-4 w-4 flex-shrink-0" />
