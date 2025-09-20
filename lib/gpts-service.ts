@@ -65,7 +65,7 @@ class GPTsService {
   async getGPTs(filters: GPTFilters = {}): Promise<CustomGPT[]> {
     try {
       const params = new URLSearchParams()
-      
+
       if (filters.category) params.append('category', filters.category)
       if (filters.search) params.append('search', filters.search)
       if (filters.featured) params.append('featured', 'true')
@@ -77,6 +77,7 @@ class GPTsService {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
         },
       })
 
