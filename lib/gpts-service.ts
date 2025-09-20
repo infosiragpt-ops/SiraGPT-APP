@@ -77,7 +77,7 @@ class GPTsService {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          // 'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
         },
       })
 
@@ -141,6 +141,7 @@ class GPTsService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
         },
         credentials: 'include',
         body: JSON.stringify(gptData),
@@ -165,6 +166,8 @@ class GPTsService {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+
         },
         credentials: 'include',
         body: JSON.stringify(gptData),
@@ -190,6 +193,8 @@ class GPTsService {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+
         },
       })
 
@@ -230,6 +235,8 @@ class GPTsService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+
         },
         credentials: 'include',
       })
