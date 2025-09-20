@@ -93,7 +93,7 @@ export default function CreateGPTPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const editId = searchParams.get('edit')
-  
+
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -143,7 +143,7 @@ export default function CreateGPTPage() {
     setIsLoading(true)
     try {
       const gpt = await gptsService.getGPT(gptId)
-      
+
       // Convert GPT data to form data
       setFormData({
         name: gpt.name,
@@ -155,7 +155,7 @@ export default function CreateGPTPage() {
         modelName: gpt.modelName,
         temperature: gpt.temperature,
         maxTokens: gpt.maxTokens,
-        conversationStarters: gpt.conversationStarters?.length > 0 
+        conversationStarters: gpt.conversationStarters?.length > 0
           ? [...gpt.conversationStarters, ...Array(2).fill("")].slice(0, 4)
           : ["", ""],
         visibility: gpt.visibility,
@@ -273,7 +273,7 @@ export default function CreateGPTPage() {
       }
 
       let result: CustomGPT
-      
+
       if (isEditMode && editId) {
         result = await gptsService.updateGPT(editId, gptData)
         toast.success("GPT updated successfully!")
@@ -281,7 +281,7 @@ export default function CreateGPTPage() {
         result = await gptsService.createGPT(gptData)
         toast.success("GPT created successfully!")
       }
-      
+
       router.push("/gpts")
     } catch (error: any) {
       toast.error(error.message || "Failed to save GPT")
@@ -289,38 +289,174 @@ export default function CreateGPTPage() {
       setIsSaving(false)
     }
   }
+  interface Template {
+    tone: string;
+    text: string;
+  }
+  interface Context {
+    tone: "technical" | "creative" | "professional" | "conversational" | "general";
+    domain: string;
+  }
+  // const generateInstructions = () => {
+  //   if (!formData.name || !formData.description) {
+  //     toast.error("Please fill in name and description first")
+  //     return
+  //   }
 
-  const generateInstructions = () => {
+  //   const suggestions = [
+  //     `You are ${formData.name}. ${formData.description}. Always be helpful, accurate, and engaging in your responses. Provide detailed explanations and practical advice when needed.`,
+  //     `As ${formData.name}, your primary goal is to help users with ${formData.description.toLowerCase()}. Provide detailed, actionable advice and be thorough in your explanations.`,
+  //     `You are an expert ${formData.name}. Your specialization is ${formData.description.toLowerCase()}. Be thorough, precise, and helpful in all your interactions. Always ask clarifying questions when needed.`
+  //   ]
+
+  //   const randomSuggestion = suggestions[Math.floor(Math.random() * suggestions.length)]
+  //   setFormData(prev => ({ ...prev, instructions: randomSuggestion }))
+  // }
+
+  // const generateGreeting = () => {
+  //   if (!formData.name || !formData.description) {
+  //     toast.error("Please fill in name and description first")
+  //     return
+  //   }
+
+  //   const greetings = [
+  //     `Hello! I'm ${formData.name}. I'm here to help you with ${formData.description.toLowerCase()}. What can I assist you with today?`,
+  //     `Hi there! I'm ${formData.name}, your assistant for ${formData.description.toLowerCase()}. How can I help you get started?`,
+  //     `Welcome! I'm ${formData.name} and I specialize in ${formData.description.toLowerCase()}. Feel free to ask me anything!`
+  //   ]
+
+  //   const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)]
+  //   setFormData(prev => ({ ...prev, greetingMessage: randomGreeting }))
+  // }
+
+  // Helper function to infer tone and context from description
+  const inferContext = (description: string): Context => {
+    const lowerDesc = description.toLowerCase();
+    if (lowerDesc.includes("technical") || lowerDesc.includes("programming") || lowerDesc.includes("coding")) {
+      return { tone: "technical", domain: "technical" };
+    } else if (lowerDesc.includes("creative") || lowerDesc.includes("writing") || lowerDesc.includes("design")) {
+      return { tone: "creative", domain: "creative" };
+    } else if (lowerDesc.includes("business") || lowerDesc.includes("marketing") || lowerDesc.includes("strategy")) {
+      return { tone: "professional", domain: "business" };
+    }
+    return { tone: "conversational", domain: "general" };
+  };
+
+  // Track used prompts to avoid repetition
+  let usedInstructions: string[] = [];
+  let usedGreetings: string[] = [];
+
+  const generateInstructions = (): void => {
     if (!formData.name || !formData.description) {
-      toast.error("Please fill in name and description first")
-      return
+      toast.error("Please fill in name and description first");
+      return;
     }
 
- const suggestions = [
-  `You are ${formData.name}. ${formData.description}. Always be helpful, accurate, and engaging in your responses. Provide detailed explanations and practical advice when needed.`,
-  `As ${formData.name}, your primary goal is to help users with ${formData.description.toLowerCase()}. Provide detailed, actionable advice and be thorough in your explanations.`,
-  `You are an expert ${formData.name}. Your specialization is ${formData.description.toLowerCase()}. Be thorough, precise, and helpful in all your interactions. Always ask clarifying questions when needed.`
-]
+    const { tone } = inferContext(formData.description);
 
-    const randomSuggestion = suggestions[Math.floor(Math.random() * suggestions.length)]
-    setFormData(prev => ({ ...prev, instructions: randomSuggestion }))
-  }
-
-  const generateGreeting = () => {
-    if (!formData.name || !formData.description) {
-      toast.error("Please fill in name and description first")
-      return
+    // Reset usedInstructions if all templates are used
+    if (usedInstructions.length >= 5) {
+      usedInstructions = [];
     }
 
-   const greetings = [
-  `Hello! I'm ${formData.name}. I'm here to help you with ${formData.description.toLowerCase()}. What can I assist you with today?`,
-  `Hi there! I'm ${formData.name}, your assistant for ${formData.description.toLowerCase()}. How can I help you get started?`,
-  `Welcome! I'm ${formData.name} and I specialize in ${formData.description.toLowerCase()}. Feel free to ask me anything!`
-]
-    
-    const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)]
-    setFormData(prev => ({ ...prev, greetingMessage: randomGreeting }))
-  }
+    const instructionTemplates: Template[] = [
+      {
+        tone: "technical",
+        text: `You are ${formData.name}, a highly skilled expert in ${formData.description.toLowerCase()}. Provide precise, accurate, and detailed technical guidance. Include code examples, step-by-step explanations, and best practices when relevant. Always clarify ambiguous queries with follow-up questions to ensure accuracy. Maintain a professional and approachable tone, and structure your responses for clarity and depth.`,
+      },
+      {
+        tone: "creative",
+        text: `You are ${formData.name}, a creative specialist in ${formData.description.toLowerCase()}. Offer imaginative, detailed, and inspiring advice tailored to the user's needs. Provide examples, spark ideas, and encourage creative exploration. Use a warm, engaging tone and ask clarifying questions to better understand the user's goals. Ensure responses are vivid, structured, and actionable.`,
+      },
+      {
+        tone: "professional",
+        text: `You are ${formData.name}, an expert in ${formData.description.toLowerCase()}. Deliver professional, concise, and actionable advice tailored to business contexts. Focus on strategic insights, practical solutions, and clear communication. Use a formal yet approachable tone, and proactively ask questions to refine your understanding of the user's objectives. Structure your responses for clarity and impact.`,
+      },
+      {
+        tone: "conversational",
+        text: `You are ${formData.name}, dedicated to assisting with ${formData.description.toLowerCase()}. Engage users with a friendly, approachable tone, providing clear, detailed, and practical advice. Break down complex topics into simple, actionable steps, and ask clarifying questions to ensure relevance. Organize your responses logically and anticipate follow-up needs to enhance user experience.`,
+      },
+      {
+        tone: "general",
+        text: `You are ${formData.name}, an expert assistant specializing in ${formData.description.toLowerCase()}. Your goal is to provide comprehensive, accurate, and engaging responses. Adapt your tone to the user's needs, offering detailed explanations, practical tips, and relevant examples. Ask clarifying questions when needed, and ensure your responses are well-structured, helpful, and user-focused.`,
+      },
+    ];
+
+    // Filter templates by tone or general, excluding used ones
+    const availableTemplates = instructionTemplates
+      .filter((t) => (t.tone === tone || t.tone === "general") && !usedInstructions.includes(t.text));
+
+    // Fallback to general tone if no specific templates remain
+    const finalTemplates = availableTemplates.length > 0
+      ? availableTemplates
+      : instructionTemplates.filter((t) => t.tone === "general" && !usedInstructions.includes(t.text));
+
+    if (finalTemplates.length === 0) {
+      usedInstructions = []; // Reset if all templates used
+      finalTemplates.push(...instructionTemplates.filter((t) => t.tone === "general"));
+    }
+
+    const selectedInstruction = finalTemplates[Math.floor(Math.random() * finalTemplates.length)].text;
+    usedInstructions.push(selectedInstruction);
+
+    setFormData((prev) => ({ ...prev, instructions: selectedInstruction }));
+  };
+
+  const generateGreeting = (): void => {
+    if (!formData.name || !formData.description) {
+      toast.error("Please fill in name and description first");
+      return;
+    }
+
+    const { tone } = inferContext(formData.description);
+
+    // Reset usedGreetings if all templates are used
+    if (usedGreetings.length >= 5) {
+      usedGreetings = [];
+    }
+
+    const greetingTemplates: Template[] = [
+      {
+        tone: "technical",
+        text: `Hello! I'm ${formData.name}, your go-to expert for ${formData.description.toLowerCase()}. I'm here to provide detailed technical guidance, code snippets, and best practices. What specific challenge or question can I help you with today?`,
+      },
+      {
+        tone: "creative",
+        text: `Hi there! I'm ${formData.name}, your creative partner for ${formData.description.toLowerCase()}. I'm excited to help spark ideas and guide you through your project. What's your next creative goal or question?`,
+      },
+      {
+        tone: "professional",
+        text: `Greetings! I'm ${formData.name}, specializing in ${formData.description.toLowerCase()}. I'm here to offer strategic insights and practical solutions for your business needs. How can I assist you today?`,
+      },
+      {
+        tone: "conversational",
+        text: `Hey there! I'm ${formData.name}, ready to help you with ${formData.description.toLowerCase()}. Whether it's a quick question or a deep dive, I'm here with clear, practical answers. What's on your mind?`,
+      },
+      {
+        tone: "general",
+        text: `Welcome! I'm ${formData.name}, your assistant for ${formData.description.toLowerCase()}. I'm here to provide detailed, friendly, and actionable help. What would you like to explore or learn about today?`,
+      },
+    ];
+
+    // Filter templates by tone or general, excluding used ones
+    const availableGreetings = greetingTemplates
+      .filter((t) => (t.tone === tone || t.tone === "general") && !usedGreetings.includes(t.text));
+
+    // Fallback to general tone if no specific templates remain
+    const finalGreetings = availableGreetings.length > 0
+      ? availableGreetings
+      : greetingTemplates.filter((t) => t.tone === "general" && !usedGreetings.includes(t.text));
+
+    if (finalGreetings.length === 0) {
+      usedGreetings = []; // Reset if all templates used
+      finalGreetings.push(...greetingTemplates.filter((t) => t.tone === "general"));
+    }
+
+    const selectedGreeting = finalGreetings[Math.floor(Math.random() * finalGreetings.length)].text;
+    usedGreetings.push(selectedGreeting);
+
+    setFormData((prev) => ({ ...prev, greetingMessage: selectedGreeting }));
+  };
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -329,9 +465,9 @@ export default function CreateGPTPage() {
         toast.error("Image size should be less than 5MB")
         return
       }
-      
+
       setFormData(prev => ({ ...prev, iconFile: file }))
-      
+
       const reader = new FileReader()
       reader.onload = (e) => {
         const result = e.target?.result as string
@@ -392,15 +528,15 @@ export default function CreateGPTPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setIsPreviewOpen(true)}
                 disabled={!formData.name}
               >
                 <Eye className="h-4 w-4 mr-2" />
                 Preview
               </Button>
-              <Button 
+              <Button
                 onClick={handleSave}
                 disabled={isSaving || !formData.name}
               >
@@ -414,7 +550,7 @@ export default function CreateGPTPage() {
       {/* Main Content */}
       <div className="container mx-auto px-4 py-6">
         <div className="max-w-4xl mx-auto space-y-8">
-          
+
           {/* Basic Information Section */}
           <Card>
             <CardHeader>
@@ -430,15 +566,15 @@ export default function CreateGPTPage() {
               {/* Avatar Selection */}
               <div className="space-y-4">
                 <Label>Avatar</Label>
-                
+
                 {/* Avatar Preview */}
                 <div className="flex items-start gap-6">
                   <div className="relative w-20 h-20 rounded-xl flex items-center justify-center text-3xl font-bold shadow-lg overflow-hidden">
                     {uploadedImage ? (
                       <>
-                        <img 
-                          src={uploadedImage} 
-                          alt="Avatar" 
+                        <img
+                          src={uploadedImage}
+                          alt="Avatar"
                           className="w-full h-full object-cover"
                         />
                         <button
@@ -458,7 +594,7 @@ export default function CreateGPTPage() {
                       </div>
                     )}
                   </div>
-                  
+
                   <div className="flex-1 space-y-3">
                     {/* Emoji Options */}
                     <div>
@@ -468,18 +604,17 @@ export default function CreateGPTPage() {
                           <button
                             key={emoji}
                             onClick={() => handleEmojiIcon(emoji)}
-                            className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center text-lg hover:border-primary transition-colors ${
-                              formData.iconUrl === emoji ? 'border-primary bg-primary/10' : 'border-border'
-                            }`}
+                            className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center text-lg hover:border-primary transition-colors ${formData.iconUrl === emoji ? 'border-primary bg-primary/10' : 'border-border'
+                              }`}
                           >
                             {emoji}
                           </button>
                         ))}
                       </div>
                     </div>
-                    
+
                     {/* Upload Image Button */}
-                    <div className="flex gap-2">
+                    {/*  <div className="flex gap-2">
                       <Button variant="outline" size="sm" asChild>
                         <label htmlFor="icon-upload" className="cursor-pointer">
                           <Upload className="h-4 w-4 mr-2" />
@@ -498,7 +633,7 @@ export default function CreateGPTPage() {
                           Remove
                         </Button>
                       )}
-                    </div>
+                    </div>*/}
                     <p className="text-xs text-muted-foreground">
                       Choose an emoji, upload an image, or use the first letter of your GPT's name
                     </p>
@@ -558,7 +693,7 @@ export default function CreateGPTPage() {
               </div>
 
               {/* Conversation Starters */}
-              <div className="space-y-2">
+              {/* <div className="space-y-2">
                 <Label>Conversation Starters</Label>
                 <p className="text-sm text-muted-foreground">
                   Provide example prompts to help users get started with your GPT
@@ -596,7 +731,7 @@ export default function CreateGPTPage() {
                     </Button>
                   )}
                 </div>
-              </div>
+              </div> */}
             </CardContent>
           </Card>
 
@@ -784,9 +919,9 @@ export default function CreateGPTPage() {
               <div className="flex items-start space-x-4">
                 <div className="w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold overflow-hidden">
                   {uploadedImage ? (
-                    <img 
-                      src={uploadedImage} 
-                      alt="Avatar" 
+                    <img
+                      src={uploadedImage}
+                      alt="Avatar"
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : formData.iconUrl ? (
@@ -820,14 +955,14 @@ export default function CreateGPTPage() {
                   </div>
                 </div>
               </div>
-              
+
               {formData.category && (
                 <Badge variant="outline" className="mt-3">
                   {formData.category}
                 </Badge>
               )}
             </div>
-            
+
             {/* Greeting Preview */}
             {formData.greetingMessage && (
               <Card>
@@ -843,16 +978,16 @@ export default function CreateGPTPage() {
                 </CardContent>
               </Card>
             )}
-            
+
             {/* Conversation Starters Preview */}
-            {formData.conversationStarters.filter(s => s.trim()).length > 0 && (
+            {/* {formData.conversationStarters.filter(s => s.trim()).length > 0 && (
               <div>
                 <h4 className="font-medium mb-2 text-sm">Conversation Starters</h4>
                 <div className="space-y-2">
                   {formData.conversationStarters.filter(s => s.trim()).map((starter, index) => (
-                    <Button 
-                      key={index} 
-                      variant="outline" 
+                    <Button
+                      key={index}
+                      variant="outline"
                       className="w-full justify-start text-left h-auto py-2 px-3 text-sm"
                     >
                       {starter}
@@ -860,7 +995,7 @@ export default function CreateGPTPage() {
                   ))}
                 </div>
               </div>
-            )}
+            )} */}
           </div>
         </DialogContent>
       </Dialog>
