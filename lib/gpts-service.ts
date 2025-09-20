@@ -60,7 +60,7 @@ export interface GPTFilters {
 
 class GPTsService {
   // Use environment variable or fallback to localhost:5000
-  private baseUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'}/api/gpts`
+  private baseUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/gpts`
 
   async getGPTs(filters: GPTFilters = {}): Promise<CustomGPT[]> {
     try {
