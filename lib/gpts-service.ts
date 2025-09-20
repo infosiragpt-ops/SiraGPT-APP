@@ -60,7 +60,7 @@ export interface GPTFilters {
 
 class GPTsService {
   // Use environment variable or fallback to localhost:5000
-  private baseUrl = `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}/api/gpts`
+  private baseUrl = `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'}/api`
 
   async getGPTs(filters: GPTFilters = {}): Promise<CustomGPT[]> {
     try {
@@ -73,7 +73,7 @@ class GPTsService {
         params.append('visibility', filters.visibility)
       }
 
-      const response = await fetch(`${this.baseUrl}?${params.toString()}`, {
+      const response = await fetch(`${this.baseUrl}/gpts?${params.toString()}`, {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
