@@ -10,7 +10,7 @@ interface AppWrapperProps {
 }
 
 // Pages that need chat context and sidebar
-const chatPages = ['/chat', '/gpts', '/profile', '/admin']
+const chatPages = ['/chat', '/gpts', '/profile', ]
 // Pages that only need sidebar (no chat context)
 const sidebarOnlyPages = ['/profile', '/admin']
 
