@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Search, History, Clock, MessageSquare, Loader2, ChevronDown } from "lucide-react"
+import { Search, History, Clock, MessageSquare, Loader2, MessageCircle } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter, usePathname } from "next/navigation"
-import { cn } from "@/lib/utils"
 
 interface ChatSearchDialogProps {
   open: boolean
@@ -226,7 +225,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                   >
                     <div className="flex items-start gap-3 w-full">
                       <div className="flex-shrink-0 mt-1">
-                        <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                        <MessageCircle className="h-4 w-4 text-muted-foreground" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-sm truncate">
