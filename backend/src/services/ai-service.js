@@ -44,13 +44,24 @@ class AIService {
         try {
             const client = this.getClient(provider);
 
-            const stream = await client.chat.completions.create({
+            const payload = {
                 model: model,
                 messages: messages,
                 stream: true,
-                max_completion_tokens: 4000, // Aap isko adjust kar sakte hain
-                
-            });
+            };
+
+
+            if (model.includes('gpt-5')) {
+
+                console.log(`Using special parameter 'max_completion_tokens' for model: ${model}`);
+                payload.max_completion_tokens = 8192;
+
+            } else {
+
+                console.log(`Using standard parameter 'max_tokens' for model: ${model}`);
+                payload.max_tokens = 8192;
+            }
+            const stream = await client.chat.completions.create(payload);
 
             // Stream se data parhein aur client ko bhejein
             for await (const chunk of stream) {
