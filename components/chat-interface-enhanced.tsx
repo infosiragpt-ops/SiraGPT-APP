@@ -69,11 +69,11 @@ import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 
 // Enhanced Actions Dropdown Component
-const ActionsDropdown = ({ 
+const ActionsDropdown = ({
   chatType,
   setChatType,
-  currentPlan, 
-  isWebSearchActive, 
+  currentPlan,
+  isWebSearchActive,
   setIsWebSearchActive,
   isImageGenerationActive,
   setIsImageGenerationActive,
@@ -89,7 +89,7 @@ const ActionsDropdown = ({
   isGeneratingVideo
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-const [isOpen, setIsOpen] = React.useState(false);
+  const [isOpen, setIsOpen] = React.useState(false);
 
   const handleFileUpload = () => {
     fileInputRef.current?.click();
@@ -100,7 +100,7 @@ const [isOpen, setIsOpen] = React.useState(false);
       handleAndUploadFiles(e.target.files);
       // Clear the input to allow re-uploading the same file
       e.target.value = '';
-      setIsOpen(false); 
+      setIsOpen(false);
     }
   };
 
@@ -115,33 +115,33 @@ const [isOpen, setIsOpen] = React.useState(false);
     setIsWebSearchActive(!isWebSearchActive);
   };
 
- const handleImageGenerationToggle = () => {
-  const newState = !isImageGenerationActive;
+  const handleImageGenerationToggle = () => {
+    const newState = !isImageGenerationActive;
 
-  if (newState) {
-    setIsWebSearchActive(false);
-    setIsVideoGenerationActive(false);
-    setChatType('image');
-  } else {
-    setChatType('text');
-  }
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsVideoGenerationActive(false);
+      setChatType('image');
+    } else {
+      setChatType('text');
+    }
 
-  setIsImageGenerationActive(newState);
-};
+    setIsImageGenerationActive(newState);
+  };
 
-const handleVideoGenerationToggle = () => {
-  const newState = !isVideoGenerationActive;
+  const handleVideoGenerationToggle = () => {
+    const newState = !isVideoGenerationActive;
 
-  if (newState) {
-    setIsWebSearchActive(false);
-    setIsImageGenerationActive(false);
-    setChatType('video');
-  } else {
-    setChatType('text');
-  }
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsImageGenerationActive(false);
+      setChatType('video');
+    } else {
+      setChatType('text');
+    }
 
-  setIsVideoGenerationActive(newState);
-};
+    setIsVideoGenerationActive(newState);
+  };
 
   const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching;
 
@@ -160,44 +160,42 @@ const handleVideoGenerationToggle = () => {
       <DropdownMenuContent align="start" className="w-64">
         {/* File Upload - Only for text chats */}
 
-            <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
-              <div className="flex items-center gap-3 w-full">
-                <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
-                  <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-sm">Upload Files</div>
-                  <div className="text-xs text-muted-foreground">
-                    {isUploading ? 'Uploading...' : 'Images, PDFs, Documents'}
-                  </div>
-                </div>
+        <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
+          <div className="flex items-center gap-3 w-full">
+            <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
+              <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">Upload Files</div>
+              <div className="text-xs text-muted-foreground">
+                {isUploading ? 'Uploading...' : 'Images, PDFs, Documents'}
               </div>
-            </DropdownMenuItem>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
-              onChange={handleFilesSelected}
-            />
+            </div>
+          </div>
+        </DropdownMenuItem>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+          onChange={handleFilesSelected}
+        />
 
         {/* Web Search */}
-        <DropdownMenuItem 
+        <DropdownMenuItem
           onClick={handleWebSearchToggle}
           disabled={isWebSearching}
         >
           <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-              isWebSearchActive 
-                ? 'bg-green-100 dark:bg-green-900/20' 
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
+                ? 'bg-green-100 dark:bg-green-900/20'
                 : 'bg-emerald-100 dark:bg-emerald-900/20'
-            }`}>
-              <Globe className={`h-4 w-4 ${
-                isWebSearchActive 
-                  ? 'text-green-600 dark:text-green-400' 
+              }`}>
+              <Globe className={`h-4 w-4 ${isWebSearchActive
+                  ? 'text-green-600 dark:text-green-400'
                   : 'text-emerald-600 dark:text-emerald-400'
-              }`} />
+                }`} />
             </div>
             <div className="flex-1">
               <div className="font-medium text-sm">
@@ -216,7 +214,7 @@ const handleVideoGenerationToggle = () => {
         <DropdownMenuSeparator />
 
         {/* Voice Studio - Opens panel directly */}
-        <DropdownMenuItem 
+        <DropdownMenuItem
           onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
           disabled={currentPlan === "FREE" || isDisabled}
         >
@@ -237,21 +235,19 @@ const handleVideoGenerationToggle = () => {
         </DropdownMenuItem>
 
         {/* Image Generation */}
-        <DropdownMenuItem 
+        <DropdownMenuItem
           onClick={handleImageGenerationToggle}
           disabled={currentPlan === "FREE" || isDisabled}
         >
           <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-              isImageGenerationActive 
-                ? 'bg-pink-100 dark:bg-pink-900/20' 
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
+                ? 'bg-pink-100 dark:bg-pink-900/20'
                 : 'bg-pink-100 dark:bg-pink-900/20'
-            }`}>
-              <Palette className={`h-4 w-4 ${
-                isImageGenerationActive 
-                  ? 'text-pink-600 dark:text-pink-400' 
+              }`}>
+              <Palette className={`h-4 w-4 ${isImageGenerationActive
+                  ? 'text-pink-600 dark:text-pink-400'
                   : 'text-pink-600 dark:text-pink-400'
-              }`} />
+                }`} />
             </div>
             <div className="flex-1">
               <div className="font-medium text-sm">
@@ -271,21 +267,19 @@ const handleVideoGenerationToggle = () => {
         </DropdownMenuItem>
 
         {/* Video Generation */}
-        <DropdownMenuItem 
+        <DropdownMenuItem
           onClick={handleVideoGenerationToggle}
           disabled={currentPlan === "FREE" || isDisabled}
         >
           <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-              isVideoGenerationActive 
-                ? 'bg-orange-100 dark:bg-orange-900/20' 
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
+                ? 'bg-orange-100 dark:bg-orange-900/20'
                 : 'bg-orange-100 dark:bg-orange-900/20'
-            }`}>
-              <Video className={`h-4 w-4 ${
-                isVideoGenerationActive 
-                  ? 'text-orange-600 dark:text-orange-400' 
+              }`}>
+              <Video className={`h-4 w-4 ${isVideoGenerationActive
+                  ? 'text-orange-600 dark:text-orange-400'
                   : 'text-orange-600 dark:text-orange-400'
-              }`} />
+                }`} />
             </div>
             <div className="flex-1">
               <div className="font-medium text-sm">
@@ -308,61 +302,62 @@ const handleVideoGenerationToggle = () => {
   );
 };
 
-// Improved File icon helper function with more comprehensive support
+// Improved File icon helper function with colored square wrapper
 const getFileIcon = (fileType: string, fileName: string) => {
-  // Check by MIME type first
-  if (fileType?.startsWith('image/')) {
-    return <ImageIcon className="h-7 w-7 text-blue-500" />;
-  }
-  
+  // Helper to wrap icon in square with bg color
+  const wrapIcon = (icon: JSX.Element, color: string) => (
+    <div className={`h-8 w-8 flex items-center justify-center rounded-md`} style={{ backgroundColor: color }}>
+      {icon}
+    </div>
+  );
+
   // Get file extension
   const extension = fileName?.split('.').pop()?.toLowerCase();
-  
+
   switch (extension) {
     case 'pdf':
-      return <FileText className="h-7 w-7 text-red-500" />;
+      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#ef4444"); // red
     case 'doc':
     case 'docx':
-      return <FileText className="h-7 w-7 text-blue-600" />;
+      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#2563eb"); // blue
     case 'xls':
     case 'xlsx':
-      return <FileSpreadsheet className="h-7 w-7 text-green-600" />;
     case 'csv':
-      return <FileSpreadsheet className="h-7 w-7 text-green-500" />;
+      return wrapIcon(<FileSpreadsheet className="h-5 w-5 text-white" />, "#16a34a"); // green
     case 'ppt':
     case 'pptx':
-      return <File className="h-7 w-7 text-orange-500" />;
+      return wrapIcon(<File className="h-5 w-5 text-white" />, "#f97316"); // orange
     case 'txt':
-      return <FileText className="h-7 w-7 text-gray-500" />;
+      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#6b7280"); // grey
     case 'png':
     case 'jpg':
     case 'jpeg':
     case 'gif':
     case 'webp':
     case 'svg':
-      return <ImageIcon className="h-7 w-7 text-blue-500" />;
+      return wrapIcon(<ImageIcon className="h-5 w-5 text-white" />, "#3b82f6"); // blue
     case 'mp4':
     case 'avi':
     case 'mov':
     case 'wmv':
-      return <Video className="h-7 w-7 text-purple-500" />;
+      return wrapIcon(<Video className="h-5 w-5 text-white" />, "#9333ea"); // purple
     case 'mp3':
     case 'wav':
     case 'flac':
-      return <Music className="h-7 w-7 text-pink-500" />;
+      return wrapIcon(<Music className="h-5 w-5 text-white" />, "#db2777"); // pink
     case 'zip':
     case 'rar':
     case '7z':
-      return <File className="h-7 w-7 text-yellow-500" />;
+      return wrapIcon(<File className="h-5 w-5 text-white" />, "#eab308"); // yellow
     default:
-      return <File className="h-4 w-4 text-gray-400" />;
+      return wrapIcon(<File className="h-5 w-5 text-white" />, "#9ca3af"); // gray
   }
 };
 
 // Active Options Display Component - Shows INSIDE the textarea
 // Active Options Display Component - Shows INSIDE the textarea
-const ActiveOptionsDisplay = ({ 
-  isWebSearchActive, 
+const ActiveOptionsDisplay = ({
+  isWebSearchActive,
   setIsWebSearchActive,
   isImageGenerationActive,
   setIsImageGenerationActive,
@@ -383,7 +378,7 @@ const ActiveOptionsDisplay = ({
   setChatType: (type: any) => void;
 }) => {
   const hasActiveOptions = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || uploadedFiles.length > 0;
-  
+
   if (!hasActiveOptions) return null;
 
   const handleWebSearchClose = () => {
@@ -405,16 +400,21 @@ const ActiveOptionsDisplay = ({
     <div className="absolute top-2 left-3 right-3 flex flex-wrap items-center gap-2 z-10 max-h-20 overflow-y-auto">
       {/* Uploaded Files */}
       {uploadedFiles.map((file, index) => (
-        <div key={index} className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
+        <div
+          key={index}
+          className="flex items-center gap-2 border border-gray-400 px-2 py-1 rounded-lg text-sm"
+        >
           {getFileIcon(file.type, file.name)}
-          <span className="max-w-24 truncate font-medium">{file.name}</span>
+          <span className="max-w-40 truncate font-medium text-gray-800 text-[13px]">
+            {file.name}
+          </span>
           <Button
             variant="ghost"
             size="sm"
-            className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-800/30 rounded-full ml-1"
+            className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
             onClick={() => removeFile(index)}
           >
-            <X className="h-3 w-3" />
+            <X className="h-4 w-4" />
           </Button>
         </div>
       ))}
@@ -434,7 +434,7 @@ const ActiveOptionsDisplay = ({
           </Button>
         </div>
       )}
-      
+
       {/* Image Generation - Only show if active */}
       {isImageGenerationActive && (
         <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
@@ -450,7 +450,7 @@ const ActiveOptionsDisplay = ({
           </Button>
         </div>
       )}
-      
+
       {/* Video Generation - Only show if active */}
       {isVideoGenerationActive && (
         <div className="flex items-center gap-1.5 bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 px-2 py-1 rounded-full text-xs border border-orange-200 dark:border-orange-800">
@@ -471,16 +471,16 @@ const ActiveOptionsDisplay = ({
 };
 
 // Enhanced Model Selector
-const NavbarModelSelector = ({ 
-  selectedModel, 
-  setSelectedModel, 
-  availableModels, 
-  setSelectedProvider, 
-  chatTypes, 
-  currentChat 
+const NavbarModelSelector = ({
+  selectedModel,
+  setSelectedModel,
+  availableModels,
+  setSelectedProvider,
+  chatTypes,
+  currentChat
 }: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
-  
+
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
     return (
@@ -493,21 +493,21 @@ const NavbarModelSelector = ({
       </div>
     );
   }
-  
+
   // If this chat is associated with a custom GPT, show GPT info instead of model selector
   if (currentChat?.customGptId || currentChat?.customGpt) {
     const customGptName = currentChat?.customGpt?.name || currentChat?.title || "Custom GPT";
     const customGptIcon = currentChat?.customGpt?.iconUrl;
-    
+
     return (
       <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background">
         {customGptIcon ? (
           customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img 
-              src={customGptIcon} 
-              alt="GPT icon" 
-              className="w-4 h-4 rounded-full object-cover" 
+            <img
+              src={customGptIcon}
+              alt="GPT icon"
+              className="w-4 h-4 rounded-full object-cover"
             />
           ) : (
             <div className="w-4 h-4 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-xs">
@@ -524,7 +524,7 @@ const NavbarModelSelector = ({
       </div>
     );
   }
-  
+
   // Default model selector for regular chats
   return (
     <DropdownMenu>
@@ -780,18 +780,18 @@ export default function ChatInterface() {
   //     }
   //   }
   // }, [currentChat]);
-// Replace the commented useEffect and add a new one for chat switching
-React.useEffect(() => {
-  // Reset generation modes when switching chats
-  setIsWebSearchActive(false);
-  setIsImageGenerationActive(false);
-  setIsVideoGenerationActive(false);
-  setChatType('text'); // Always default to text when switching chats
-}, [currentChat?.id]); // Only trigger when chat ID changes
+  // Replace the commented useEffect and add a new one for chat switching
+  React.useEffect(() => {
+    // Reset generation modes when switching chats
+    setIsWebSearchActive(false);
+    setIsImageGenerationActive(false);
+    setIsVideoGenerationActive(false);
+    setChatType('text'); // Always default to text when switching chats
+  }, [currentChat?.id]); // Only trigger when chat ID changes
 
-React.useEffect(() => {
-  setShowAudioPanel(false);
-}, [currentChat?.id]);
+  React.useEffect(() => {
+    setShowAudioPanel(false);
+  }, [currentChat?.id]);
   React.useEffect(() => {
     setShowAudioPanel(false);
   }, [currentChat?.id]);
@@ -859,7 +859,7 @@ React.useEffect(() => {
 
     const msg = input.trim()
     setInput("")
-    
+
     try {
       if (isWebSearchActive) {
         await handleWebSearch(); // Changed to await
@@ -896,7 +896,7 @@ React.useEffect(() => {
     try {
       if (!currentChat) {
         // If no chat is active, create a new one with type 'image'
-        const newChat = await createNewChat('image', prompt, true); // Pass true to indicate image generation mode for initial message
+        const newChat = createNewChat('image', prompt, true); // Pass true to indicate image generation mode for initial message
         if (newChat && newChat.id) {
           // Then call generateImage with the new chat ID
           const response = await apiClient.generateImage({
@@ -1240,7 +1240,7 @@ React.useEffect(() => {
                   />
 
                   {/* Active Options Display - INSIDE the textarea */}
-                  <ActiveOptionsDisplay 
+                  <ActiveOptionsDisplay
                     isWebSearchActive={isWebSearchActive}
                     setIsWebSearchActive={setIsWebSearchActive}
                     isImageGenerationActive={isImageGenerationActive}
@@ -1249,7 +1249,7 @@ React.useEffect(() => {
                     setIsVideoGenerationActive={setIsVideoGenerationActive}
                     uploadedFiles={uploadedFiles}
                     removeFile={removeFile}
-                     setChatType={setChatType}
+                    setChatType={setChatType}
                   />
 
                   {/* Plus icon dropdown - positioned on the left with better alignment */}
@@ -1405,7 +1405,7 @@ React.useEffect(() => {
                       />
 
                       {/* Active Options Display - INSIDE the textarea */}
-                      <ActiveOptionsDisplay 
+                      <ActiveOptionsDisplay
                         isWebSearchActive={isWebSearchActive}
                         setIsWebSearchActive={setIsWebSearchActive}
                         isImageGenerationActive={isImageGenerationActive}
@@ -1414,7 +1414,7 @@ React.useEffect(() => {
                         setIsVideoGenerationActive={setIsVideoGenerationActive}
                         uploadedFiles={uploadedFiles}
                         removeFile={removeFile}
-                         setChatType={setChatType}
+                        setChatType={setChatType}
                       />
 
                       {/* Plus icon dropdown - positioned on the left with better alignment */}
