@@ -402,10 +402,10 @@ const ActiveOptionsDisplay = ({
       {uploadedFiles.map((file, index) => (
         <div
           key={index}
-          className="flex items-center gap-2 border border-gray-400 px-2 py-1 rounded-lg text-sm"
+          className="flex items-center gap-2 border border-gray-200 px-2 py-1 rounded-lg text-sm "
         >
           {getFileIcon(file.type, file.name)}
-          <span className="max-w-40 truncate font-medium text-gray-800 text-[13px]">
+          <span className="max-w-50 truncate font-medium text-gray-800 text-[13px]">
             {file.name}
           </span>
           <Button
