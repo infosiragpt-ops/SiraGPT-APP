@@ -22,6 +22,7 @@ import {
   Library,
   Images,
   LayoutGrid,
+  Loader2,
 } from "lucide-react"
 import {
   Sidebar,
@@ -54,6 +55,7 @@ import { useRouter, usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
+import { ChatSearchDialog } from "./ChatSearchDialog"
 
 // Generation Types with enhanced functionality
 const generationTypes = [
@@ -96,12 +98,20 @@ export function AppSidebar() {
     deleteChat,
     selectedModel,
     setSelectedModel,
+    loadMoreChats, 
+    hasMoreChats, 
+    isLoadingMore,
+    pagination
   } = useChat()
   const router = useRouter()
   const pathname = usePathname()
   const [selectedType, setSelectedType] = React.useState("Text Chat")
   const { state, toggleSidebar } = useSidebar()
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
+  const [searchOpen, setSearchOpen] = React.useState(false)
+
+  // Scroll area ref for infinite scroll
+  const scrollAreaRef = React.useRef<HTMLDivElement>(null)
 
   const handleLogout = () => {
     localStorage.setItem("currentChatId", "")
@@ -160,6 +170,27 @@ export function AppSidebar() {
     }
   }
 
+  const handleSearchClick = () => {
+    setSearchOpen(true)
+  }
+
+  // Handle load more chats
+  const handleLoadMore = () => {
+    if (hasMoreChats && !isLoadingMore && loadMoreChats) {
+      loadMoreChats()
+    }
+  }
+
+  // Infinite scroll handler
+  const handleScroll = React.useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLDivElement
+    const bottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 50 // 50px threshold
+    
+    if (bottom && hasMoreChats && !isLoadingMore && loadMoreChats) {
+      loadMoreChats()
+    }
+  }, [hasMoreChats, isLoadingMore, loadMoreChats])
+
   // Check if we're on GPTs page
   const isOnGPTsPage = pathname.startsWith('/gpts')
 
@@ -215,20 +246,18 @@ export function AppSidebar() {
           variant="outline"
         >
           <Plus className="h-4 w-4" />
-          {/* Yeh text bhi sirf open state mein dikhega */}
           <span className="group-data-[state=closed]:hidden ml-2">New Chat</span>
         </SidebarMenuButton>
         
-        {/* Search button */}
         <SidebarMenuButton
-          className="w-full justify-start h-9 px-3"
+          onClick={handleSearchClick}
+          className="w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors"
           variant="ghost"
         >
           <Search className="h-4 w-4" />
           <span className="group-data-[state=closed]:hidden ml-2">Search chats</span>
         </SidebarMenuButton>
         
-        {/* Library button */}
         <SidebarMenuButton
           className="w-full justify-start h-9 px-3"
           variant="ghost"
@@ -237,7 +266,6 @@ export function AppSidebar() {
           <span className="group-data-[state=closed]:hidden ml-2">Library</span>
         </SidebarMenuButton>
         
-        {/* GPTs button - Updated with active state */}
         <SidebarMenuButton
           onClick={handleGPTsClick}
           className={cn(
@@ -251,7 +279,11 @@ export function AppSidebar() {
         </SidebarMenuButton>
       </div>
 
-      <SidebarContent className="px-2 overflow-y-auto custom-scrollbar flex-1">
+      <SidebarContent 
+        className="px-2 overflow-y-auto custom-scrollbar flex-1"
+        ref={scrollAreaRef}
+        onScroll={handleScroll}
+      >
         <SidebarSeparator />
 
         {/* Recent Chats - Only show for Text Chat */}
@@ -274,47 +306,82 @@ export function AppSidebar() {
                     No chats yet. Start a new conversation!
                   </div>
                 ) : (
-                  chats.slice(0, 50).map((chat) => (
-                    <SidebarMenuItem key={chat.id}>
-                      <div className="flex items-center w-full group">
-                        <SidebarMenuButton
-                          isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
-                          onClick={() => handleChatClick(chat.id)}
-                          className="flex-1 justify-start h-auto py-2 pr-8"
+                  <>
+                    {chats.map((chat) => (
+                      <SidebarMenuItem key={chat.id}>
+                        <div className="flex items-center w-full group">
+                          <SidebarMenuButton
+                            isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
+                            onClick={() => handleChatClick(chat.id)}
+                            className="flex-1 justify-start h-auto py-2 pr-8"
+                          >
+                            <History className="mr-2 h-4 w-4 flex-shrink-0" />
+                            <div className="flex flex-col items-start min-w-0 flex-1">
+                              <span className="text-sm truncate w-full">
+                                {chat.title}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {formatChatTime(chat.updatedAt)}
+                              </span>
+                            </div>
+                          </SidebarMenuButton>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2"
+                              >
+                                <MoreHorizontal className="h-3 w-3" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => deleteChat(chat.id)}
+                                className="text-red-600"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </SidebarMenuItem>
+                    ))}
+                    
+                    {/* Loading indicator at the bottom */}
+                    {isLoadingMore && (
+                      <SidebarMenuItem>
+                        <div className="flex items-center justify-center py-3">
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                          <span className="text-xs text-muted-foreground">Loading more chats...</span>
+                        </div>
+                      </SidebarMenuItem>
+                    )}
+                    
+                    {/* Load more button (manual trigger) */}
+                    {hasMoreChats && !isLoadingMore && chats.length >= 20 && (
+                      <SidebarMenuItem>
+                        <Button
+                          variant="ghost"
+                          onClick={handleLoadMore}
+                          className="w-full justify-center text-xs text-muted-foreground py-2 h-8 hover:bg-accent hover:text-accent-foreground"
                         >
-                          <History className="mr-2 h-4 w-4 flex-shrink-0" />
-                          <div className="flex flex-col items-start min-w-0 flex-1">
-                            <span className="text-sm truncate w-full">
-                              {chat.title}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {formatChatTime(chat.updatedAt)}
-                            </span>
-                          </div>
-                        </SidebarMenuButton>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2"
-                            >
-                              <MoreHorizontal className="h-3 w-3" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={() => deleteChat(chat.id)}
-                              className="text-red-600"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </SidebarMenuItem>
-                  ))
+                          <ChevronDown className="h-3 w-3 mr-1" />
+                          Load more chats
+                        </Button>
+                      </SidebarMenuItem>
+                    )}
+                    
+                    {/* End of chats indicator */}
+                    {!hasMoreChats && !isLoadingMore && chats.length >= 20 && (
+                      <SidebarMenuItem>
+                        <div className="text-center py-2 text-xs text-muted-foreground opacity-50">
+                          All chats loaded
+                        </div>
+                      </SidebarMenuItem>
+                    )}
+                  </>
                 )}
               </SidebarMenu>
             </SidebarGroupContent>
@@ -416,6 +483,12 @@ export function AppSidebar() {
         open={upgradeOpen}
         onOpenChange={setUpgradeOpen}
         user={user}
+      />
+
+      {/* Chat Search Dialog */}
+      <ChatSearchDialog
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
       />
     </Sidebar>
   )

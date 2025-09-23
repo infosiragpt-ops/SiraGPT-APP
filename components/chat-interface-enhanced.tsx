@@ -27,7 +27,9 @@ import {
   Check,
   Music,
   Film,
-  Bolt
+  Bolt,
+  FileSpreadsheet,
+  File
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -52,6 +54,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import MessageComponent from "./message-component"
 import VoiceControls from "./voice-controls"
@@ -65,9 +68,409 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 
+// Enhanced Actions Dropdown Component
+const ActionsDropdown = ({
+  chatType,
+  setChatType,
+  currentPlan,
+  isWebSearchActive,
+  setIsWebSearchActive,
+  isImageGenerationActive,
+  setIsImageGenerationActive,
+  isVideoGenerationActive,
+  setIsVideoGenerationActive,
+  setShowAudioPanel,
+  setAudioTab,
+  handleAndUploadFiles,
+  isUploading,
+  isWebSearching,
+  isLoading,
+  isGeneratingImage,
+  isGeneratingVideo
+}: any) => {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [isOpen, setIsOpen] = React.useState(false);
+
+  const handleFileUpload = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      handleAndUploadFiles(e.target.files);
+      // Clear the input to allow re-uploading the same file
+      e.target.value = '';
+      setIsOpen(false);
+    }
+  };
+
+  // Function to handle single selection - deactivate others when one is selected
+  const handleWebSearchToggle = () => {
+    setChatType('text');
+    if (!isWebSearchActive) {
+      // Deactivate other options
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+    }
+    setIsWebSearchActive(!isWebSearchActive);
+  };
+
+  const handleImageGenerationToggle = () => {
+    const newState = !isImageGenerationActive;
+
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsVideoGenerationActive(false);
+      setChatType('image');
+    } else {
+      setChatType('text');
+    }
+
+    setIsImageGenerationActive(newState);
+  };
+
+  const handleVideoGenerationToggle = () => {
+    const newState = !isVideoGenerationActive;
+
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsImageGenerationActive(false);
+      setChatType('video');
+    } else {
+      setChatType('text');
+    }
+
+    setIsVideoGenerationActive(newState);
+  };
+
+  const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching;
+
+  return (
+    <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
+          disabled={isDisabled}
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        {/* File Upload - Only for text chats */}
+
+        <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
+          <div className="flex items-center gap-3 w-full">
+            <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
+              <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">Upload Files</div>
+              <div className="text-xs text-muted-foreground">
+                {isUploading ? 'Uploading...' : 'Images, PDFs, Documents'}
+              </div>
+            </div>
+          </div>
+        </DropdownMenuItem>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+          onChange={handleFilesSelected}
+        />
+
+        {/* Web Search */}
+        <DropdownMenuItem
+          onClick={handleWebSearchToggle}
+          disabled={isWebSearching}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
+              ? 'bg-green-100 dark:bg-green-900/20'
+              : 'bg-emerald-100 dark:bg-emerald-900/20'
+              }`}>
+              <Globe className={`h-4 w-4 ${isWebSearchActive
+                ? 'text-green-600 dark:text-green-400'
+                : 'text-emerald-600 dark:text-emerald-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isWebSearchActive ? 'Web Search Active' : 'Web Search'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {isWebSearching ? 'Searching...' : 'Search the internet for answers'}
+              </div>
+            </div>
+            {isWebSearchActive && (
+              <div className="w-2 h-2 bg-green-500 rounded-full" />
+            )}
+          </div>
+        </DropdownMenuItem>
+
+        <DropdownMenuSeparator />
+
+        {/* Voice Studio - Opens panel directly */}
+        <DropdownMenuItem
+          onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
+          disabled={currentPlan === "FREE" || isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
+              <Mic className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">Voice Studio</div>
+              <div className="text-xs text-muted-foreground">
+                Text-to-Speech, Speech-to-Text, Music
+              </div>
+            </div>
+            {currentPlan === "FREE" && (
+              <Badge variant="secondary" className="text-xs">Pro</Badge>
+            )}
+          </div>
+        </DropdownMenuItem>
+
+        {/* Image Generation */}
+        <DropdownMenuItem
+          onClick={handleImageGenerationToggle}
+          disabled={currentPlan === "FREE" || isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
+              ? 'bg-pink-100 dark:bg-pink-900/20'
+              : 'bg-pink-100 dark:bg-pink-900/20'
+              }`}>
+              <Palette className={`h-4 w-4 ${isImageGenerationActive
+                ? 'text-pink-600 dark:text-pink-400'
+                : 'text-pink-600 dark:text-pink-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isImageGenerationActive ? 'Image Generation Active' : 'Image Generation'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Generate images with DALL-E 3
+              </div>
+            </div>
+            {isImageGenerationActive && (
+              <div className="w-2 h-2 bg-pink-500 rounded-full" />
+            )}
+            {currentPlan === "FREE" && (
+              <Badge variant="secondary" className="text-xs">Pro</Badge>
+            )}
+          </div>
+        </DropdownMenuItem>
+
+        {/* Video Generation */}
+        <DropdownMenuItem
+          onClick={handleVideoGenerationToggle}
+          disabled={currentPlan === "FREE" || isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
+              ? 'bg-orange-100 dark:bg-orange-900/20'
+              : 'bg-orange-100 dark:bg-orange-900/20'
+              }`}>
+              <Video className={`h-4 w-4 ${isVideoGenerationActive
+                ? 'text-orange-600 dark:text-orange-400'
+                : 'text-orange-600 dark:text-orange-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Create videos with Google Veo 3
+              </div>
+            </div>
+            {isVideoGenerationActive && (
+              <div className="w-2 h-2 bg-orange-500 rounded-full" />
+            )}
+            {currentPlan === "FREE" && (
+              <Badge variant="secondary" className="text-xs">Pro</Badge>
+            )}
+          </div>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
+
+// Improved File icon helper function with colored square wrapper
+const getFileIcon = (fileType: string, fileName: string) => {
+  // Helper to wrap icon in square with bg color
+  const wrapIcon = (icon: JSX.Element, color: string) => (
+    <div className={`h-8 w-8 flex items-center justify-center rounded-md`} style={{ backgroundColor: color }}>
+      {icon}
+    </div>
+  );
+
+  // Get file extension
+  const extension = fileName?.split('.').pop()?.toLowerCase();
+
+  switch (extension) {
+    case 'pdf':
+      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#ef4444"); // red
+    case 'doc':
+    case 'docx':
+      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#2563eb"); // blue
+    case 'xls':
+    case 'xlsx':
+    case 'csv':
+      return wrapIcon(<FileSpreadsheet className="h-5 w-5 text-white" />, "#16a34a"); // green
+    case 'ppt':
+    case 'pptx':
+      return wrapIcon(<File className="h-5 w-5 text-white" />, "#f97316"); // orange
+    case 'txt':
+      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#6b7280"); // grey
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'webp':
+    case 'svg':
+      return wrapIcon(<ImageIcon className="h-5 w-5 text-white" />, "#3b82f6"); // blue
+    case 'mp4':
+    case 'avi':
+    case 'mov':
+    case 'wmv':
+      return wrapIcon(<Video className="h-5 w-5 text-white" />, "#9333ea"); // purple
+    case 'mp3':
+    case 'wav':
+    case 'flac':
+      return wrapIcon(<Music className="h-5 w-5 text-white" />, "#db2777"); // pink
+    case 'zip':
+    case 'rar':
+    case '7z':
+      return wrapIcon(<File className="h-5 w-5 text-white" />, "#eab308"); // yellow
+    default:
+      return wrapIcon(<File className="h-5 w-5 text-white" />, "#9ca3af"); // gray
+  }
+};
+
+// Active Options Display Component - Shows INSIDE the textarea
+// Active Options Display Component - Shows INSIDE the textarea
+const ActiveOptionsDisplay = ({
+  isWebSearchActive,
+  setIsWebSearchActive,
+  isImageGenerationActive,
+  setIsImageGenerationActive,
+  isVideoGenerationActive,
+  setIsVideoGenerationActive,
+  uploadedFiles,
+  removeFile,
+  setChatType
+}: {
+  isWebSearchActive: boolean;
+  setIsWebSearchActive: (value: boolean) => void;
+  isImageGenerationActive: boolean;
+  setIsImageGenerationActive: (value: boolean) => void;
+  isVideoGenerationActive: boolean;
+  setIsVideoGenerationActive: (value: boolean) => void;
+  uploadedFiles: any[];
+  removeFile: (index: number) => void;
+  setChatType: (type: any) => void;
+}) => {
+  const hasActiveOptions = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || uploadedFiles.length > 0;
+
+  if (!hasActiveOptions) return null;
+
+  const handleWebSearchClose = () => {
+    setIsWebSearchActive(false);
+    setChatType('text');
+  };
+
+  const handleImageGenerationClose = () => {
+    setIsImageGenerationActive(false);
+    setChatType('text');
+  };
+
+  const handleVideoGenerationClose = () => {
+    setIsVideoGenerationActive(false);
+    setChatType('text');
+  };
+
+  return (
+    <div className="absolute top-2 left-3 right-3 flex flex-wrap items-center gap-2 z-10 max-h-20 overflow-y-auto">
+      {/* Uploaded Files */}
+      {uploadedFiles.map((file, index) => (
+        <div
+          key={index}
+          className="flex items-center gap-2 border border-gray-200 px-2 py-1 rounded-lg text-sm "
+        >
+          {getFileIcon(file.type, file.name)}
+          <span className="max-w-50 truncate font-medium text-gray-800 text-[13px]">
+            {file.name}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
+            onClick={() => removeFile(index)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      ))}
+
+      {/* Web Search - Only show if active */}
+      {isWebSearchActive && (
+        <div className="flex items-center gap-1.5 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 px-2 py-1 rounded-full text-xs border border-green-200 dark:border-green-800">
+          <Globe className="h-3 w-3" />
+          <span className="font-medium">Web Search</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-green-200 dark:hover:bg-green-800/30 rounded-full ml-1"
+            onClick={handleWebSearchClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+
+      {/* Image Generation - Only show if active */}
+      {isImageGenerationActive && (
+        <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
+          <Palette className="h-3 w-3" />
+          <span className="font-medium">Image Generation</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-pink-200 dark:hover:bg-pink-800/30 rounded-full ml-1"
+            onClick={handleImageGenerationClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+
+      {/* Video Generation - Only show if active */}
+      {isVideoGenerationActive && (
+        <div className="flex items-center gap-1.5 bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 px-2 py-1 rounded-full text-xs border border-orange-200 dark:border-orange-800">
+          <Video className="h-3 w-3" />
+          <span className="font-medium">Video Generation</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-orange-200 dark:hover:bg-orange-800/30 rounded-full ml-1"
+            onClick={handleVideoGenerationClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // Enhanced Model Selector
-// Enhanced Model Selector with Custom GPT support
 const NavbarModelSelector = ({
   selectedModel,
   setSelectedModel,
@@ -77,6 +480,7 @@ const NavbarModelSelector = ({
   currentChat
 }: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
+
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
@@ -168,127 +572,6 @@ const NavbarModelSelector = ({
   );
 };
 
-
-// MODIFICATION: FileUploadDialog ko saral banaya gaya hai. Ab yeh logic parent se leta hai.
-const FileUploadDialog = ({ onFileUpload, isUploading }: { onFileUpload: (files: FileList) => void; isUploading: boolean }) => {
-  const [isOpen, setIsOpen] = React.useState(false);
-  const [dragActive, setDragActive] = React.useState(false);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
-
-  const handleFiles = (files: FileList) => {
-    if (files.length === 0) return;
-    onFileUpload(files);
-    setIsOpen(false);
-  };
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFiles(e.dataTransfer.files);
-    }
-  };
-
-  return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="flex items-center gap-2">
-          <Paperclip className="h-4 w-4" />
-          Upload Files
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Upload Files</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div
-            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${dragActive ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'
-              }`}
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-          >
-            <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
-            <p className="text-sm text-muted-foreground mb-2">
-              Drag and drop files here, or click to select
-            </p>
-            <Button
-              variant="outline"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-            >
-              {isUploading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                'Select Files'
-              )}
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
-              onChange={(e) => e.target.files && handleFiles(e.target.files)}
-            />
-          </div>
-          <div className="text-xs text-muted-foreground">
-            Supported: Images, PDF, Word, Excel, PowerPoint, Text files (Max 10MB each)
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-};
-
-// Enhanced File Display Component
-const FileDisplay = ({ files, onRemove }: { files: any[]; onRemove: (index: number) => void }) => {
-  if (files.length === 0) return null
-
-  return (
-    <div className="flex flex-wrap gap-2 mb-3">
-      {files.map((file, index) => (
-        <div key={index} className="flex items-center gap-2 bg-muted rounded-md px-3 py-2 text-sm">
-          {file.type?.startsWith('image/') ? (
-            <div className="flex items-center gap-2">
-              <img src={"http://localhost:5000" + file.url} alt={file.name} className="w-10 h-10 object-cover rounded" />
-              {/* <ImageIcon className="h-4 w-4" /> */}
-            </div>
-          ) : (
-            <FileText className="h-4 w-4" />
-          )}
-          <span className="truncate max-w-[150px]">{file.name}</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0"
-            onClick={() => onRemove(index)}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-
 export default function ChatInterface() {
   const { user } = useAuth()
   const {
@@ -324,7 +607,6 @@ export default function ChatInterface() {
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
 
-  // MODIFICATION: State ko parent component (ChatInterface) mein move kiya gaya hai
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
 
@@ -332,30 +614,43 @@ export default function ChatInterface() {
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
 
-
-  // Speech-to-Text ke liye naye states 
+  // Speech-to-Text states 
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
   const recognitionRef = React.useRef<SpeechRecognition | null>(null);
 
-
-  // In the ChatInterface component, add this state variable with other states:
   const [isWebSearching, setIsWebSearching] = React.useState(false)
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
+  const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
+  const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
 
+  // Calculate top padding based on active options
+  const hasActiveOptions = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || uploadedFiles.length > 0;
+  const textareaPaddingTop = hasActiveOptions ? 'pt-12' : 'pt-4';
+  const textareaRef = React.useRef(null);
 
-  // Instant (demo) upgrade call
+  const autoResize = (target: any) => {
+    target.style.height = "auto"; // reset height
+    target.style.height = `${target.scrollHeight}px`; // fit text height
+  };
+
+  React.useEffect(() => {
+    if (textareaRef.current) {
+      autoResize(textareaRef.current);
+    }
+  }, [input]);
+
+
+  // Instant upgrade function
   const instantUpgrade = async (plan: 'BASIC' | 'STANDARD' | 'ENTERPRISE') => {
     try {
       setIsSubscribing(true);
-
-      // plan -> monthlyLimit mapping
       const planMap: Record<string, { monthlyLimit: number; price?: number }> = {
         BASIC: { monthlyLimit: 10000, price: 5 },
         STANDARD: { monthlyLimit: 30000, price: 15 },
-        ENTERPRISE: { monthlyLimit: 0, price: 99 }, // 0 => treated as "unlimited" on server
+        ENTERPRISE: { monthlyLimit: 0, price: 99 },
       };
 
       const payload = {
@@ -364,7 +659,6 @@ export default function ChatInterface() {
         price: planMap[plan].price ?? 0,
       };
 
-      // Try to call backend instant endpoint (recommended)
       const res = await fetch('/api/payments/instant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -373,10 +667,8 @@ export default function ChatInterface() {
       });
 
       if (!res.ok) {
-        // backend not available or returned error -> fallback to client-only update
         const body = await res.json().catch(() => ({}));
         console.warn('instantUpgrade backend failed:', body);
-        // FALLBACK: simulate success only in UI (DB not updated)
         const simulatedUser = {
           ...(currentUserInfo || user || {}),
           plan,
@@ -388,12 +680,10 @@ export default function ChatInterface() {
         return;
       }
 
-      // Success: refresh user info from server
       toast.success('Subscription applied — plan updated');
       setSubscribeOpen(false);
     } catch (err: any) {
       console.error('instantUpgrade error', err);
-      // Network or unexpected error -> fallback to UI-only simulation
       const planMap: Record<string, { monthlyLimit: number }> = {
         BASIC: { monthlyLimit: 10000 },
         STANDARD: { monthlyLimit: 30000 },
@@ -410,11 +700,9 @@ export default function ChatInterface() {
       setIsSubscribing(false);
     }
   };
-  // ...inside ChatInterface component, after you declare subscribeOpen and setSubscribeOpen...
 
   React.useEffect(() => {
     function handleOpenUpgrade(e: any) {
-      // Optionally inspect e.detail.message if you want to customize UX
       setSubscribeOpen(true);
     }
     if (typeof window !== 'undefined') {
@@ -426,8 +714,8 @@ export default function ChatInterface() {
       }
     };
   }, [setSubscribeOpen]);
+
   React.useEffect(() => {
-    // Check if the browser supports Speech Recognition
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
     if (SpeechRecognition) {
@@ -437,7 +725,6 @@ export default function ChatInterface() {
       recognition.interimResults = true;
       recognition.lang = 'en-US';
 
-      // Ab yeh event type aaram se resolve ho jayega
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let finalTranscript = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
@@ -450,7 +737,6 @@ export default function ChatInterface() {
         }
       };
 
-      // Error event bhi resolve ho jayega
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error:", event.error);
         if (isRecording) {
@@ -459,7 +745,6 @@ export default function ChatInterface() {
       };
 
       recognition.onend = () => {
-        // Jab recording ruk jaye (chahe manually ya automatically), state ko false kar dein
         setIsRecording(false);
       };
 
@@ -471,7 +756,7 @@ export default function ChatInterface() {
         recognitionRef.current.stop();
       }
     };
-  }, []); // Empty dependency array means this runs only once on mount
+  }, []);
 
   const handleMicClick = () => {
     const recognition = recognitionRef.current;
@@ -479,44 +764,50 @@ export default function ChatInterface() {
 
     if (isRecording) {
       recognition.stop();
-      // onend event state ko handle kar lega
     } else {
       recognition.start();
-      setIsRecording(true); // Recording shuru hote hi state ko true karein
+      setIsRecording(true);
     }
   };
 
+  // React.useEffect(() => {
+  //   console.log(currentChat);
+
+  //   if (currentChat && currentChat.messages.length > 0) {
+  //     if (currentChat.messages[0].content !== "Hello! I'm gpt. How can I help you today?") {
+  //       const hasImageMessages = currentChat.messages.some(msg =>
+  //         msg.role === "ASSISTANT" && (
+  //           (msg.content.startsWith('http') && (msg.content.includes('oaidalleapiprodscus') || msg.content.includes('dalle'))) ||
+  //           (msg.files && JSON.parse(msg.files.toString() || '[]').some((f: any) => f.type === 'image'))
+  //         )
+  //       );
+
+  //       const hasVideoMessages = currentChat.messages.some(msg =>
+  //         msg.videoData && (msg.videoData.status === 'completed' || msg.videoData.status === 'processing' || msg.videoData.status === 'failed')
+  //       );
+
+  //       if (chatType === "video") {
+  //         setChatType('video');
+  //       } else if (hasImageMessages) {
+  //         setChatType('image');
+  //       } else {
+  //         setChatType('text');
+  //       }
+  //     }
+  //   }
+  // }, [currentChat]);
+  // Replace the commented useEffect and add a new one for chat switching
+  React.useEffect(() => {
+    // Reset generation modes when switching chats
+    setIsWebSearchActive(false);
+    setIsImageGenerationActive(false);
+    setIsVideoGenerationActive(false);
+    setChatType('text'); // Always default to text when switching chats
+  }, [currentChat?.id]); // Only trigger when chat ID changes
 
   React.useEffect(() => {
-    console.log(currentChat);
-
-    if (currentChat && currentChat.messages.length > 0) {
-      if (currentChat.messages[0].content !== "Hello! I'm gpt. How can I help you today?") {
-        const hasImageMessages = currentChat.messages.some(msg =>
-          msg.role === "ASSISTANT" && (
-            (msg.content.startsWith('http') && (msg.content.includes('oaidalleapiprodscus') || msg.content.includes('dalle'))) ||
-            (msg.files && JSON.parse(msg.files.toString() || '[]').some((f: any) => f.type === 'image'))
-          )
-        );
-        console.log(hasImageMessages);
-
-        const hasVideoMessages = currentChat.messages.some(msg =>
-          msg.videoData && (msg.videoData.status === 'completed' || msg.videoData.status === 'processing' || msg.videoData.status === 'failed')
-        );
-
-        if (chatType === "video") {
-          setChatType('video');
-        } else if (hasImageMessages) {
-          setChatType('image');
-        } else {
-          setChatType('text');
-        }
-      }
-
-    }
-  }, [currentChat]);
-
-  // Hide audio panel when chat changes or a new chat is created/selected
+    setShowAudioPanel(false);
+  }, [currentChat?.id]);
   React.useEffect(() => {
     setShowAudioPanel(false);
   }, [currentChat?.id]);
@@ -531,10 +822,9 @@ export default function ChatInterface() {
       selectChat(savedChatId)
       return;
     }
-
   }, [currentChat, createNewChat, availableModels, selectedModel, selectChat]);
 
-  // MODIFICATION: File upload logic ab ChatInterface mein hai
+  // File upload logic
   const handleAndUploadFiles = async (files: FileList) => {
     if (files.length === 0) return;
     if (chatType === 'image' || chatType === 'video') {
@@ -549,7 +839,6 @@ export default function ChatInterface() {
         setUploadedFiles([...uploadedFiles, ...response.files]);
         toast.success(`${response.files.length} file(s) uploaded successfully`);
         console.log("response ", response);
-
       } else {
         toast.error('File upload failed');
       }
@@ -561,7 +850,7 @@ export default function ChatInterface() {
     }
   };
 
-  // MODIFICATION: Drag and Drop event handlers
+  // Drag and Drop event handlers
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -581,15 +870,19 @@ export default function ChatInterface() {
     }
   };
 
-
   const handleSend = async () => {
     if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isStreaming) return
 
     const msg = input.trim()
     setInput("")
+
     try {
       if (isWebSearchActive) {
-        handleWebSearch();
+        await handleWebSearch(); // Changed to await
+      } else if (isImageGenerationActive) {
+        await handleImageGeneration(msg);
+      } else if (isVideoGenerationActive) {
+        await handleVideoGeneration(msg);
       } else {
         if (!currentChat) {
           await createNewChat(chatType, msg)
@@ -603,7 +896,6 @@ export default function ChatInterface() {
       }
     } catch (err: any) {
       console.error('Send error', err);
-      // If backend returned a quota error (429) open subscribe modal
       const message = (err && (err.message || '')) as string;
       const status = err?.status || err?.statusCode || (err?.response && err.response.status);
       if (status === 429 || message.toLowerCase().includes('monthly') || message.toLowerCase().includes('limit')) {
@@ -615,27 +907,42 @@ export default function ChatInterface() {
     }
   }
 
-
   const handleImageGeneration = async (prompt: string) => {
     setIsGeneratingImage(true)
     try {
-      const response = await apiClient.generateImage({
-        prompt,
-        chatId: currentChat?.id,
-        provider: selectProvider,
-        model: selectedModel
-      })
-      await selectChat(currentChat?.id ?? "")
-      toast.success('Image generated successfully!')
+      if (!currentChat) {
+        // If no chat is active, create a new one with type 'image'
+        const newChat = createNewChat('image', prompt, true); // Pass true to indicate image generation mode for initial message
+        if (newChat && newChat.id) {
+          // Then call generateImage with the new chat ID
+          const response = await apiClient.generateImage({
+            prompt,
+            chatId: newChat.id,
+            provider: selectProvider,
+            model: selectedModel
+          })
+          await selectChat(newChat.id); // Re-select the chat to update messages
+          toast.success('Image generated successfully!')
+        }
+      } else {
+        // If a chat is active, just generate image within it
+        const response = await apiClient.generateImage({
+          prompt,
+          chatId: currentChat?.id,
+          provider: selectProvider,
+          model: selectedModel
+        })
+        await selectChat(currentChat?.id ?? "") // Re-select the chat to update messages
+        toast.success('Image generated successfully!')
+      }
     } catch (error) {
       console.error('Image generation failed:', error)
       toast.error('Image generation failed. Please try again.')
     } finally {
       setIsGeneratingImage(false)
+      // Don't auto-reset - user must manually remove
     }
   }
-
-  // Update the handleVideoGeneration function:
 
   const handleVideoGeneration = async (prompt: string) => {
     setIsGeneratingVideo(true)
@@ -645,15 +952,14 @@ export default function ChatInterface() {
       } else {
         await addVideoMessage(prompt)
       }
-      // Only show success toast if no error occurred
       toast.success('Video generation started! This may take 2-5 minutes.')
     } catch (error: any) {
       console.error('Video generation failed:', error)
-      // Show specific error message
       const errorMessage = error.message || 'Video generation failed. Please try again.';
       toast.error(errorMessage)
     } finally {
       setIsGeneratingVideo(false)
+      // Don't auto-reset - user must manually remove
     }
   }
 
@@ -664,83 +970,11 @@ export default function ChatInterface() {
     }
   }
 
-  const startNewImageChat = () => {
-    setChatType('image')
-    createNewChat('image')
-  }
-
-  const startNewVideoChat = () => {
-    setChatType('video')
-    createNewChat('video')
-  }
-
   const removeFile = (index: number) => {
     setUploadedFiles(uploadedFiles.filter((_, i) => i !== index))
   }
 
-  // React.useEffect(() => {
-  //   scrollAreaRef.current?.scrollTo({
-  //     top: scrollAreaRef.current.scrollHeight,
-  //   })
-  // }, [currentChat?.messages, isLoading])
-
   const isInitial = !currentChat && !showAudioPanel
-
-  // Replace the existing handleWebSearch function with this corrected version:
-
-  // const handleWebSearch = async () => {
-  //   if (!input.trim()) {
-  //     toast.error('Please enter a search query');
-  //     return;
-  //   }
-
-  //   // Create new chat if none exists
-  //   if (!currentChat?.id) {
-  //     try {
-  //       await createNewChat();
-  //       // Wait a bit for the chat to be created
-  //       await new Promise(resolve => setTimeout(resolve, 500));
-  //     } catch (error) {
-  //       toast.error('Failed to create chat');
-  //       return;
-  //     }
-  //   }
-
-  //   setIsWebSearching(true);
-
-  //   try {
-  //     const searchQuery = input.trim();
-
-  //     // Perform web search (this will also save messages to backend)
-  //     const response = await webSearchService.search(searchQuery, currentChat?.id);
-
-  //     // Reload the current chat to get the updated messages from backend
-  //     if (currentChat?.id) {
-  //       await selectChat(currentChat.id);
-  //     }
-
-  //     // Clear input
-  //     setInput('');
-
-  //     // Scroll to bottom
-  //     setTimeout(() => {
-  //       if (scrollAreaRef.current) {
-  //         const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
-  //         if (scrollContainer) {
-  //           scrollContainer.scrollTop = scrollContainer.scrollHeight;
-  //         }
-  //       }
-  //     }, 100);
-
-  //     toast.success(`Found ${response.results.length} search results`);
-  //   } catch (error: any) {
-  //     console.error('Web search failed:', error);
-  //     toast.error(error.message || 'Web search failed');
-  //   } finally {
-  //     setIsWebSearching(false);
-  //   }
-  // };
-  // Replace the handleWebSearch function:
 
   const handleWebSearch = async () => {
     if (!input.trim()) {
@@ -748,66 +982,76 @@ export default function ChatInterface() {
       return;
     }
 
-    if (!currentChat?.id) {
+    let activeChatId = currentChat?.id;
+
+    if (!activeChatId) {
       try {
-        createNewChat();
+        const newChat = await createNewChat('text', `🔍 Web Search: ${input.trim()}`, false);
+        activeChatId = newChat?.id;
+        if (!activeChatId) {
+          toast.error('Failed to create chat for web search');
+          return;
+        }
+        // Delay to ensure chat is fully initialized and selected
         await new Promise(resolve => setTimeout(resolve, 500));
+        selectChat(activeChatId); // Ensure the newly created chat is selected
       } catch (error) {
-        toast.error('Failed to create chat');
+        toast.error('Failed to create chat for web search');
+        console.error("Error creating chat for web search:", error);
         return;
       }
     }
 
     setIsWebSearching(true);
+    const searchQuery = input.trim();
+    setInput(''); // Clear input immediately after starting search
 
     try {
-      const searchQuery = input.trim();
-
-      // Add user message immediately
+      // Add a placeholder user message for the web search
       const userMessage = {
         id: `msg-user-${Date.now()}`,
-        chatId: currentChat?.id,
+        chatId: activeChatId,
         role: 'USER',
         content: `🔍 Web Search: ${searchQuery}`,
         timestamp: new Date().toISOString(),
       };
 
-      // Add AI placeholder for streaming
+      // Add a placeholder AI message for the search results
       const aiMessage = {
-        id: `msg-ai-${Date.now()}`,
-        chatId: currentChat?.id,
+        id: `msg-ai-${Date.now() + 1}`, // Ensure unique ID
+        chatId: activeChatId,
         role: 'ASSISTANT',
-        content: '',
+        content: 'Searching the web...', // Initial loading state
         timestamp: new Date().toISOString(),
       };
 
-      // Update UI immediately
-      const updatedMessages = [...(currentChat?.messages || []), userMessage, aiMessage];
-      const updatedChat = { ...currentChat, messages: updatedMessages };
-      setCurrentChat(updatedChat);
+      // Update the chat with the new messages
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat; // Should not happen if activeChatId is set
+        const updatedMessages = [...(prevChat.messages || []), userMessage, aiMessage];
+        return { ...prevChat, messages: updatedMessages };
+      });
 
       let accumulatedContent = '';
 
-      // Start streaming search
       await webSearchService.searchStream(
         searchQuery,
-        currentChat?.id,
+        activeChatId,
         (content: string) => {
-          // Accumulate content for streaming effect
           accumulatedContent += content;
-
-          // Update the AI message with accumulated content
-          const newMessages = updatedMessages.map(msg =>
-            msg.id === aiMessage.id
-              ? { ...msg, content: accumulatedContent }
-              : msg
-          );
-
-          setCurrentChat(prev => prev ? { ...prev, messages: newMessages } : prev);
+          setCurrentChat(prev => {
+            if (!prev) return prev;
+            const newMessages = prev.messages.map(msg =>
+              msg.id === aiMessage.id
+                ? { ...msg, content: accumulatedContent }
+                : msg
+            );
+            return { ...prev, messages: newMessages };
+          });
         },
         () => {
-          // On complete, reload chat to get saved version
-          selectChat(currentChat?.id || '');
+          // Final update to ensure UI reflects completion
+          selectChat(activeChatId || ''); // Re-fetch to ensure all state is consistent
           setIsWebSearching(false);
           toast.success('Web search completed');
         },
@@ -815,11 +1059,18 @@ export default function ChatInterface() {
           console.error('Web search failed:', error);
           toast.error(error.message || 'Web search failed');
           setIsWebSearching(false);
+          // If search fails, update the AI message to reflect the error
+          setCurrentChat(prev => {
+            if (!prev) return prev;
+            const newMessages = prev.messages.map(msg =>
+              msg.id === aiMessage.id
+                ? { ...msg, content: `Web search failed: ${error.message}` }
+                : msg
+            );
+            return { ...prev, messages: newMessages };
+          });
         }
       );
-
-      // Clear input
-      setInput('');
 
     } catch (error: any) {
       console.error('Web search failed:', error);
@@ -827,7 +1078,7 @@ export default function ChatInterface() {
       setIsWebSearching(false);
     }
   };
-  // Minimal FeatureRow component — paste near top of file once
+
   function FeatureRow({ icon, title, desc, included = true }: { icon: React.ReactNode; title: string; desc: string; included?: boolean }) {
     return (
       <div className={`flex items-start gap-3 ${included ? '' : 'opacity-60'}`}>
@@ -841,18 +1092,17 @@ export default function ChatInterface() {
       </div>
     );
   }
+
   const currentPlan = user?.plan || user?.plan || 'FREE';
 
   return (
-    // MODIFICATION: Event handlers ko main div mein lagaya gaya hai
     <div
-      className="flex h-full flex-col relative" // 'relative' class zaroori hai overlay ke liye
+      className="flex h-full flex-col relative"
       onDragEnter={handleDrag}
       onDragOver={handleDrag}
       onDragLeave={handleDrag}
       onDrop={handleDrop}
     >
-      {/* MODIFICATION: Yeh overlay tab dikhega jab file drag ho rahi ho */}
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-4 rounded-lg border-2 border-dashed border-primary p-12">
@@ -876,26 +1126,6 @@ export default function ChatInterface() {
                   chatTypes={chatType}
                   currentChat={currentChat}
                 />
-                <div className="flex items-center gap-2 mt-2">
-                  {/* <Badge variant={chatType === 'text' ? 'default' : 'outline'}>
-                    <MessageSquare className="h-3 w-3 mr-1" />
-                    {chatType === 'text' && 'Text Chat'}
-                    {chatType === 'image' && 'Image Generation'}
-                    {chatType === 'video' && 'Video Generation'}
-                  </Badge>
-                  {chatType === 'image' && (
-                    <Badge variant="secondary" className="text-xs">
-                      <Palette className="h-3 w-3 mr-1" />
-                      DALL-E 3
-                    </Badge>
-                  )}
-                  {chatType === 'video' && (
-                    <Badge variant="secondary" className="text-xs">
-                      <Film className="h-3 w-3 mr-1" />
-                      Veo-3
-                    </Badge>
-                  )} */}
-                </div>
               </>
             ) : (
               <div className="flex flex-col">
@@ -905,7 +1135,6 @@ export default function ChatInterface() {
             )}
           </div>
           <div className="flex items-center gap-2">
-
             <ThemeToggle />
             <Button variant="outline" size="sm" onClick={() => setSubscribeOpen(true)}>
               {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
@@ -915,13 +1144,6 @@ export default function ChatInterface() {
               onOpenChange={setSubscribeOpen}
               user={currentUserInfo || user}
             />
-
-
-            {/* {!showAudioPanel && (
-              <Button variant="outline" size="sm" onClick={clearCurrentChat}>
-                Clear Chat
-              </Button>
-            )} */}
           </div>
         </div>
       </div>
@@ -1007,37 +1229,102 @@ export default function ChatInterface() {
             )}
 
             <div className="space-y-3">
-              {chatType === 'text' && (
-                <FileDisplay files={uploadedFiles} onRemove={removeFile} />
-              )}
               <div className="bg-background">
                 <div className="flex-1 relative">
-
-                  <Textarea
+                  {/* <Textarea
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyPress={handleKeyPress}
                     placeholder={
-                      chatType === 'image'
+                      isImageGenerationActive
                         ? "Describe the image you want to generate..."
-                        : chatType === 'video'
+                        : isVideoGenerationActive
                           ? "Describe the video you want to create..."
-                          : "Type your message here..."
+                          : isWebSearchActive
+                            ? "Enter your search query..."
+                            : "Type your message here..."
                     }
-                    className="min-h-[60px] max-h-[350px] resize-none pr-20 py-4 transition-all duration-200"
+                    className={`min-h-[60px] max-h-[350px] resize-none pl-12 pr-20 py-4 ${textareaPaddingTop} transition-all duration-200`}
                     style={{
                       overflowY: input.split('\n').length > 2 ? 'auto' : 'hidden',
                       minHeight: '60px',
                       maxHeight: '350px',
                       height: 'auto',
-                      padding: '1rem',
                     }}
                     rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
                     disabled={isLoading || isGeneratingImage || isGeneratingVideo}
+                  /> */}
+
+                  <Textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => {
+                      setInput(e.target.value);
+                      autoResize(e.target);
+                    }}
+                    onKeyPress={handleKeyPress}
+                    placeholder={
+                      isImageGenerationActive
+                        ? "Describe the image you want to generate..."
+                        : isVideoGenerationActive
+                          ? "Describe the video you want to create..."
+                          : isWebSearchActive
+                            ? "Enter your search query..."
+                            : "Type your message here..."
+                    }
+                    className={`resize-none pl-12 pr-20 py-2 ${textareaPaddingTop} transition-all duration-200`}
+                    style={{
+                      minHeight: "60px", // ek line se start
+                      maxHeight: "350px",
+                      overflowY: "auto",
+                    }}
+                    rows={1}
+                    disabled={
+                      isLoading ||
+                      isGeneratingImage ||
+                      isGeneratingVideo ||
+                      isUploading ||
+                      isWebSearching
+                    }
+                  />
+                  {/* Active Options Display - INSIDE the textarea */}
+                  <ActiveOptionsDisplay
+                    isWebSearchActive={isWebSearchActive}
+                    setIsWebSearchActive={setIsWebSearchActive}
+                    isImageGenerationActive={isImageGenerationActive}
+                    setIsImageGenerationActive={setIsImageGenerationActive}
+                    isVideoGenerationActive={isVideoGenerationActive}
+                    setIsVideoGenerationActive={setIsVideoGenerationActive}
+                    uploadedFiles={uploadedFiles}
+                    removeFile={removeFile}
+                    setChatType={setChatType}
                   />
 
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                  {/* Plus icon dropdown - positioned on the left with better alignment */}
+                  <div className="absolute left-3 bottom-4 flex items-center justify-center">
+                    <ActionsDropdown
+                      chatType={chatType}
+                      setChatType={setChatType}
+                      currentPlan={currentPlan}
+                      isWebSearchActive={isWebSearchActive}
+                      setIsWebSearchActive={setIsWebSearchActive}
+                      isImageGenerationActive={isImageGenerationActive}
+                      setIsImageGenerationActive={setIsImageGenerationActive}
+                      isVideoGenerationActive={isVideoGenerationActive}
+                      setIsVideoGenerationActive={setIsVideoGenerationActive}
+                      setShowAudioPanel={setShowAudioPanel}
+                      setAudioTab={setAudioTab}
+                      handleAndUploadFiles={handleAndUploadFiles}
+                      isUploading={isUploading}
+                      isWebSearching={isWebSearching}
+                      isLoading={isLoading}
+                      isGeneratingImage={isGeneratingImage}
+                      isGeneratingVideo={isGeneratingVideo}
+                    />
+                  </div>
 
+                  {/* Send button - positioned on the right */}
+                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     <Button
                       onClick={handleSend}
                       disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo}
@@ -1053,59 +1340,15 @@ export default function ChatInterface() {
                   </div>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                {chatType === 'text' && (
-                  <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
-                )}
-                {chatType === 'text' && (
-                  <Button
-                    variant={isWebSearchActive ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setIsWebSearchActive(!isWebSearchActive)}
-                    className="flex items-center gap-2"
-                  >
-                    <Globe className="h-4 w-4" />
-                    {isWebSearching ? 'Searching...' : 'Web Search'}
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPlan === "FREE"}
 
-                  onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
-                  className="flex items-center gap-2"
-                >
-                  <Mic className="h-4 w-4" />
-                  Voice Studio
-                </Button>
-                <Button
-                  disabled={currentPlan === "FREE"}
-                  variant="outline"
-                  size="sm"
-                  onClick={startNewImageChat}
-                  className="flex items-center gap-2"
-                >
-                  <Palette className="h-4 w-4" />
-                  {chatType === 'image' ? 'Image Generation' : 'New Image Chat'}
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={currentPlan === "FREE"}
-                  size="sm"
-                  onClick={startNewVideoChat}
-                  className="flex items-center gap-2"
-                >
-                  <Video className="h-4 w-4" />
-                  {chatType === 'video' ? 'Video Generation' : 'New Video Chat'}
-                </Button>
-              </div>
               <p className="text-center text-xs text-muted-foreground">
-                {chatType === 'image'
+                {isImageGenerationActive
                   ? 'Press Enter to generate image, Shift+Enter for new line'
-                  : chatType === 'video'
+                  : isVideoGenerationActive
                     ? 'Press Enter to generate video, Shift+Enter for new line'
-                    : 'Press Enter to send, Shift+Enter for new line'
+                    : isWebSearchActive
+                      ? 'Press Enter to search the web, Shift+Enter for new line'
+                      : 'Press Enter to send, Shift+Enter for new line'
                 }
               </p>
             </div>
@@ -1116,7 +1359,6 @@ export default function ChatInterface() {
           {showAudioPanel ? (
             // Voice Studio inline view
             <div className="flex flex-1">
-              {/* Inline sidebar */}
               <div className="w-56 border-r border-border/40 p-4 space-y-4">
                 <div>
                   <div className="text-sm font-medium mb-2">Voice Studio</div>
@@ -1145,18 +1387,9 @@ export default function ChatInterface() {
                       <Music className="h-4 w-4 mr-2" />
                       Music
                     </Button>
-                    {/* <Button
-                      variant={audioTab === 'video' ? 'default' : 'outline'}
-                      className="w-full justify-start"
-                      onClick={() => setAudioTab('video')}
-                    >
-                      <Video className="h-4 w-4 mr-2" />
-                      Video
-                    </Button> */}
                   </div>
                 </div>
               </div>
-              {/* Content area */}
               <div className="flex-1 p-4">
                 {audioTab === 'tts' && (
                   <TextToSpeechComponent />
@@ -1192,38 +1425,82 @@ export default function ChatInterface() {
               {/* Input & Actions */}
               <div className="border-t border-border/40 p-4">
                 <div className="max-w-4xl mx-auto space-y-3">
-                  {/* File Display */}
-                  {chatType === 'text' && (
-                    <FileDisplay files={uploadedFiles} onRemove={removeFile} />
-                  )}
-
                   {/* Input Area */}
                   <div className="bg-background">
                     <div className="flex-1 relative">
+
+
                       <Textarea
+                        ref={textareaRef}
                         value={input}
-                        onChange={(e) => setInput(e.target.value)}
+                        onChange={(e) => {
+                          setInput(e.target.value);
+                          autoResize(e.target);
+                        }}
                         onKeyPress={handleKeyPress}
                         placeholder={
-                          chatType === 'image'
+                          isImageGenerationActive
                             ? "Describe the image you want to generate..."
-                            : chatType === 'video'
+                            : isVideoGenerationActive
                               ? "Describe the video you want to create..."
-                              : "Type your message here..."
+                              : isWebSearchActive
+                                ? "Enter your search query..."
+                                : "Type your message here..."
                         }
-                        className="min-h-[60px] max-h-[350px] resize-none pr-20 py-4 transition-all duration-200"
+                        className={`resize-none pl-12 pr-20 py-2 ${textareaPaddingTop} transition-all duration-200`}
                         style={{
-                          overflowY: input.split('\n').length > 2 ? 'auto' : 'hidden',
-                          minHeight: '60px',
-                          maxHeight: '350px',
-                          height: 'auto',
-                          padding: '1rem',
+                          minHeight: "60px", // ek line se start
+                          maxHeight: "350px",
+                          overflowY: "auto",
                         }}
-                        rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
-                        disabled={isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isStreaming}
+                        rows={1}
+                        disabled={
+                          isLoading ||
+                          isGeneratingImage ||
+                          isGeneratingVideo ||
+                          isUploading ||
+                          isWebSearching
+                        }
                       />
 
 
+                      {/* Active Options Display - INSIDE the textarea */}
+                      <ActiveOptionsDisplay
+                        isWebSearchActive={isWebSearchActive}
+                        setIsWebSearchActive={setIsWebSearchActive}
+                        isImageGenerationActive={isImageGenerationActive}
+                        setIsImageGenerationActive={setIsImageGenerationActive}
+                        isVideoGenerationActive={isVideoGenerationActive}
+                        setIsVideoGenerationActive={setIsVideoGenerationActive}
+                        uploadedFiles={uploadedFiles}
+                        removeFile={removeFile}
+                        setChatType={setChatType}
+                      />
+
+                      {/* Plus icon dropdown - positioned on the left with better alignment */}
+                      <div className="absolute left-3 bottom-3 flex items-center justify-center">
+                        <ActionsDropdown
+                          chatType={chatType}
+                          setChatType={setChatType}
+                          currentPlan={currentPlan}
+                          isWebSearchActive={isWebSearchActive}
+                          setIsWebSearchActive={setIsWebSearchActive}
+                          isImageGenerationActive={isImageGenerationActive}
+                          setIsImageGenerationActive={setIsImageGenerationActive}
+                          isVideoGenerationActive={isVideoGenerationActive}
+                          setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          setShowAudioPanel={setShowAudioPanel}
+                          setAudioTab={setAudioTab}
+                          handleAndUploadFiles={handleAndUploadFiles}
+                          isUploading={isUploading}
+                          isWebSearching={isWebSearching}
+                          isLoading={isLoading}
+                          isGeneratingImage={isGeneratingImage}
+                          isGeneratingVideo={isGeneratingVideo}
+                        />
+                      </div>
+
+                      {/* Voice Controls and Send button - positioned on the right */}
                       <div className="absolute bottom-3 right-3 flex items-center gap-2">
                         <VoiceControls
                           onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
@@ -1256,82 +1533,16 @@ export default function ChatInterface() {
                     </div>
                   </div>
 
-                  {/* Function buttons row */}
-
-                  <div className="flex flex-wrap items-center justify-start gap-2">
-                    {chatType === 'text' && (
-                      <FileUploadDialog onFileUpload={handleAndUploadFiles} isUploading={isUploading} />
-                    )}
-                    {chatType === 'text' && (
-                      <Button
-                        variant={isWebSearchActive ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setIsWebSearchActive(!isWebSearchActive)}
-                        className="flex items-center gap-2"
-                      >
-                        <Globe className="h-4 w-4" />
-                        {isWebSearching ? 'Searching...' : 'Web Search'}
-                      </Button>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={currentPlan === "FREE"}
-                      onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
-                      className="flex items-center gap-2"
-                    >
-                      <Mic className="h-4 w-4" />
-                      Voice Studio
-                    </Button>
-
-                    <Button
-                      variant="outline"
-                      disabled={currentPlan === "FREE"}
-
-                      size="sm"
-                      onClick={startNewImageChat}
-                      className="flex items-center gap-2"
-                    >
-                      <Palette className="h-4 w-4" />
-                      {chatType === 'image' ? 'Image Generation' : 'New Image Chat'}
-                    </Button>
-
-                    <Button
-                      disabled={currentPlan === "FREE"}
-
-                      variant="outline"
-                      size="sm"
-                      onClick={startNewVideoChat}
-                      className="flex items-center gap-2"
-                    >
-                      <Video className="h-4 w-4" />
-                      {chatType === 'video' ? 'Video Generation' : 'New Video Chat'}
-                    </Button>
-                  </div>
-
                   <p className="text-center text-xs text-muted-foreground">
-                    {chatType === 'image'
+                    {isImageGenerationActive
                       ? 'Press Enter to generate image, Shift+Enter for new line'
-                      : chatType === 'video'
+                      : isVideoGenerationActive
                         ? 'Press Enter to generate video, Shift+Enter for new line'
-                        : 'Press Enter to send, Shift+Enter for new line'
+                        : isWebSearchActive
+                          ? 'Press Enter to search the web, Shift+Enter for new line'
+                          : 'Press Enter to send, Shift+Enter for new line'
                     }
                   </p>
-
-                  {/* {isAnon && anonBlocked && (
-  <div className="absolute inset-0 z-50 backdrop-blur-sm bg-background/80 flex flex-col items-center justify-center gap-6 p-6">
-    <div className="max-w-sm text-center space-y-3">
-      <h3 className="text-xl font-semibold">Free trial limit reached</h3>
-      <p className="text-sm text-muted-foreground">
-        You used all {anonLimit} free messages. Create an account to unlock unlimited chats, history, file attachments and more.
-      </p>
-      <div className="flex gap-3 justify-center">
-        <Button onClick={() => router.push('/auth/register')}>Create Account</Button>
-        <Button variant="outline" onClick={() => router.push('/auth/login')}>Login</Button>
-      </div>
-    </div>
-  </div>
-)} */}
                 </div>
               </div>
             </>

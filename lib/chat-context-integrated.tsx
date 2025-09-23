@@ -50,7 +50,12 @@ interface Chat {
     }>
   }
 }
-
+interface PaginationInfo {
+  page: number
+  limit: number
+  total: number
+  pages: number
+}
 interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
@@ -78,6 +83,11 @@ interface ChatContextType {
 
   isStreaming: boolean; // ✅ Naya state add karein
   stopStreaming: () => void; // ✅ Naya function add karein
+  pagination: PaginationInfo | null
+  isLoadingMore: boolean
+  hasMoreChats: boolean
+  loadMoreChats: () => Promise<void>
+  resetChats: () => void
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined)
@@ -94,7 +104,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [hasInitialized, setHasInitialized] = useState(false)
   const [chatType, setChatType] = useState<'text' | 'image' | 'video'>('text')
   const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
-
+  const [pagination, setPagination] = useState<PaginationInfo | null>(null)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const [hasMoreChats, setHasMoreChats] = useState(true)
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
 
@@ -172,15 +184,53 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     loadModelsForType();
   }, [chatType, hasInitialized]);
 
-  const loadUserChats = async () => {
+  // const loadUserChats = async () => {
+  //   try {
+  //     const response = await apiClient.getChats()
+  //     setChats(response.chats)
+  //   } catch (error) {
+  //     console.error("Failed to load chats:", error)
+  //   }
+  // }
+  const loadUserChats = async (page: number = 1, limit: number = 20) => {
     try {
-      const response = await apiClient.getChats()
-      setChats(response.chats)
+      const response = await apiClient.getChats({ page, limit })
+
+      if (page === 1) {
+        // First page - replace all chats
+        setChats(response.chats)
+      } else {
+        // Subsequent pages - append to existing chats
+        setChats(prev => [...prev, ...response.chats])
+      }
+
+      setPagination(response.pagination)
+      setHasMoreChats(response.pagination.page < response.pagination.pages)
     } catch (error) {
       console.error("Failed to load chats:", error)
     }
   }
 
+  // Load more chats for infinite scroll
+  const loadMoreChats = useCallback(async () => {
+    if (!hasMoreChats || isLoadingMore || !pagination) return
+
+    setIsLoadingMore(true)
+    try {
+      await loadUserChats(pagination.page + 1, pagination.limit)
+    } catch (error) {
+      console.error("Failed to load more chats:", error)
+    } finally {
+      setIsLoadingMore(false)
+    }
+  }, [hasMoreChats, isLoadingMore, pagination])
+
+  const resetChats = useCallback(() => {
+    setChats([])
+    setPagination(null)
+    setHasMoreChats(true)
+    loadUserChats()
+  }, [])
   // ✅ Naya function: Streaming ko rokne ke liye
   // const stopStreaming = useCallback(() => {
   //   if (abortControllerRef.current) {
@@ -941,7 +991,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     regenerateLastMessage,
     editAndRegenerate,
     updateMessageInChat,
-    pollVideoStatus, isStreaming, stopStreaming
+    pollVideoStatus, isStreaming, stopStreaming,
+    pagination,
+    isLoadingMore,
+    hasMoreChats,
+    loadMoreChats,
+    resetChats
   }
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
