@@ -230,7 +230,7 @@ class ApiClient {
     onData: (chunk: string) => void, // Jab data ka naya tukra aaye
     onClose: () => void, // Jab stream band ho jaye
     onError: (error: Error) => void, // Jab koi error aaye
-    signal?: AbortSignal
+
   ) {
 
     const url = `${this.baseURL}/ai/generate`;
@@ -241,7 +241,7 @@ class ApiClient {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
       body: JSON.stringify(data),
-      signal
+
     };
 
     try {

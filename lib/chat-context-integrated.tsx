@@ -287,12 +287,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !token) return;
 
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-        // Optional: previous stream ke message ko update karein agar zaroori ho
-      }
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
+      // if (abortControllerRef.current) {
+      //   abortControllerRef.current.abort();
+      //   // Optional: previous stream ke message ko update karein agar zaroori ho
+      // }
+      // const controller = new AbortController();
+      // abortControllerRef.current = controller;
 
       // STEP 1: User ka message foran UI mein dikhayein
       const userMessage: Message = {
@@ -378,7 +378,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             //   });
             // }
           },
-          controller.signal
+
         );
       } catch (error) {
         console.error("Failed to start AI stream:", error);
@@ -558,17 +558,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       };
     });
 
-
+    const streamId = crypto.randomUUID();
+    setCurrentStreamId(streamId);
     try {
       // Step 4: Call your streaming function
       await apiClient.generateAIStream(
         {
           provider: selectProvider,
-
           model: selectedModel,
           prompt: originalUserMessage.content,
           chatId: currentChat.id,
           files: (originalUserMessage.files?.map((f: any) => f.id) as string[]) || [],
+          streamId: streamId,
         },
         (chunk) => {
           // onData: Fill the placeholder
@@ -678,7 +679,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
     setCurrentChat(prev => prev ? { ...prev, messages: [...prev.messages, aiMessagePlaceholder] } : null);
 
-
+    const streamId = crypto.randomUUID();
+    setCurrentStreamId(streamId);
 
     await apiClient.generateAIStream(
       {
@@ -688,6 +690,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         prompt: newContent,
         chatId: currentChat.id,
         files: [],
+        streamId: streamId
       },
       (chunk) => {
         // onData: Fill the placeholder

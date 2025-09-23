@@ -593,7 +593,7 @@ router.post('/stop-stream', authenticateToken, (req, res) => {
 
 // // ✅ Generate AI image response
 router.post(
-  '/generate-image',
+  '/generate-image-old',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
@@ -850,7 +850,7 @@ async function saveBase64Image(base64Data) {
 }
 
 router.post(
-  '/generate-image-new',
+  '/generate-image',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
