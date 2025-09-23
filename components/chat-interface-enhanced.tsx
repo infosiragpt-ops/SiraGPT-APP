@@ -189,12 +189,12 @@ const ActionsDropdown = ({
         >
           <div className="flex items-center gap-3 w-full">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
-                ? 'bg-green-100 dark:bg-green-900/20'
-                : 'bg-emerald-100 dark:bg-emerald-900/20'
+              ? 'bg-green-100 dark:bg-green-900/20'
+              : 'bg-emerald-100 dark:bg-emerald-900/20'
               }`}>
               <Globe className={`h-4 w-4 ${isWebSearchActive
-                  ? 'text-green-600 dark:text-green-400'
-                  : 'text-emerald-600 dark:text-emerald-400'
+                ? 'text-green-600 dark:text-green-400'
+                : 'text-emerald-600 dark:text-emerald-400'
                 }`} />
             </div>
             <div className="flex-1">
@@ -241,12 +241,12 @@ const ActionsDropdown = ({
         >
           <div className="flex items-center gap-3 w-full">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
-                ? 'bg-pink-100 dark:bg-pink-900/20'
-                : 'bg-pink-100 dark:bg-pink-900/20'
+              ? 'bg-pink-100 dark:bg-pink-900/20'
+              : 'bg-pink-100 dark:bg-pink-900/20'
               }`}>
               <Palette className={`h-4 w-4 ${isImageGenerationActive
-                  ? 'text-pink-600 dark:text-pink-400'
-                  : 'text-pink-600 dark:text-pink-400'
+                ? 'text-pink-600 dark:text-pink-400'
+                : 'text-pink-600 dark:text-pink-400'
                 }`} />
             </div>
             <div className="flex-1">
@@ -273,12 +273,12 @@ const ActionsDropdown = ({
         >
           <div className="flex items-center gap-3 w-full">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
-                ? 'bg-orange-100 dark:bg-orange-900/20'
-                : 'bg-orange-100 dark:bg-orange-900/20'
+              ? 'bg-orange-100 dark:bg-orange-900/20'
+              : 'bg-orange-100 dark:bg-orange-900/20'
               }`}>
               <Video className={`h-4 w-4 ${isVideoGenerationActive
-                  ? 'text-orange-600 dark:text-orange-400'
-                  : 'text-orange-600 dark:text-orange-400'
+                ? 'text-orange-600 dark:text-orange-400'
+                : 'text-orange-600 dark:text-orange-400'
                 }`} />
             </div>
             <div className="flex-1">
