@@ -1227,7 +1227,7 @@ export default function ChatInterface() {
             <div className="space-y-3">
               <div className="bg-background">
                 <div className="flex-1 relative">
-                  <Textarea
+                  {/* <Textarea
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyPress={handleKeyPress}
@@ -1249,8 +1249,40 @@ export default function ChatInterface() {
                     }}
                     rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
                     disabled={isLoading || isGeneratingImage || isGeneratingVideo}
-                  />
+                  /> */}
 
+                  <Textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => {
+                      setInput(e.target.value);
+                      autoResize(e.target);
+                    }}
+                    onKeyPress={handleKeyPress}
+                    placeholder={
+                      isImageGenerationActive
+                        ? "Describe the image you want to generate..."
+                        : isVideoGenerationActive
+                          ? "Describe the video you want to create..."
+                          : isWebSearchActive
+                            ? "Enter your search query..."
+                            : "Type your message here..."
+                    }
+                    className={`resize-none pl-12 pr-20 py-2 ${textareaPaddingTop} transition-all duration-200`}
+                    style={{
+                      minHeight: "60px", // ek line se start
+                      maxHeight: "350px",
+                      overflowY: "auto",
+                    }}
+                    rows={1}
+                    disabled={
+                      isLoading ||
+                      isGeneratingImage ||
+                      isGeneratingVideo ||
+                      isUploading ||
+                      isWebSearching
+                    }
+                  />
                   {/* Active Options Display - INSIDE the textarea */}
                   <ActiveOptionsDisplay
                     isWebSearchActive={isWebSearchActive}
@@ -1265,7 +1297,7 @@ export default function ChatInterface() {
                   />
 
                   {/* Plus icon dropdown - positioned on the left with better alignment */}
-                  <div className="absolute left-3 bottom-3 flex items-center justify-center">
+                  <div className="absolute left-3 bottom-4 flex items-center justify-center">
                     <ActionsDropdown
                       chatType={chatType}
                       setChatType={setChatType}
