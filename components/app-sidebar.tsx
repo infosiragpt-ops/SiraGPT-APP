@@ -98,8 +98,8 @@ export function AppSidebar() {
     deleteChat,
     selectedModel,
     setSelectedModel,
-    loadMoreChats, 
-    hasMoreChats, 
+    loadMoreChats,
+    hasMoreChats,
     isLoadingMore,
     pagination
   } = useChat()
@@ -162,6 +162,10 @@ export function AppSidebar() {
     router.push("/gpts")
   }
 
+  const handleLibraryClick = () => {
+    router.push("/library")
+  }
+
   const handleChatClick = (chatId: string) => {
     selectChat(chatId)
     // Navigate to chat page if not already there
@@ -185,7 +189,7 @@ export function AppSidebar() {
   const handleScroll = React.useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const target = e.target as HTMLDivElement
     const bottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 50 // 50px threshold
-    
+
     if (bottom && hasMoreChats && !isLoadingMore && loadMoreChats) {
       loadMoreChats()
     }
@@ -248,7 +252,7 @@ export function AppSidebar() {
           <Plus className="h-4 w-4" />
           <span className="group-data-[state=closed]:hidden ml-2">New Chat</span>
         </SidebarMenuButton>
-        
+
         <SidebarMenuButton
           onClick={handleSearchClick}
           className="w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors"
@@ -257,15 +261,16 @@ export function AppSidebar() {
           <Search className="h-4 w-4" />
           <span className="group-data-[state=closed]:hidden ml-2">Search chats</span>
         </SidebarMenuButton>
-        
+
         <SidebarMenuButton
+          onClick={handleLibraryClick}
           className="w-full justify-start h-9 px-3"
           variant="ghost"
         >
           <Images className="h-4 w-4" />
           <span className="group-data-[state=closed]:hidden ml-2">Library</span>
         </SidebarMenuButton>
-        
+
         <SidebarMenuButton
           onClick={handleGPTsClick}
           className={cn(
@@ -274,12 +279,12 @@ export function AppSidebar() {
           )}
           variant="ghost"
         >
-         <LayoutGrid className="h-4 w-4" />
+          <LayoutGrid className="h-4 w-4" />
           <span className="group-data-[state=closed]:hidden ml-2">GPTs</span>
         </SidebarMenuButton>
       </div>
 
-      <SidebarContent 
+      <SidebarContent
         className="px-2 overflow-y-auto custom-scrollbar flex-1"
         ref={scrollAreaRef}
         onScroll={handleScroll}
@@ -348,7 +353,7 @@ export function AppSidebar() {
                         </div>
                       </SidebarMenuItem>
                     ))}
-                    
+
                     {/* Loading indicator at the bottom */}
                     {isLoadingMore && (
                       <SidebarMenuItem>
@@ -358,7 +363,7 @@ export function AppSidebar() {
                         </div>
                       </SidebarMenuItem>
                     )}
-                    
+
                     {/* Load more button (manual trigger) */}
                     {hasMoreChats && !isLoadingMore && chats.length >= 20 && (
                       <SidebarMenuItem>
@@ -372,7 +377,7 @@ export function AppSidebar() {
                         </Button>
                       </SidebarMenuItem>
                     )}
-                    
+
                     {/* End of chats indicator */}
                     {!hasMoreChats && !isLoadingMore && chats.length >= 20 && (
                       <SidebarMenuItem>
