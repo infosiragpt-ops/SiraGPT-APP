@@ -625,6 +625,18 @@ export default function ChatInterface() {
   // Calculate top padding based on active options
   const hasActiveOptions = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || uploadedFiles.length > 0;
   const textareaPaddingTop = hasActiveOptions ? 'pt-12' : 'pt-4';
+  const textareaRef = React.useRef(null);
+
+  const autoResize = (target: any) => {
+    target.style.height = "auto"; // reset height
+    target.style.height = `${target.scrollHeight}px`; // fit text height
+  };
+
+  React.useEffect(() => {
+    if (textareaRef.current) {
+      autoResize(textareaRef.current);
+    }
+  }, [input]);
 
 
   // Instant upgrade function
@@ -1380,9 +1392,15 @@ export default function ChatInterface() {
                   {/* Input Area */}
                   <div className="bg-background">
                     <div className="flex-1 relative">
+
+
                       <Textarea
+                        ref={textareaRef}
                         value={input}
-                        onChange={(e) => setInput(e.target.value)}
+                        onChange={(e) => {
+                          setInput(e.target.value);
+                          autoResize(e.target);
+                        }}
                         onKeyPress={handleKeyPress}
                         placeholder={
                           isImageGenerationActive
@@ -1393,16 +1411,22 @@ export default function ChatInterface() {
                                 ? "Enter your search query..."
                                 : "Type your message here..."
                         }
-                        className={`min-h-[60px] max-h-[350px] resize-none pl-12 pr-20 py-4 ${textareaPaddingTop} transition-all duration-200`}
+                        className={`resize-none pl-12 pr-20 py-2 ${textareaPaddingTop} transition-all duration-200`}
                         style={{
-                          overflowY: input.split('\n').length > 2 ? 'auto' : 'hidden',
-                          minHeight: '60px',
-                          maxHeight: '350px',
-                          height: 'auto',
+                          minHeight: "60px", // ek line se start
+                          maxHeight: "350px",
+                          overflowY: "auto",
                         }}
-                        rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
-                        disabled={isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
+                        rows={1}
+                        disabled={
+                          isLoading ||
+                          isGeneratingImage ||
+                          isGeneratingVideo ||
+                          isUploading ||
+                          isWebSearching
+                        }
                       />
+
 
                       {/* Active Options Display - INSIDE the textarea */}
                       <ActiveOptionsDisplay
