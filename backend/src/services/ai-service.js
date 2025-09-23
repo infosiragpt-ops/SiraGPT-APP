@@ -2,7 +2,6 @@
 
 const OpenAI = require('openai');
 const prisma = require('../config/database');
-
 class AIService {
     /**
      * Provider ke naam ke hisab se sahi configured AI client return karta hai.
@@ -39,7 +38,11 @@ class AIService {
      * @param {import('express').Response} options.res - Express response object jis par stream likha jayega
      * @returns {Promise<string>} - Poora generate kiya hua content
      */
-    async generateStream({ provider, model, messages, res }) {
+
+
+
+
+    async generateStream({ provider, model, messages, res, signal, streamId }) {
         let fullResponseContent = '';
         try {
             const client = this.getClient(provider);
@@ -61,10 +64,11 @@ class AIService {
                 console.log(`Using standard parameter 'max_tokens' for model: ${model}`);
                 payload.max_tokens = 8192;
             }
-            const stream = await client.chat.completions.create(payload);
+            const stream = await client.chat.completions.create(payload, { signal });
 
             // Stream se data parhein aur client ko bhejein
             for await (const chunk of stream) {
+
                 const contentChunk = chunk.choices[0]?.delta?.content || '';
                 if (contentChunk) {
                     fullResponseContent += contentChunk;
@@ -75,10 +79,14 @@ class AIService {
 
             return fullResponseContent;
         } catch (apiError) {
+            if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
+                console.warn(`AI stream aborted by client for provider: ${provider}.`);
+                // Agar request abort ho gayi hai, toh koi error message client ko na bhejein
+                // aur jo content receive hua hai, wahi return karein
+                return fullResponseContent;
+            }
             console.error(`Error from ${provider} API:`, apiError);
-            // Client ko error ka message bhejein
-            res.write(`data: ${JSON.stringify({ error: `AI service (${provider}) is temporarily unavailable.` })}\n\n`);
-            // Error ko aage pass karein takay route handler usko log kar sake
+            res.write(`data: ${JSON.stringify({ error: `AI service (${provider}) is temporarily unavailable or stream was interrupted.` })}\n\n`);
             throw apiError;
         }
     }

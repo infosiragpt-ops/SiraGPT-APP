@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useState, useCallback, useEffect } from "react"
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 
@@ -74,7 +74,10 @@ interface ChatContextType {
   regenerateLastMessage: () => void
   editAndRegenerate: (messageId: string, newContent: string) => void
   updateMessageInChat: (messageId: string, newContent: string) => void
-  pollVideoStatus: (operationId: string, messageId: string) => void
+  pollVideoStatus: (operationId: string, messageId: string) => void,
+
+  isStreaming: boolean; // ✅ Naya state add karein
+  stopStreaming: () => void; // ✅ Naya function add karein
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined)
@@ -91,6 +94,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [hasInitialized, setHasInitialized] = useState(false)
   const [chatType, setChatType] = useState<'text' | 'image' | 'video'>('text')
   const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
+
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
+
+
+
+  const abortControllerRef = useRef<AbortController | null>(null); // ✅ AbortController ref
+
 
   // Load user's chats
   useEffect(() => {
@@ -170,10 +181,68 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // ✅ Naya function: Streaming ko rokne ke liye
+  // const stopStreaming = useCallback(() => {
+  //   if (abortControllerRef.current) {
+  //     abortControllerRef.current.abort(); // Fetch request ko abort karein
+  //     console.log("Client-side stream abortion requested.");
+
+  //     // UI state ko immediately update karein
+  //     setIsLoading(false);
+  //     setIsStreaming(false);
+  //     abortControllerRef.current = null;
+
+  //     // Last AI message ko update karein taaki user ko pata chale ki generation ruk gayi hai
+  //     setCurrentChat(prevChat => {
+  //       if (!prevChat) return prevChat;
+  //       const lastMessageIndex = prevChat.messages.length - 1;
+  //       if (lastMessageIndex >= 0 && prevChat.messages[lastMessageIndex].role === 'ASSISTANT') {
+  //         const lastMessage = prevChat.messages[lastMessageIndex];
+  //         // Agar message khaali ya incomplete hai, toh usko "Stopped" mark karein
+  //         if (lastMessage.content === '' || (lastMessage.content.trim().length > 0 && !lastMessage.content.endsWith('.'))) {
+  //           const updatedMessages = [...prevChat.messages];
+  //           updatedMessages[lastMessageIndex] = {
+  //             ...lastMessage,
+  //             content: lastMessage.content + " (Generation stopped by user)."
+  //           };
+  //           return { ...prevChat, messages: updatedMessages };
+  //         }
+  //       }
+  //       return prevChat;
+  //     });
+  //   }
+  // }, [setCurrentChat]);
+
+  const stopStreaming = useCallback(async () => {
+    console.log("Working Stop Streaming", currentStreamId);
+
+    if (currentStreamId) {
+      console.log(`Frontend se stop signal bhej raha hoon: ${currentStreamId}`);
+      try {
+        await apiClient.stopAIStream(currentStreamId);
+
+
+        // States ko foran reset karein takay UI update ho
+        setIsStreaming(false);
+        setIsLoading(false);
+        setCurrentStreamId(null);
+      } catch (error) {
+
+        console.error("Failed to send stop signal:", error);
+      }
+    }
+  }, [currentStreamId]);
   const addMessage = useCallback(
     async (content: string, fileIds?: string[], chat?: any) => { // Added optional 'chat' parameter
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !token) return;
+
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        // Optional: previous stream ke message ko update karein agar zaroori ho
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
       // STEP 1: User ka message foran UI mein dikhayein
       const userMessage: Message = {
@@ -203,7 +272,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setChats((prev) => prev.map((c) => (c.id === activeChat.id ? updatedChat : c)));
       setUploadedFiles([]); // Uploaded files clear kar dein
       setIsLoading(true); // Loading state start karein
-
+      setIsStreaming(true);
+      const streamId = crypto.randomUUID();
+      setCurrentStreamId(streamId);
       try {
         // STEP 3: Nayi streaming API call karein
         await apiClient.generateAIStream(
@@ -213,6 +284,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             prompt: content,
             chatId: activeChat.id,
             files: fileIds || [],
+            streamId: streamId,
           },
           (chunk) => {
             // onData: Jab bhi backend se naya text aaye
@@ -233,33 +305,37 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           () => {
             // onClose: Jab stream khatam ho jaye
             setIsLoading(false);
-            // Yahan hum chat list (sidebar) ko bhi update kar sakte hain
-            // Taake poora message save ho jaye
-            // if (currentChat) {
-            //   // We can trigger a final state update to ensure everything is synced
-            //   selectChat(currentChat.id)
-            // }
+            setIsStreaming(false); // ✅ Streaming khatam ho gayi
+            // abortControllerRef.current = null; // AbortController ko reset karein
+            setCurrentStreamId(null);
           },
           (error) => {
-            // onError: Agar koi error aaye
             console.error("Streaming failed:", error);
             setIsLoading(false);
-            // UI mein error message dikhayein
-            setCurrentChat((prevChat) => {
-              if (!prevChat) return prevChat;
-              const newMessages = prevChat.messages.map((msg) => {
-                if (msg.id === aiMessagePlaceholder.id) {
-                  return { ...msg, content: "Sorry, an error occurred. Please try again." };
-                }
-                return msg;
-              });
-              return { ...prevChat, messages: newMessages };
-            });
-          }
+            setIsStreaming(false); // ✅ Streaming error ke saath khatam
+            setCurrentStreamId(null);
+            abortControllerRef.current = null; // AbortController ko reset karein
+            // if (error.name !== 'AbortError') { // Agar AbortError nahi hai, toh hi toast dikhayein
+            //   setCurrentChat((prevChat) => {
+            //     if (!prevChat) return prevChat;
+            //     const newMessages = prevChat.messages.map((msg) => {
+            //       if (msg.id === aiMessagePlaceholder.id) {
+            //         return { ...msg, content: "Sorry, an error occurred. Please try again." };
+            //       }
+            //       return msg;
+            //     });
+            //     return { ...prevChat, messages: newMessages };
+            //   });
+            // }
+          },
+          controller.signal
         );
       } catch (error) {
         console.error("Failed to start AI stream:", error);
         setIsLoading(false);
+        setIsStreaming(false); // ✅ Streaming error ke saath khatam
+        setCurrentStreamId(null);
+        // abortControllerRef.current = null; // AbortController ko reset karein
       }
 
     },
@@ -295,36 +371,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [user, token, selectedModel, availableModels, setChatType, addMessage]);
 
-const selectChat = useCallback(
-  async (chatId: string) => {
-    try {
-      const response = await apiClient.getChat(chatId)
-      const chat = response.chat
-      setCurrentChat(chat)
+  const selectChat = useCallback(
+    async (chatId: string) => {
+      try {
+        const response = await apiClient.getChat(chatId)
+        const chat = response.chat
+        setCurrentChat(chat)
 
-      // Update the chats list to ensure consistency and add new chat if needed
-      setChats((prev) => {
-        // Check if chat already exists
-        const existingIndex = prev.findIndex(c => c.id === chatId)
-        if (existingIndex >= 0) {
-          // Update existing chat
-          return prev.map((c) => c.id === chatId ? chat : c)
-        } else {
-          // Add new chat at the beginning
-          return [chat, ...prev]
-        }
-      })
+        // Update the chats list to ensure consistency and add new chat if needed
+        setChats((prev) => {
+          // Check if chat already exists
+          const existingIndex = prev.findIndex(c => c.id === chatId)
+          if (existingIndex >= 0) {
+            // Update existing chat
+            return prev.map((c) => c.id === chatId ? chat : c)
+          } else {
+            // Add new chat at the beginning
+            return [chat, ...prev]
+          }
+        })
 
-      // Store the current chat ID in localStorage
-      localStorage.setItem('currentChatId', chatId)
+        // Store the current chat ID in localStorage
+        localStorage.setItem('currentChatId', chatId)
 
-      setUploadedFiles([]) // Clear uploaded files when switching chats
-    } catch (error) {
-      console.error("Failed to load chat:", error)
-    }
-  },
-  [],
-)
+        setUploadedFiles([]) // Clear uploaded files when switching chats
+      } catch (error) {
+        console.error("Failed to load chat:", error)
+      }
+    },
+    [],
+  )
 
   const clearCurrentChat = useCallback(async () => {
     if (!currentChat || !token) return
@@ -865,7 +941,7 @@ const selectChat = useCallback(
     regenerateLastMessage,
     editAndRegenerate,
     updateMessageInChat,
-    pollVideoStatus
+    pollVideoStatus, isStreaming, stopStreaming
   }
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>

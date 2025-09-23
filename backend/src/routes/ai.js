@@ -281,7 +281,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
     console.error("Error in background database save:", dbError);
   }
 }
-
+const streamControllers = new Map();
 router.post(
   '/generate',
   [
@@ -294,9 +294,29 @@ router.post(
   ],
   authenticateToken,
   async (req, res) => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const { streamId } = req.body;
+
+    if (streamId) {
+      streamControllers.set(streamId, controller);
+      console.log(`Stream registered with ID: ${streamId}`);
+    }
+
+    // Agar client connection close karta hai, toh AI generation ko bhi abort karein
+    req.on('close', () => {
+      console.log(`Client connection closed for chat: ${req.body.chatId}. Aborting AI generation.`);
+      controller.abort();
+    });
+    req.on('aborted', () => {
+      console.log(`Client request aborted for chat: ${req.body.chatId}. Aborting AI generation.`);
+      controller.abort();
+    });
+
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
+        controller.abort(); // Agar validation error hai, toh bhi controller ko abort karein
         return res.status(400).json({ errors: errors.array() });
       }
 
@@ -403,9 +423,9 @@ router.post(
           actualTemperature = customGpt.temperature || 0.7;
 
           // ✅ Provider detection logic merged here
-          if (actualModel.includes('x-ai/') || actualModel.includes('openrouter/') || actualModel.includes('anthropic/') || actualModel.includes('meta-llama/') ||actualModel.includes("deepseek/") ||
-  actualModel.includes("meta-llama/") || actualModel.includes("/gpt-oss")
-) {
+          if (actualModel.includes('x-ai/') || actualModel.includes('openrouter/') || actualModel.includes('anthropic/') || actualModel.includes('meta-llama/') || actualModel.includes("deepseek/") ||
+            actualModel.includes("meta-llama/") || actualModel.includes("/gpt-oss")
+          ) {
             actualProvider = 'OpenRouter';
           } else if (actualModel.includes('gemini') || actualModel.includes('imagen')) {
             actualProvider = 'Gemini';
@@ -519,10 +539,17 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
           model: actualModel,       // ✅ updated
           messages,
           res,
+          signal,
           temperature: actualTemperature
         });
       } catch (apiError) {
+        if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
+          console.warn('AI Service stream aborted by client in route, no further content will be sent.');
+          // Don't rethrow, just return, as client has already aborted and doesn't expect more data/error
+          return;
+        }
         console.error('AI Service stream failed in route:', apiError.message);
+        throw apiError;
       }
 
       const tokens = fullResponseContent.length + prompt.length;
@@ -536,11 +563,33 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
       res.status(500).json({ error: error.message || 'AI generation failed' });
     }
     finally {
+      if (streamId) {
+        streamControllers.delete(streamId);
+        console.log(`Stream unregistered for ID: ${streamId}`);
+      }
       res.end();
     }
   }
 );
+router.post('/stop-stream', authenticateToken, (req, res) => {
+  const { streamId } = req.body;
+  if (!streamId) {
+    return res.status(400).json({ error: 'streamId is required' });
+  }
 
+  // Map se us ID ka controller dhoondein
+  const controller = streamControllers.get(streamId);
+
+  if (controller) {
+    console.log(`>>> Aborting stream with ID: ${streamId}`);
+    controller.abort(); // <-- YEH LINE STREAM KO FORAN ROK DEGI
+    streamControllers.delete(streamId); // Usko foran map se hata dein
+    res.status(200).json({ message: 'Stop signal sent.' });
+  } else {
+    console.warn(`Stop request for an unknown or finished stream ID: ${streamId}`);
+    res.status(404).json({ message: 'Stream not found or already finished.' });
+  }
+});
 
 // // ✅ Generate AI image response
 router.post(

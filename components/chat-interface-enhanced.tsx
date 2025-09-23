@@ -68,16 +68,16 @@ import { IconProvider } from "./icon-provider"
 
 // Enhanced Model Selector
 // Enhanced Model Selector with Custom GPT support
-const NavbarModelSelector = ({ 
-  selectedModel, 
-  setSelectedModel, 
-  availableModels, 
-  setSelectedProvider, 
-  chatTypes, 
-  currentChat 
+const NavbarModelSelector = ({
+  selectedModel,
+  setSelectedModel,
+  availableModels,
+  setSelectedProvider,
+  chatTypes,
+  currentChat
 }: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
-  
+
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
     return (
@@ -90,21 +90,21 @@ const NavbarModelSelector = ({
       </div>
     );
   }
-  
+
   // If this chat is associated with a custom GPT, show GPT info instead of model selector
   if (currentChat?.customGptId || currentChat?.customGpt) {
     const customGptName = currentChat?.customGpt?.name || currentChat?.title || "Custom GPT";
     const customGptIcon = currentChat?.customGpt?.iconUrl;
-    
+
     return (
       <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background">
         {customGptIcon ? (
           customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img 
-              src={customGptIcon} 
-              alt="GPT icon" 
-              className="w-4 h-4 rounded-full object-cover" 
+            <img
+              src={customGptIcon}
+              alt="GPT icon"
+              className="w-4 h-4 rounded-full object-cover"
             />
           ) : (
             <div className="w-4 h-4 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-xs">
@@ -121,7 +121,7 @@ const NavbarModelSelector = ({
       </div>
     );
   }
-  
+
   // Default model selector for regular chats
   return (
     <DropdownMenu>
@@ -309,7 +309,9 @@ export default function ChatInterface() {
     chatType, setChatType,
     availableModels, regenerateLastMessage,
     editAndRegenerate,
-    updateMessageInChat
+    updateMessageInChat,
+    isStreaming, // ✅ isStreaming ko yahan se fetch karein
+    stopStreaming,
 
   } = useChat()
 
@@ -581,7 +583,7 @@ export default function ChatInterface() {
 
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo) return
+    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isStreaming) return
 
     const msg = input.trim()
     setInput("")
@@ -1218,7 +1220,7 @@ export default function ChatInterface() {
                           padding: '1rem',
                         }}
                         rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
-                        disabled={isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
+                        disabled={isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isStreaming}
                       />
 
 
@@ -1227,6 +1229,17 @@ export default function ChatInterface() {
                           onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
                           className="flex items-center gap-1"
                         />
+                        {isLoading && isStreaming && (
+                          <Button
+                            onClick={stopStreaming}
+                            size="sm"
+                            className="h-8 w-auto px-3 bg-red-500 hover:bg-red-600 text-white"
+                            title="Stop AI Generation"
+                          >
+                            <Square className="h-4 w-4 mr-2" /> Stop
+                          </Button>
+                        )}
+
                         <Button
                           onClick={handleSend}
                           disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}

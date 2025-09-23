@@ -216,12 +216,21 @@ class ApiClient {
   //   });
   // }
 
+  async stopAIStream(streamId: string) {
+    return this.request('/ai/stop-stream', {
+      method: 'POST',
+      body: JSON.stringify({ streamId }),
+    });
+  }
+
+
   // ✅ YEH NAYA METHOD STREAMING KE LIYE HAI
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[] },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string },
     onData: (chunk: string) => void, // Jab data ka naya tukra aaye
     onClose: () => void, // Jab stream band ho jaye
-    onError: (error: Error) => void // Jab koi error aaye
+    onError: (error: Error) => void, // Jab koi error aaye
+    signal?: AbortSignal
   ) {
 
     const url = `${this.baseURL}/ai/generate`;
@@ -232,7 +241,7 @@ class ApiClient {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
       body: JSON.stringify(data),
-      // credentials: 'include'
+      signal
     };
 
     try {
@@ -392,13 +401,13 @@ class ApiClient {
     return this.request(`/admin/users/${id}`, { method: 'DELETE' });
   }
 
-async createUserAdmin(data: { name: string; email: string; password: string; plan?: string; isAdmin?: boolean; monthlyLimit?: number }) {
-  // Calls admin POST /admin/users - requires admin session token
-  return this.request('/admin/users', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
+  async createUserAdmin(data: { name: string; email: string; password: string; plan?: string; isAdmin?: boolean; monthlyLimit?: number }) {
+    // Calls admin POST /admin/users - requires admin session token
+    return this.request('/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
   async getAnalytics() {
     return this.request('/admin/analytics');
   }
