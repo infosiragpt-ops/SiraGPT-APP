@@ -11,7 +11,7 @@ const authenticateToken = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
+
     // Check if session exists and is valid
     const session = await prisma.session.findUnique({
       where: { token },
@@ -19,9 +19,6 @@ const authenticateToken = async (req, res, next) => {
     });
 
     if (!session || session.expiresAt < new Date()) {
-      if (session) {
-        await prisma.session.delete({ where: { id: session.id } });
-      }
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
