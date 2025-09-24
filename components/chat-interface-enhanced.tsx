@@ -990,7 +990,7 @@ export default function ChatInterface() {
 
     if (!activeChatId) {
       try {
-        const newChat = await createNewChat('text', `🔍 Web Search: ${input.trim()}`, false);
+        const newChat = await createNewChat('text', `🔍 Web Search: ${input.trim()}`);
         activeChatId = newChat?.id;
         if (!activeChatId) {
           toast.error('Failed to create chat for web search');
