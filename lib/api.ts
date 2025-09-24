@@ -717,6 +717,11 @@ class ApiClient {
     }
     return res.json();
   }
+
+  async getMediaLibrary(params?: { page?: number; limit?: number; type?: 'image' | 'video' }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/library/media-library${query ? `?${query}` : ''}`);
+  }
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);
