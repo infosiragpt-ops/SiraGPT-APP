@@ -413,8 +413,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setUploadedFiles([]); // Clear uploaded files for new chat
 
       // If initialContent is provided, immediately call addMessage to get AI response
-      if (initialContent) {
-        await addMessage(initialContent, [], newChat); // Pass newChat as the third parameter
+            if (initialContent) {
+        if (type === 'image') {
+          // For image generation, call the image API directly
+          try {
+            const response = await apiClient.generateImage({
+              prompt: initialContent,
+              chatId: newChat.id,
+              provider: selectProvider,
+              model: selectedModel
+            });
+            // Refresh the chat to get the updated messages
+            await selectChat(newChat.id);
+          } catch (error) {
+            console.error('Image generation failed during chat creation:', error);
+            throw error;
+          }
+        } else if (type === 'video') {
+          // For video generation, call addVideoMessage
+          await addVideoMessage(initialContent);
+        } else {
+          // For text, use regular addMessage
+          await addMessage(initialContent, [], newChat); // Pass newChat as the third parameter
+        }
+            return newChat;
       }
     } catch (error) {
       console.error("Failed to create chat:", error);
