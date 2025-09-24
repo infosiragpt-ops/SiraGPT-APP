@@ -301,59 +301,62 @@ const ActionsDropdown = ({
     </DropdownMenu>
   );
 };
+const wrapIconInSmallSquare = (icon: JSX.Element, color: string) => (
+  <div className={`h-8 w-8 flex items-center justify-center rounded-md overflow-hidden`} style={{ backgroundColor: color }}>
+    {icon}
+  </div>
+);
 
-// Improved File icon helper function with colored square wrapper
-const getFileIcon = (fileType: string, fileName: string) => {
-  // Helper to wrap icon in square with bg color
-  const wrapIcon = (icon: JSX.Element, color: string) => (
-    <div className={`h-8 w-8 flex items-center justify-center rounded-md`} style={{ backgroundColor: color }}>
-      {icon}
-    </div>
-  );
+const getFileIcon = (file: any) => {
+  const isImage = file.type?.startsWith('image/');
 
-  // Get file extension
-  const extension = fileName?.split('.').pop()?.toLowerCase();
+  if (isImage && file.url) {
+    const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || "";
+    const imageUrl = baseUrl + file.url;
+
+    return (
+      <img
+        src={imageUrl}
+        alt={file.name}
+        className="h-full w-full object-cover" // Yeh classes <img> ko apne parent container mein fit karengi
+      />
+    );
+  }
+
+  // Non-image files ke liye, purana logic use karein (wrapped icon)
+  const extension = file.name?.split('.').pop()?.toLowerCase();
 
   switch (extension) {
     case 'pdf':
-      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#ef4444"); // red
+      return wrapIconInSmallSquare(<FileText className="h-5 w-5 text-white" />, "#ef4444"); // red
     case 'doc':
     case 'docx':
-      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#2563eb"); // blue
+      return wrapIconInSmallSquare(<FileText className="h-5 w-5 text-white" />, "#2563eb"); // blue
     case 'xls':
     case 'xlsx':
     case 'csv':
-      return wrapIcon(<FileSpreadsheet className="h-5 w-5 text-white" />, "#16a34a"); // green
+      return wrapIconInSmallSquare(<FileSpreadsheet className="h-5 w-5 text-white" />, "#16a34a"); // green
     case 'ppt':
     case 'pptx':
-      return wrapIcon(<File className="h-5 w-5 text-white" />, "#f97316"); // orange
+      return wrapIconInSmallSquare(<File className="h-5 w-5 text-white" />, "#f97316"); // orange
     case 'txt':
-      return wrapIcon(<FileText className="h-5 w-5 text-white" />, "#6b7280"); // grey
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'gif':
-    case 'webp':
-    case 'svg':
-      return wrapIcon(<ImageIcon className="h-5 w-5 text-white" />, "#3b82f6"); // blue
+      return wrapIconInSmallSquare(<FileText className="h-5 w-5 text-white" />, "#6b7280"); // grey
     case 'mp4':
     case 'avi':
     case 'mov':
     case 'wmv':
-      return wrapIcon(<Video className="h-5 w-5 text-white" />, "#9333ea"); // purple
+      return wrapIconInSmallSquare(<Video className="h-5 w-5 text-white" />, "#9333ea"); // purple
     case 'mp3':
     case 'wav':
-    case 'flac':
-      return wrapIcon(<Music className="h-5 w-5 text-white" />, "#db2777"); // pink
+      return wrapIconInSmallSquare(<Music className="h-5 w-5 text-white" />, "#db2777"); // pink
     case 'zip':
     case 'rar':
     case '7z':
-      return wrapIcon(<File className="h-5 w-5 text-white" />, "#eab308"); // yellow
+      return wrapIconInSmallSquare(<File className="h-5 w-5 text-white" />, "#eab308"); // yellow
     default:
-      return wrapIcon(<File className="h-5 w-5 text-white" />, "#9ca3af"); // gray
+      return wrapIconInSmallSquare(<File className="h-5 w-5 text-white" />, "#9ca3af"); // gray
   }
 };
-
 // Active Options Display Component - Renders above the textarea
 const ActiveOptionsDisplay = ({
   uploadedFiles,
@@ -367,30 +370,62 @@ const ActiveOptionsDisplay = ({
   return (
     <div className="p-3 rounded-md mb-3">
       <div className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto">
-        {/* Uploaded Files */}
-        {uploadedFiles.map((file, index) => (
-          <div
-            key={index}
-            className="flex items-center gap-2 border border-gray-200 px-2 py-1 rounded-xl text-sm "
-          >
-            {getFileIcon(file.type, file.name)}
-            <span className="max-w-50 truncate font-medium   text-[13px]">
-              {file.name}
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
-              onClick={() => removeFile(index)}
+        {/* Uploaded Files iterate karein */}
+        {uploadedFiles.map((file, index) => {
+          const isImage = file.type?.startsWith('image/');
+
+          return (
+            <div
+              key={index}
+              className={`
+                relative // 'X' button ki absolute positioning ke liye
+                border border-gray-200
+                rounded-xl
+                text-sm
+                ${isImage ? 'h-32 w-32 p-0' : 'flex items-center gap-2 px-2 py-1'} // Conditional sizing aur padding
+              `}
             >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        ))}
-      </div></div>
+              {isImage ? (
+                <>
+                  {/* Image files ke liye: badi image aur uske upar 'X' button */}
+                  <div className="h-full w-full rounded-md overflow-hidden bg-gray-100 flex items-center justify-center">
+                    {getFileIcon(file)} {/* Ab sirf <img> tag return ho raha hai */}
+                  </div>
+
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1  right-1 h-6 w-6 p-0 bg-white rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={() => removeFile(index)}
+                  >
+                    <X className="h-4 w-4 text-gray-600" />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {/* Non-image files ke liye: purana structure (icon, naam, aur 'X' button side mein) */}
+                  {getFileIcon(file)}
+                  <span className="max-w-50 truncate font-medium text-[13px]">
+                    {file.name}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
+                    onClick={() => removeFile(index)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 };
-
 // Active Tools Display Component - Shows INSIDE the textarea at the bottom
 const ActiveToolsDisplay = ({
   isWebSearchActive,

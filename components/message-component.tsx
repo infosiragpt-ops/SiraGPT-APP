@@ -99,6 +99,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         if (message.videoData?.filename) {
             try {
                 setVideoLoading(true);
+                // apiClient.downloadVideo returns a URL string, not a blob. We need to fetch the file as a blob.
+                // const downloadUrl = apiClient.downloadVideo(message.videoData.filename);
+                // const response = await fetch(downloadUrl);
+                // if (!response.ok) throw new Error('Network response was not ok');
+                // const blob = await response.blob();
                 const blob = await apiClient.downloadVideo(message.videoData.filename);
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');

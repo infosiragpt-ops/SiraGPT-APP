@@ -123,7 +123,7 @@ module.exports = {
         "zoom-out": "zoom-out 0.2s ease-out",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
+        sans: ["Times New Roman", "Times", "serif"],
         mono: ["JetBrains Mono", "Consolas", "monospace"],
       },
       fontSize: {

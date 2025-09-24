@@ -87,6 +87,8 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: "Times New Roman", Times, serif;
+    font-size: 12px;
   }
 }
 
@@ -381,6 +383,7 @@
     scroll-behavior: auto !important;
   }
 }
+
 /* Super thin scrollbar for sidebar */
 .custom-scrollbar {
   scrollbar-width: thin;
@@ -388,7 +391,8 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar {
-  width: 4px; /* 👈 thinner */
+  width: 4px;
+  /* 👈 thinner */
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
@@ -397,5 +401,6 @@
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
   background-color: rgba(120, 120, 120, 0.6);
-  border-radius: 9999px; /* fully rounded */
+  border-radius: 9999px;
+  /* fully rounded */
 }
