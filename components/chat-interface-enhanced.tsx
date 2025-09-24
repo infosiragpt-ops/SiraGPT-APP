@@ -952,17 +952,17 @@ export default function ChatInterface() {
       if (!currentChat) {
         // If no chat is active, create a new one with type 'image'
         const newChat = await createNewChat('image', prompt); // Pass true to indicate image generation mode for initial message
-        if (newChat && newChat.id) {
-          // Then call generateImage with the new chat ID
-          const response = await apiClient.generateImage({
-            prompt,
-            chatId: newChat.id,
-            provider: selectProvider,
-            model: selectedModel
-          })
-          await selectChat(newChat.id); // Re-select the chat to update messages
-          toast.success('Image generated successfully!')
-        }
+        // if (newChat && newChat.id) {
+        //   // Then call generateImage with the new chat ID
+        //   const response = await apiClient.generateImage({
+        //     prompt,
+        //     chatId: newChat.id,
+        //     provider: selectProvider,
+        //     model: selectedModel
+        //   })
+        //   await selectChat(newChat.id); // Re-select the chat to update messages
+        //   toast.success('Image generated successfully!')
+        // }
       } else {
         // If a chat is active, just generate image within it
         const response = await apiClient.generateImage({
