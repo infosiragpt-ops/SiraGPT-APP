@@ -407,10 +407,13 @@ const MediaLibrary: React.FC = () => {
                             onClick={() => openMediaModal(item)}
                         >
                             {/* IMAGE */}
-                            {item.type === 'image' && item.url && (
+                            {item.type === 'image' && (
                                 <img
-                                    src={item.url}
+                                    src={item.url || '/placeholder.png'}
                                     alt={item.prompt || 'Generated Image'}
+                                    onError={(e) => {
+                                        (e.currentTarget as HTMLImageElement).src = '/placeholder.svg';
+                                    }}
                                     className="object-cover w-full h-full transition-transform duration-300 group-hover:scale-105"
                                 />
                             )}
