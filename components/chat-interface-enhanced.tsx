@@ -354,17 +354,51 @@ const getFileIcon = (fileType: string, fileName: string) => {
   }
 };
 
-// Active Options Display Component - Shows INSIDE the textarea
-// Active Options Display Component - Shows INSIDE the textarea
+// Active Options Display Component - Renders above the textarea
 const ActiveOptionsDisplay = ({
+  uploadedFiles,
+  removeFile
+}: {
+  uploadedFiles: any[];
+  removeFile: (index: number) => void;
+}) => {
+  if (uploadedFiles.length === 0) return null;
+
+  return (
+    <div className="p-3 rounded-md mb-3">
+      <div className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto">
+        {/* Uploaded Files */}
+        {uploadedFiles.map((file, index) => (
+          <div
+            key={index}
+            className="flex items-center gap-2 border border-gray-200 px-2 py-1 rounded-xl text-sm "
+          >
+            {getFileIcon(file.type, file.name)}
+            <span className="max-w-50 truncate font-medium   text-[13px]">
+              {file.name}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
+              onClick={() => removeFile(index)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ))}
+      </div></div>
+  );
+};
+
+// Active Tools Display Component - Shows INSIDE the textarea at the bottom
+const ActiveToolsDisplay = ({
   isWebSearchActive,
   setIsWebSearchActive,
   isImageGenerationActive,
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
-  uploadedFiles,
-  removeFile,
   setChatType
 }: {
   isWebSearchActive: boolean;
@@ -373,13 +407,11 @@ const ActiveOptionsDisplay = ({
   setIsImageGenerationActive: (value: boolean) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
-  uploadedFiles: any[];
-  removeFile: (index: number) => void;
   setChatType: (type: any) => void;
 }) => {
-  const hasActiveOptions = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || uploadedFiles.length > 0;
+  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive;
 
-  if (!hasActiveOptions) return null;
+  if (!hasActiveTools) return null;
 
   const handleWebSearchClose = () => {
     setIsWebSearchActive(false);
@@ -397,29 +429,7 @@ const ActiveOptionsDisplay = ({
   };
 
   return (
-    <div className="absolute top-2 left-3 right-3 flex flex-wrap items-center gap-2 z-10 max-h-20 overflow-y-auto">
-      {/* Uploaded Files */}
-      {uploadedFiles.map((file, index) => (
-        <div
-          key={index}
-          className="flex items-center gap-2 border border-gray-200 px-2 py-1 rounded-lg text-sm "
-        >
-          {getFileIcon(file.type, file.name)}
-          <span className="max-w-50 truncate font-medium text-gray-800 text-[13px]">
-            {file.name}
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
-            onClick={() => removeFile(index)}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      ))}
-
-      {/* Web Search - Only show if active */}
+    <div className="flex items-center gap-2">
       {isWebSearchActive && (
         <div className="flex items-center gap-1.5 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 px-2 py-1 rounded-full text-xs border border-green-200 dark:border-green-800">
           <Globe className="h-3 w-3" />
@@ -434,8 +444,6 @@ const ActiveOptionsDisplay = ({
           </Button>
         </div>
       )}
-
-      {/* Image Generation - Only show if active */}
       {isImageGenerationActive && (
         <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
           <Palette className="h-3 w-3" />
@@ -450,8 +458,6 @@ const ActiveOptionsDisplay = ({
           </Button>
         </div>
       )}
-
-      {/* Video Generation - Only show if active */}
       {isVideoGenerationActive && (
         <div className="flex items-center gap-1.5 bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 px-2 py-1 rounded-full text-xs border border-orange-200 dark:border-orange-800">
           <Video className="h-3 w-3" />
@@ -626,9 +632,7 @@ export default function ChatInterface() {
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
 
-  // Calculate top padding based on active options
-  const hasActiveOptions = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || uploadedFiles.length > 0;
-  const textareaPaddingTop = hasActiveOptions ? 'pt-12' : 'pt-4';
+  // No longer need dynamic padding, handled by layout
   const textareaRef = React.useRef(null);
 
   const autoResize = (target: any) => {
@@ -912,7 +916,7 @@ export default function ChatInterface() {
     try {
       if (!currentChat) {
         // If no chat is active, create a new one with type 'image'
-        const newChat = createNewChat('image', prompt, true); // Pass true to indicate image generation mode for initial message
+        const newChat = await createNewChat('image', prompt); // Pass true to indicate image generation mode for initial message
         if (newChat && newChat.id) {
           // Then call generateImage with the new chat ID
           const response = await apiClient.generateImage({
@@ -1011,7 +1015,7 @@ export default function ChatInterface() {
       const userMessage = {
         id: `msg-user-${Date.now()}`,
         chatId: activeChatId,
-        role: 'USER',
+        role: 'USER' as const,
         content: `🔍 Web Search: ${searchQuery}`,
         timestamp: new Date().toISOString(),
       };
@@ -1020,7 +1024,7 @@ export default function ChatInterface() {
       const aiMessage = {
         id: `msg-ai-${Date.now() + 1}`, // Ensure unique ID
         chatId: activeChatId,
-        role: 'ASSISTANT',
+        role: 'ASSISTANT' as const,
         content: 'Searching the web...', // Initial loading state
         timestamp: new Date().toISOString(),
       };
@@ -1229,117 +1233,112 @@ export default function ChatInterface() {
             )}
 
             <div className="space-y-3">
-              <div className="bg-background">
-                <div className="flex-1 relative">
-                  {/* <Textarea
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder={
-                      isImageGenerationActive
-                        ? "Describe the image you want to generate..."
-                        : isVideoGenerationActive
-                          ? "Describe the video you want to create..."
-                          : isWebSearchActive
-                            ? "Enter your search query..."
-                            : "Type your message here..."
-                    }
-                    className={`min-h-[60px] max-h-[350px] resize-none pl-12 pr-20 py-4 ${textareaPaddingTop} transition-all duration-200`}
-                    style={{
-                      overflowY: input.split('\n').length > 2 ? 'auto' : 'hidden',
-                      minHeight: '60px',
-                      maxHeight: '350px',
-                      height: 'auto',
-                    }}
-                    rows={Math.min(Math.max(input.split('\n').length, 2), 12)}
-                    disabled={isLoading || isGeneratingImage || isGeneratingVideo}
-                  /> */}
-
-                  <Textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={(e) => {
-                      setInput(e.target.value);
-                      autoResize(e.target);
-                    }}
-                    onKeyPress={handleKeyPress}
-                    placeholder={
-                      isImageGenerationActive
-                        ? "Describe the image you want to generate..."
-                        : isVideoGenerationActive
-                          ? "Describe the video you want to create..."
-                          : isWebSearchActive
-                            ? "Enter your search query..."
-                            : "Type your message here..."
-                    }
-                    className={`resize-none pl-12 pr-20 py-2 ${textareaPaddingTop} transition-all duration-200`}
-                    style={{
-                      minHeight: "60px", // ek line se start
-                      maxHeight: "350px",
-                      overflowY: "auto",
-                    }}
-                    rows={1}
-                    disabled={
-                      isLoading ||
-                      isGeneratingImage ||
-                      isGeneratingVideo ||
-                      isUploading ||
-                      isWebSearching
-                    }
-                  />
-                  {/* Active Options Display - INSIDE the textarea */}
-                  <ActiveOptionsDisplay
-                    isWebSearchActive={isWebSearchActive}
-                    setIsWebSearchActive={setIsWebSearchActive}
-                    isImageGenerationActive={isImageGenerationActive}
-                    setIsImageGenerationActive={setIsImageGenerationActive}
-                    isVideoGenerationActive={isVideoGenerationActive}
-                    setIsVideoGenerationActive={setIsVideoGenerationActive}
-                    uploadedFiles={uploadedFiles}
-                    removeFile={removeFile}
-                    setChatType={setChatType}
-                  />
-
-                  {/* Plus icon dropdown - positioned on the left with better alignment */}
-                  <div className="absolute left-3 bottom-4 flex items-center justify-center">
-                    <ActionsDropdown
-                      chatType={chatType}
-                      setChatType={setChatType}
-                      currentPlan={currentPlan}
-                      isWebSearchActive={isWebSearchActive}
-                      setIsWebSearchActive={setIsWebSearchActive}
-                      isImageGenerationActive={isImageGenerationActive}
-                      setIsImageGenerationActive={setIsImageGenerationActive}
-                      isVideoGenerationActive={isVideoGenerationActive}
-                      setIsVideoGenerationActive={setIsVideoGenerationActive}
-                      setShowAudioPanel={setShowAudioPanel}
-                      setAudioTab={setAudioTab}
-                      handleAndUploadFiles={handleAndUploadFiles}
-                      isUploading={isUploading}
-                      isWebSearching={isWebSearching}
-                      isLoading={isLoading}
-                      isGeneratingImage={isGeneratingImage}
-                      isGeneratingVideo={isGeneratingVideo}
+              
+              <div className="relative rounded-3xl  border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+                    <ActiveOptionsDisplay
+                      uploadedFiles={uploadedFiles}
+                      removeFile={removeFile}
                     />
-                  </div>
-
-                  {/* Send button - positioned on the right */}
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                    <Button
-                      onClick={handleSend}
-                      disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo}
-                      size="sm"
-                      className="h-8 w-8 p-0"
-                    >
-                      {isGeneratingImage || isGeneratingVideo || isUploading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4" />
+                    <Textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        autoResize(e.target);
+                      }}
+                      onKeyPress={handleKeyPress}
+                      placeholder={
+                        isImageGenerationActive
+                          ? "Describe the image you want to generate..."
+                          : isVideoGenerationActive
+                            ? "Describe the video you want to create..."
+                            : isWebSearchActive
+                              ? "Enter your search query..."
+                              : "Type your message here..."
+                      }
+                      className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200`}
+                      style={{
+                        minHeight: "60px",
+                        maxHeight: "350px",
+                        overflowY: "auto",
+                        border: "none",           // Inline style border remove
+                        outline: "none",          // Inline style outline remove
+                        boxShadow: "none",        // Remove focus shadow if any
+                      }}
+                      rows={1}
+                      disabled={
+                        isLoading ||
+                        isGeneratingImage ||
+                        isGeneratingVideo ||
+                        isUploading ||
+                        isWebSearching
+                      }
+                    />
+                    <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 rounded-b-xl bg-background/95 p-2 backdrop-blur-sm">
+                      <ActionsDropdown
+                        chatType={chatType}
+                        setChatType={setChatType}
+                        currentPlan={currentPlan}
+                        isWebSearchActive={isWebSearchActive}
+                        setIsWebSearchActive={setIsWebSearchActive}
+                        isImageGenerationActive={isImageGenerationActive}
+                        setIsImageGenerationActive={setIsImageGenerationActive}
+                        isVideoGenerationActive={isVideoGenerationActive}
+                        setIsVideoGenerationActive={setIsVideoGenerationActive}
+                        setShowAudioPanel={setShowAudioPanel}
+                        setAudioTab={setAudioTab}
+                        handleAndUploadFiles={handleAndUploadFiles}
+                        isUploading={isUploading}
+                        isWebSearching={isWebSearching}
+                        isLoading={isLoading}
+                        isGeneratingImage={isGeneratingImage}
+                        isGeneratingVideo={isGeneratingVideo}
+                      />
+                      <ActiveToolsDisplay
+                        isWebSearchActive={isWebSearchActive}
+                        setIsWebSearchActive={setIsWebSearchActive}
+                        isImageGenerationActive={isImageGenerationActive}
+                        setIsImageGenerationActive={setIsImageGenerationActive}
+                        isVideoGenerationActive={isVideoGenerationActive}
+                        setIsVideoGenerationActive={setIsVideoGenerationActive}
+                        setChatType={setChatType}
+                      />
+                      <div className="flex-grow" />
+                      {!(isLoading && isStreaming) && (
+                        <>
+                          <VoiceControls
+                            onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                            className="flex items-center gap-1"
+                          />
+                          <Button
+                            onClick={handleSend}
+                            disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                          >
+                            {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Send className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </>
                       )}
-                    </Button>
+
+                      {/* Stop Button when streaming */}
+                      {isLoading && isStreaming && (
+                        <Button
+                          onClick={stopStreaming}
+                          size="icon"
+                          // variant="ghost" 
+                          className="h-8 w-8  rounded-full text-muted-foreground hover:text-foreground"
+                          title="Stop Generating"
+                        >
+                          <Square className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </div>
 
               <p className="text-center text-xs text-muted-foreground">
                 {isImageGenerationActive
@@ -1423,113 +1422,114 @@ export default function ChatInterface() {
               </ScrollArea>
 
               {/* Input & Actions */}
+
               <div className="border-t border-border/40 p-4">
                 <div className="max-w-4xl mx-auto space-y-3">
                   {/* Input Area */}
-                  <div className="bg-background">
-                    <div className="flex-1 relative">
 
-
-                      <Textarea
-                        ref={textareaRef}
-                        value={input}
-                        onChange={(e) => {
-                          setInput(e.target.value);
-                          autoResize(e.target);
-                        }}
-                        onKeyPress={handleKeyPress}
-                        placeholder={
-                          isImageGenerationActive
-                            ? "Describe the image you want to generate..."
-                            : isVideoGenerationActive
-                              ? "Describe the video you want to create..."
-                              : isWebSearchActive
-                                ? "Enter your search query..."
-                                : "Type your message here..."
-                        }
-                        className={`resize-none pl-12 pr-20 py-2 ${textareaPaddingTop} transition-all duration-200`}
-                        style={{
-                          minHeight: "60px", // ek line se start
-                          maxHeight: "350px",
-                          overflowY: "auto",
-                        }}
-                        rows={1}
-                        disabled={
-                          isLoading ||
-                          isGeneratingImage ||
-                          isGeneratingVideo ||
-                          isUploading ||
-                          isWebSearching
-                        }
-                      />
-
-
-                      {/* Active Options Display - INSIDE the textarea */}
-                      <ActiveOptionsDisplay
+                  <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+                    <ActiveOptionsDisplay
+                      uploadedFiles={uploadedFiles}
+                      removeFile={removeFile}
+                    />
+                    <Textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={(e) => {
+                        setInput(e.target.value);
+                        autoResize(e.target);
+                      }}
+                      onKeyPress={handleKeyPress}
+                      placeholder={
+                        isImageGenerationActive
+                          ? "Describe the image you want to generate..."
+                          : isVideoGenerationActive
+                            ? "Describe the video you want to create..."
+                            : isWebSearchActive
+                              ? "Enter your search query..."
+                              : "Type your message here..."
+                      }
+                      className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200`}
+                      style={{
+                        minHeight: "60px",
+                        maxHeight: "350px",
+                        overflowY: "auto",
+                        border: "none",           // Inline style border remove
+                        outline: "none",          // Inline style outline remove
+                        boxShadow: "none",        // Remove focus shadow if any
+                      }}
+                      rows={1}
+                      disabled={
+                        isLoading ||
+                        isGeneratingImage ||
+                        isGeneratingVideo ||
+                        isUploading ||
+                        isWebSearching
+                      }
+                    />
+                    <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 rounded-b-xl bg-background/95 p-2 backdrop-blur-sm">
+                      <ActionsDropdown
+                        chatType={chatType}
+                        setChatType={setChatType}
+                        currentPlan={currentPlan}
                         isWebSearchActive={isWebSearchActive}
                         setIsWebSearchActive={setIsWebSearchActive}
                         isImageGenerationActive={isImageGenerationActive}
                         setIsImageGenerationActive={setIsImageGenerationActive}
                         isVideoGenerationActive={isVideoGenerationActive}
                         setIsVideoGenerationActive={setIsVideoGenerationActive}
-                        uploadedFiles={uploadedFiles}
-                        removeFile={removeFile}
+                        setShowAudioPanel={setShowAudioPanel}
+                        setAudioTab={setAudioTab}
+                        handleAndUploadFiles={handleAndUploadFiles}
+                        isUploading={isUploading}
+                        isWebSearching={isWebSearching}
+                        isLoading={isLoading}
+                        isGeneratingImage={isGeneratingImage}
+                        isGeneratingVideo={isGeneratingVideo}
+                      />
+                      <ActiveToolsDisplay
+                        isWebSearchActive={isWebSearchActive}
+                        setIsWebSearchActive={setIsWebSearchActive}
+                        isImageGenerationActive={isImageGenerationActive}
+                        setIsImageGenerationActive={setIsImageGenerationActive}
+                        isVideoGenerationActive={isVideoGenerationActive}
+                        setIsVideoGenerationActive={setIsVideoGenerationActive}
                         setChatType={setChatType}
                       />
-
-                      {/* Plus icon dropdown - positioned on the left with better alignment */}
-                      <div className="absolute left-3 bottom-3 flex items-center justify-center">
-                        <ActionsDropdown
-                          chatType={chatType}
-                          setChatType={setChatType}
-                          currentPlan={currentPlan}
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
-                          isVideoGenerationActive={isVideoGenerationActive}
-                          setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          setShowAudioPanel={setShowAudioPanel}
-                          setAudioTab={setAudioTab}
-                          handleAndUploadFiles={handleAndUploadFiles}
-                          isUploading={isUploading}
-                          isWebSearching={isWebSearching}
-                          isLoading={isLoading}
-                          isGeneratingImage={isGeneratingImage}
-                          isGeneratingVideo={isGeneratingVideo}
-                        />
-                      </div>
-
-                      {/* Voice Controls and Send button - positioned on the right */}
-                      <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                        <VoiceControls
-                          onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                          className="flex items-center gap-1"
-                        />
-                        {isLoading && isStreaming && (
+                      <div className="flex-grow" />
+                      {!(isLoading && isStreaming) && (
+                        <>
+                          <VoiceControls
+                            onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                            className="flex items-center gap-1"
+                          />
                           <Button
-                            onClick={stopStreaming}
+                            onClick={handleSend}
+                            disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
                             size="sm"
-                            className="h-8 w-auto px-3 bg-red-500 hover:bg-red-600 text-white"
-                            title="Stop AI Generation"
+                            className="h-8 w-8 p-0"
                           >
-                            <Square className="h-4 w-4 mr-2" /> Stop
+                            {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Send className="h-4 w-4" />
+                            )}
                           </Button>
-                        )}
+                        </>
+                      )}
 
+                      {/* Stop Button when streaming */}
+                      {isLoading && isStreaming && (
                         <Button
-                          onClick={handleSend}
-                          disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
-                          size="sm"
-                          className="h-8 w-8 p-0"
+                          onClick={stopStreaming}
+                          size="icon"
+                          // variant="ghost" 
+                          className="h-8 w-8  rounded-full text-muted-foreground hover:text-foreground"
+                          title="Stop Generating"
                         >
-                          {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Send className="h-4 w-4" />
-                          )}
+                          <Square className="h-4 w-4" />
                         </Button>
-                      </div>
+                      )}
                     </div>
                   </div>
 

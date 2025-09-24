@@ -256,7 +256,7 @@ export function AppSidebar() {
         <SidebarMenuButton
           onClick={handleSearchClick}
           className="w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors"
-          variant="ghost"
+          variant="default"
         >
           <Search className="h-4 w-4" />
           <span className="group-data-[state=closed]:hidden ml-2">Search chats</span>
@@ -265,7 +265,7 @@ export function AppSidebar() {
         <SidebarMenuButton
           onClick={handleLibraryClick}
           className="w-full justify-start h-9 px-3"
-          variant="ghost"
+          variant="default"
         >
           <Images className="h-4 w-4" />
           <span className="group-data-[state=closed]:hidden ml-2">Library</span>
@@ -277,7 +277,7 @@ export function AppSidebar() {
             "w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors",
             isOnGPTsPage && "bg-accent text-accent-foreground"
           )}
-          variant="ghost"
+          variant="default"
         >
           <LayoutGrid className="h-4 w-4" />
           <span className="group-data-[state=closed]:hidden ml-2">GPTs</span>

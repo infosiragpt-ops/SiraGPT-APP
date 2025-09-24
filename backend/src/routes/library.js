@@ -10,7 +10,7 @@ function parseAndFindFile(jsonString, type) {
         const filesArray = JSON.parse(jsonString);
         // Find the first entry that matches the type and has a URL
         const foundFile = filesArray.find((f) => f.type === type && typeof f.url === 'string' && f.url.length > 0);
-        console.log(`[parseAndFindFile] JSON String: ${jsonString}, Type: ${type}, Found: ${JSON.stringify(foundFile)}`); // NEW LOG
+        //console.log(`[parseAndFindFile] JSON String: ${jsonString}, Type: ${type}, Found: ${JSON.stringify(foundFile)}`); // NEW LOG
         return foundFile;
     } catch (e) {
         console.error("Error parsing file JSON:", e);
@@ -25,7 +25,7 @@ function parseAndFindFile(jsonString, type) {
  */
 router.get('/images', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.userId; // Authentication middleware se userId mil raha hai
+        const userId = req.user.id; // Authentication middleware se userId mil raha hai
         console.log(`[DEBUG - Backend] Attempting to fetch images for userId: ${userId}`);
         const userImageMessages = await prisma.message.findMany({
             where: {
@@ -88,24 +88,24 @@ router.get('/images', authenticateToken, async (req, res) => {
  */
 router.get('/videos', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.userId;
-
-        // Assuming video messages are stored similarly to image messages:
-        // - `content` field contains the video URL
-        // - `files` JSON contains an object like `{ type: 'video', url: '...', prompt: '...' }`
+           if (!req.user || !req.user.id) {
+             console.error('Authentication Error: User ID is missing in the /videos route.');
+             return res.status(401).json({ error: 'Authentication failed, user ID not found.' });
+        }
+        const userId = req.user.id;
         const userVideoMessages = await prisma.message.findMany({
             where: {
                 chat: {
                     userId: userId,
                 },
                 role: 'ASSISTANT',
-                files: {
-                    string_contains: '"type":"video"', // Search for video type in JSON string
-                },
+                // files: {
+                //  string_contains: '"type":"video"', // 'string_contains' deprecated hai, 'contains' istemal karein
+                // },
             },
             select: {
                 id: true,
-                content: true, // This would be the video URL
+               // content: true, // This would be the video URL
                 files: true,   // For potential prompt or other metadata
                 timestamp: true,
                 chat: {
@@ -121,6 +121,8 @@ router.get('/videos', authenticateToken, async (req, res) => {
             // skip: (page - 1) * 20,
         });
 
+            console.log(userVideoMessages.length);
+            
         const videos = userVideoMessages
             .map((msg) => {
                 const videoFile = parseAndFindFile(msg.files, 'video');

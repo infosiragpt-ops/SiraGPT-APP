@@ -17,15 +17,15 @@ class ApiClient {
   private async request(endpoint: string, options: RequestInit = {}) {
     const url = `${this.baseURL}${endpoint}`;
 
-    // Don't set Content-Type for FormData - let browser set it with boundary
-    const headers: Record<string, string> = {
-      ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      ...options.headers,
-    };
+    const headers = new Headers(options.headers);
+
+    if (this.token) {
+      headers.set('Authorization', `Bearer ${this.token}`);
+    }
 
     // Only set Content-Type for non-FormData requests
-    if (!(options.body instanceof FormData)) {
-      headers['Content-Type'] = 'application/json';
+    if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
     }
 
     const config: RequestInit = {
