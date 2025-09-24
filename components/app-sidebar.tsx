@@ -94,6 +94,7 @@ export function AppSidebar() {
     chats,
     currentChat,
     createNewChat,
+    setCurrentChat,
     selectChat,
     deleteChat,
     selectedModel,
@@ -120,7 +121,8 @@ export function AppSidebar() {
   }
 
   const handleNewChat = () => {
-    createNewChat()
+     setCurrentChat(null);
+  localStorage.removeItem('currentChatId');
     // Navigate to chat if not already there
     if (!pathname.startsWith('/chat')) {
       router.push('/chat')
