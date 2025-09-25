@@ -836,13 +836,13 @@ export default function ChatInterface() {
   //   }
   // }, [currentChat]);
   // Replace the commented useEffect and add a new one for chat switching
-  React.useEffect(() => {
+    React.useEffect(() => {
     // Reset generation modes when switching chats
     setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
     setIsVideoGenerationActive(false);
     setChatType('text'); // Always default to text when switching chats
-  }, [currentChat?.id]); // Only trigger when chat ID changes
+  }, []);
 
   React.useEffect(() => {
     setShowAudioPanel(false);
@@ -951,21 +951,39 @@ export default function ChatInterface() {
     setIsGeneratingImage(true)
     try {
       if (!currentChat) {
-        // If no chat is active, create a new one with type 'image'
-        const newChat = await createNewChat('image', prompt); // Pass true to indicate image generation mode for initial message
-        // if (newChat && newChat.id) {
-        //   // Then call generateImage with the new chat ID
-        //   const response = await apiClient.generateImage({
-        //     prompt,
-        //     chatId: newChat.id,
-        //     provider: selectProvider,
-        //     model: selectedModel
-        //   })
-        //   await selectChat(newChat.id); // Re-select the chat to update messages
-        //   toast.success('Image generated successfully!')
-        // }
+        // If no chat is active, create a new one. The user message will be added optimistically by createNewChat.
+        const newChat =   createNewChat('image', prompt) as any;
+        if (newChat && newChat.id) { 
+          const response = await apiClient.generateImage({
+            prompt,
+            chatId: newChat.id,
+            provider: selectProvider,
+            model: selectedModel
+          })
+          await selectChat(newChat.id); // Re-select the chat to update messages
+          toast.success('Image generated successfully!')
+        }
       } else {
-        // If a chat is active, just generate image within it\
+        // If a chat is active, add the message optimistically and then generate the image.
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'USER' as const,
+          content: prompt,
+          timestamp: new Date().toISOString(),
+          files: uploadedFiles.map(f => ({
+            ...f,
+            url: f.url, // Ensure the URL is included for rendering
+            type: 'image'
+          }))
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
+
         const payload = {
           prompt,
           chatId: currentChat?.id,
@@ -973,7 +991,6 @@ export default function ChatInterface() {
           model: selectedModel,
         };
 
-        // ✅ Only add fileId if files[0] exists and is not empty
         if (files && files[0]) {
           (payload as any).fileId = files[0];
         }
@@ -987,10 +1004,9 @@ export default function ChatInterface() {
       toast.error('Image generation failed. Please try again.')
     } finally {
       setIsGeneratingImage(false)
-      // Don't auto-reset - user must manually remove
     }
-  }
-
+  } 
+ 
   const handleVideoGeneration = async (prompt: string) => {
     setIsGeneratingVideo(true)
     try {
