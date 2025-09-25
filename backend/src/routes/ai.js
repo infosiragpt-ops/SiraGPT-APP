@@ -880,7 +880,7 @@ router.post(
         });
       }
 
-      // ✅ Check monthly limit (logic is fine)
+      // ✅ Check monthly limit
       if (req.user.apiUsage >= req.user.monthlyLimit) {
         return res.status(429).json({
           error: 'Monthly API limit exceeded',
@@ -890,7 +890,7 @@ router.post(
 
       let imageUrl;
       let imagePath;
-      const tokens = 1000; // Note: Token calculation should ideally be dynamic based on provider and resolution
+      const tokens = 1000;
       if (fileId) {
         const inputFileRecord = await prisma.file.findFirst({
           where: { id: fileId, userId: userId }
@@ -900,10 +900,8 @@ router.post(
           return res.status(404).json({ error: 'Input image file not found.' });
         }
 
-        // Input image ke path se file ko read karen
         imagePath = inputFileRecord.path;
 
-        // Ensure file exists and is readable
         let imageBuffer;
         try {
           imageBuffer = await fs.readFile(imagePath);
@@ -912,21 +910,17 @@ router.post(
           return res.status(500).json({ error: 'Failed to read input image file.' });
         }
       }
+
       try {
         let response;
         const timeoutPromise = new Promise((_, reject) => {
           setTimeout(() => reject(new Error('Image generation timeout')), 50000);
         });
-        console.log("fileID", fileId);
-
 
         if (fileId) {
-
           const imagePromise = aiService.generateImageFromImage(imagePath, prompt, provider)
           response = await Promise.race([imagePromise, timeoutPromise]);
           const base64Data = response;
-
-          // YAHAN PAR TABDEELI HAI: Hum ab naye helper function ka istemal kar rahe hain
           imageUrl = await saveBase64Image(base64Data);
         }
         else {
@@ -939,24 +933,20 @@ router.post(
               size: "1024x1024"
             });
             response = await Promise.race([imagePromise, timeoutPromise]);
-          } else { // Provider is OpenAI (DALL-E)
-            // YAHAN PAR TABDEELI HAI: Hum ab URL ke bajaye b64_json request kar rahe hain
+          } else {
             const imagePromise = openai.images.generate({
               model: 'dall-e-3',
               prompt: prompt,
               n: 1,
               size: '1024x1024',
               quality: 'standard',
-              response_format: 'b64_json', // IMPORTANT CHANGE
+              response_format: 'b64_json',
             });
             response = await Promise.race([imagePromise, timeoutPromise]);
           }
           const base64Data = response.data[0].b64_json;
-
-          // YAHAN PAR TABDEELI HAI: Hum ab naye helper function ka istemal kar rahe hain
           imageUrl = await saveBase64Image(base64Data);
         }
-
 
       } catch (apiError) {
         console.error(`${provider} Image API error:`, apiError);
@@ -969,25 +959,61 @@ router.post(
         });
       }
 
-      // ✅ Save messages and track usage (Baaqi code theek hai)
+      // ✅ Save messages and track usage (Enhanced with complete file info)
       if (chatId) {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (!chat) {
           return res.status(404).json({ error: 'Chat not found' });
         }
 
+        // ✅ Prepare complete file information for user message if fileId provided
+        let userMessageFiles = undefined;
+        if (fileId) {
+          try {
+            const inputFileRecord = await prisma.file.findFirst({
+              where: { id: fileId, userId },
+              select: {
+                id: true,
+                originalName: true,
+                filename: true,
+                mimeType: true,
+                path: true, // ✅ Use 'path' instead of 'url'
+              }
+            });
+
+            if (inputFileRecord) {
+              // ✅ Construct URL from available data
+              const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+              const fileUrl = `${baseUrl}/uploads/${userId}/${inputFileRecord.filename}`;
+              
+              userMessageFiles = JSON.stringify([{
+                id: inputFileRecord.id,
+                name: inputFileRecord.originalName,
+                filename: inputFileRecord.filename,
+                type: inputFileRecord.mimeType,
+                url: fileUrl, // ✅ Construct URL from available data
+                path: inputFileRecord.path
+              }]);
+              console.log('📎 Input image file prepared for user message display');
+            }
+          } catch (fileError) {
+            console.error('Error fetching input file for user message:', fileError);
+          }
+        }
+
         try {
           await prisma.$transaction([
-            // Operation 1: USER ka message create karen
+            // Operation 1: USER message with complete file info
             prisma.message.create({
               data: {
                 chatId,
                 role: 'USER',
                 content: prompt,
+                files: userMessageFiles // ✅ Now includes complete file info for display
               }
             }),
 
-            // Operation 2: ASSISTANT ka image message create karen
+            // Operation 2: ASSISTANT image message
             prisma.message.create({
               data: {
                 chatId,
@@ -998,7 +1024,7 @@ router.post(
               }
             }),
 
-            // Operation 3: Chat ko update karen
+            // Operation 3: Update chat
             prisma.chat.update({
               where: { id: chatId },
               data: {
@@ -1012,15 +1038,13 @@ router.post(
 
         } catch (error) {
           console.error("Transaction failed:", error);
-          // Transaction fail hone par user ko error bhej sakte hain
           return res.status(500).json({ error: "Failed to save chat history." });
         }
-
       }
 
       // ✅ Track usage
       await prisma.apiUsage.create({
-        data: { userId, model, tokens, cost: tokens * 0.001 } // Model name ko dynamic kar den
+        data: { userId, model, tokens, cost: tokens * 0.001 }
       });
 
       const updatedUser = await prisma.user.update({
@@ -1032,7 +1056,6 @@ router.post(
         imageUrl,
         tokens,
         usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
-
       });
 
     } catch (error) {
@@ -1116,7 +1139,7 @@ router.post(
           prompt,
           aspect_ratio,
           negative_prompt,
-          ...(processedImageUrl && { image_url: processedImageUrl }) // ✅ Include image URL if available
+          ...(processedImageUrl && { image_url: processedImageUrl })
         };
 
         const videoResponse = await axios.post(url, videoPayload, {
@@ -1129,20 +1152,102 @@ router.post(
 
         console.log('✅ Video service response:', videoResponse.data);
 
-        // ✅ Save user message first if chatId provided
+        // ✅ Save user message with complete file information if chatId provided
         if (chatId) {
           const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
           if (!chat) {
             return res.status(404).json({ error: 'Chat not found' });
           }
 
-          // Save user message with files if provided
+          // ✅ Prepare user message files - handle both files array and direct image_url
+          let userMessageFiles = undefined;
+          
+          // Case 1: Files uploaded via files array
+          if (files && files.length > 0) {
+            try {
+              const fileRecords = await prisma.file.findMany({
+                where: { 
+                  id: { in: files }, 
+                  userId 
+                },
+                select: {
+                  id: true,
+                  originalName: true,
+                  filename: true,
+                  mimeType: true,
+                  path: true, // ✅ Use 'path' instead of 'url'
+                }
+              });
+
+              userMessageFiles = JSON.stringify(fileRecords.map(file => {
+                // ✅ Construct URL from available data
+                const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+                const fileUrl = `${baseUrl}/uploads/${userId}/${file.filename}`;
+                
+                return {
+                  id: file.id,
+                  name: file.originalName,
+                  filename: file.filename,
+                  type: file.mimeType,
+                  url: fileUrl, // ✅ Construct URL from available data
+                  path: file.path
+                };
+              }));
+
+              console.log('📎 User message files from upload:', fileRecords.length, 'files');
+            } catch (fileError) {
+              console.error('Error fetching files for user message:', fileError);
+            }
+          }
+          // Case 2: Direct image URL provided (extract from processedImageUrl)
+          else if (processedImageUrl) {
+            try {
+              // Extract filename from URL to find the file record
+              const urlParts = processedImageUrl.split('/');
+              const filename = urlParts[urlParts.length - 1];
+              
+              const fileRecord = await prisma.file.findFirst({
+                where: { 
+                  filename: filename,
+                  userId 
+                },
+                select: {
+                  id: true,
+                  originalName: true,
+                  filename: true,
+                  mimeType: true,
+                  path: true, // ✅ Use 'path' instead of 'url'
+                }
+              });
+
+              if (fileRecord) {
+                // ✅ Construct URL from available data
+                const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+                const fileUrl = `${baseUrl}/uploads/${userId}/${fileRecord.filename}`;
+                
+                userMessageFiles = JSON.stringify([{
+                  id: fileRecord.id,
+                  name: fileRecord.originalName,
+                  filename: fileRecord.filename,
+                  type: fileRecord.mimeType,
+                  url: fileUrl, // ✅ Construct URL from available data
+                  path: fileRecord.path
+                }]);
+                
+                console.log('📎 User message file from image_url:', fileRecord.originalName);
+              }
+            } catch (fileError) {
+              console.error('Error fetching file from image_url for user message:', fileError);
+            }
+          }
+
+          // Save user message with complete file information
           await prisma.message.create({
             data: {
               chatId,
               role: 'USER',
               content: prompt,
-              files: files && files.length > 0 ? JSON.stringify(files.map(fileId => ({ id: fileId, type: 'file' }))) : undefined
+              files: userMessageFiles // ✅ Now includes complete file info for frontend display
             }
           });
 
@@ -1236,7 +1341,6 @@ router.post(
     }
   }
 );
-
 // ✅ Check video generation status (Fixed)
 router.get('/video-status/:operationId', authenticateToken, async (req, res) => {
   try {

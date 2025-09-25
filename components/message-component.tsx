@@ -529,22 +529,38 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             )}
                     </div>
                 )}
-            {parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type !== 'image') && (
-                <div className="mt-2 pt-2 border-t border-border/20">
-                    <div className="flex flex-wrap gap-1">
-                        {parsedFiles
-                            .filter((f: any) => f.type !== 'image')
-                            .map((file: any, index: number) => (
-                                <div key={index} className="flex items-center gap-1">
-                                    <FileText className="h-4 w-4" />
-                                    <Badge className="text-xs">
-                                        {file.name || 'File'}
-                                    </Badge>
-                                </div>
-                            ))}
-                    </div>
-                </div>
-            )}
+           {parsedFiles && parsedFiles.length > 0 &&message.role === "USER"   && (
+ <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
+    {parsedFiles.some((file: any) => file.type?.startsWith('image/')) ? (
+      // Only images, aligned right
+      <div className="flex flex-wrap gap-1 ml-auto">
+        {parsedFiles
+          .filter((file: any) => file.type?.startsWith('image/'))
+          .map((file: any, index: number) => (
+            <img
+              key={index}
+              src={file.url || file.path}
+              alt={file.name || 'Image'}
+              className="h-20 w-20 object-cover rounded"
+            />
+          ))}
+      </div>
+    ) : (
+      // Only non-image files, aligned left
+      <div className="flex flex-wrap gap-1">
+        {parsedFiles
+          .filter((file: any) => !file.type?.startsWith('image/'))
+          .map((file: any, index: number) => (
+            <div key={index} className="flex items-center gap-1 px-2 py-1 border rounded">
+              <FileText className="h-4 w-4" />
+              <span className="text-xs">{file.originalName || file.name || 'File'}</span>
+            </div>
+          ))}
+      </div>
+    )}
+  </div>
+)}
+
         </>
     );
 
