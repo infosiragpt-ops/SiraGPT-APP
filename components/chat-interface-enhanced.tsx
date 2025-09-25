@@ -1160,7 +1160,7 @@ export default function ChatInterface() {
       )}
 
       {/* Header */}
-      <div className="border-b border-border/40 p-4">
+      <div className=" border-border/40 p-4">
         <div className="flex items-center justify-between">
           <div>
             {!showAudioPanel ? (
@@ -1483,7 +1483,7 @@ export default function ChatInterface() {
 
               {/* Input & Actions */}
 
-              <div className="border-t border-border/40 p-4">
+              <div className="">
                 <div className="max-w-4xl mx-auto space-y-3">
                   {/* Input Area */}
 
