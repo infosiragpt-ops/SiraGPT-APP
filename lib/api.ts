@@ -681,14 +681,15 @@ class ApiClient {
     prompt: string;
     aspect_ratio?: '16:9' | '9:16' | '1:1';
     negative_prompt?: string;
-    chatId?: string;  // Add chatId parameter
+    chatId?: string;
+    files?: string[]; 
+    image_url?: string; 
   }) {
     return this.request('/ai/generate-video', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
-
   // async getVideoStatus(operationId: string) {
   //   return this.request(`/video/status/${operationId}`);
   // }

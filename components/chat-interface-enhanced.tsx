@@ -866,11 +866,16 @@ export default function ChatInterface() {
   // File upload logic
   const handleAndUploadFiles = async (files: FileList) => {
     if (files.length === 0) return;
-    if (chatType === 'video') {
-      toast.error("You cannot upload files in this generation mode.");
+     if (chatType === 'video' || chatType === 'image') {
+    const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
+
+    if (imageFiles.length === 0) {
+      toast.error("Only image files are allowed in image/video mode.");
       return;
     }
 
+    files = imageFiles as unknown as FileList;
+  }
     setIsUploading(true);
     try {
       const response = await apiClient.uploadFiles(files);
@@ -916,6 +921,16 @@ export default function ChatInterface() {
     setInput("")
 
     try {
+       if (chatType === 'image' || chatType === 'video') {
+      const hasNonImageFiles = uploadedFiles.some(
+        (file) => !file.type?.startsWith('image/')
+      );
+
+      if (hasNonImageFiles) {
+        toast.error("Only image files are allowed in image/video mode.");
+        return; 
+      }
+    }
       if (isWebSearchActive) {
         await handleWebSearch(); // Changed to await
       } else if (isImageGenerationActive) {
