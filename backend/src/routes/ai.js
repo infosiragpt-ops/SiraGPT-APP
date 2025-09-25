@@ -864,9 +864,9 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-
-      const { prompt, chatId, provider, model } = req.body;
+      const { prompt, chatId, provider, model, fileId } = req.body;
       const userId = req.user.id;
+      console.log("file ID", fileId);
 
       let openai;
       if (provider === "Gemini") {
@@ -889,40 +889,75 @@ router.post(
       }
 
       let imageUrl;
+      let imagePath;
       const tokens = 1000; // Note: Token calculation should ideally be dynamic based on provider and resolution
+      if (fileId) {
+        const inputFileRecord = await prisma.file.findFirst({
+          where: { id: fileId, userId: userId }
+        });
 
+        if (!inputFileRecord) {
+          return res.status(404).json({ error: 'Input image file not found.' });
+        }
+
+        // Input image ke path se file ko read karen
+        imagePath = inputFileRecord.path;
+
+        // Ensure file exists and is readable
+        let imageBuffer;
+        try {
+          imageBuffer = await fs.readFile(imagePath);
+        } catch (readError) {
+          console.error('Error reading input image file:', readError);
+          return res.status(500).json({ error: 'Failed to read input image file.' });
+        }
+      }
       try {
         let response;
         const timeoutPromise = new Promise((_, reject) => {
           setTimeout(() => reject(new Error('Image generation timeout')), 50000);
         });
+        console.log("fileID", fileId);
 
-        if (provider === "Gemini") {
-          const imagePromise = openai.images.generate({
-            model: "imagen-3.0-generate-002",
-            prompt: prompt,
-            response_format: "b64_json",
-            n: 1,
-            size: "1024x1024"
-          });
+
+        if (fileId) {
+
+          const imagePromise = aiService.generateImageFromImage(imagePath, prompt, provider)
           response = await Promise.race([imagePromise, timeoutPromise]);
-        } else { // Provider is OpenAI (DALL-E)
-          // YAHAN PAR TABDEELI HAI: Hum ab URL ke bajaye b64_json request kar rahe hain
-          const imagePromise = openai.images.generate({
-            model: 'dall-e-3',
-            prompt: prompt,
-            n: 1,
-            size: '1024x1024',
-            quality: 'standard',
-            response_format: 'b64_json', // IMPORTANT CHANGE
-          });
-          response = await Promise.race([imagePromise, timeoutPromise]);
+          const base64Data = response;
+
+          // YAHAN PAR TABDEELI HAI: Hum ab naye helper function ka istemal kar rahe hain
+          imageUrl = await saveBase64Image(base64Data);
+        }
+        else {
+          if (provider === "Gemini") {
+            const imagePromise = openai.images.generate({
+              model: "imagen-3.0-generate-002",
+              prompt: prompt,
+              response_format: "b64_json",
+              n: 1,
+              size: "1024x1024"
+            });
+            response = await Promise.race([imagePromise, timeoutPromise]);
+          } else { // Provider is OpenAI (DALL-E)
+            // YAHAN PAR TABDEELI HAI: Hum ab URL ke bajaye b64_json request kar rahe hain
+            const imagePromise = openai.images.generate({
+              model: 'dall-e-3',
+              prompt: prompt,
+              n: 1,
+              size: '1024x1024',
+              quality: 'standard',
+              response_format: 'b64_json', // IMPORTANT CHANGE
+            });
+            response = await Promise.race([imagePromise, timeoutPromise]);
+          }
+          const base64Data = response.data[0].b64_json;
+
+          // YAHAN PAR TABDEELI HAI: Hum ab naye helper function ka istemal kar rahe hain
+          imageUrl = await saveBase64Image(base64Data);
         }
 
-        const base64Data = response.data[0].b64_json;
 
-        // YAHAN PAR TABDEELI HAI: Hum ab naye helper function ka istemal kar rahe hain
-        imageUrl = await saveBase64Image(base64Data);
       } catch (apiError) {
         console.error(`${provider} Image API error:`, apiError);
         if (apiError.message === 'Image generation timeout') {

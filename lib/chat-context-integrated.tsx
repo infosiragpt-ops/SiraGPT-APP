@@ -413,7 +413,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setUploadedFiles([]); // Clear uploaded files for new chat
 
       // If initialContent is provided, immediately call addMessage to get AI response
-            if (initialContent) {
+      if (initialContent) {
         if (type === 'image') {
           // For image generation, call the image API directly
           try {
@@ -436,7 +436,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // For text, use regular addMessage
           await addMessage(initialContent, [], newChat); // Pass newChat as the third parameter
         }
-            return newChat;
+        return newChat;
       }
     } catch (error) {
       console.error("Failed to create chat:", error);

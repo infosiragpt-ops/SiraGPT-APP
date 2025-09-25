@@ -306,7 +306,15 @@ class ApiClient {
       onError(error);
     }
   }
-  async generateImage(data: { prompt: string; chatId?: string, provider: string; model: string; }) {
+  async generateImage(data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string }) {
+    const response = await this.request('/ai/generate-image', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+
+    return response;
+  }
+  async generateImageByImage(data: { fileId: string, prompt: string; chatId?: string, provider: string; model: string; }) {
     const response = await this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),

@@ -866,8 +866,8 @@ export default function ChatInterface() {
   // File upload logic
   const handleAndUploadFiles = async (files: FileList) => {
     if (files.length === 0) return;
-    if (chatType === 'image' || chatType === 'video') {
-      toast.error("You cannot upload files in image/video generation mode.");
+    if (chatType === 'video') {
+      toast.error("You cannot upload files in this generation mode.");
       return;
     }
 
@@ -919,14 +919,15 @@ export default function ChatInterface() {
       if (isWebSearchActive) {
         await handleWebSearch(); // Changed to await
       } else if (isImageGenerationActive) {
-        await handleImageGeneration(msg);
+        await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
+
       } else if (isVideoGenerationActive) {
         await handleVideoGeneration(msg);
       } else {
         if (!currentChat) {
           await createNewChat(chatType, msg)
         } else if (chatType === 'image') {
-          await handleImageGeneration(msg)
+          await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
         } else if (chatType === 'video') {
           await handleVideoGeneration(msg)
         } else {
@@ -946,7 +947,7 @@ export default function ChatInterface() {
     }
   }
 
-  const handleImageGeneration = async (prompt: string) => {
+  const handleImageGeneration = async (prompt: string, files?: string[]) => {
     setIsGeneratingImage(true)
     try {
       if (!currentChat) {
@@ -964,13 +965,20 @@ export default function ChatInterface() {
         //   toast.success('Image generated successfully!')
         // }
       } else {
-        // If a chat is active, just generate image within it
-        const response = await apiClient.generateImage({
+        // If a chat is active, just generate image within it\
+        const payload = {
           prompt,
           chatId: currentChat?.id,
           provider: selectProvider,
-          model: selectedModel
-        })
+          model: selectedModel,
+        };
+
+        // ✅ Only add fileId if files[0] exists and is not empty
+        if (files && files[0]) {
+          (payload as any).fileId = files[0];
+        }
+        setUploadedFiles([]);
+        const response = await apiClient.generateImage(payload)
         await selectChat(currentChat?.id ?? "") // Re-select the chat to update messages
         toast.success('Image generated successfully!')
       }
@@ -1025,7 +1033,7 @@ export default function ChatInterface() {
 
     if (!activeChatId) {
       try {
-        const newChat = await createNewChat('text', `🔍 Web Search: ${input.trim()}`);
+        const newChat = createNewChat('text', `🔍 Web Search: ${input.trim()}`) as any;
         activeChatId = newChat?.id;
         if (!activeChatId) {
           toast.error('Failed to create chat for web search');

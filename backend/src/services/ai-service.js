@@ -1,7 +1,12 @@
 // file: services/ai-service.js
 
 const OpenAI = require('openai');
+const { toFile } = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai'); // Make sure to install this package: npm install @google/generative-ai
+const fs = require('fs');
 const prisma = require('../config/database');
+const { GoogleGenAI, Modality } = require("@google/genai");
+const path = require('path');
 class AIService {
     /**
      * Provider ke naam ke hisab se sahi configured AI client return karta hai.
@@ -90,7 +95,68 @@ class AIService {
             throw apiError;
         }
     }
+
+    async generateImageFromImage(imagePath, prompt, provider) {
+        try {
+            if (provider === "Gemini") {
+                const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+                const imageData = fs.readFileSync(imagePath);
+                const base64Image = imageData.toString("base64");
+
+                const requestPrompt = [
+                    { text: prompt },
+                    {
+                        inlineData: {
+                            mimeType: "image/png",
+                            data: base64Image,
+                        },
+                    },
+                ];
+
+                const response = await ai.models.generateContent({
+                    model: "gemini-2.5-flash-image-preview",
+                    contents: requestPrompt,
+                });
+
+                for (const part of response.candidates[0].content.parts) {
+                    if (part.inlineData && part.inlineData.data) {
+                        return part.inlineData.data;
+                    }
+                }
+
+                throw new Error("No image returned by Gemini");
+
+            } else {
+                const openai = new OpenAI({
+                    apiKey: process.env.OPENAI_API_KEY,
+                });
+
+                const imageFile = await toFile(fs.createReadStream(imagePath), null, {
+                    type: "image/png",
+                });
+
+                const response = await openai.images.edit({
+                    image: imageFile,
+                    prompt: prompt,
+                    model: 'gpt-image-1',
+                    n: 1,
+                    size: '1024x1024',
+                    quality: 'auto',
+                });
+
+                const image_base64 = response.data[0].b64_json;
+                return image_base64;
+
+            }
+        } catch (error) {
+            console.error("Error:", error.message);
+            throw error;
+        }
+    }
+
 }
+
 
 // Service ka ek hi instance banayein aur export karein
 module.exports = new AIService();
