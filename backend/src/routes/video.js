@@ -25,7 +25,8 @@ function generateOperationId() {
 router.post('/generate', [
   body('prompt').trim().notEmpty().withMessage('Video prompt is required'),
   body('aspect_ratio').optional().isIn(['16:9', '9:16', '1:1']).withMessage('Invalid aspect ratio'),
-  body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string')
+  body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string'),
+  body('image_url').optional().isString().withMessage('Image URL must be a string')
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -40,7 +41,8 @@ router.post('/generate', [
     const {
       prompt,
       aspect_ratio = '16:9',
-      negative_prompt
+      negative_prompt,
+      image_url
     } = req.body;
 
     // Force duration to be exactly 8 seconds as per Fal.ai requirement
@@ -49,7 +51,8 @@ router.post('/generate', [
     console.log('Video generation request received:', { 
       prompt: prompt.substring(0, 50) + '...', 
       duration, 
-      aspect_ratio 
+      aspect_ratio,
+      hasImageUrl: !!image_url
     });
 
     // Check user's monthly limit
@@ -90,13 +93,13 @@ router.post('/generate', [
         userId: req.user.id,
         status: 'processing',
         createdAt: new Date().toISOString(),
-        lastChecked: new Date().toISOString()
+        lastChecked: new Date().toISOString(),
+        sourceImageUrl: image_url || null
       };
-
       activeOperations.set(operationId, operationData);
 
       // Start video generation with Fal.ai (async)
-      generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id);
+         generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id, image_url);
 
       // Track initial usage
       await prisma.apiUsage.create({
@@ -162,125 +165,234 @@ router.post('/generate', [
   }
 });
 
-// Async video generation function with correct Fal.ai parameters
-// ...existing code...
-
-// Async video generation function with retries on transient network failures
-async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId) {
+// generateVideoAsync function with proper variable scoping and syntax fix
+async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrl = null) {
   const maxRetries = 3;
-  const baseDelayMs = 4000;
+  let retryCount = 0;
 
-  const tryOnce = async () => {
-    console.log(`🎬 Starting video generation for operation: ${operationId}`);
-
-    const operationData = activeOperations.get(operationId);
-    if (operationData) {
+  while (retryCount < maxRetries) {
+    try {
+      console.log(`🎬 Starting video generation attempt ${retryCount + 1}/${maxRetries} for operation: ${operationId}`);
+      console.log(`🖼️ Generation Mode: ${imageUrl ? 'Image-to-Video' : 'Text-to-Video'}`);
+      
+      // Update status
+      let operationData = activeOperations.get(operationId) || {};
       operationData.status = 'processing';
-      operationData.lastChecked = new Date().toISOString();
+      operationData.updatedAt = new Date().toISOString();
       activeOperations.set(operationId, operationData);
-    }
 
-    const apiInput = {
-      prompt,
-      aspect_ratio: aspectRatio || "16:9",
-      duration: "8s",
-      enhance_prompt: true,
-      auto_fix: true,
-      resolution: "720p",
-      generate_audio: true,
-    };
-    if (negativePrompt && negativePrompt.trim() !== '') {
-      apiInput.negative_prompt = negativePrompt;
-    }
+      // Declare variables at function scope to avoid scope issues
+      let endpoint, requestPayload, processedImageUrl = null;
 
-    console.log(`🔧 Calling Fal.ai API with input:`, JSON.stringify(apiInput, null, 2));
+      if (imageUrl) {
+        //  Handle image URL - upload to Fal.ai if it's a local file
+        processedImageUrl = imageUrl;
+        
+        // If it's a local file URL, upload it to Fal.ai
+        if (imageUrl.includes('localhost') || imageUrl.includes('127.0.0.1') || (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://'))) {
+          try {
+            console.log('📤 Uploading local image to Fal.ai for processing...');
+            
+            // Extract the local file path from URL
+            let localImagePath;
+            if (imageUrl.includes('/uploads/')) {
+              // Extract path after /uploads/
+              const pathAfterUploads = imageUrl.split('/uploads/')[1];
+              localImagePath = path.join('uploads', pathAfterUploads);
+            } else {
+              // Direct file path
+              localImagePath = imageUrl;
+            }
 
-    // This may take minutes; subscribe returns when done or throws
-    return await fal.subscribe('fal-ai/veo3/fast', {
-      input: apiInput,
-      logs: true,
-      onQueueUpdate: (update) => {
-        // keep status fresh for pollers
-        const d = activeOperations.get(operationId);
-        if (d) {
-          d.queuePosition = update.queue_position || 0;
-          d.status = update.status === 'COMPLETED' ? 'processing' : (update.status || 'processing');
-          d.lastChecked = new Date().toISOString();
-          if (update.metrics) d.metrics = update.metrics;
-          activeOperations.set(operationId, d);
+            console.log('📁 Local image path:', localImagePath);
+
+            // Check if file exists
+            if (fs.existsSync(localImagePath)) {
+              // Read the file and upload to Fal.ai
+              const imageBuffer = fs.readFileSync(localImagePath);
+              const fileName = path.basename(localImagePath);
+              
+              // Create a Blob from the buffer
+              const fileBlob = new Blob([imageBuffer], { 
+                type: getImageMimeType(fileName) 
+              });
+              
+              // Upload to Fal.ai storage
+              const uploadedUrl = await fal.storage.upload(fileBlob);
+              processedImageUrl = uploadedUrl;
+              
+              console.log('✅ Image uploaded to Fal.ai successfully:', uploadedUrl);
+            } else {
+              throw new Error(`Local image file not found: ${localImagePath}`); // 
+            }
+          } catch (uploadError) {
+            console.error(' Failed to upload image to Fal.ai:', uploadError);
+            throw new Error(`Failed to process image for video generation: ${uploadError.message}`);
+          }
         }
-      },
-    });
-  };
 
-  const isConnectTimeout = (err) =>
-    err?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT' ||
-    err?.code === 'UND_ERR_CONNECT_TIMEOUT' ||
-    /connect timeout/i.test(err?.message || '');
-
-  try {
-    let result;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        result = await tryOnce();
-        break; // success
-      } catch (err) {
-        console.error(`❌ Fal.ai subscribe error (attempt ${attempt}/${maxRetries}):`, err);
-        if (attempt < maxRetries && isConnectTimeout(err)) {
-          const delay = baseDelayMs * attempt;
-          console.log(`⏳ Retry in ${delay}ms due to network timeout...`);
-          await new Promise(r => setTimeout(r, delay));
-          continue;
-        }
-        throw err; // non-retryable or exhausted
+        //  Use Image-to-Video endpoint
+        endpoint = "fal-ai/veo3/fast/image-to-video";
+        requestPayload = {
+          prompt: prompt,
+          image_url: processedImageUrl,
+          aspect_ratio: aspectRatio === '16:9' ? '16:9' : 
+                       aspectRatio === '9:16' ? '9:16' : 'auto',
+          duration: duration,
+          generate_audio: true,
+          resolution: "720p"
+        };
+        console.log('🖼️➡️🎬 Using Image-to-Video model (fal-ai/veo3/fast/image-to-video)');
+        console.log('🔗 Using processed image URL:', processedImageUrl.substring(0, 50) + '...');
+      } else {
+        //  Use Text-to-Video endpoint
+        endpoint = "fal-ai/veo3/fast";
+        requestPayload = {
+          prompt: prompt,
+          duration: duration,
+          aspect_ratio: aspectRatio,
+          negative_prompt: negativePrompt || undefined
+        };
+        console.log('📝➡️🎬 Using Text-to-Video model (fal-ai/veo3/fast)');
       }
+
+      console.log('📡 Fal.ai request details:', {
+        endpoint: endpoint,
+        payload: {
+          ...requestPayload,
+          image_url: processedImageUrl ? '[PROCESSED_IMAGE_URL]' : undefined
+        }
+      });
+
+      //  Make API call with better error handling
+      const result = await fal.subscribe(endpoint, {
+        input: requestPayload,
+        logs: true,
+        onQueueUpdate: (update) => {
+          let updateData = activeOperations.get(operationId) || {};
+          updateData.queuePosition = update.queue_position;
+          updateData.status = update.status === "IN_PROGRESS" ? 'processing' : updateData.status;
+          updateData.updatedAt = new Date().toISOString();
+          activeOperations.set(operationId, updateData);
+          
+          // Log progress updates
+          if (update.logs) {
+            update.logs.forEach(log => {
+              console.log(`📊 ${operationId}: ${log.message}`);
+            });
+          }
+        },
+      });
+
+      console.log(`✅ Fal.ai API response for ${operationId}:`, JSON.stringify(result, null, 2));
+
+      // Validate the response structure
+      if (!result || !result.data) {
+        throw new Error('Invalid API response: Missing data object');
+      }
+
+      if (!result.data.video || !result.data.video.url) {
+        throw new Error('Invalid API response: Missing video URL');
+      }
+
+      // Download and save the video
+      console.log(`📥 Downloading video from: ${result.data.video.url}`);
+      const resp = await fetch(result.data.video.url);
+      if (!resp.ok) {
+        throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
+      }
+      
+      const videoBuffer = await resp.arrayBuffer();
+      const videosDir = path.join('uploads', 'videos');
+      if (!fs.existsSync(videosDir)) {
+        fs.mkdirSync(videosDir, { recursive: true });
+      }
+      
+      const videoPath = path.join(videosDir, filename);
+      fs.writeFileSync(videoPath, Buffer.from(videoBuffer));
+
+      console.log(`📁 Video saved successfully: ${filename} (${Math.round(videoBuffer.byteLength / 1024 / 1024 * 100) / 100} MB)`);
+
+      //  Update operation status to completed with enhanced metadata
+      let completedData = activeOperations.get(operationId) || {};
+      completedData.status = 'completed';
+      completedData.result = {
+        video_url: `/video/watch/${filename}`,
+        download_url: `/video/download/${filename}`,
+        filename,
+        duration: "8s",
+        file_size: videoBuffer.byteLength,
+        resolution: result.data.video.width && result.data.video.height ? 
+                   `${result.data.video.width}x${result.data.video.height}` : "720p",
+        aspect_ratio: aspectRatio,
+        fal_video_url: result.data.video.url,
+        fal_request_id: result.requestId || null,
+        sourceImageUrl: imageUrl,
+        processedImageUrl: processedImageUrl, //  Now properly scoped
+        generationType: imageUrl ? 'image-to-video' : 'text-to-video',
+        model: endpoint,
+        prompt: prompt,
+        completedAt: new Date().toISOString()
+      };
+      completedData.updatedAt = new Date().toISOString();
+      activeOperations.set(operationId, completedData);
+
+      console.log(`🎉 Video generation completed successfully for ${operationId}`);
+      break; // Success, exit retry loop
+
+    } catch (error) {
+      console.error(`❌ Video generation failed for ${operationId} (attempt ${retryCount + 1}/${maxRetries}):`, error);
+      
+      //  Enhanced error logging
+      if (error.status === 422) {
+        console.error('📋 Validation Error Details:', error.body);
+      }
+
+      retryCount++;
+      if (retryCount >= maxRetries) {
+        let failedData = activeOperations.get(operationId) || {};
+        failedData.status = 'failed';
+        failedData.error = error?.message || 'Video generation failed after maximum retries';
+        failedData.errorDetails = {
+          totalAttempts: retryCount,
+          timestamp: new Date().toISOString(),
+          error_type: error.constructor.name,
+          original_error: error.message,
+          status_code: error.status,
+          response_body: error.body,
+          generationType: imageUrl ? 'image-to-video' : 'text-to-video',
+          endpoint: imageUrl ? 'fal-ai/veo3/fast/image-to-video' : 'fal-ai/veo3/fast'
+        };
+        failedData.updatedAt = new Date().toISOString();
+        activeOperations.set(operationId, failedData);
+        
+        console.error(` Final failure for ${operationId} after ${retryCount} attempts`);
+        break;
+      }
+      
+      // Wait before retry with exponential backoff
+      const waitTime = Math.pow(2, retryCount) * 1000;
+      console.log(` Waiting ${waitTime}ms before retry ${retryCount + 1}/${maxRetries}...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
     }
+  }
+}
 
-    // Download and save the video
-    if (!(result?.data?.video?.url)) {
-      throw new Error('No video URL found in API response');
-    }
-    console.log(`📥 Downloading video from: ${result.data.video.url}`);
-
-    const resp = await fetch(result.data.video.url);
-    if (!resp.ok) throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
-    const videoBuffer = await resp.arrayBuffer();
-
-    const videosDir = path.join('uploads', 'videos');
-    if (!fs.existsSync(videosDir)) fs.mkdirSync(videosDir, { recursive: true });
-    const videoPath = path.join(videosDir, filename);
-    fs.writeFileSync(videoPath, Buffer.from(videoBuffer));
-
-    console.log(`📁 Video saved successfully: ${filename} (${videoBuffer.byteLength} bytes)`);
-
-    const d = activeOperations.get(operationId) || {};
-    d.status = 'completed';
-    d.result = {
-      video_url: `/video/watch/${filename}`,
-      download_url: `/video/download/${filename}`,
-      filename,
-      duration: "8s",
-      file_size: videoBuffer.byteLength,
-      resolution: "720p",
-      aspect_ratio: aspectRatio,
-      fal_video_url: result.data.video.url,
-      fal_request_id: result.requestId || null,
-    };
-    d.updatedAt = new Date().toISOString();
-    activeOperations.set(operationId, d);
-
-  } catch (error) {
-    console.error(`❌ Video generation failed for ${operationId}:`, error);
-
-    const d = activeOperations.get(operationId) || {};
-    d.status = 'failed';
-    d.error = error?.message || 'Video generation failed';
-    d.errorDetails = {
-      code: error?.code || error?.cause?.code || null,
-      name: error?.name || null,
-    };
-    d.updatedAt = new Date().toISOString();
-    activeOperations.set(operationId, d);
+// Helper function to determine image MIME type
+function getImageMimeType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  switch (ext) {
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.png':
+      return 'image/png';
+    case '.gif':
+      return 'image/gif';
+    case '.webp':
+      return 'image/webp';
+    default:
+      return 'image/jpeg'; // Default fallback
   }
 }
 // Check video generation status - THIS WAS MISSING!

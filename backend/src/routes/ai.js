@@ -1054,6 +1054,8 @@ router.post(
     body('chatId').optional().isString(),
     body('aspect_ratio').optional().isIn(['16:9', '9:16', '1:1']).withMessage('Invalid aspect ratio'),
     body('negative_prompt').optional().isString(),
+    body('files').optional().isArray(), 
+    body('image_url').optional().isString(), 
   ],
   authenticateToken,
   async (req, res) => {
@@ -1063,10 +1065,10 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, aspect_ratio = '16:9', negative_prompt } = req.body;
+      const { prompt, chatId, aspect_ratio = '16:9', negative_prompt, files, image_url } = req.body;
       const userId = req.user.id;
 
-      console.log('🎬 Video generation request:', { prompt, aspect_ratio, userId, chatId });
+      console.log('🎬 Video generation request:', { prompt, aspect_ratio, userId, chatId, hasFiles: !!files?.length, hasImageUrl: !!image_url });
 
       // ✅ Check monthly limit
       if (req.user.apiUsage >= req.user.monthlyLimit) {
@@ -1076,22 +1078,48 @@ router.post(
         });
       }
 
+      // ✅ Process attached files (for image-to-video)
+      let processedImageUrl = image_url;
+      console.log('Initial image URL:', processedImageUrl);
+      if (files && files.length > 0 && !processedImageUrl) {
+        try {
+          // Find the first image file
+          const imageFile = await prisma.file.findFirst({
+            where: { 
+              id: { in: files }, 
+              userId,
+              mimeType: { startsWith: 'image/' }
+            }
+          });
+          
+          if (imageFile) {
+            // Construct the full image URL
+            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+            processedImageUrl = `${baseUrl}/uploads/${userId}/${imageFile.filename}`;
+            console.log('🖼️ Using image for video generation:', processedImageUrl);
+          }
+        } catch (fileError) {
+          console.error('Error processing files for video:', fileError);
+        }
+      }
+
       // ✅ Make internal API call to video service using axios
       const axios = require('axios');
 
       try {
         console.log('📡 Calling internal video service...');
 
-        // Make call to the video generation service
-
         const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
         let url = `${baseUrl}/api/video/generate`;
 
-        const videoResponse = await axios.post(url, {
+        const videoPayload = {
           prompt,
           aspect_ratio,
-          negative_prompt
-        }, {
+          negative_prompt,
+          ...(processedImageUrl && { image_url: processedImageUrl }) // ✅ Include image URL if available
+        };
+
+        const videoResponse = await axios.post(url, videoPayload, {
           headers: {
             'Authorization': req.headers.authorization,
             'Content-Type': 'application/json'
@@ -1101,19 +1129,31 @@ router.post(
 
         console.log('✅ Video service response:', videoResponse.data);
 
-        // ✅ Save assistant message with video operation data if chatId provided
+        // ✅ Save user message first if chatId provided
         if (chatId) {
           const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
           if (!chat) {
             return res.status(404).json({ error: 'Chat not found' });
           }
 
+          // Save user message with files if provided
+          await prisma.message.create({
+            data: {
+              chatId,
+              role: 'USER',
+              content: prompt,
+              files: files && files.length > 0 ? JSON.stringify(files.map(fileId => ({ id: fileId, type: 'file' }))) : undefined
+            }
+          });
+
           // Save assistant message with video operation data
           const assistantMessage = await prisma.message.create({
             data: {
               chatId,
               role: 'ASSISTANT',
-              content: `Generating video: "${prompt}"...`,
+              content: processedImageUrl ? 
+                `Generating video from image: "${prompt}"...` : 
+                `Generating video: "${prompt}"...`,
               tokens: 1000, // Fixed token count for video generation
               // Store video data in files field as JSON
               files: JSON.stringify([{
@@ -1122,7 +1162,8 @@ router.post(
                 status: 'processing',
                 filename: videoResponse.data.filename,
                 prompt: prompt,
-                aspect_ratio: aspect_ratio
+                aspect_ratio: aspect_ratio,
+                sourceImageUrl: processedImageUrl 
               }])
             }
           });
@@ -1144,7 +1185,7 @@ router.post(
         // ✅ Track usage
         const tokens = 1000; // Fixed token count for video generation
         await prisma.apiUsage.create({
-          data: { userId, model: 'veo-3.0', tokens, cost: tokens * 0.001 }
+          data: { userId, model: processedImageUrl ? 'veo-3.0-img2vid' : 'veo-3.0', tokens, cost: tokens * 0.001 }
         });
 
         const updatedUser = await prisma.user.update({
@@ -1158,9 +1199,10 @@ router.post(
           operationId: videoResponse.data.operationId,
           filename: videoResponse.data.filename,
           status: 'processing',
-          message: 'Video generation started successfully',
+          message: processedImageUrl ? 'Image-to-video generation started successfully' : 'Video generation started successfully',
           tokens,
-          usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
+          usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit },
+          sourceImageUrl: processedImageUrl
         });
 
       } catch (videoServiceError) {
@@ -1168,8 +1210,6 @@ router.post(
 
         // Handle specific video service errors
         if (videoServiceError.code === 'ECONNREFUSED') {
-          console.log("videoServiceError", videoServiceError);
-
           return res.status(503).json({
             error: 'Video generation service is not available. Please try again later.'
           });
