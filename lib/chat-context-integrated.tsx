@@ -60,10 +60,10 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
-  createNewChat: (type?: 'text' | 'image' | 'video', initialContent?: string) => void
+  createNewChat: (type?: 'text' | 'image' | 'video', initialContent?: string, initialFiles?: string[]) => void
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[]) => Promise<void>
- addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
+  addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => void
   selectedModel: string
@@ -81,8 +81,8 @@ interface ChatContextType {
   updateMessageInChat: (messageId: string, newContent: string) => void
   pollVideoStatus: (operationId: string, messageId: string) => void,
 
-  isStreaming: boolean; 
-  stopStreaming: () => void; 
+  isStreaming: boolean;
+  stopStreaming: () => void;
   pagination: PaginationInfo | null
   isLoadingMore: boolean
   hasMoreChats: boolean
@@ -391,7 +391,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     },
     [currentChat, user, token, selectedModel, uploadedFiles]
   );
-  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' = 'text', initialContent?: string) => {
+  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' = 'text', initialContent?: string, initialFiles?: string[]) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
@@ -417,13 +417,34 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (type === 'image') {
           // For image generation, call the image API directly
           try {
-            const response = await apiClient.generateImage({
+            const userMessage = {
+              id: `msg-user-${Date.now()}`,
+              chatId: newChat.id,
+              role: 'USER' as const,
+              content: initialContent,
+              timestamp: new Date().toISOString(),
+              files: uploadedFiles,
+            };
+
+
+
+            setCurrentChat(prevChat => {
+              if (!prevChat) return prevChat;
+              const updatedMessages = [...(prevChat.messages || []), userMessage];
+              return { ...prevChat, messages: updatedMessages };
+            });
+
+            const imageGenerationPayload = {
               prompt: initialContent,
               chatId: newChat.id,
               provider: selectProvider,
-              model: selectedModel
-            });
-            // Refresh the chat to get the updated messages
+              model: selectedModel,
+            };
+
+            if (initialFiles && initialFiles.length > 0) {
+              (imageGenerationPayload as any).fileId = initialFiles[0];
+            }
+            await apiClient.generateImage(imageGenerationPayload);
             await selectChat(newChat.id);
           } catch (error) {
             console.error('Image generation failed during chat creation:', error);
@@ -431,10 +452,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
         } else if (type === 'video') {
           // For video generation, call addVideoMessage
-         await addVideoMessage(initialContent, [], newChat); 
+          await addVideoMessage(initialContent, [], newChat);
         } else {
           // For text, use regular addMessage
-          await addMessage(initialContent, [], newChat); // Pass newChat as the third parameter
+          await addMessage(initialContent, initialFiles, newChat); // Pass newChat as the third parameter
         }
         return newChat;
       }
@@ -751,180 +772,180 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   };
 
-const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
-  console.log('🔄 Starting polling for:', operationId);
-  
-  const interval = setInterval(async () => {
-    try {
-      const statusResponse = await apiClient.getVideoStatus(operationId);
-      console.log('📊 Video status response:', statusResponse);
+  const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
+    console.log('🔄 Starting polling for:', operationId);
 
-      // Normalize status casing
-      const status = (statusResponse.status || '').toLowerCase();
+    const interval = setInterval(async () => {
+      try {
+        const statusResponse = await apiClient.getVideoStatus(operationId);
+        console.log('📊 Video status response:', statusResponse);
 
-      if (status === 'completed' || status === 'failed') {
-        console.log(' Video processing finished:', status);
+        // Normalize status casing
+        const status = (statusResponse.status || '').toLowerCase();
+
+        if (status === 'completed' || status === 'failed') {
+          console.log(' Video processing finished:', status);
+          clearInterval(interval);
+          setPollingIntervals(prev => {
+            const n = new Map(prev);
+            n.delete(operationId);
+            return n;
+          });
+
+          //  Force refresh chat from DB to get updated message with video file
+          if (currentChat?.id) {
+            console.log('🔄 Refreshing chat to show completed video');
+            await selectChat(currentChat.id);
+          }
+
+          //  Also ensure loading state is turned off
+          setIsLoading(false);
+
+        } else {
+          console.log(' Video still processing:', status);
+          // Optional: show "processing" in UI by updating that one message
+          setCurrentChat(prev => {
+            if (!prev) return prev;
+            const updated = prev.messages.map(m => {
+              if (m.id !== messageId) return m;
+              // Mark as processing if needed
+              return m;
+            });
+            return { ...prev, messages: updated };
+          });
+        }
+      } catch (error) {
+        console.error(' Error polling video status:', error);
         clearInterval(interval);
         setPollingIntervals(prev => {
           const n = new Map(prev);
           n.delete(operationId);
           return n;
         });
-
-        //  Force refresh chat from DB to get updated message with video file
-        if (currentChat?.id) {
-          console.log('🔄 Refreshing chat to show completed video');
-          await selectChat(currentChat.id);
-        }
-
-        //  Also ensure loading state is turned off
         setIsLoading(false);
-        
-      } else {
-        console.log(' Video still processing:', status);
-        // Optional: show "processing" in UI by updating that one message
-        setCurrentChat(prev => {
-          if (!prev) return prev;
-          const updated = prev.messages.map(m => {
-            if (m.id !== messageId) return m;
-            // Mark as processing if needed
-            return m;
-          });
-          return { ...prev, messages: updated };
-        });
       }
-    } catch (error) {
-      console.error(' Error polling video status:', error);
-      clearInterval(interval);
-      setPollingIntervals(prev => {
-        const n = new Map(prev);
-        n.delete(operationId);
-        return n;
-      });
-      setIsLoading(false);
-    }
-  }, 5000); // Reduced polling interval to 5 seconds for faster updates
+    }, 5000); // Reduced polling interval to 5 seconds for faster updates
 
-  setPollingIntervals(prev => {
-    const n = new Map(prev);
-    n.set(operationId, interval);
-    return n;
-  });
-}, [currentChat?.id, selectChat, setCurrentChat]);
+    setPollingIntervals(prev => {
+      const n = new Map(prev);
+      n.set(operationId, interval);
+      return n;
+    });
+  }, [currentChat?.id, selectChat, setCurrentChat]);
 
-const addVideoMessage = useCallback(async (prompt: string, fileIds?: string[], chat?: any) => {
-  const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
-  if (!activeChat || !user) return;
+  const addVideoMessage = useCallback(async (prompt: string, fileIds?: string[], chat?: any) => {
+    const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
+    if (!activeChat || !user) return;
 
-  setIsLoading(true);
-  try {
-    //  Alternative approach: Use uploadedFiles from context if available
-    let imageUrl = null;
+    setIsLoading(true);
+    try {
+      //  Alternative approach: Use uploadedFiles from context if available
+      let imageUrl = null;
 
-    // First try to get image URL from uploadedFiles context
-    if (uploadedFiles && uploadedFiles.length > 0) {
-      const imageFile = uploadedFiles.find(f => f.type?.startsWith('image/'));
-      if (imageFile && imageFile.url) {
-        const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
-        const backendBaseUrl = baseUrl.replace('/api', '');
-        imageUrl = imageFile.url.startsWith('http') ? imageFile.url : `${backendBaseUrl}${imageFile.url}`;
-        console.log(' Using image from uploadedFiles context:', imageUrl);
-      }
-    }
-
-    // Fallback to API call if no image found in context
-    if (!imageUrl && fileIds && fileIds.length > 0) {
-      try {
-        for (const fileId of fileIds) {
-          const fileResponse = await apiClient.getFile(fileId);
-          const file = fileResponse.file;
-          
-          if (file && file.mimeType?.startsWith('image/')) {
-            const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
-            const backendBaseUrl = baseUrl.replace('/api', '');
-            
-            if (file.url) {
-              imageUrl = file.url.startsWith('http') ? file.url : `${backendBaseUrl}${file.url}`;
-            } else if (file.filename && file.userId) {
-              imageUrl = `${backendBaseUrl}/uploads/${file.userId}/${file.filename}`;
-            }
-            
-            console.log('🖼️ Got image URL from API call:', imageUrl);
-            break;
-          }
+      // First try to get image URL from uploadedFiles context
+      if (uploadedFiles && uploadedFiles.length > 0) {
+        const imageFile = uploadedFiles.find(f => f.type?.startsWith('image/'));
+        if (imageFile && imageFile.url) {
+          const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+          const backendBaseUrl = baseUrl.replace('/api', '');
+          imageUrl = imageFile.url.startsWith('http') ? imageFile.url : `${backendBaseUrl}${imageFile.url}`;
+          console.log(' Using image from uploadedFiles context:', imageUrl);
         }
-      } catch (err) {
-        console.error('Error getting file details for video generation:', err);
       }
-    }
 
-    // REMOVE THIS BLOCK - Backend handles user message creation
-    // await apiClient.addMessage(activeChat.id, {
-    //   role: 'USER',
-    //   content: prompt,
-    //   files: fileIds
-    // });
-
-    console.log('🎬 Calling generateVideo with:', {
-      prompt,
-      aspect_ratio: '16:9',
-      chatId: activeChat.id,
-      files: fileIds,
-      image_url: imageUrl
-    });
-
-    // 2) Kick off video generation with files and image URL
-    const videoResponse = await apiClient.generateVideo({
-      prompt,
-      aspect_ratio: '16:9',
-      chatId: activeChat.id,
-      files: fileIds,
-      ...(imageUrl && { image_url: imageUrl })
-    });
-
-    console.log(' Video generation response:', videoResponse);
-
-    //  Refresh chat to get the updated messages from backend
-    await selectChat(activeChat.id);
-
-    const findAssistantByOperation = (chat: any, opId: string) => {
-      if (!chat?.messages) return null;
-      for (const m of chat.messages) {
-        if (m.role !== 'ASSISTANT' || !m.files) continue;
+      // Fallback to API call if no image found in context
+      if (!imageUrl && fileIds && fileIds.length > 0) {
         try {
-          const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
-          if (Array.isArray(files) && files.some((f: any) => f?.type === 'video' && f?.operationId === opId)) {
-            return m;
+          for (const fileId of fileIds) {
+            const fileResponse = await apiClient.getFile(fileId);
+            const file = fileResponse.file;
+
+            if (file && file.mimeType?.startsWith('image/')) {
+              const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+              const backendBaseUrl = baseUrl.replace('/api', '');
+
+              if (file.url) {
+                imageUrl = file.url.startsWith('http') ? file.url : `${backendBaseUrl}${file.url}`;
+              } else if (file.filename && file.userId) {
+                imageUrl = `${backendBaseUrl}/uploads/${file.userId}/${file.filename}`;
+              }
+
+              console.log('🖼️ Got image URL from API call:', imageUrl);
+              break;
+            }
           }
-        } catch {
-          // ignore bad JSON
+        } catch (err) {
+          console.error('Error getting file details for video generation:', err);
         }
       }
-      return null;
-    };
 
-    //  Get the updated chat after refresh
-    const freshChat = await apiClient.getChat(activeChat.id);
-    let targetMessage = findAssistantByOperation(freshChat.chat, videoResponse.operationId);
-    
-    if (!targetMessage) {
-      console.warn('Could not find assistant message for operation:', videoResponse.operationId);
-      // Use operationId as fallback
-      targetMessage = { id: videoResponse.operationId };
+      // REMOVE THIS BLOCK - Backend handles user message creation
+      // await apiClient.addMessage(activeChat.id, {
+      //   role: 'USER',
+      //   content: prompt,
+      //   files: fileIds
+      // });
+
+      console.log('🎬 Calling generateVideo with:', {
+        prompt,
+        aspect_ratio: '16:9',
+        chatId: activeChat.id,
+        files: fileIds,
+        image_url: imageUrl
+      });
+
+      // 2) Kick off video generation with files and image URL
+      const videoResponse = await apiClient.generateVideo({
+        prompt,
+        aspect_ratio: '16:9',
+        chatId: activeChat.id,
+        files: fileIds,
+        ...(imageUrl && { image_url: imageUrl })
+      });
+
+      console.log(' Video generation response:', videoResponse);
+
+      //  Refresh chat to get the updated messages from backend
+      await selectChat(activeChat.id);
+
+      const findAssistantByOperation = (chat: any, opId: string) => {
+        if (!chat?.messages) return null;
+        for (const m of chat.messages) {
+          if (m.role !== 'ASSISTANT' || !m.files) continue;
+          try {
+            const files = typeof m.files === 'string' ? JSON.parse(m.files) : m.files;
+            if (Array.isArray(files) && files.some((f: any) => f?.type === 'video' && f?.operationId === opId)) {
+              return m;
+            }
+          } catch {
+            // ignore bad JSON
+          }
+        }
+        return null;
+      };
+
+      //  Get the updated chat after refresh
+      const freshChat = await apiClient.getChat(activeChat.id);
+      let targetMessage = findAssistantByOperation(freshChat.chat, videoResponse.operationId);
+
+      if (!targetMessage) {
+        console.warn('Could not find assistant message for operation:', videoResponse.operationId);
+        // Use operationId as fallback
+        targetMessage = { id: videoResponse.operationId };
+      }
+
+      const messageId = targetMessage?.id || videoResponse.operationId;
+      console.log('🎯 Starting polling for operation:', videoResponse.operationId, 'message:', messageId);
+      pollVideoStatus(videoResponse.operationId, messageId);
+
+    } catch (error) {
+      console.error("❌ Failed to generate video:", error);
+      throw error;
+    } finally {
+      setIsLoading(false);
+      setUploadedFiles([]); // Clear uploaded files after processing
     }
-
-    const messageId = targetMessage?.id || videoResponse.operationId;
-    console.log('🎯 Starting polling for operation:', videoResponse.operationId, 'message:', messageId);
-    pollVideoStatus(videoResponse.operationId, messageId);
-    
-  } catch (error) {
-    console.error("❌ Failed to generate video:", error);
-    throw error;
-  } finally {
-    setIsLoading(false);
-    setUploadedFiles([]); // Clear uploaded files after processing
-  }
-}, [currentChat, user, token, selectedModel, uploadedFiles, selectChat, pollVideoStatus]);
+  }, [currentChat, user, token, selectedModel, uploadedFiles, selectChat, pollVideoStatus]);
   // ...later...
 
 

@@ -836,7 +836,7 @@ export default function ChatInterface() {
   //   }
   // }, [currentChat]);
   // Replace the commented useEffect and add a new one for chat switching
-    React.useEffect(() => {
+  React.useEffect(() => {
     // Reset generation modes when switching chats
     setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
@@ -866,16 +866,16 @@ export default function ChatInterface() {
   // File upload logic
   const handleAndUploadFiles = async (files: FileList) => {
     if (files.length === 0) return;
-     if (chatType === 'video' || chatType === 'image') {
-    const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
+    if (chatType === 'video' || chatType === 'image') {
+      const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
 
-    if (imageFiles.length === 0) {
-      toast.error("Only image files are allowed in image/video mode.");
-      return;
+      if (imageFiles.length === 0) {
+        toast.error("Only image files are allowed in image/video mode.");
+        return;
+      }
+
+      files = imageFiles as unknown as FileList;
     }
-
-    files = imageFiles as unknown as FileList;
-  }
     setIsUploading(true);
     try {
       const response = await apiClient.uploadFiles(files);
@@ -921,28 +921,35 @@ export default function ChatInterface() {
     setInput("")
 
     try {
-       if (chatType === 'image' || chatType === 'video') {
-      const hasNonImageFiles = uploadedFiles.some(
-        (file) => !file.type?.startsWith('image/')
-      );
+      if (chatType === 'image' || chatType === 'video') {
+        const hasNonImageFiles = uploadedFiles.some(
+          (file) => !file.type?.startsWith('image/')
+        );
 
-      if (hasNonImageFiles) {
-        toast.error("Only image files are allowed in image/video mode.");
-        return; 
+        if (hasNonImageFiles) {
+          toast.error("Only image files are allowed in image/video mode.");
+          return;
+        }
       }
-    }
       if (isWebSearchActive) {
         await handleWebSearch(); // Changed to await
       } else if (isImageGenerationActive) {
         await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
 
+
+
       } else if (isVideoGenerationActive) {
         await handleVideoGeneration(msg);
       } else {
         if (!currentChat) {
-          await createNewChat(chatType, msg)
+          console.log("1s1");
+
+          await createNewChat(chatType, msg, uploadedFiles.map(f => f.id))
         } else if (chatType === 'image') {
+
+
           await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
+
         } else if (chatType === 'video') {
           await handleVideoGeneration(msg)
         } else {
@@ -967,7 +974,8 @@ export default function ChatInterface() {
     try {
       if (!currentChat) {
         // If no chat is active, create a new one with type 'image'
-        const newChat = await createNewChat('image', prompt);
+        const newChat = await createNewChat('image', prompt, files);
+
       } else {
         // If a chat is active, add the user's message optimistically
         const userMessage = {

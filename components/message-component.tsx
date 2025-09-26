@@ -123,13 +123,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         }
     };
     const ShimmerContent = () => {
-    return (
-        <div className="flex items-start gap-2 text-muted-foreground py-2 px-4">
-            <Sparkles className="h-4 w-4 text-primary animate-bounce mt-0.5" />
-            <p className="text-sm font-medium animate-pulse">Thinking...</p>
-        </div>
-    );
-};
+        return (
+            <div className="flex items-start gap-2 text-muted-foreground py-2 px-4">
+                <Sparkles className="h-4 w-4 text-primary animate-bounce mt-0.5" />
+                <p className="text-sm font-medium animate-pulse">Thinking...</p>
+            </div>
+        );
+    };
 
 
     const isAssistant = message.role === "ASSISTANT";
@@ -525,37 +525,46 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             )}
                     </div>
                 )}
-           {parsedFiles && parsedFiles.length > 0 &&message.role === "USER"   && (
- <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
-    {parsedFiles.some((file: any) => file.type?.startsWith('image/')) ? (
-      // Only images, aligned right
-      <div className="flex flex-wrap gap-1 ml-auto">
-        {parsedFiles
-          .filter((file: any) => file.type?.startsWith('image/'))
-          .map((file: any, index: number) => (
-            <img
-              key={index}
-              src={file.url || `${process.env.NEXT_PUBLIC_IMAGE_URL}${file.base64}`}
-              alt={file.name || 'Image'}
-              className="max-w-full h-auto rounded-lg max-h-[350px]  object-cover rounded"
-            />
-          ))}
-      </div>
-    ) : (
-      // Only non-image files, aligned left
-      <div className="flex flex-wrap gap-1">
-        {parsedFiles
-          .filter((file: any) => !file.type?.startsWith('image/'))
-          .map((file: any, index: number) => (
-            <div key={index} className="flex items-center gap-1 px-2 py-1 border rounded">
-              <FileText className="h-4 w-4" />
-              <span className="text-xs">{file.originalName || file.name || 'File'}</span>
-            </div>
-          ))}
-      </div>
-    )}
-  </div>
-)}
+            {parsedFiles && parsedFiles.length > 0 && message.role === "USER" && (
+                <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
+                    {parsedFiles.some((file: any) => file.type?.startsWith('image/')) ? (
+                        // Only images, aligned right
+                        <div className="flex flex-wrap gap-1 ml-auto">
+                            {parsedFiles
+                                .filter((file: any) => file.type?.startsWith("image/"))
+                                .map((file: any, index: number) => {
+                                    let imageUrl = file.url || file.base64;
+
+                                    if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
+                                        imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:3000", "")}`;
+                                    }
+
+                                    return (
+                                        <img
+                                            key={index}
+                                            src={imageUrl}
+                                            alt={file.name || "Image"}
+                                            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover"
+                                        />
+                                    );
+                                })}
+                        </div>
+
+                    ) : (
+                        // Only non-image files, aligned left
+                        <div className="flex flex-wrap gap-1">
+                            {parsedFiles
+                                .filter((file: any) => !file.type?.startsWith('image/'))
+                                .map((file: any, index: number) => (
+                                    <div key={index} className="flex items-center gap-1 px-2 py-1 border rounded">
+                                        <FileText className="h-4 w-4" />
+                                        <span className="text-xs">{file.originalName || file.name || 'File'}</span>
+                                    </div>
+                                ))}
+                        </div>
+                    )}
+                </div>
+            )}
 
         </>
     );
@@ -594,10 +603,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                         <Pencil size={14} />
                                     </Button>
                                 </div>
-                                  <FileDisplay />
-                                  <div className="mt-2" />
+                                <FileDisplay />
+                                <div className="mt-2" />
                                 <MessageContent />
-                              
+
                             </>
                         )}
                     </Card>
@@ -606,7 +615,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 {message.role === 'ASSISTANT' && (
                     <div className="w-full max-w-[90%]">
                         {isThinking ? (
-                            <ShimmerContent />  
+                            <ShimmerContent />
                         ) : (<>
                             <MessageContent />
                             <VideoDisplay />

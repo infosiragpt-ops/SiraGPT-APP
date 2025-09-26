@@ -682,8 +682,8 @@ class ApiClient {
     aspect_ratio?: '16:9' | '9:16' | '1:1';
     negative_prompt?: string;
     chatId?: string;
-    files?: string[]; 
-    image_url?: string; 
+    files?: string[];
+    image_url?: string;
   }) {
     return this.request('/ai/generate-video', {
       method: 'POST',
