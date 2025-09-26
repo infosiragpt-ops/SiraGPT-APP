@@ -704,6 +704,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       //toast.error("Could not save the edited message.");
       // Error ki soorat mein UI ko wapas purani state par le aayein (optional)
+      console.log("error From edit and regenerate message", error);
+
       setIsLoading(false);
       return;
     }

@@ -1501,7 +1501,7 @@ export default function ChatInterface() {
                       message={message}
                       user={user}
                       onRegenerate={regenerateLastMessage}
-                      updateMessageInChat={updateMessageInChat}
+                      updateMessageInChat={editAndRegenerate}
                     />
                   ))}
                 </div>
