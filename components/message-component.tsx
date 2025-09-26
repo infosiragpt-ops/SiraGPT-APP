@@ -123,19 +123,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         }
     };
     const ShimmerContent = () => {
-        return (
-            <div className="animate-pulse">
-                <div className="flex items-center gap-2 mb-3">
-                    <Sparkles className="h-4 w-4 text-muted-foreground" />
-                    <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-1/4"></div>
-                </div>
-                <div className="space-y-2">
-                    <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-full"></div>
-                    <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-5/6"></div>
-                </div>
-            </div>
-        );
-    };
+    return (
+        <div className="flex items-start gap-2 text-muted-foreground py-2 px-4">
+            <Sparkles className="h-4 w-4 text-primary animate-bounce mt-0.5" />
+            <p className="text-sm font-medium animate-pulse">Thinking...</p>
+        </div>
+    );
+};
+
+
     const isAssistant = message.role === "ASSISTANT";
     const isUser = message.role === "USER";
 
@@ -541,7 +537,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
               key={index}
               src={file.url || file.path}
               alt={file.name || 'Image'}
-              className="h-20 w-20 object-cover rounded"
+              className="max-w-full h-auto rounded-lg max-h-[350px]  object-cover rounded"
             />
           ))}
       </div>
@@ -590,16 +586,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             </div>
                         ) : (
                             <>
-                                <div className="absolute top-1 right-1 hidden group-hover:flex items-center gap-1 bg-background/80 backdrop-blur-sm p-1 rounded-md border">
+                                <div className="absolute bottom-1 right-1 hidden group-hover:flex items-center gap-1 bg-background/80 backdrop-blur-sm p-1 rounded-md border">
                                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard.writeText(message.content); toast.success("Copied!"); }} title="Copy">
-                                        <Clipboard size={14} />
+                                        <Copy size={14} />
                                     </Button>
                                     <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsEditing(true)} title="Edit">
                                         <Pencil size={14} />
                                     </Button>
                                 </div>
+                                  <FileDisplay />
+                                  <div className="mt-2" />
                                 <MessageContent />
-                                <FileDisplay />
+                              
                             </>
                         )}
                     </Card>
@@ -608,7 +606,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 {message.role === 'ASSISTANT' && (
                     <div className="w-full max-w-[90%]">
                         {isThinking ? (
-                            <ShimmerContent /> // Agar soch raha hai, to shimmer dikhayein
+                            <ShimmerContent />  
                         ) : (<>
                             <MessageContent />
                             <VideoDisplay />

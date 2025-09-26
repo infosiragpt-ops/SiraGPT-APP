@@ -842,7 +842,7 @@ export default function ChatInterface() {
     setIsImageGenerationActive(false);
     setIsVideoGenerationActive(false);
     setChatType('text'); // Always default to text when switching chats
-  }, [currentChat?.id]); // Only trigger when chat ID changes
+  }, []); // Only trigger when chat ID changes
 
   React.useEffect(() => {
     setShowAudioPanel(false);
@@ -1535,8 +1535,8 @@ export default function ChatInterface() {
                       }}
                       rows={1}
                       disabled={
-                        isLoading ||
-                        isGeneratingImage ||
+                        // isLoading ||
+                        // isGeneratingImage ||
                         isGeneratingVideo ||
                         isUploading ||
                         isWebSearching
