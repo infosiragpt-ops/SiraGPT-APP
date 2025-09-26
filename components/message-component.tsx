@@ -535,7 +535,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
           .map((file: any, index: number) => (
             <img
               key={index}
-              src={file.url || file.path}
+              src={file.url || `${process.env.NEXT_PUBLIC_IMAGE_URL}${file.base64}`}
               alt={file.name || 'Image'}
               className="max-w-full h-auto rounded-lg max-h-[350px]  object-cover rounded"
             />

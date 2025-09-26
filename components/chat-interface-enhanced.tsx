@@ -836,7 +836,7 @@ export default function ChatInterface() {
   //   }
   // }, [currentChat]);
   // Replace the commented useEffect and add a new one for chat switching
-  React.useEffect(() => {
+    React.useEffect(() => {
     // Reset generation modes when switching chats
     setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
@@ -967,20 +967,25 @@ export default function ChatInterface() {
     try {
       if (!currentChat) {
         // If no chat is active, create a new one with type 'image'
-        const newChat = await createNewChat('image', prompt); // Pass true to indicate image generation mode for initial message
-        // if (newChat && newChat.id) {
-        //   // Then call generateImage with the new chat ID
-        //   const response = await apiClient.generateImage({
-        //     prompt,
-        //     chatId: newChat.id,
-        //     provider: selectProvider,
-        //     model: selectedModel
-        //   })
-        //   await selectChat(newChat.id); // Re-select the chat to update messages
-        //   toast.success('Image generated successfully!')
-        // }
+        const newChat = await createNewChat('image', prompt);
       } else {
-        // If a chat is active, just generate image within it\
+        // If a chat is active, add the user's message optimistically
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'USER' as const,
+          content: prompt,
+          timestamp: new Date().toISOString(),
+          files: uploadedFiles,
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
+
+        // Then, generate the image
         const payload = {
           prompt,
           chatId: currentChat?.id,
@@ -988,7 +993,6 @@ export default function ChatInterface() {
           model: selectedModel,
         };
 
-        // ✅ Only add fileId if files[0] exists and is not empty
         if (files && files[0]) {
           (payload as any).fileId = files[0];
         }
@@ -1002,7 +1006,6 @@ export default function ChatInterface() {
       toast.error('Image generation failed. Please try again.')
     } finally {
       setIsGeneratingImage(false)
-      // Don't auto-reset - user must manually remove
     }
   }
 
@@ -1536,7 +1539,6 @@ export default function ChatInterface() {
                       rows={1}
                       disabled={
                         // isLoading ||
-                        // isGeneratingImage ||
                         isGeneratingVideo ||
                         isUploading ||
                         isWebSearching
