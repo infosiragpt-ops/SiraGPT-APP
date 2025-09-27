@@ -102,13 +102,15 @@ class WebSearchServiceImpl {
   async searchStream(
     query: string, 
     chatId: string | undefined,
+    model: string | undefined,
+    provider: string | undefined,
     onData: (content: string) => void,
     onComplete: () => void,
     onError: (error: Error) => void
   ) {
     try {
       await apiClient.webSearchStream(
-        { query, chatId },
+        { query, chatId, model, provider },
         (chunk: any) => {
           if (chunk.type === 'content' || chunk.type === 'start') {
             onData(chunk.content);

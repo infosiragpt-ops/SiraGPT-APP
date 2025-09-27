@@ -618,7 +618,7 @@ class ApiClient {
 
   // Web Search endpoints
   async webSearchStream(
-    data: { query: string; chatId?: string },
+    data: { query: string; chatId?: string; model?: string; provider?: string },
     onData: (chunk: any) => void,
     onComplete: () => void,
     onError: (error: Error) => void

@@ -1110,6 +1110,8 @@ export default function ChatInterface() {
       await webSearchService.searchStream(
         searchQuery,
         activeChatId,
+        selectedModel,
+        selectProvider,
         (content: string) => {
           accumulatedContent += content;
           setCurrentChat(prev => {
