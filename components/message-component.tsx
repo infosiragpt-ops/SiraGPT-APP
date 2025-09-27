@@ -343,16 +343,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         }
 
         return (
-            <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
+            <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
+
+            >
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
                         code: CodeBlock,
-                        p: ({ children }) => <p className="mb-3">{children}</p>,
-                        ul: ({ children }) => <ul className="mb-3 pl-6">{children}</ul>,
-                        ol: ({ children }) => <ol className="mb-3 pl-6">{children}</ol>,
-                        li: ({ children }) => <li className="mb-1">{children}</li>,
+                        p: ({ children }) => <p className="mb-3 text-base">{children}</p>,
+                        ul: ({ children }) => <ul className="mb-3 pl-6 text-base">{children}</ul>,
+                        ol: ({ children }) => <ol className="mb-3 pl-6 text-base">{children}</ol>,
+                        li: ({ children }) => <li className="mb-1 text-base">{children}</li>,
                         h1: ({ children }) => <h1 className="mb-4 text-xl font-bold">{children}</h1>,
                         h2: ({ children }) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
                         h3: ({ children }) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
@@ -362,8 +364,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 {children}
                             </table>
                         </div>,
-                        th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium">{children}</th>,
-                        td: ({ children }) => <td className="border border-muted px-3 py-2">{children}</td>,
+                        th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm">{children}</th>,
+                        td: ({ children }) => <td className="border border-muted px-3 py-2 text-sm">{children}</td>,
                         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
                         em: ({ children }) => <em className="italic">{children}</em>,
                         a: ({ href, children, ...props }) => (
