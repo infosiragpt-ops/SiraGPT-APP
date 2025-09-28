@@ -22,6 +22,13 @@ model User {
   apiUsage     Int      @default(0)
   monthlyCallLimit Int  @default(3)        // NEW: counts number of generate calls / month
   monthlyLimit Int      @default(10000) 
+  
+  // Stripe Integration Fields
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?  @unique
+  subscriptionStatus   String?  // active, inactive, canceled, past_due
+  subscriptionEndDate  DateTime?
+  
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -132,7 +139,14 @@ model Payment {
   status      PaymentStatus @default(PENDING)
   plan        Plan
   provider    PaymentProvider
-  providerId  String?       // External payment ID
+  providerId  String?       // External payment ID (Stripe session ID, PayPal order ID, etc.)
+  
+  // Stripe specific fields
+  stripeSessionId      String?  @unique
+  stripeSubscriptionId String?
+  stripeCustomerId     String?
+  stripePriceId        String?
+  
   metadata    Json?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt

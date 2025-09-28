@@ -339,10 +339,30 @@ class ApiClient {
   }
 
   // Payment endpoints
-  async createStripePayment(data: { plan: string; priceId: string }) {
+  async createStripePayment(data: { plan: string }) {
     return this.request('/payments/stripe', {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  async verifyPaymentSession(sessionId: string) {
+    return this.request(`/payments/verify-session?session_id=${sessionId}`);
+  }
+
+  async getSubscriptionInfo() {
+    return this.request('/payments/subscription');
+  }
+
+  async cancelSubscription() {
+    return this.request('/payments/subscription/cancel', {
+      method: 'POST',
+    });
+  }
+
+  async reactivateSubscription() {
+    return this.request('/payments/subscription/reactivate', {
+      method: 'POST',
     });
   }
 

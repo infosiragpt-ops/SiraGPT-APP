@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useState, useEffect } from "react"
 import { MessageSquare, Globe, ImageIcon, Mic, Video, Crown } from "lucide-react"
 import {
   Dialog,
@@ -48,11 +49,16 @@ function FeatureRow({ icon, title, desc, included = true }: { icon: React.ReactN
 export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, isSubscribing }: UpgradeModalProps) {
   const [loadingPlan, setLoadingPlan] = React.useState<Plan | null>(null)
 
-  // Use auth context update helper
-  const { updateUser } = useAuth()
-
-  const currentPlan = user?.plan || "FREE"
-  const apiUsage = user?.apiUsage ?? 0
+  // Use auth context directly for the most up-to-date user data
+  const { user: authUser, updateUser } = useAuth()
+  
+  // Use auth context user if available, fallback to prop user
+  const currentUser = authUser || user
+  const currentPlan = currentUser?.plan || "FREE"
+  const apiUsage = currentUser?.apiUsage ?? 0
+  const monthlyLimit = currentUser?.monthlyLimit ?? 0
+  const monthlyCallLimit = currentUser?.monthlyCallLimit ?? 0
+  const remainingCalls = monthlyLimit - monthlyCallLimit
 
   const planMeta: Record<Exclude<Plan, "FREE">, { price: number; creditsLabel: string; monthlyLimit: number }> = {
     BASIC: { price: 5, creditsLabel: "10,000 / month", monthlyLimit: 10000 },
@@ -63,59 +69,31 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   const subscribe = async (plan: Exclude<Plan, "FREE">) => {
     try {
       setLoadingPlan(plan)
+      
       if (onSubscribe) {
         await onSubscribe(plan)
       } else {
-        // Default behaviour: attempt server call, fallback to local update
-        const add = planMeta[plan].monthlyLimit || 0
-
-        if (!user) {
+        if (!currentUser) {
           toast.error("Please sign in to subscribe")
           return
         }
 
-        const payload = {
-          plan,
-          monthlyLimit: planMeta[plan].monthlyLimit,
-          price: planMeta[plan].price,
-        }
-
-        let serverUpdatedUser: any = null
+        // Create Stripe checkout session
         try {
-          const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null
-          const res = await fetch(`${apiClient.apiBaseURL}/payments/instant`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            credentials: 'include',
-            body: JSON.stringify(payload),
-          })
-
-          if (res.ok) {
-            const body = await res.json().catch(() => ({}))
-            serverUpdatedUser = body?.user ?? null
+          const response = await apiClient.createStripePayment({ plan })
+          
+          if (response.url) {
+            // Redirect to Stripe Checkout
+            window.location.href = response.url
+            return // Don't close modal or update state since we're redirecting
           } else {
-            const errBody = await res.json().catch(() => ({}))
-            console.warn("payments/instant returned non-OK:", errBody)
+            throw new Error('No checkout URL received')
           }
-        } catch (err) {
-          console.warn("payments/instant call failed (network or CORS):", err)
-        }
-
-        if (serverUpdatedUser) {
-          updateUser(serverUpdatedUser)
-        } else {
-          updateUser({
-            plan,
-            monthlyLimit: (user?.monthlyLimit ?? 0) + add,
-          })
+        } catch (error: any) {
+          console.error("Stripe checkout error:", error)
+          
         }
       }
-
-      toast.success("Subscription applied")
-      onOpenChange(false)
     } catch (err: any) {
       console.error("subscribe error", err)
       toast.error(err?.message || "Subscription failed")
@@ -135,16 +113,16 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
           {/* Top summary row */}
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-4">
-              {user ? (
+              {currentUser ? (
                 <div className="text-sm">
-                  <div className="font-medium">{user?.name || "User"}</div>
-                  <div className="text-xs text-muted-foreground">{user?.email || ""}</div>
+                  <div className="font-medium">{currentUser?.name || "User"}</div>
+                  <div className="text-xs text-muted-foreground">{currentUser?.email || ""}</div>
                 </div>
               ) : (
                 <div className="text-sm text-muted-foreground">
                   <div className="flex items-center gap-2">
                     <div>Not signed in</div>
-                    <Button size="xs" variant="ghost" onClick={() => (window.location.href = "/auth/login")}>Sign in</Button>
+                    <Button size="sm" variant="ghost" onClick={() => (window.location.href = "/auth/login")}>Sign in</Button>
                   </div>
                 </div>
               )}

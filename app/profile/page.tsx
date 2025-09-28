@@ -9,8 +9,11 @@ import { Label } from "@/components/ui/label"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { ArrowLeft, Camera, CreditCard, Shield } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ArrowLeft, Camera, CreditCard, Shield, User, Settings } from "lucide-react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
+import SubscriptionManager from "@/components/subscription-manager"
 
 export default function ProfilePage() {
   return (
@@ -22,12 +25,14 @@ export default function ProfilePage() {
 
 function ProfileContent() {
   const { user } = useAuth()
+  const searchParams = useSearchParams()
+  const defaultTab = searchParams.get('tab') || 'profile'
 
   if (!user) return null
 
   return (
     <div className="min-h-screen bg-background p-4">
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center gap-4">
           <Link href="/chat">
@@ -37,14 +42,31 @@ function ProfileContent() {
             </Button>
           </Link>
           <div>
-            <h1 className="text-2xl font-bold">Profile Settings</h1>
-            <p className="text-muted-foreground">Manage your account settings and preferences</p>
+            <h1 className="text-2xl font-bold">Account Settings</h1>
+            <p className="text-muted-foreground">Manage your profile, subscription, and preferences</p>
           </div>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-3">
-          {/* Profile Info */}
-          <div className="md:col-span-2 space-y-6">
+        <Tabs defaultValue={defaultTab} className="space-y-6">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="profile" className="flex items-center gap-2">
+              <User className="h-4 w-4" />
+              Profile
+            </TabsTrigger>
+            <TabsTrigger value="subscription" className="flex items-center gap-2">
+              <CreditCard className="h-4 w-4" />
+              Subscription
+            </TabsTrigger>
+            {/* <TabsTrigger value="security" className="flex items-center gap-2">
+              <Shield className="h-4 w-4" />
+              Security
+            </TabsTrigger> */}
+          </TabsList>
+
+          <TabsContent value="profile" className="space-y-6">
+            <div className="grid gap-6 lg:grid-cols-3">
+              {/* Profile Info */}
+              <div className="lg:col-span-2 space-y-6">
             <Card>
               <CardHeader>
                 <CardTitle>Personal Information</CardTitle>
@@ -177,21 +199,68 @@ function ProfileContent() {
                 <div className="space-y-2">
                   <div className="flex justify-between">
                     <span className="text-sm">Messages this month</span>
-                    <span className="text-sm font-medium">1,247</span>
+                    <span className="text-sm font-medium">{user.monthlyLimit - (user.monthlyCallLimit || 0)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm">API calls</span>
-                    <span className="text-sm font-medium">3,891</span>
+                    <span className="text-sm">API calls remaining</span>
+                    <span className="text-sm font-medium">{user.monthlyCallLimit || 0}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm">Storage used</span>
-                    <span className="text-sm font-medium">2.4 GB</span>
+                    <span className="text-sm">Current plan</span>
+                    <span className="text-sm font-medium">{user.plan}</span>
                   </div>
                 </div>
               </CardContent>
             </Card>
           </div>
         </div>
+      </TabsContent>
+
+      <TabsContent value="subscription" className="space-y-6">
+        <SubscriptionManager />
+      </TabsContent>
+
+      <TabsContent value="security" className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Security Settings</CardTitle>
+            <CardDescription>Manage your account security and privacy</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="current-password">Current Password</Label>
+              <Input id="current-password" type="password" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-password">New Password</Label>
+              <Input id="new-password" type="password" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="confirm-password">Confirm New Password</Label>
+              <Input id="confirm-password" type="password" />
+            </div>
+            <Button>Update Password</Button>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader>
+            <CardTitle>Two-Factor Authentication</CardTitle>
+            <CardDescription>Add an extra layer of security to your account</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">2FA Status</p>
+                <p className="text-sm text-muted-foreground">Not enabled</p>
+              </div>
+              <Button variant="outline">Enable 2FA</Button>
+            </div>
+          </CardContent>
+        </Card>
+      </TabsContent>
+
+    </Tabs>
       </div>
     </div>
   )

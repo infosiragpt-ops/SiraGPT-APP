@@ -29,7 +29,7 @@ interface AuthContextType {
    * Patch the current user locally. Useful for UI-only updates (e.g. a local fallback when
    * backend subscription endpoint is not yet implemented).
    */
-  updateUser: (update: Partial<User>) => void
+  refreshUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -136,16 +136,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  // New helper: locally patch the user object
-  const updateUser = (update: Partial<User>) => {
-    setUser((prev) => {
-      if (!prev) return prev
-      return { ...prev, ...update }
-    })
-  }
+const refreshUser = async () => {
+    try {
+      const latestUser = await apiClient.getCurrentUser(); // /auth/me
+      console.log("Refreshing user in AuthContext:", latestUser);
+      setUser(latestUser.user);
+    } catch (error) {
+      console.error("Failed to refresh user:", error);
+    }
+  };
+  useEffect(() => {
+      refreshUser();
+
+  }, [setUser]);
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, isLoading, token, loginWithToken, updateUser }}>
+    <AuthContext.Provider value={{ user, login, register, logout, isLoading, token, loginWithToken, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )
