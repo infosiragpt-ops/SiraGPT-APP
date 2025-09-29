@@ -309,18 +309,57 @@ function isValidAcademicQuery(query) {
 }
 
 /**
+ * Clean and extract the core academic query from user input
+ * Removes emojis, date ranges, instructions, and other noise
+ */
+function cleanAcademicQuery(query) {
+  let cleaned = query;
+  
+  // Remove emojis and special symbols
+  cleaned = cleaned.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '');
+  
+  // Remove common search instructions (case insensitive)
+  const instructionPatterns = [
+    /find\s+me\s+\d+\s+(scientific\s+)?(articles?|papers?|studies)/gi,
+    /show\s+me\s+\d+\s+(scientific\s+)?(articles?|papers?|studies)/gi,
+    /give\s+me\s+\d+\s+(scientific\s+)?(articles?|papers?|studies)/gi,
+    /search\s+for\s+\d+\s+(scientific\s+)?(articles?|papers?|studies)/gi,
+    /from\s+\d{4}\s+to\s+\d{4}/gi,
+    /between\s+\d{4}\s+and\s+\d{4}/gi,
+    /in\s+\d{4}(-\d{4})?/gi,
+    /published\s+in\s+\d{4}/gi,
+  ];
+  
+  instructionPatterns.forEach(pattern => {
+    cleaned = cleaned.replace(pattern, '');
+  });
+  
+  // Remove stray parentheses, brackets without content
+  cleaned = cleaned.replace(/[()[\]{}]/g, ' ');
+  
+  // Remove extra whitespace and trim
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  
+  console.log(`🧹 Query cleaned: "${query}" → "${cleaned}"`);
+  return cleaned;
+}
+
+/**
  * Filter out low-quality results
  */
 function filterQualityResults(results, query) {
   return results.filter(result => {
+    // Ensure title is a string
+    const title = typeof result.title === 'string' ? result.title : String(result.title || '');
+    
     // Filter out results with default/placeholder values
-    if (result.title.includes('Untitled') ||
-      result.title === 'Article Title' ||
-      result.title === 'Research Article' ||
+    if (title.includes('Untitled') ||
+      title === 'Article Title' ||
+      title === 'Research Article' ||
       result.authors === 'Unknown authors' ||
       result.journal === 'Unknown Journal' ||
       result.journal === 'SciELO Journal' ||
-      result.title.length < 10) {
+      title.length < 10) {
       return false;
     }
 
@@ -339,57 +378,217 @@ function filterQualityResults(results, query) {
 }
 
 /**
- * Enhanced PubMed Search with quality filtering
+ * Enhanced arXiv Search with comprehensive metadata
  */
-async function searchPubMed(query, maxResults = 15) {
+async function searchArXiv(query, maxResults = 30) {
   try {
-    // Step 1: Search for PMC IDs
-    const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pmc&term=${encodeURIComponent(query)}&retmax=${maxResults}&retmode=json`;
+    console.log(`📚 arXiv: Searching for "${query}" (max: ${maxResults})`);
+    const base = 'http://export.arxiv.org/api/query';
+    const params = new URLSearchParams({
+      search_query: `all:${query}`,
+      start: '0',
+      max_results: String(maxResults),
+      sortBy: 'relevance',
+      sortOrder: 'descending',
+    });
+
+    const url = `${base}?${params.toString()}`;
+    console.log(`📚 arXiv: Request URL: ${url}`);
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'OpenWebUI/1.0 (arXiv Search)'
+      }
+    });
+    
+    if (!res.ok) {
+      console.error(`arXiv API error: ${res.status} ${res.statusText}`);
+      return [];
+    }
+
+    const xml = await res.text();
+    const parsed = await xml2js.parseStringPromise(xml, { explicitArray: true, mergeAttrs: true });
+    const entries = parsed?.feed?.entry || [];
+    console.log(`📚 arXiv: Found ${entries.length} raw entries`);
+
+    const results = entries.map((e) => {
+      const title = (e.title?.[0] || '').replace(/\s+/g, ' ').trim();
+      const summary = (e.summary?.[0] || '').replace(/\s+/g, ' ').trim();
+      const published = e.published?.[0] || null;
+      const updated = e.updated?.[0] || null;
+      const year = published ? new Date(published).getFullYear() : null;
+      
+      // Get all authors (not limited to 5)
+      const authors = (e.author || [])
+        .map((a) => a?.name?.[0])
+        .filter(Boolean);
+      const authorsDisplay = authors.slice(0, 5).join(', ') + (authors.length > 5 ? ` et al. (${authors.length} total)` : '');
+      
+      // Get links
+      const links = (e.link || []);
+      const pdfLink = links.find(l => l.rel?.[0] === 'related' && /pdf/.test(l.title?.[0] || ''))?.href?.[0]
+        || links.find(l => l.type?.[0] === 'application/pdf')?.href?.[0];
+      const altLink = links.find(l => l.rel?.[0] === 'alternate')?.href?.[0];
+      const url = pdfLink || altLink || null;
+      
+      // Get categories
+      const categories = (e.category || []).map(c => c.term?.[0]).filter(Boolean);
+      const primaryCategory = e['arxiv:primary_category']?.[0]?.term?.[0] || categories[0] || '';
+      const categoriesDisplay = categories.slice(0, 3).join(', ') + (categories.length > 3 ? '...' : '');
+      
+      // Get arXiv ID for citation count lookup
+      const arxivId = e.id?.[0]?.split('/abs/')?.[1] || '';
+      
+      // Validate essential fields
+      if (!title || title.length < 10 || !url) {
+        return null;
+      }
+
+      // Create comprehensive snippet with all metadata - FULL ABSTRACT
+      const snippet = `📝 **Abstract:** ${summary}\n\n` +
+        `👥 **Authors:** ${authorsDisplay}\n` +
+        `🏷️ **Categories:** ${categoriesDisplay}\n` +
+        `📅 **Published:** ${published ? new Date(published).toLocaleDateString() : 'N/A'}\n` +
+        `🔄 **Updated:** ${updated ? new Date(updated).toLocaleDateString() : 'N/A'}\n` +
+        `🆔 **arXiv ID:** ${arxivId}\n` +
+        `📄 **PDF:** [Download](${pdfLink || url})`;
+
+      return {
+        title,
+        url,
+        snippet,
+        displayLink: 'arxiv.org',
+        authors: authorsDisplay,
+        journal: 'arXiv',
+        year: year ? String(year) : 'N/A',
+        doi: null,
+        type: 'preprint',
+        abstract: summary,
+        categories: categoriesDisplay,
+        primaryCategory,
+        arxivId,
+        pdfUrl: pdfLink,
+        publishedDate: published,
+        updatedDate: updated,
+        database: 'arXiv'
+      };
+    }).filter(Boolean);
+
+    console.log(`📚 arXiv: Mapped ${results.length} valid results (after null filter)`);
+    const filtered = filterQualityResults(results, query);
+    console.log(`📚 arXiv: Returning ${filtered.length} quality results`);
+    return filtered;
+  } catch (err) {
+    console.error('arXiv error:', err);
+    return [];
+  }
+}
+
+/**
+ * Enhanced PubMed Search with comprehensive metadata and abstracts
+ */
+async function searchPubMed(query, maxResults = 30) {
+  try {
+    // Step 1: Search for PubMed IDs
+    const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmax=${maxResults}&retmode=json&sort=relevance`;
     const searchRes = await fetch(searchUrl);
     const searchData = await searchRes.json();
 
     if (!searchData.esearchresult?.idlist?.length) return [];
 
-    // Step 2: Get detailed information for each article
+    // Step 2: Get detailed information including abstracts
     const ids = searchData.esearchresult.idlist.slice(0, maxResults);
-    const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pmc&id=${ids.join(',')}&retmode=json`;
+    const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${ids.join(',')}&retmode=xml`;
     const summaryRes = await fetch(summaryUrl);
-    const summaryData = await summaryRes.json();
+    const xmlData = await summaryRes.text();
+    
+    // Parse XML response
+    const parsed = await xml2js.parseStringPromise(xmlData, { explicitArray: true, mergeAttrs: true });
+    const articles = parsed?.PubmedArticleSet?.PubmedArticle || [];
 
-    const results = ids.map(id => {
-      const article = summaryData.result?.[id];
-      if (!article || !article.title) {
-        return null; // Skip articles without proper data
-      }
+    const results = articles.map(article => {
+      const medlineCitation = article?.MedlineCitation?.[0];
+      const pubmedData = article?.PubmedData?.[0];
+      
+      if (!medlineCitation) return null;
+
+      const articleData = medlineCitation?.Article?.[0];
+      if (!articleData) return null;
+
+      // Extract title - ensure it's a string
+      const rawTitle = articleData?.ArticleTitle?.[0];
+      const title = typeof rawTitle === 'string' ? rawTitle : (rawTitle?._ || String(rawTitle || ''));
+      if (!title || title.length < 10) return null;
+
+      // Extract abstract
+      const abstractObj = articleData?.Abstract?.[0];
+      const abstractTexts = abstractObj?.AbstractText || [];
+      const abstract = abstractTexts.map(a => {
+        if (typeof a === 'string') return a;
+        if (a._) return `${a.Label ? a.Label + ': ' : ''}${a._}`;
+        return '';
+      }).filter(Boolean).join('\n');
 
       // Extract authors
-      const authors = article.authors?.map(a => a.name).join(', ') ||
-        article.authorlist?.split(',').slice(0, 3).join(', ');
+      const authorList = articleData?.AuthorList?.[0]?.Author || [];
+      const authors = authorList
+        .map(a => {
+          const lastName = a?.LastName?.[0] || '';
+          const foreName = a?.ForeName?.[0] || '';
+          return foreName && lastName ? `${foreName} ${lastName}` : (lastName || '');
+        })
+        .filter(Boolean);
+      const authorsDisplay = authors.slice(0, 5).join(', ') + (authors.length > 5 ? ` et al. (${authors.length} total)` : '');
 
+      // Extract journal information
+      const journal = articleData?.Journal?.[0];
+      const journalTitle = journal?.Title?.[0] || journal?.ISOAbbreviation?.[0] || 'PubMed';
+      
       // Extract publication date
-      const pubDate = article.pubdate || article.epubdate || article.printpubdate || "";
-      const year = pubDate ? new Date(pubDate).getFullYear() : null;
+      const pubDate = journal?.JournalIssue?.[0]?.PubDate?.[0];
+      const year = pubDate?.Year?.[0] || null;
+      const month = pubDate?.Month?.[0] || '';
+      const day = pubDate?.Day?.[0] || '';
+      
+      // Extract PMID and DOI
+      const pmid = medlineCitation?.PMID?.[0]?._ || medlineCitation?.PMID?.[0] || '';
+      const articleIds = pubmedData?.ArticleIdList?.[0]?.ArticleId || [];
+      const doi = articleIds.find(id => id.IdType === 'doi')?._  || null;
+      
+      // Extract MeSH terms
+      const meshTerms = medlineCitation?.MeshHeadingList?.[0]?.MeshHeading || [];
+      const keywords = meshTerms
+        .map(m => m?.DescriptorName?.[0]?._ || m?.DescriptorName?.[0])
+        .filter(Boolean)
+        .slice(0, 5);
 
-      // Only include if we have meaningful data
-      if (!article.title || article.title.length < 10 || !authors) {
-        return null;
-      }
+      // Build URL
+      const url = doi ? `https://doi.org/${doi}` : `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`;
 
-      const doi = article.articleids?.find(id => id.idtype === 'doi')?.value;
-      const url = doi ? `https://doi.org/${doi}` : `https://www.ncbi.nlm.nih.gov/pmc/articles/PMC${id}/`;
+      // Create comprehensive snippet - FULL ABSTRACT
+      const snippet = `📝 **Abstract:** ${abstract || 'No abstract available'}\n\n` +
+        `👥 **Authors:** ${authorsDisplay || 'Unknown authors'}\n` +
+        `📚 **Journal:** ${journalTitle}\n` +
+        `📅 **Published:** ${year || 'N/A'}${month ? ` ${month}` : ''}${day ? ` ${day}` : ''}\n` +
+        `🆔 **PMID:** ${pmid}\n` +
+        (doi ? `� **DOI:** ${doi}\n` : '') +
+        (keywords.length ? `🏷️ **Keywords:** ${keywords.join(', ')}` : '');
 
       return {
-        title: article.title,
-        url: url,
-        snippet: `${article.title}\n👤 ${authors}\n📚 ${article.fulljournalname || article.source || 'PubMed Central'}\n📅 ${year || 'N/A'}`,
+        title,
+        url,
+        snippet,
         displayLink: "ncbi.nlm.nih.gov",
-        authors: authors,
-        journal: article.fulljournalname || article.source || "PubMed Central",
+        authors: authorsDisplay,
+        journal: journalTitle,
         year: year ? year.toString() : "N/A",
-        doi: article.articleids?.find(id => id.idtype === 'doi')?.value || null,
-        type: "research_article"
+        doi,
+        pmid,
+        abstract,
+        keywords,
+        type: "research_article",
+        database: "PubMed"
       };
-    }).filter(Boolean); // Remove null entries
+    }).filter(Boolean);
 
     return filterQualityResults(results, query);
   } catch (err) {
@@ -399,9 +598,9 @@ async function searchPubMed(query, maxResults = 15) {
 }
 
 /**
- * Enhanced Scopus Search with quality filtering
+ * Enhanced Scopus Search with quality filtering and comprehensive metadata
  */
-async function searchScopus(query, maxResults = 15) {
+async function searchScopus(query, maxResults = 30) {
   try {
     if (!process.env.SCOPUS_API_KEY) {
       console.log("Scopus API key not configured, skipping Scopus search");
@@ -409,7 +608,7 @@ async function searchScopus(query, maxResults = 15) {
     }
 
     const searchQuery = `TITLE-ABS-KEY(${query})`;
-    const url = `https://api.elsevier.com/content/search/scopus?query=${encodeURIComponent(searchQuery)}&count=${maxResults}&field=title,creator,prism:publicationName,prism:coverDate,prism:doi,dc:description,citedby-count,prism:aggregationType`;
+    const url = `https://api.elsevier.com/content/search/scopus?query=${encodeURIComponent(searchQuery)}&count=${maxResults}&field=title,creator,prism:publicationName,prism:coverDate,prism:doi,dc:description,citedby-count,prism:aggregationType,affiliation,authkeywords`;
 
     const res = await fetch(url, {
       headers: {
@@ -474,7 +673,16 @@ async function searchScopus(query, maxResults = 15) {
 
       // Enhanced snippet with metadata
       const description = item["dc:description"] || title;
-      const snippet = `${description}\n👤 Authors: ${authors}\n📚 Journal: ${journal || 'Scopus Journal'}\n📅 Year: ${year || 'N/A'}\n📊 Citations: ${citations}\n📄 Type: ${docType}`;
+      const authorKeywords = item["authkeywords"] || '';
+      
+      const snippet = `📝 **Abstract:** ${description || title}\n\n` +
+        `� **Authors:** ${authors}\n` +
+        `📚 **Journal:** ${journal || 'Scopus Journal'}\n` +
+        `📅 **Year:** ${year || 'N/A'}\n` +
+        `📊 **Citations:** ${citations}\n` +
+        `📄 **Type:** ${docType}\n` +
+        (doi ? `🔗 **DOI:** ${doi}\n` : '') +
+        (authorKeywords ? `🏷️ **Keywords:** ${authorKeywords}` : '');
 
       return {
         title,
@@ -499,9 +707,9 @@ async function searchScopus(query, maxResults = 15) {
 }
 
 /**
- * Enhanced Web of Science Search with quality filtering
+ * Enhanced Web of Science Search with quality filtering and comprehensive metadata
  */
-async function searchWebOfScience(query, maxResults = 15) {
+async function searchWebOfScience(query, maxResults = 30) {
   try {
     if (!process.env.WOS_API_KEY) {
       console.log("Web of Science API key not configured, skipping WoS search");
@@ -749,6 +957,75 @@ async function searchOpenAIWeb(query) {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
+    console.log('🤖 OpenAI: Searching for comprehensive information...');
+
+    // Enhanced prompt for academic-style comprehensive response
+    const prompt = `You are a research assistant providing comprehensive information about: "${query}"
+
+Please provide:
+1. A detailed summary of current research and knowledge on this topic
+2. Key findings and important points
+3. Relevant statistics or data if applicable
+4. Recent developments or trends (as of 2025)
+5. Notable researchers or institutions working in this area
+
+Format your response as a comprehensive academic summary with rich detail.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: "You are an expert research assistant providing comprehensive, detailed academic summaries with rich information and context." },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: 1500,
+      temperature: 0.7,
+    });
+
+    const content = completion.choices[0]?.message?.content;
+
+    if (content) {
+      // Format with rich metadata like other sources
+      const currentDate = new Date();
+      const snippet = `🤖 **AI-Generated Research Summary:**\n\n${content}\n\n` +
+        `📊 **Source:** OpenAI GPT-4o Knowledge Base\n` +
+        `📅 **Generated:** ${currentDate.toLocaleDateString()} at ${currentDate.toLocaleTimeString()}\n` +
+        `🔍 **Query:** ${query}\n` +
+        `⚡ **Model:** GPT-4o (OpenAI)\n` +
+        `📚 **Type:** Comprehensive AI Research Summary`;
+
+      console.log(`🤖 OpenAI: Generated comprehensive summary (${content.length} characters)`);
+
+      return [{
+        title: `AI Research Summary: ${query}`,
+        url: `https://openai.com/gpt-4`,
+        snippet: snippet,
+        displayLink: "openai.com",
+        authors: "OpenAI GPT-4o",
+        journal: "AI Knowledge Base",
+        year: currentDate.getFullYear().toString(),
+        type: "ai_research_summary",
+        database: "OpenAI"
+      }];
+    }
+    return [];
+  } catch (err) {
+    console.error("OpenAI Web Search error:", err);
+    return [];
+  }
+}
+
+/* ORIGINAL CODE - DISABLED UNTIL API SUPPORTS web_search_preview
+async function searchOpenAIWebOriginal(query) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      console.log("OpenAI API key not configured, skipping OpenAI Web Search");
+      return [];
+    }
+
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+
     console.log('Searching OpenAI for web results...');
 
     // Prompt the GPT-4o model to act as a web search engine and summarize
@@ -758,27 +1035,21 @@ async function searchOpenAIWeb(query) {
       model: "gpt-4o",
       messages: [
         { role: "system", content: "You are a helpful assistant that provides web search results." },
-
         { role: "user", content: prompt },
       ],
       tools: [{ type: "web_search_preview" }],
-      // stream: true,
-
-      // We are relying on the model's internal capabilities, not an explicit 'web_search' tool type here.
-      // If you had a custom tool, it would be defined in 'tools' and you'd handle 'tool_calls'.
     });
 
     const content = completion.choices[0]?.message?.content;
     console.log(completion.choices[0]?.message);
 
     if (content) {
-      // Format the content as a single search result to match other sources
       return [{
         title: `OpenAI Summary for "${query}"`,
-        url: `https://openai.com/chat-gpt`, // Placeholder URL, as OpenAI does not provide a direct source link for its internal browsing summary.
+        url: `https://openai.com/chat-gpt`,
         snippet: content,
         displayLink: "openai.com",
-        authors: "OpenAI", // Attributing the summary to OpenAI
+        authors: "OpenAI",
         journal: "AI Web Search",
         year: new Date().getFullYear().toString(),
         type: "ai_summary",
@@ -791,6 +1062,7 @@ async function searchOpenAIWeb(query) {
     return [];
   }
 }
+*/
 
 /**
  * Enhanced academic search route with query validation and quality filtering
@@ -998,8 +1270,13 @@ router.post(
       const { query, chatId } = req.body;
       const userId = req.user.id;
 
-      // Validate query quality
-      if (!isValidAcademicQuery(query)) {
+      // Clean the query to extract core academic topic
+      const cleanedQuery = cleanAcademicQuery(query);
+      console.log(`🔍 Original query: "${query}"`);
+      console.log(`🔍 Cleaned query: "${cleanedQuery}"`);
+
+      // Validate cleaned query quality
+      if (!isValidAcademicQuery(cleanedQuery)) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
@@ -1040,23 +1317,30 @@ router.post(
 
       res.write(`data: ${JSON.stringify({ type: 'start', content: '🔍 Searching academic databases...\n\n' })}\n\n`);
 
-      // MODIFIED: Use a dynamic task list for promises
+      // Debug: Log the query being searched
+      console.log(`🔍 Starting search for query: "${cleanedQuery}"`);
+
+      // MODIFIED: Use a dynamic task list for promises (use cleaned query)
       const searchTasks = [];
-      searchTasks.push({ name: 'PubMed Central', promise: searchPubMed(query) });
-      searchTasks.push({ name: 'Scopus', promise: searchScopus(query) });
-      // searchTasks.push({ name: 'SciELO', promise: searchSciELO(query) });
+      searchTasks.push({ name: 'arXiv', promise: searchArXiv(cleanedQuery) });
+      searchTasks.push({ name: 'PubMed', promise: searchPubMed(cleanedQuery) });
+      searchTasks.push({ name: 'Scopus', promise: searchScopus(cleanedQuery) });
+      // searchTasks.push({ name: 'SciELO', promise: searchSciELO(cleanedQuery) });
       if (process.env.WOS_API_KEY) {
-        searchTasks.push({ name: 'Web of Science', promise: searchWebOfScience(query) });
+        searchTasks.push({ name: 'Web of Science', promise: searchWebOfScience(cleanedQuery) });
       }
       // NEW: Add OpenAI Web Search to the tasks
       if (process.env.OPENAI_API_KEY) {
-        searchTasks.push({ name: 'OpenAI Web Search', promise: searchOpenAIWeb(query) });
+        searchTasks.push({ name: 'OpenAI Web Search', promise: searchOpenAIWeb(cleanedQuery) });
       }
 
 
       // Stream progress updates for each search source
-      res.write(`data: ${JSON.stringify({ type: 'content', content: '📚 Searching PubMed Central...\n' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'content', content: '� Searching arXiv preprints...\n' })}\n\n`);
       await new Promise(resolve => setTimeout(resolve, 100)); // Shorter delay for smoother streaming
+
+      res.write(`data: ${JSON.stringify({ type: 'content', content: '📚 Searching PubMed...\n' })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       res.write(`data: ${JSON.stringify({ type: 'content', content: '🔬 Searching Scopus...\n' })}\n\n`);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -1110,12 +1394,12 @@ router.post(
           content: "⚠️ **No Relevant Academic Results Found**\n\nWe searched across academic databases but couldn't find articles matching your query. This could happen because:\n\n• **Query too specific**: Try broader terms\n• **Spelling issues**: Check scientific terminology\n• **New research area**: Topic might be too recent\n• **Database coverage**: Some fields may not be well-represented\n\n**Suggestions:**\n• Try different keywords or synonyms\n• Use broader scientific terms\n• Check spelling of technical terms\n• Try related research topics\n\n**Good academic search examples:**\n• 'machine learning healthcare'\n• 'cancer immunotherapy'\n• 'renewable energy efficiency'\n• 'neural networks applications'\n\n"
         })}\n\n`);
       } else {
-        const title = `**🎓 Academic & Web Search Results for: "${query}"**\n\n📊 Found ${allResults.length} high-quality articles/summaries across ${foundDatabases.size} databases\n\n`;
+        const title = `**🎓 Academic & Web Search Results for: "${query}"**\n\n📊 Found ${allResults.length} high-quality articles/summaries across ${foundDatabases.size} source(s)\n\n`;
         res.write(`data: ${JSON.stringify({ type: 'content', content: title })}\n\n`);
 
         // Group results by database for better organization
-        // MODIFIED: Added OpenAI to the ordered list
-        const databasesOrdered = ['PubMed Central', 'Scopus', 'SciELO', 'Web of Science', 'OpenAI Web Search'];
+        // MODIFIED: Added arXiv to the ordered list at the beginning for preprints
+        const databasesOrdered = ['arXiv', 'PubMed', 'Scopus', 'Web of Science', 'SciELO', 'OpenAI Web Search'];
 
         for (const db of databasesOrdered) {
           const dbResults = allResults.filter(r => r.database === db);
@@ -1145,10 +1429,10 @@ router.post(
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (chat) {
           const fullContent = allResults.length > 0
-            ? `**🎓 Academic & Web Search Results for: "${query}"**\n\n` +
+            ? `**🎓 Academic & Web Search Results for: "${cleanedQuery}"**\n\n` +
             allResults.map((r, i) => `**${i + 1}. [${r.title}](${r.url})**\n${r.snippet}\nDatabase: ${r.database}\n`).join('\n') +
             footer
-            : `**🎓 Academic & Web Search Results for: "${query}"**\n\nNo relevant academic or web results found. Please try different keywords or broader terms.${footer}`;
+            : `**🎓 Academic & Web Search Results for: "${cleanedQuery}"**\n\nNo relevant academic or web results found. Please try different keywords or broader terms.${footer}`;
 
           await prisma.message.create({
             data: {
