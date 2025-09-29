@@ -1044,7 +1044,7 @@ router.post(
       const searchTasks = [];
       searchTasks.push({ name: 'PubMed Central', promise: searchPubMed(query) });
       searchTasks.push({ name: 'Scopus', promise: searchScopus(query) });
-      searchTasks.push({ name: 'SciELO', promise: searchSciELO(query) });
+      // searchTasks.push({ name: 'SciELO', promise: searchSciELO(query) });
       if (process.env.WOS_API_KEY) {
         searchTasks.push({ name: 'Web of Science', promise: searchWebOfScience(query) });
       }
@@ -1061,8 +1061,8 @@ router.post(
       res.write(`data: ${JSON.stringify({ type: 'content', content: '🔬 Searching Scopus...\n' })}\n\n`);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      res.write(`data: ${JSON.stringify({ type: 'content', content: '🌎 Searching SciELO...\n' })}\n\n`);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // res.write(`data: ${JSON.stringify({ type: 'content', content: '🌎 Searching SciELO...\n' })}\n\n`);
+      // await new Promise(resolve => setTimeout(resolve, 100));
 
       if (process.env.WOS_API_KEY) {
         res.write(`data: ${JSON.stringify({ type: 'content', content: '📊 Searching Web of Science...\n' })}\n\n`);

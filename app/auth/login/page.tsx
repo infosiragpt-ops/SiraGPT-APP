@@ -63,11 +63,11 @@ export default function LoginPage() {
         </CardHeader>
 
         <CardContent>
-          <div className="mb-4 p-3 bg-muted rounded-lg text-sm">
+          {/* <div className="mb-4 p-3 bg-muted rounded-lg text-sm">
             <p className="font-medium mb-1">Demo Credentials:</p>
             <p>Email: admin@example.com</p>
             <p>Password: password</p>
-          </div>
+          </div> */}
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
