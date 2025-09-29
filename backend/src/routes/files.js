@@ -174,6 +174,31 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Get file content
+router.get('/:id/content', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!file) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    // For now, we'll just send back the extracted text.
+    // In the future, you might want to read the file from file.path
+    // if the content is not stored in the database.
+    res.send(file.extractedText || 'No content available.');
+
+  } catch (error) {
+    console.error('Get file content error:', error);
+    res.status(500).json({ error: 'Failed to fetch file content' });
+  }
+});
+
 // Delete file
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {

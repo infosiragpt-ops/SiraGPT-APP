@@ -32,47 +32,47 @@ function cleanContentForExport(text: string): string {
 // Extract table data from content
 export function detectTableData(content: string): TableData | null {
   const lines = content.split('\n').filter(line => line.trim());
-  
+
   // Look for derivative examples pattern
   const examples: { rule: string; formula: string }[] = [];
   let currentRule = '';
-  
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    
+
     // Skip empty lines and intro text
     if (!line || line.includes('Here are') || line.includes('Let me know')) {
       continue;
     }
-    
+
     // Check for numbered rules (1. **Rule Name**)
     const ruleMatch = line.match(/^\d+\.\s*\*\*([^*]+)\*\*/);
     if (ruleMatch) {
       currentRule = ruleMatch[1].trim();
       continue;
     }
-    
+
     // Check for formula lines
     if (line.includes('Formula:') && currentRule) {
       const formulaText = line.replace('Formula:', '').trim();
       const cleanFormula = cleanContentForExport(formulaText);
-      
+
       examples.push({
         rule: currentRule,
         formula: cleanFormula
       });
-      
+
       currentRule = '';
     }
   }
-  
+
   if (examples.length >= 2) {
     return {
       headers: ['Derivative Rule', 'Formula'],
       rows: examples.map(ex => [ex.rule, ex.formula])
     };
   }
-  
+
   // Look for markdown tables (prioritize existing tables in response)
   const tableMatches = content.match(/\|(.+)\|\s*\n\|[-\s|:]+\|\s*\n((?:\|.+\|\s*\n?)+)/g);
   if (tableMatches && tableMatches.length > 0) {
@@ -83,11 +83,11 @@ export function detectTableData(content: string): TableData | null {
       const rows = tableMatch[2].split('\n')
         .filter(row => row.trim() && row.includes('|'))
         .map(row => row.split('|').map(cell => cell.trim()).filter(cell => cell));
-      
+
       return { headers, rows };
     }
   }
-  
+
   return null;
 }
 
@@ -95,7 +95,7 @@ export function detectTableData(content: string): TableData | null {
 export function generateCSV(tableData: TableData): string {
   const rows = [
     tableData.headers.join(','),
-    ...tableData.rows.map(row => 
+    ...tableData.rows.map(row =>
       row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',')
     )
   ];
@@ -107,7 +107,7 @@ export function generateExcel(tableData: TableData): Blob {
   const wb = XLSX.utils.book_new();
   const wsData = [tableData.headers, ...tableData.rows];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
-  
+
   // Auto-size columns
   const colWidths = tableData.headers.map((_, colIndex) => {
     const maxLength = Math.max(
@@ -117,7 +117,7 @@ export function generateExcel(tableData: TableData): Blob {
     return { wch: Math.min(maxLength + 2, 50) };
   });
   ws['!cols'] = colWidths;
-  
+
   XLSX.utils.book_append_sheet(wb, ws, 'Data');
   const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   return new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -126,37 +126,37 @@ export function generateExcel(tableData: TableData): Blob {
 // Generate Word document
 export async function generateWord(content: string, tableData?: TableData): Promise<Blob> {
   const paragraphs: Paragraph[] = [];
-  
+
   // Preserve original formatting - split by lines but don't clean content
   const lines = content.split('\n');
-  
+
   lines.forEach(line => {
     // Add each line as a paragraph, including empty lines for spacing
-    paragraphs.push(new Paragraph({ 
+    paragraphs.push(new Paragraph({
       text: line || ' ', // Use space for empty lines to maintain spacing
       spacing: {
         after: 120 // Add some spacing after each paragraph
       }
     }));
   });
-  
+
   // Add table if available
   if (tableData) {
     paragraphs.push(new Paragraph({ text: '' }));
     paragraphs.push(new Paragraph({ text: 'Data Summary', heading: 'Heading2' }));
-    
+
     const tableRows = [
       new TableRow({
-        children: tableData.headers.map(header => 
+        children: tableData.headers.map(header =>
           new TableCell({
             children: [new Paragraph({ text: header })],
             width: { size: 100 / tableData.headers.length, type: WidthType.PERCENTAGE }
           })
         )
       }),
-      ...tableData.rows.map(row => 
+      ...tableData.rows.map(row =>
         new TableRow({
-          children: row.map(cell => 
+          children: row.map(cell =>
             new TableCell({
               children: [new Paragraph({ text: cell })],
               width: { size: 100 / row.length, type: WidthType.PERCENTAGE }
@@ -165,23 +165,23 @@ export async function generateWord(content: string, tableData?: TableData): Prom
         })
       )
     ];
-    
+
     const table = new Table({
       rows: tableRows,
       width: { size: 100, type: WidthType.PERCENTAGE }
     });
-    
+
     const doc = new Document({
       sections: [{ children: [...paragraphs, table] }]
     });
-    
+
     return await Packer.toBlob(doc);
   }
-  
+
   const doc = new Document({
     sections: [{ children: paragraphs }]
   });
-  
+
   return await Packer.toBlob(doc);
 }
 
@@ -223,10 +223,10 @@ export function downloadText(content: string, filename: string = 'document.txt')
 export function generateHTMLPresentation(content: string, tableData?: TableData): string {
   const cleanContent = cleanContentForExport(content);
   const lines = cleanContent.split('\n').filter(line => line.trim());
-  
+
   let slides: string[] = [];
   let currentSlide: string[] = [];
-  
+
   lines.forEach(line => {
     if (line.includes(':') && line.length < 100) {
       if (currentSlide.length > 0) {
@@ -238,21 +238,21 @@ export function generateHTMLPresentation(content: string, tableData?: TableData)
       currentSlide.push(line);
     }
   });
-  
+
   if (currentSlide.length > 0) {
     slides.push(currentSlide.join('<br>'));
   }
-  
+
   if (tableData) {
     let tableHTML = '<h2>Data Summary</h2><table border="1" style="border-collapse: collapse; width: 100%;">';
     tableHTML += '<tr>' + tableData.headers.map(h => `<th style="padding: 8px; background: #f2f2f2;">${h}</th>`).join('') + '</tr>';
-    tableHTML += tableData.rows.map(row => 
+    tableHTML += tableData.rows.map(row =>
       '<tr>' + row.map(cell => `<td style="padding: 8px;">${cell}</td>`).join('') + '</tr>'
     ).join('');
     tableHTML += '</table>';
     slides.push(tableHTML);
   }
-  
+
   return `<!DOCTYPE html>
 <html>
 <head>

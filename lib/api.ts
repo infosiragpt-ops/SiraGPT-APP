@@ -208,6 +208,23 @@ class ApiClient {
     return this.request(`/files/${id}`, { method: 'DELETE' });
   }
 
+  async getFileContent(id: string): Promise<string> {
+    const url = `${this.baseURL}/files/${id}/content`;
+    const headers = new Headers();
+    if (this.token) {
+      headers.set('Authorization', `Bearer ${this.token}`);
+    }
+
+    const response = await fetch(url, { headers });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Network error' }));
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    return response.text();
+  }
+
   // AI endpoints
   // async generateAI(data: { model: string; prompt: string; chatId?: string; files?: string[] }) {
   //   return this.request('/ai/generate', {
@@ -711,8 +728,17 @@ class ApiClient {
     return `${this.apiBaseURL}/video/watch/${filename}`;
   }
 
-  downloadVideo(filename: string) {
-    return `${this.apiBaseURL}/video/download/${filename}`;
+  async downloadVideo(filename: string) {
+    const url = `${this.apiBaseURL}/video/download/${filename}`;
+    const response = await fetch(url, {
+      headers: {
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    });
+    if (!response.ok) {
+      throw new Error('Failed to download video');
+    }
+    return response.blob();
   }
   async getAnonQuota() {
     localStorage.setItem('currentChatId', "")

@@ -290,20 +290,20 @@ const router = express.Router();
 function isValidAcademicQuery(query) {
   // Remove special characters and check length
   const cleanQuery = query.replace(/[^a-zA-Z0-9\s]/g, '').trim();
-  
+
   // Must be at least 3 characters and contain letters
   if (cleanQuery.length < 3 || !/[a-zA-Z]/.test(cleanQuery)) {
     return false;
   }
-  
+
   // Check if it's just random characters (more than 50% consecutive repeated chars)
   const repeatedChars = cleanQuery.match(/(.)\1{2,}/g);
   if (repeatedChars && repeatedChars.join('').length > cleanQuery.length * 0.5) {
     return false;
   }
-  
+
   // Check if it contains common academic terms or is a reasonable length
-const academicTerms = /\b(research|study|analysis|review|survey|method|model|data|technology|system|algorithm|treatment|diagnosis|therapy|medicine|clinical|patient|disease|health|cancer|covid|drug|vaccine|biology|protein|gene|cell|brain|heart|neuroscience|genetics|microbiology|biochemistry|physics|chemistry|materials|nanotechnology|energy|robotics|engineering|psychology|sociology|education|economics|behavior|policy|climate|environment|ecology|pollution|biodiversity|sustainability)\b/i;
+  const academicTerms = /\b(research|study|analysis|review|survey|method|model|data|technology|system|algorithm|treatment|diagnosis|therapy|medicine|clinical|patient|disease|health|cancer|covid|drug|vaccine|biology|protein|gene|cell|brain|heart|neuroscience|genetics|microbiology|biochemistry|physics|chemistry|materials|nanotechnology|energy|robotics|engineering|psychology|sociology|education|economics|behavior|policy|climate|environment|ecology|pollution|biodiversity|sustainability)\b/i;
 
   return cleanQuery.length >= 3 && (academicTerms.test(cleanQuery) || cleanQuery.split(/\s+/).length >= 2);
 }
@@ -314,26 +314,26 @@ const academicTerms = /\b(research|study|analysis|review|survey|method|model|dat
 function filterQualityResults(results, query) {
   return results.filter(result => {
     // Filter out results with default/placeholder values
-    if (result.title.includes('Untitled') || 
-        result.title === 'Article Title' ||
-        result.title === 'Research Article' ||
-        result.authors === 'Unknown authors' ||
-        result.journal === 'Unknown Journal' ||
-        result.journal === 'SciELO Journal' ||
-        result.title.length < 10) {
+    if (result.title.includes('Untitled') ||
+      result.title === 'Article Title' ||
+      result.title === 'Research Article' ||
+      result.authors === 'Unknown authors' ||
+      result.journal === 'Unknown Journal' ||
+      result.journal === 'SciELO Journal' ||
+      result.title.length < 10) {
       return false;
     }
-    
+
     // Filter out results without proper URLs
     if (!result.url || result.url === '#' || result.url.includes('unknown')) {
       return false;
     }
-    
+
     // Basic relevance check - title should contain at least one word from query
     const queryWords = query.toLowerCase().split(/\s+/).filter(word => word.length > 2);
     const titleWords = result.title.toLowerCase();
     const hasRelevantKeyword = queryWords.some(word => titleWords.includes(word));
-    
+
     return hasRelevantKeyword || result.title.length > 20; // Allow longer titles even without keyword match
   });
 }
@@ -341,7 +341,7 @@ function filterQualityResults(results, query) {
 /**
  * Enhanced PubMed Search with quality filtering
  */
-async function searchPubMed(query, maxResults = 5) {
+async function searchPubMed(query, maxResults = 15) {
   try {
     // Step 1: Search for PMC IDs
     const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pmc&term=${encodeURIComponent(query)}&retmax=${maxResults}&retmode=json`;
@@ -363,8 +363,8 @@ async function searchPubMed(query, maxResults = 5) {
       }
 
       // Extract authors
-      const authors = article.authors?.map(a => a.name).join(', ') || 
-                    article.authorlist?.split(',').slice(0, 3).join(', ');
+      const authors = article.authors?.map(a => a.name).join(', ') ||
+        article.authorlist?.split(',').slice(0, 3).join(', ');
 
       // Extract publication date
       const pubDate = article.pubdate || article.epubdate || article.printpubdate || "";
@@ -375,9 +375,12 @@ async function searchPubMed(query, maxResults = 5) {
         return null;
       }
 
+      const doi = article.articleids?.find(id => id.idtype === 'doi')?.value;
+      const url = doi ? `https://doi.org/${doi}` : `https://www.ncbi.nlm.nih.gov/pmc/articles/PMC${id}/`;
+
       return {
         title: article.title,
-        url: `https://www.ncbi.nlm.nih.gov/pmc/articles/PMC${id}/`,
+        url: url,
         snippet: `${article.title}\n👤 ${authors}\n📚 ${article.fulljournalname || article.source || 'PubMed Central'}\n📅 ${year || 'N/A'}`,
         displayLink: "ncbi.nlm.nih.gov",
         authors: authors,
@@ -398,7 +401,7 @@ async function searchPubMed(query, maxResults = 5) {
 /**
  * Enhanced Scopus Search with quality filtering
  */
-async function searchScopus(query, maxResults = 5) {
+async function searchScopus(query, maxResults = 15) {
   try {
     if (!process.env.SCOPUS_API_KEY) {
       console.log("Scopus API key not configured, skipping Scopus search");
@@ -407,7 +410,7 @@ async function searchScopus(query, maxResults = 5) {
 
     const searchQuery = `TITLE-ABS-KEY(${query})`;
     const url = `https://api.elsevier.com/content/search/scopus?query=${encodeURIComponent(searchQuery)}&count=${maxResults}&field=title,creator,prism:publicationName,prism:coverDate,prism:doi,dc:description,citedby-count,prism:aggregationType`;
-    
+
     const res = await fetch(url, {
       headers: {
         "X-ELS-APIKey": process.env.SCOPUS_API_KEY,
@@ -422,13 +425,13 @@ async function searchScopus(query, maxResults = 5) {
 
     const data = await res.json();
     const entries = data?.["search-results"]?.entry || [];
-    
+
     if (!entries.length) return [];
 
     const results = entries.map((item) => {
       // Handle title (can be array or string)
-      const title = Array.isArray(item["dc:title"]) 
-        ? item["dc:title"][0] 
+      const title = Array.isArray(item["dc:title"])
+        ? item["dc:title"][0]
         : item["dc:title"];
 
       // Skip if no proper title
@@ -437,10 +440,10 @@ async function searchScopus(query, maxResults = 5) {
       }
 
       // Handle authors
-      const authors = item["dc:creator"] 
-        ? (Array.isArray(item["dc:creator"]) 
-            ? item["dc:creator"].slice(0, 3).join(", ") 
-            : item["dc:creator"])
+      const authors = item["dc:creator"]
+        ? (Array.isArray(item["dc:creator"])
+          ? item["dc:creator"].slice(0, 3).join(", ")
+          : item["dc:creator"])
         : null;
 
       // Skip if no authors
@@ -450,19 +453,19 @@ async function searchScopus(query, maxResults = 5) {
 
       // Publication details
       const journal = item["prism:publicationName"];
-      const year = item["prism:coverDate"] 
-        ? new Date(item["prism:coverDate"]).getFullYear() 
+      const year = item["prism:coverDate"]
+        ? new Date(item["prism:coverDate"]).getFullYear()
         : null;
-      
+
       // Citations count
       const citations = item["citedby-count"] || "0";
-      
+
       // Document type
       const docType = item["prism:aggregationType"] || "Article";
 
       // DOI and URL
       const doi = item["prism:doi"];
-      const url = doi ? `https://doi.org/${doi}` : item["prism:url"];
+      const url = doi ? `https://doi.org/${doi}` : (item["prism:url"] || `https://www.scopus.com/record/display.uri?eid=2-s2.0-${item['eid']}&origin=resultslist`);
 
       // Skip if no URL
       if (!url) {
@@ -470,7 +473,8 @@ async function searchScopus(query, maxResults = 5) {
       }
 
       // Enhanced snippet with metadata
-      const snippet = `${title}\n👤 Authors: ${authors}\n📚 Journal: ${journal || 'Scopus Journal'}\n📅 Year: ${year || 'N/A'}\n📊 Citations: ${citations}\n📄 Type: ${docType}`;
+      const description = item["dc:description"] || title;
+      const snippet = `${description}\n👤 Authors: ${authors}\n📚 Journal: ${journal || 'Scopus Journal'}\n📅 Year: ${year || 'N/A'}\n📊 Citations: ${citations}\n📄 Type: ${docType}`;
 
       return {
         title,
@@ -497,7 +501,7 @@ async function searchScopus(query, maxResults = 5) {
 /**
  * Enhanced Web of Science Search with quality filtering
  */
-async function searchWebOfScience(query, maxResults = 5) {
+async function searchWebOfScience(query, maxResults = 15) {
   try {
     if (!process.env.WOS_API_KEY) {
       console.log("Web of Science API key not configured, skipping WoS search");
@@ -505,7 +509,7 @@ async function searchWebOfScience(query, maxResults = 5) {
     }
 
     const url = `https://api.clarivate.com/api/woslite/v1/documents?q=${encodeURIComponent(query)}&count=${maxResults}&offset=0`;
-    
+
     const res = await fetch(url, {
       headers: {
         "X-ApiKey": process.env.WOS_API_KEY,
@@ -529,20 +533,20 @@ async function searchWebOfScience(query, maxResults = 5) {
       const journal = item.source?.[0];
       const year = item.published_year;
       const abstract = item.abstract;
-      
+
       // Skip if missing essential data
       if (!title || title.length < 10 || !authors || title.includes('Untitled')) {
         return null;
       }
-      
+
       const doi = item.identifier?.doi?.[0];
-      const url = doi ? `https://doi.org/${doi}` : null;
-      
+      const url = doi ? `https://doi.org/${doi}` : (item.url || null);
+
       // Skip if no URL
       if (!url) {
         return null;
       }
-      
+
       const citations = item.times_cited || "0";
       const snippet = `${abstract || title}\n👤 Authors: ${authors}\n📚 Journal: ${journal || 'WoS Journal'}\n📅 Year: ${year || 'N/A'}\n📊 Citations: ${citations}`;
 
@@ -574,19 +578,19 @@ async function searchWebOfScience(query, maxResults = 5) {
 async function searchSciELO(query) {
   try {
     console.log('Searching SciELO...');
-    
+
     const endpoints = [
-      `https://search.scielo.org/api/v1/search/?q=${encodeURIComponent(query)}&lang=en&format=json&page=1&count=10`,
-      `https://articlemeta.scielo.org/api/v1/article/identifiers/?collection=scl&issn=&limit=10&offset=0&from=&until=&extra_filter=${encodeURIComponent(query)}`,
-      `https://search.scielo.org/?q=${encodeURIComponent(query)}&lang=en&count=10&from=0&output=site&sort=&format=summary&fb=&page=1`
+      `https://search.scielo.org/api/v1/search/?q=${encodeURIComponent(query)}&lang=en&format=json&page=1&count=15`,
+      `https://articlemeta.scielo.org/api/v1/article/identifiers/?collection=scl&issn=&limit=15&offset=0&from=&until=&extra_filter=${encodeURIComponent(query)}`,
+      `https://search.scielo.org/?q=${encodeURIComponent(query)}&lang=en&count=15&from=0&output=site&sort=&format=summary&fb=&page=1`
     ];
 
     let results = [];
-    
+
     for (let i = 0; i < endpoints.length; i++) {
       try {
         console.log(`Trying SciELO endpoint ${i + 1}...`);
-        
+
         const response = await fetch(endpoints[i], {
           method: 'GET',
           headers: {
@@ -602,7 +606,7 @@ async function searchSciELO(query) {
 
         if (response.ok) {
           const contentType = response.headers.get('content-type');
-          
+
           if (contentType && contentType.includes('application/json')) {
             const data = await response.json();
             results = await parseSciELOResponse(data, i, query);
@@ -628,7 +632,7 @@ async function searchSciELO(query) {
     }
 
     return filterQualityResults(results, query);
-    
+
   } catch (error) {
     console.error('SciELO search error:', error);
     return [];
@@ -638,21 +642,21 @@ async function searchSciELO(query) {
 // Helper function to parse SciELO responses with quality checks
 async function parseSciELOResponse(data, endpointIndex, query) {
   const results = [];
-  
+
   try {
     if (endpointIndex === 0) {
       const items = data.response?.docs || data.docs || [];
-      
+
       items.forEach((item, index) => {
-        if (index < 10) {
+        if (index < 15) {
           const title = item.ti_en || item.ti || item.title;
           const authors = item.au || item.authors;
-          
+
           // Skip if missing essential data or poor quality
           if (!title || title.length < 10 || title === 'Article Title' || !authors) {
             return;
           }
-          
+
           results.push({
             title: title,
             authors: Array.isArray(authors) ? authors : [authors],
@@ -668,17 +672,17 @@ async function parseSciELOResponse(data, endpointIndex, query) {
       });
     } else if (endpointIndex === 1) {
       const items = data.objects || data.results || [];
-      
+
       items.forEach((item, index) => {
-        if (index < 10) {
+        if (index < 15) {
           const title = item.title;
           const authors = item.authors;
-          
+
           // Skip if missing essential data
           if (!title || title.length < 10 || title === 'Research Article' || !authors) {
             return;
           }
-          
+
           results.push({
             title: title,
             authors: Array.isArray(authors) ? authors.map(a => a.name || a) : [authors],
@@ -696,22 +700,22 @@ async function parseSciELOResponse(data, endpointIndex, query) {
   } catch (parseError) {
     console.error('Error parsing SciELO response:', parseError);
   }
-  
+
   return results;
 }
 
 // Helper function to parse HTML response with quality checks
 async function parseSciELOHTML(html, query) {
   const results = [];
-  
+
   try {
     const titleMatches = html.match(/<h3[^>]*>(.*?)<\/h3>/gi) || [];
     const authorMatches = html.match(/authors?[^>]*>(.*?)</gi) || [];
-    
-    titleMatches.slice(0, 5).forEach((titleMatch, index) => {
+
+    titleMatches.slice(0, 15).forEach((titleMatch, index) => {
       const title = titleMatch.replace(/<[^>]*>/g, '').trim();
       const author = authorMatches[index] ? authorMatches[index].replace(/<[^>]*>/g, '').trim() : null;
-      
+
       // Only include if we have meaningful data
       if (title && title.length > 10 && author && !title.includes('SciELO Article')) {
         results.push({
@@ -730,72 +734,110 @@ async function parseSciELOHTML(html, query) {
   } catch (parseError) {
     console.error('Error parsing SciELO HTML:', parseError);
   }
-  
+
   return results;
 }
 
+async function searchOpenAIWeb(query) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      console.log("OpenAI API key not configured, skipping OpenAI Web Search");
+      return [];
+    }
+
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+
+    console.log('Searching OpenAI for web results...');
+
+    // Prompt the GPT-4o model to act as a web search engine and summarize
+    const prompt = `Please act as a comprehensive web search engine. For the query "${query}", provide a concise summary of the most relevant information found online, citing any specific sources or domains if possible. Structure the answer as if it's a top web search result snippet. Focus on factual and highly relevant information.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: "You are a helpful assistant that provides web search results." },
+
+        { role: "user", content: prompt },
+      ],
+      tools: [{ type: "web_search_preview" }],
+      // stream: true,
+
+      // We are relying on the model's internal capabilities, not an explicit 'web_search' tool type here.
+      // If you had a custom tool, it would be defined in 'tools' and you'd handle 'tool_calls'.
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    console.log(completion.choices[0]?.message);
+
+    if (content) {
+      // Format the content as a single search result to match other sources
+      return [{
+        title: `OpenAI Summary for "${query}"`,
+        url: `https://openai.com/chat-gpt`, // Placeholder URL, as OpenAI does not provide a direct source link for its internal browsing summary.
+        snippet: content,
+        displayLink: "openai.com",
+        authors: "OpenAI", // Attributing the summary to OpenAI
+        journal: "AI Web Search",
+        year: new Date().getFullYear().toString(),
+        type: "ai_summary",
+        database: "OpenAI Web Search"
+      }];
+    }
+    return [];
+  } catch (err) {
+    console.error("OpenAI Web Search error:", err);
+    return [];
+  }
+}
+
 /**
- * Web search via OpenAI Responses API with web_search tool
- * Streams markdown content back to client using SSE
+ * Enhanced academic search route with query validation and quality filtering
  */
 // router.post(
 //   '/web',
 //   [
 //     body('query').trim().notEmpty().withMessage('Search query is required'),
 //     body('chatId').optional().isString(),
-//     body('model').optional().isString(),
-//     body('provider').optional().isString(),
-//     body('systemPrompt').optional().isString(),
-//     body('maxSources').optional().isInt({ min: 3, max: 10 }),
-//     body('searchMode').optional().isIn(['general', 'news', 'docs', 'academic', 'technical'])
 //   ],
 //   authenticateToken,
 //   async (req, res) => {
-//     const errors = validationResult(req);
-//     if (!errors.isEmpty()) {
-//       return res.status(400).json({ errors: errors.array() });
-//     }
-
-//     const {
-//       query,
-//       chatId,
-//       model: bodyModel,
-//       provider: bodyProvider,
-//       systemPrompt: overrideSystemPrompt,
-//       maxSources: bodyMaxSources,
-//       searchMode
-//     } = req.body;
-
-//     const userId = req.user.id;
-
-//     // Check OpenAI config
-//     if (!process.env.OPENAI_API_KEY) {
-//       return res.status(500).json({ error: 'OpenAI API key not configured' });
-//     }
-
-//     // SSE headers
-//     res.setHeader('Content-Type', 'text/event-stream');
-//     res.setHeader('Cache-Control', 'no-cache');
-//     res.setHeader('Connection', 'keep-alive');
-//     res.setHeader('X-Accel-Buffering', 'no');
-//     res.flushHeaders();
-
-//     // Handle client disconnects
-//     let aborted = false;
-//     req.on('close', () => { aborted = true; });
-//     const safeWrite = (obj) => {
-//       if (aborted) return false;
-//       try {
-//         res.write(`data: ${JSON.stringify(obj)}\n\n`);
-//         return true;
-//       } catch (e) {
-//         aborted = true;
-//         return false;
-//       }
-//     };
-
 //     try {
-//       // Persist user query to chat if exists
+//       const errors = validationResult(req);
+//       if (!errors.isEmpty()) {
+//         return res.status(400).json({ errors: errors.array() });
+//       }
+
+//       const { query, chatId } = req.body;
+//       const userId = req.user.id;
+
+//       // Validate query quality
+//       if (!isValidAcademicQuery(query)) {
+//         res.setHeader('Content-Type', 'text/event-stream');
+//         res.setHeader('Cache-Control', 'no-cache');
+//         res.setHeader('Connection', 'keep-alive');
+//         res.setHeader('X-Accel-Buffering', 'no');
+//         res.flushHeaders();
+
+//         res.write(`data: ${JSON.stringify({
+//           type: 'content',
+//           content: "❌ **Invalid Search Query**\n\nYour search query doesn't appear to be suitable for academic search. Please try:\n\n• Using meaningful scientific or research terms\n• Spelling out complete words\n• Using proper terminology\n\n**Good examples:**\n• 'machine learning cancer diagnosis'\n• 'COVID-19 treatment efficacy'\n• 'artificial intelligence medical imaging'\n• 'gene therapy clinical trials'\n\nPlease enter a valid academic search query."
+//         })}\n\n`);
+
+//         res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+//         res.end();
+//         return;
+//       }
+
+//       // Set up streaming
+//       res.setHeader('Content-Type', 'text/event-stream');
+//       res.setHeader('Cache-Control', 'no-cache');
+//       res.setHeader('Connection', 'keep-alive');
+//       res.setHeader('X-Accel-Buffering', 'no');
+//       res.flushHeaders();
+
+//       // Save user query
 //       if (chatId) {
 //         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
 //         if (chat) {
@@ -803,435 +845,329 @@ async function parseSciELOHTML(html, query) {
 //             data: {
 //               chatId,
 //               role: 'USER',
-//               content: `🔎 Web Search (OpenAI): ${query}`,
+//               content: `🔍 Academic Search: ${query}`,
 //               timestamp: new Date(),
 //             }
 //           });
 //         }
 //       }
 
-//       safeWrite({ type: 'start', content: '🔎 Searching the web with OpenAI...\n\n' });
+//       res.write(`data: ${JSON.stringify({ type: 'start', content: '🔍 Searching academic databases...\n\n' })}\n\n`);
 
-//       const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-//       const provider = bodyProvider || 'OpenAI';
-//       const FALLBACK_MODEL = process.env.OPENAI_SEARCH_MODEL || 'o4-mini';
-//       let model = (bodyModel && typeof bodyModel === 'string' && bodyModel.trim())
-//         ? bodyModel.trim()
-//         : FALLBACK_MODEL;
+//       const searchPromises = [
+//         searchPubMed(query).catch(err => {
+//           console.error('PubMed search failed:', err);
+//           return [];
+//         }),
+//         searchScopus(query).catch(err => {
+//           console.error('Scopus search failed:', err);
+//           return [];
+//         }),
+//         searchSciELO(query).catch(err => {
+//           console.error('SciELO search failed:', err);
+//           return [];
+//         })
+//       ];
 
-//       // If a non-OpenAI provider/model was selected, inform and use fallback
-//       const providerName = String(provider || '').toLowerCase();
-//       const looksOpenAIModel = /^(gpt-|o\d|o\d-.*|gpt4|gpt-4o)/i.test(model);
-//       if (providerName && providerName !== 'openai') {
-//         safeWrite({ type: 'content', content: `**Note:** Selected provider “${provider}” is not supported for Web Search. Using OpenAI ${FALLBACK_MODEL}.\n\n` });
-//         model = FALLBACK_MODEL;
-//       } else if (!looksOpenAIModel) {
-//         safeWrite({ type: 'content', content: `**Note:** Model “${model}” doesn't support OpenAI web search. Falling back to ${FALLBACK_MODEL}.\n\n` });
-//         model = FALLBACK_MODEL;
-//       }
-
-//       // Tune output shape
-//       const maxSources = Math.min(10, Math.max(3, Number.isInteger(bodyMaxSources) ? bodyMaxSources : (typeof bodyMaxSources === 'string' ? parseInt(bodyMaxSources, 10) : 6) || 6));
-//       const mode = (searchMode || 'general');
-//       const modeInstructionsMap = {
-//         general: 'Mix reputable sources. Prioritize clarity and breadth.',
-//         news: 'Prioritize recent, reputable news outlets. Include publication dates prominently.',
-//         docs: 'Prefer official product or vendor documentation and trusted reference sites.',
-//         academic: 'Prioritize peer-reviewed articles, conferences, and respected institutions.',
-//         technical: 'Prefer official docs, standards, RFCs, and authoritative technical blogs.'
-//       };
-//       const modeInstructions = modeInstructionsMap[mode] || modeInstructionsMap.general;
-
-//       const defaultSystemPrompt = [
-//         'You are a careful web research agent. Use the web_search tool to fetch fresh, credible information.',
-//         'Respond in the same language as the user\'s query (e.g., Spanish → Spanish).',
-//         '',
-//         `Mode focus: ${mode} — ${modeInstructions}`,
-//         '',
-//         'Output requirements (Markdown):',
-//         '• Start with a level-3 heading: "### Web Search (OpenAI): {query}".',
-//         '• Then a one-line bold purpose summary in the user\'s language.',
-//         `• Follow with a numbered list of the top ${maxSources} sources (up to ${maxSources}). For each item provide:`,
-//         '  - **Title** (Domain) — one concise, factual summary',
-//         '  - **URL:** Direct clickable link',
-//         '  - **Date:** Publication date (YYYY-MM-DD) when known',
-//         '  - **Type:** article | docs | research | video',
-//         '  - If an image preview is clearly available and stable, include it on a new line as Markdown: ![alt](https://...)',
-//         '    Only include images you are confident will load. Do NOT fabricate image URLs.',
-//         '  - If the source is a video (e.g., YouTube), clearly mark with ▶️ and provide the video URL. Do NOT embed iframes.',
-//         '',
-//         '• After the list, add a summary section titled in the user\'s language: use "#### Resumen" for Spanish, or "#### Summary" for other languages. Synthesize key points and caveats.',
-//         '• Prefer official documentation, reputable news, academic sources, and well-known sites.',
-//         '• Avoid low-quality, spammy, or irrelevant pages. Do not hallucinate links or images.',
-//         '• Use clean, readable Markdown only (no HTML).',
-//       ].join('\n');
-
-//       const systemPrompt = (overrideSystemPrompt && typeof overrideSystemPrompt === 'string' && overrideSystemPrompt.trim())
-//         ? overrideSystemPrompt.trim()
-//         : defaultSystemPrompt;
-
-//       // Helper to try a search and optionally fall back if the model/tool is unsupported
-//       const trySearch = async (modelToUse) => {
-//         return client.responses.create({
-//           model: modelToUse,
-//           input: [
-//             { role: 'system', content: systemPrompt },
-//             { role: 'user', content: `Search the web for: ${query}. Provide links and cite sources.` }
-//           ],
-//           tools: [{ type: 'web_search' }],
-//         });
-//       };
-
-//       const isUnsupportedToolError = (err) => {
-//         const msg = (err && (err.message || ''))?.toLowerCase?.() || '';
-//         return (
-//           msg.includes('web_search') && (
-//             msg.includes('unsupported') ||
-//             msg.includes('not supported') ||
-//             msg.includes('does not support') ||
-//             msg.includes('unknown') ||
-//             msg.includes('unrecognized') ||
-//             msg.includes('disabled') ||
-//             msg.includes('tools are not available')
-//           )
+//       // Add Web of Science if API key available
+//       if (process.env.WOS_API_KEY) {
+//         searchPromises.push(
+//           searchWebOfScience(query).catch(err => {
+//             console.error('Web of Science search failed:', err);
+//             return [];
+//           })
 //         );
-//       };
-
-//       let response;
-//       try {
-//         response = await trySearch(model);
-//       } catch (err) {
-//         if (isUnsupportedToolError(err) || model !== FALLBACK_MODEL) {
-//           // Inform user and retry with fallback model
-//           safeWrite({ type: 'content', content: `**Note:** Falling back to ${FALLBACK_MODEL} because the selected model \"${model}\" cannot perform web_search.\n\n` });
-//           model = FALLBACK_MODEL;
-//           response = await trySearch(model);
-//         } else {
-//           throw err;
-//         }
+//       }
+//       if (process.env.OPENAI_API_KEY) {
+//         res.write(`data: ${JSON.stringify({ type: 'content', content: '✨ Searching OpenAI Web...\n\n' })}\n\n`);
+//         await new Promise(resolve => setTimeout(resolve, 100));
 //       }
 
-//       // Extract text utility compatible with different SDK structures
-//       const extractText = (resp) => {
-//         try {
-//           if (!resp) return '';
-//           if (resp.output_text) return resp.output_text; // SDK helper if available
-//           const parts = [];
-//           if (Array.isArray(resp.output)) {
-//             for (const out of resp.output) {
-//               const content = out?.content || out?.items || [];
-//               const contentArr = Array.isArray(content) ? content : [];
-//               for (const c of contentArr) {
-//                 if (c?.type === 'output_text' && c?.text?.value) parts.push(c.text.value);
-//                 if (c?.type === 'text' && typeof c?.text === 'string') parts.push(c.text);
-//               }
+
+//       // Stream progress updates
+//       res.write(`data: ${JSON.stringify({ type: 'content', content: '📚 Searching PubMed Central...\n' })}\n\n`);
+//       await new Promise(resolve => setTimeout(resolve, 500));
+
+//       res.write(`data: ${JSON.stringify({ type: 'content', content: '🔬 Searching Scopus...\n' })}\n\n`);
+//       await new Promise(resolve => setTimeout(resolve, 500));
+
+//       // res.write(`data: ${JSON.stringify({ type: 'content', content: '🌎 Searching SciELO...\n' })}\n\n`);
+//       // await new Promise(resolve => setTimeout(resolve, 500));
+
+//       // if (process.env.WOS_API_KEY) {
+//       //   res.write(`data: ${JSON.stringify({ type: 'content', content: '📊 Searching Web of Science...\n\n' })}\n\n`);
+//       // }
+
+//       // Execute all searches
+//       const [pubmedResults, scopusResults, scieloResults, wosResults = []] = await Promise.all(searchPromises);
+
+//       // Combine and organize results by database
+//       const allResults = [
+//         ...pubmedResults.map(r => ({ ...r, database: 'PubMed Central' })),
+//         ...scopusResults.map(r => ({ ...r, database: 'Scopus' })),
+//         ...scieloResults.map(r => ({ ...r, database: 'SciELO' })),
+//         ...wosResults.map(r => ({ ...r, database: 'Web of Science' }))
+//       ];
+
+//       console.log(`Found ${allResults.length} quality results:`, {
+//         pubmed: pubmedResults.length,
+//         scopus: scopusResults.length,
+//         scielo: scieloResults.length,
+//         wos: wosResults.length
+//       });
+
+//       if (allResults.length === 0) {
+//         res.write(`data: ${JSON.stringify({
+//           type: 'content',
+//           content: "⚠️ **No Relevant Academic Results Found**\n\nWe searched across academic databases but couldn't find articles matching your query. This could happen because:\n\n• **Query too specific**: Try broader terms\n• **Spelling issues**: Check scientific terminology\n• **New research area**: Topic might be too recent\n• **Database coverage**: Some fields may not be well-represented\n\n**Suggestions:**\n• Try different keywords or synonyms\n• Use broader scientific terms\n• Check spelling of technical terms\n• Try related research topics\n\n**Good academic search examples:**\n• 'machine learning healthcare'\n• 'cancer immunotherapy'\n• 'renewable energy efficiency'\n• 'neural networks applications'\n\n"
+//         })}\n\n`);
+//       } else {
+//         const title = `**🎓 Academic Search Results for: "${query}"**\n\n📊 Found ${allResults.length} high-quality articles across ${new Set(allResults.map(r => r.database)).size} databases\n\n`;
+//         res.write(`data: ${JSON.stringify({ type: 'content', content: title })}\n\n`);
+
+//         // Group results by database for better organization
+//         const databases = ['PubMed Central', 'Scopus', 'SciELO', 'Web of Science'];
+
+//         for (const db of databases) {
+//           const dbResults = allResults.filter(r => r.database === db);
+//           if (dbResults.length > 0) {
+//             const dbHeader = `### ${db} (${dbResults.length} results)\n\n`;
+//             res.write(`data: ${JSON.stringify({ type: 'content', content: dbHeader })}\n\n`);
+
+//             for (let i = 0; i < dbResults.length; i++) {
+//               const result = dbResults[i];
+//               let resultText = `**${i + 1}. [${result.title}](${result.url})**\n`;
+//               resultText += `${result.snippet}\n\n`;
+
+//               res.write(`data: ${JSON.stringify({ type: 'content', content: resultText })}\n\n`);
+//               await new Promise(resolve => setTimeout(resolve, 300));
 //             }
 //           }
-//           if (parts.length === 0 && resp?.output?.[0]?.content?.[0]?.text?.value) {
-//             return resp.output[0].content[0].text.value;
-//           }
-//           return parts.join('\n');
-//         } catch {
-//           return '';
-//         }
-//       };
-
-//       let fullText = extractText(response) || '';
-//       if (!fullText.trim()) {
-//         fullText = `**Web Search for:** "${query}"\n\nNo detailed text was returned by the model. Please try a different query.`;
-//       }
-
-//       // Stream the content with small chunks for responsiveness
-//       const today = new Date();
-//       const dateStr = today.toISOString().slice(0, 10);
-//       const header = `### Web Search (OpenAI): ${query}\n\n*Model: ${model} • Date: ${dateStr}*\n\n`;
-//       safeWrite({ type: 'content', content: header });
-
-//       const paragraphs = fullText.split(/\n{2,}/);
-//       const chunkAndSend = async (text) => {
-//         if (!text) return;
-//         const lines = text.split(/\n/);
-//         let buffer = '';
-//         const maxLen = 800; // char-based chunk size
-//         for (const line of lines) {
-//           if ((buffer + line + '\n').length > maxLen) {
-//             if (!safeWrite({ type: 'content', content: buffer })) return;
-//             await new Promise(r => setTimeout(r, 120));
-//             buffer = '';
-//           }
-//           buffer += line + '\n';
-//         }
-//         if (buffer) {
-//           if (!safeWrite({ type: 'content', content: buffer + '\n' })) return;
-//           await new Promise(r => setTimeout(r, 120));
-//         }
-//       };
-
-//       for (const para of paragraphs) {
-//         const safe = para.trim();
-//         if (safe) {
-//           await chunkAndSend(safe);
 //         }
 //       }
 
-//       const footer = `\n---\n*Search powered by OpenAI ${model} web_search*`;
-//       safeWrite({ type: 'content', content: footer });
+//       const footer = `\n---\n*🔍 Search completed across academic databases*\n*📚 Databases: PubMed Central, Scopus,*\n*⏱️ Search time: ${new Date().toLocaleTimeString()}*`;
+//       res.write(`data: ${JSON.stringify({ type: 'content', content: footer })}\n\n`);
 
-//       // Persist assistant message
+//       // Save complete response
 //       if (chatId) {
 //         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
 //         if (chat) {
-//           const contentToSave = header + fullText + footer;
+//           const fullContent = allResults.length > 0
+//             ? `**🎓 Academic Search Results for: "${query}"**\n\n` +
+//             allResults.map((r, i) => `**${i + 1}. [${r.title}](${r.url})**\n${r.snippet}\nDatabase: ${r.database}\n`).join('\n') +
+//             footer
+//             : `**🎓 Academic Search Results for: "${query}"**\n\nNo relevant academic results found. Please try different keywords or broader terms.${footer}`;
+
 //           await prisma.message.create({
 //             data: {
 //               chatId,
 //               role: 'ASSISTANT',
-//               content: contentToSave,
-//               tokens: Math.min(contentToSave.length, 2000),
+//               content: fullContent,
+//               tokens: 50,
 //               timestamp: new Date(),
 //             }
 //           });
 //         }
 //       }
 
-//       safeWrite({ type: 'done', results: [] });
+//       res.write(`data: ${JSON.stringify({ type: 'done', results: allResults })}\n\n`);
 //       res.end();
+
 //     } catch (error) {
-//       console.error('OpenAI web search error:', error);
-//       safeWrite({ type: 'error', error: error?.message || 'Web search failed' });
+//       console.error('Academic search error:', error);
+//       res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
 //       res.end();
 //     }
 //   }
 // );
-
-
-
-// open ai based webs earch make it a route
 router.post(
   '/web',
   [
     body('query').trim().notEmpty().withMessage('Search query is required'),
     body('chatId').optional().isString(),
-    body('model').optional().isString(),
-    body('provider').optional().isString(),
   ],
   authenticateToken,
   async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      // If JSON was expected, still send JSON error (before switching to SSE)
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    const {
-      query,
-      chatId,
-      model: bodyModel,
-      provider: bodyProvider,
-    } = req.body;
-
-    // Check OpenAI config
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ error: 'OpenAI API key not configured' });
-    }
-
-    // SSE headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
-
-    let aborted = false;
-    req.on('close', () => { aborted = true; });
-
-    const safeWrite = (obj) => {
-      if (aborted) return false;
-      try {
-        res.write(`data: ${JSON.stringify(obj)}\n\n`);
-        return true;
-      } catch {
-        aborted = true;
-        return false;
-      }
-    };
-
-    const note = (content) => safeWrite({ type: 'note', content });
-    const sendContent = (content) => safeWrite({ type: 'content', content });
-    const sendError = (message) => safeWrite({ type: 'error', error: message });
-
     try {
-      // Persist user query to chat if exists
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { query, chatId } = req.body;
+      const userId = req.user.id;
+
+      // Validate query quality
+      if (!isValidAcademicQuery(query)) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders();
+
+        res.write(`data: ${JSON.stringify({
+          type: 'content',
+          content: "❌ **Invalid Search Query**\n\nYour search query doesn't appear to be suitable for academic search. Please try:\n\n• Using meaningful scientific or research terms\n• Spelling out complete words\n• Using proper terminology\n\n**Good examples:**\n• 'machine learning cancer diagnosis'\n• 'COVID-19 treatment efficacy'\n• 'artificial intelligence medical imaging'\n• 'gene therapy clinical trials'\n\nPlease enter a valid academic search query."
+        })}\n\n`);
+
+        res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+        res.end();
+        return;
+      }
+
+      // Set up streaming
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+
+      // Save user query
       if (chatId) {
-        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: req.user.id } });
+        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (chat) {
           await prisma.message.create({
             data: {
               chatId,
               role: 'USER',
-              content: `🔎 Web Search: ${query}`,
+              content: `🔍 Academic Search: ${query}`,
               timestamp: new Date(),
             }
           });
         }
       }
 
-      // Validate provider: only OpenAI is supported for web_search
-      const provider = (bodyProvider || 'OpenAI').toString().trim();
-      if (provider.toLowerCase() !== 'openai') {
-        sendError('Only the OpenAI provider is supported for web search.');
-        safeWrite({ type: 'done', results: [] });
-        return res.end();
+      res.write(`data: ${JSON.stringify({ type: 'start', content: '🔍 Searching academic databases...\n\n' })}\n\n`);
+
+      // MODIFIED: Use a dynamic task list for promises
+      const searchTasks = [];
+      searchTasks.push({ name: 'PubMed Central', promise: searchPubMed(query) });
+      searchTasks.push({ name: 'Scopus', promise: searchScopus(query) });
+      searchTasks.push({ name: 'SciELO', promise: searchSciELO(query) });
+      if (process.env.WOS_API_KEY) {
+        searchTasks.push({ name: 'Web of Science', promise: searchWebOfScience(query) });
+      }
+      // NEW: Add OpenAI Web Search to the tasks
+      if (process.env.OPENAI_API_KEY) {
+        searchTasks.push({ name: 'OpenAI Web Search', promise: searchOpenAIWeb(query) });
       }
 
-      // Start message
-      safeWrite({ type: 'start', content: '🔎 Searching the web with OpenAI...\n\n' });
 
-      // Model handling
-      const FALLBACK_MODEL = process.env.OPENAI_SEARCH_MODEL || 'o4-mini';
-      let model = (bodyModel && typeof bodyModel === 'string' && bodyModel.trim())
-        ? bodyModel.trim()
-        : FALLBACK_MODEL;
+      // Stream progress updates for each search source
+      res.write(`data: ${JSON.stringify({ type: 'content', content: '📚 Searching PubMed Central...\n' })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 100)); // Shorter delay for smoother streaming
 
-      // Simple check for "OpenAI-looking" models
-      const looksOpenAIModel = /^(gpt-|o\d|o\d-.*|gpt4|gpt-4o)/i.test(model);
-      if (!looksOpenAIModel) {
-        note(`Selected model "${model}" doesn’t look like an OpenAI model. Falling back to ${FALLBACK_MODEL}.`);
-        model = FALLBACK_MODEL;
+      res.write(`data: ${JSON.stringify({ type: 'content', content: '🔬 Searching Scopus...\n' })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      res.write(`data: ${JSON.stringify({ type: 'content', content: '🌎 Searching SciELO...\n' })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      if (process.env.WOS_API_KEY) {
+        res.write(`data: ${JSON.stringify({ type: 'content', content: '📊 Searching Web of Science...\n' })}\n\n`);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      // NEW: Stream update for OpenAI search
+      if (process.env.OPENAI_API_KEY) {
+        res.write(`data: ${JSON.stringify({ type: 'content', content: '✨ Searching OpenAI Web...\n\n' })}\n\n`);
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
 
-      const defaultSystemPrompt = [
-        'You are a careful web research agent. Use the web_search tool to fetch fresh, credible information.',
-        'Respond in the same language as the user’s query.',
-        '',
-        'Output requirements (Markdown):',
-        '• Start with a level-3 heading: "### Web Search (OpenAI): {query}".',
-        '• Then a one-line bold purpose summary.',
-        '• Follow with a numbered list of 5–8 sources. For each:',
-        '  - Title (Domain) — one concise, factual summary',
-        '  - URL: Direct clickable link',
-        '  - Date: Publication date (YYYY-MM-DD) if known',
-        '  - Type: article | docs | research | video',
-        '  - If a reliable image preview is available, include it as Markdown image on the next line. Do NOT fabricate.',
-        '  - If the source is a video, mark with ▶️ and provide the video URL.',
-        '',
-        '• After the list, add a short "#### Summary" synthesizing key points and caveats.',
-        '• Prefer official docs, reputable news, academic sources, and well-known sites.',
-        '• Avoid low-quality/spammy content and hallucinated links/images.',
-        '• Use clean, readable Markdown only (no HTML).',
-      ].join('\n');
+      // Execute all searches concurrently
+      // MODIFIED: Process results dynamically
+      const resultsByDatabase = await Promise.all(
+        searchTasks.map(async (task) => {
+          try {
+            const results = await task.promise;
+            return { database: task.name, results: results };
+          } catch (err) {
+            console.error(`${task.name} search failed:`, err);
+            return { database: task.name, results: [] };
+          }
+        })
+      );
 
-      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-      // Helper to try a search
-      const trySearch = async (modelToUse) => {
-        return client.responses.create({
-          model: modelToUse,
-          input: [
-            { role: 'system', content: defaultSystemPrompt },
-            { role: 'user', content: `Search the web for: ${query}. Provide links and cite sources.` },
-          ],
-          tools: [{ type: 'web_search' }],
-        });
-      };
-
-      // Detect unsupported tool errors
-      const isUnsupportedToolError = (err) => {
-        const msg = (err && (err.message || ''))?.toLowerCase?.() || '';
-        return (
-          msg.includes('web_search') && (
-            msg.includes('unsupported') ||
-            msg.includes('not supported') ||
-            msg.includes('does not support') ||
-            msg.includes('unknown') ||
-            msg.includes('unrecognized') ||
-            msg.includes('disabled') ||
-            msg.includes('tools are not available')
-          )
-        );
-      };
-
-      let response;
-      try {
-        response = await trySearch(model);
-      } catch (err) {
-        if (isUnsupportedToolError(err)) {
-          sendError(`The selected model "${model}" cannot perform web_search. Please choose a supported OpenAI model (e.g., ${FALLBACK_MODEL}).`);
-          safeWrite({ type: 'done', results: [] });
-          return res.end();
+      let allResults = [];
+      const foundDatabases = new Set();
+      resultsByDatabase.forEach(({ database, results }) => {
+        if (results && results.length > 0) {
+          foundDatabases.add(database);
+          allResults = allResults.concat(results);
         }
-        throw err;
-      }
+      });
 
-      // Extract text from various SDK shapes
-      const extractText = (resp) => {
-        try {
-          if (!resp) return '';
-          if (resp.output_text) return resp.output_text;
-          const parts = [];
-          if (Array.isArray(resp.output)) {
-            for (const out of resp.output) {
-              const content = out?.content || out?.items || [];
-              const contentArr = Array.isArray(content) ? content : [];
-              for (const c of contentArr) {
-                if (c?.type === 'output_text' && c?.text?.value) parts.push(c.text.value);
-                if (c?.type === 'text' && typeof c?.text === 'string') parts.push(c.text);
-              }
+      console.log(`Found ${allResults.length} quality results:`,
+        resultsByDatabase.reduce((acc, { database, results }) => {
+          acc[database] = results.length;
+          return acc;
+        }, {})
+      );
+
+      if (allResults.length === 0) {
+        res.write(`data: ${JSON.stringify({
+          type: 'content',
+          content: "⚠️ **No Relevant Academic Results Found**\n\nWe searched across academic databases but couldn't find articles matching your query. This could happen because:\n\n• **Query too specific**: Try broader terms\n• **Spelling issues**: Check scientific terminology\n• **New research area**: Topic might be too recent\n• **Database coverage**: Some fields may not be well-represented\n\n**Suggestions:**\n• Try different keywords or synonyms\n• Use broader scientific terms\n• Check spelling of technical terms\n• Try related research topics\n\n**Good academic search examples:**\n• 'machine learning healthcare'\n• 'cancer immunotherapy'\n• 'renewable energy efficiency'\n• 'neural networks applications'\n\n"
+        })}\n\n`);
+      } else {
+        const title = `**🎓 Academic & Web Search Results for: "${query}"**\n\n📊 Found ${allResults.length} high-quality articles/summaries across ${foundDatabases.size} databases\n\n`;
+        res.write(`data: ${JSON.stringify({ type: 'content', content: title })}\n\n`);
+
+        // Group results by database for better organization
+        // MODIFIED: Added OpenAI to the ordered list
+        const databasesOrdered = ['PubMed Central', 'Scopus', 'SciELO', 'Web of Science', 'OpenAI Web Search'];
+
+        for (const db of databasesOrdered) {
+          const dbResults = allResults.filter(r => r.database === db);
+          if (dbResults.length > 0) {
+            const dbHeader = `### ${db} (${dbResults.length} results)\n\n`;
+            res.write(`data: ${JSON.stringify({ type: 'content', content: dbHeader })}\n\n`);
+
+            for (let i = 0; i < dbResults.length; i++) {
+              const result = dbResults[i];
+              let resultText = `**${i + 1}. [${result.title}](${result.url})**\n`;
+              resultText += `${result.snippet}\n\n`;
+
+              res.write(`data: ${JSON.stringify({ type: 'content', content: resultText })}\n\n`);
+              await new Promise(resolve => setTimeout(resolve, 300));
             }
           }
-          if (parts.length === 0 && resp?.output?.[0]?.content?.[0]?.text?.value) {
-            return resp.output[0].content[0].text.value;
-          }
-          return parts.join('\n');
-        } catch {
-          return '';
         }
-      };
-
-      let fullText = extractText(response) || '';
-      if (!fullText.trim()) {
-        fullText = `**Web Search for:** "${query}"\n\nNo detailed text was returned by the model. Please try a different query.`;
       }
 
-      // Stream header + content in chunks
-      const today = new Date();
-      const dateStr = today.toISOString().slice(0, 10);
-      const header = `### Web Search (OpenAI): ${query}\n\n*Model: ${model} • Date: ${dateStr}*\n\n`;
-      sendContent(header);
+      // MODIFIED: Updated footer to include all found databases
+      const footerDatabases = Array.from(foundDatabases).join(', ');
+      const footer = `\n---\n*🔍 Search completed across databases*\n*📚 Databases: ${footerDatabases || 'N/A'}*\n*⏱️ Search time: ${new Date().toLocaleTimeString()}*`;
+      res.write(`data: ${JSON.stringify({ type: 'content', content: footer })}\n\n`);
 
-      const paragraphs = fullText.split(/\n{2,}/);
-      for (const para of paragraphs) {
-        const safe = para.trim();
-        if (!safe) continue;
-        if (!sendContent(safe + '\n\n')) break;
-        await new Promise(r => setTimeout(r, 120));
-      }
-
-      const footer = `\n---\n*Search powered by OpenAI ${model} web_search*`;
-      sendContent(footer);
-
-      // Persist assistant message
+      // Save complete response
       if (chatId) {
-        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: req.user.id } });
+        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (chat) {
-          const contentToSave = header + fullText + footer;
+          const fullContent = allResults.length > 0
+            ? `**🎓 Academic & Web Search Results for: "${query}"**\n\n` +
+            allResults.map((r, i) => `**${i + 1}. [${r.title}](${r.url})**\n${r.snippet}\nDatabase: ${r.database}\n`).join('\n') +
+            footer
+            : `**🎓 Academic & Web Search Results for: "${query}"**\n\nNo relevant academic or web results found. Please try different keywords or broader terms.${footer}`;
+
           await prisma.message.create({
             data: {
               chatId,
               role: 'ASSISTANT',
-              content: contentToSave,
-              tokens: Math.min(contentToSave.length, 2000),
+              content: fullContent,
+              tokens: 50, // Adjust token count based on actual response length if needed
               timestamp: new Date(),
             }
           });
         }
       }
 
-      safeWrite({ type: 'done', results: [] });
+      res.write(`data: ${JSON.stringify({ type: 'done', results: allResults })}\n\n`);
       res.end();
+
     } catch (error) {
-      console.error('OpenAI web search error:', error);
-      sendError(error?.message || 'Web search failed');
+      console.error('Academic search error:', error);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
       res.end();
     }
   }
