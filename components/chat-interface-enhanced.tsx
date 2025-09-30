@@ -965,6 +965,22 @@ export default function ChatInterface() {
         return;
       }
       toast.error(err?.message || 'Send failed');
+
+      // Add a message with an error state to the chat
+      const errorMessage = {
+        id: `msg-error-${Date.now()}`,
+        chatId: currentChat?.id || 'unknown',
+        role: 'ASSISTANT' as const,
+        content: '', // No content, just the error
+        timestamp: new Date().toISOString(),
+        error: err.message || 'An unknown error occurred',
+      };
+
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), errorMessage];
+        return { ...prevChat, messages: updatedMessages };
+      });
     }
   }
 

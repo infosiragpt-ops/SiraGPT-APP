@@ -33,6 +33,8 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
+import ChartComponent from './chart-component';
+
 // Enhanced Message Component with Video Support
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
     message: any;
@@ -180,6 +182,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             </div>
         );
     };
+
+    const ErrorMessage = ({ onRegenerate }: { onRegenerate: () => void }) => (
+        <div className="flex items-center gap-2 text-red-500 py-2 px-4 bg-red-500/10 rounded-md">
+            <AlertCircle className="h-4 w-4" />
+            <p className="text-sm font-medium">An error occurred.</p>
+            <Button onClick={onRegenerate} variant="ghost" size="sm" className="ml-auto">
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Try again
+            </Button>
+        </div>
+    );
 
 
     const isAssistant = message.role === "ASSISTANT";
@@ -392,6 +405,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             return null;
         }
 
+        // Try to render as a chart first
+        const chart = ChartComponent({ content: message.content });
+        if (chart) {
+            return <div className="w-full overflow-x-auto">{chart}</div>;
+        }
+
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
 
@@ -412,10 +431,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         table: ({ node, children, ...props }: any) => {
                             const tHead = node.children.find((child: any) => child.tagName === 'thead');
                             const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                            const headers = tHead?.children?.[1]?.children?.map(getNodeText) ?? [];
-                            console.log("tHead?.children", tHead?.children?.map((tr: any) => tr.children?.map(getNodeText) ?? []));
+                            const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e:string)=>e !="\n") ?? [];
+                            console.log("tHead?.children", headers.filter((e:string)=>e !="\n") ?? []);
 
-                            const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText) ?? []) ?? [];
+                            const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e:string)=>e !="\n") ?? []) ?? [];
                             const handleExpand = () => {
                                 setTableHeaders(headers);
                                 setTableData(data);
@@ -704,13 +723,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 
                 {message.role === 'ASSISTANT' && (
                     <div className="w-full max-w-[90%]">
-                        {isThinking ? (
+                        {message.error ? (
+                            <ErrorMessage onRegenerate={onRegenerate} />
+                        ) : isThinking ? (
                             <ShimmerContent />
-                        ) : (<>
-                            <MessageContent />
-                            <VideoDisplay />
-                            <FileDisplay />
-                        </>)}
+                        ) : (
+                            <>
+                                <MessageContent />
+                                <VideoDisplay />
+                                <FileDisplay />
+                            </>
+                        )}
 
 
                         {/* Action buttons for assistant messages */}
@@ -845,13 +868,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-            <Dialog open={isTableExpanded} onOpenChange={setIsTableExpanded}>
-                <DialogContent className="max-w-7xl h-[90vh] flex flex-col">
-                    <DialogHeader>
-                        <DialogTitle>{tableTitle || 'Expanded Table View'}</DialogTitle>
-                    </DialogHeader>
+            {isTableExpanded && (
+                <div className="fixed inset-0 bg-background z-50 p-4 flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-bold">{tableTitle || 'Expanded Table View'}</h2>
+                        <Button variant="outline" onClick={() => setIsTableExpanded(false)}>Close</Button>
+                    </div>
                     <div className="flex-grow overflow-auto border rounded-md">
-                        <div className="overflow-x-auto overflow-y-auto h-full" style={{ scrollbarWidth: 'auto' }}>
+                        <div className="overflow-x-auto overflow-y-auto h-full">
                             <table className="w-full border-collapse border border-muted" style={{ minWidth: 'max-content' }}>
                                 <thead className="sticky top-0 bg-background">
                                     <tr>
@@ -872,11 +896,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             </table>
                         </div>
                     </div>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setIsTableExpanded(false)}>Close</Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+                </div>
+            )}
         </div>
     );
 };

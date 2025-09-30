@@ -10,13 +10,8 @@ const OpenAI = require('openai');
 const router = express.Router();
 
 // Initialize OpenAI client
-// const openai = new OpenAI({
-//   apiKey: process.env.OPENAI_API_KEY
-// });
 const openai = new OpenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-
+  apiKey: process.env.OPENAI_API_KEY
 });
 
 // Upload files
