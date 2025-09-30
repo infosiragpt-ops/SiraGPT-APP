@@ -519,8 +519,21 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
           return `File: ${f.name}\nContent: ${content}`;
         }).join('\n\n');
 
-        finalPrompt = `${prompt}\n\nAttached files:\n${fileContext}`;
+        // finalPrompt = `${prompt}\n\nAttached files:\n${fileContext}`;
+        const MAX_CONTEXT_TOKENS = 200000;
+        const fileContextTokens = usageService.calculateTextTokens(fileContext, actualModel);
+
+        let truncatedFileContext = fileContext;
+        if (fileContextTokens > MAX_CONTEXT_TOKENS) {
+          const charPerToken = fileContext.length / fileContextTokens;
+          const estimatedCharLimit = Math.floor(MAX_CONTEXT_TOKENS * charPerToken);
+          truncatedFileContext = fileContext.substring(0, estimatedCharLimit) + "\n... [CONTENT TRUNCATED DUE TO TOKEN LIMIT] ...";
+        }
+
+        finalPrompt = `${prompt}\n\nAttached files:\n${truncatedFileContext}`;
+
       }
+
 
       messages.push({
         role: 'user',
