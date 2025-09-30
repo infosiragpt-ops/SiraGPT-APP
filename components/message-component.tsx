@@ -807,10 +807,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 >
                                     <Share2 size={16} />
                                 </Button>
-                                <DownloadButtons
+                                {/* <DownloadButtons
                                     content={message.content}
                                     messageId={message.id}
-                                />
+                                /> */}
                             </div>
                         )}
                     </div>
