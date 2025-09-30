@@ -33,7 +33,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
-import ChartComponent from './chart-component';
+// import ChartComponent from './chart-component';
 
 // Enhanced Message Component with Video Support
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
@@ -406,10 +406,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         }
 
         // Try to render as a chart first
-        const chart = ChartComponent({ content: message.content });
-        if (chart) {
-            return <div className="w-full overflow-x-auto">{chart}</div>;
-        }
+        // const chart = ChartComponent({ content: message.content });
+        // if (chart) {
+        //     return <div className="w-full overflow-x-auto">{chart}</div>;
+        // }
 
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
@@ -431,10 +431,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         table: ({ node, children, ...props }: any) => {
                             const tHead = node.children.find((child: any) => child.tagName === 'thead');
                             const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                            const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e:string)=>e !="\n") ?? [];
-                            console.log("tHead?.children", headers.filter((e:string)=>e !="\n") ?? []);
+                            const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
+                            console.log("tHead?.children", headers.filter((e: string) => e != "\n") ?? []);
 
-                            const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e:string)=>e !="\n") ?? []) ?? [];
+                            const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
                             const handleExpand = () => {
                                 setTableHeaders(headers);
                                 setTableData(data);
