@@ -941,19 +941,18 @@ export default function ChatInterface() {
       } else if (isVideoGenerationActive) {
         await handleVideoGeneration(msg);
       } else {
+        const filesToSend = [...uploadedFiles];
+        setUploadedFiles([]); // Clear UI immediately
+
         if (!currentChat) {
           console.log("1s1");
-
-          await createNewChat(chatType, msg, uploadedFiles.map(f => f.id))
+          await createNewChat(chatType, msg, filesToSend);
         } else if (chatType === 'image') {
-
-
-          await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
-
+          await handleImageGeneration(msg, filesToSend.map(f => f.id));
         } else if (chatType === 'video') {
-          await handleVideoGeneration(msg)
+          await handleVideoGeneration(msg);
         } else {
-          await addMessage(msg, uploadedFiles.map(f => f.id))
+          await addMessage(msg, filesToSend);
         }
       }
     } catch (err: any) {
@@ -966,6 +965,22 @@ export default function ChatInterface() {
         return;
       }
       toast.error(err?.message || 'Send failed');
+
+      // Add a message with an error state to the chat
+      const errorMessage = {
+        id: `msg-error-${Date.now()}`,
+        chatId: currentChat?.id || 'unknown',
+        role: 'ASSISTANT' as const,
+        content: '', // No content, just the error
+        timestamp: new Date().toISOString(),
+        error: err.message || 'An unknown error occurred',
+      };
+
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), errorMessage];
+        return { ...prevChat, messages: updatedMessages };
+      });
     }
   }
 

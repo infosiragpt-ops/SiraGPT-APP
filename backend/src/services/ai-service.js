@@ -52,6 +52,37 @@ class AIService {
         try {
             const client = this.getClient(provider);
 
+            // Check if the user is asking for a chart
+            const lastUserMessage = messages[messages.length - 1].content.toLowerCase();
+            const chartKeywords = ['chart', 'graph', 'plot', 'diagram', 'visualize'];
+            const isChartRequest = chartKeywords.some(keyword => lastUserMessage.includes(keyword));
+
+            if (isChartRequest) {
+                // Modify the system prompt to request JSON for charts
+                const systemMessage = {
+                    role: 'system',
+                    content: `You are an expert AI assistant. When asked to create a chart, you must respond with a JSON object that can be used with the recharts library. The JSON object should have the following structure:
+{
+  "type": "bar", // or "line", "pie", "area", etc.
+  "data": [ // array of data objects
+    { "name": "Jan", "value": 4000 },
+    { "name": "Feb", "value": 3000 }
+  ],
+  "config": { // chart configuration
+    "title": "Chart Title",
+    "dataKey": "value",
+    "xAxisKey": "name",
+    "xAxisLabel": "X-Axis Label",
+    "yAxisLabel": "Y-Axis Label",
+    "fill": "#8884d8"
+  }
+}
+Do not include any other text or explanations in your response. Just the JSON object.`
+                };
+                messages.unshift(systemMessage);
+            }
+
+
             const payload = {
                 model: model,
                 messages: messages,

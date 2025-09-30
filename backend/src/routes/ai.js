@@ -380,8 +380,9 @@ router.post(
       if (isAuth && files && files.length > 0) {
         processedFiles = await Promise.all(
           files.map(async (fileId) => {
+
             const file = await prisma.file.findFirst({
-              where: { id: fileId, userId }
+              where: { id: fileId.id, userId }
             });
             if (file) {
               if (file.openaiFileId) {
@@ -518,8 +519,21 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
           return `File: ${f.name}\nContent: ${content}`;
         }).join('\n\n');
 
-        finalPrompt = `${prompt}\n\nAttached files:\n${fileContext}`;
+        // finalPrompt = `${prompt}\n\nAttached files:\n${fileContext}`;
+        const MAX_CONTEXT_TOKENS = 200000;
+        const fileContextTokens = usageService.calculateTextTokens(fileContext, actualModel);
+
+        let truncatedFileContext = fileContext;
+        if (fileContextTokens > MAX_CONTEXT_TOKENS) {
+          const charPerToken = fileContext.length / fileContextTokens;
+          const estimatedCharLimit = Math.floor(MAX_CONTEXT_TOKENS * charPerToken);
+          truncatedFileContext = fileContext.substring(0, estimatedCharLimit) + "\n... [CONTENT TRUNCATED DUE TO TOKEN LIMIT] ...";
+        }
+
+        finalPrompt = `${prompt}\n\nAttached files:\n${truncatedFileContext}`;
+
       }
+
 
       messages.push({
         role: 'user',
@@ -985,7 +999,7 @@ router.post(
               // ✅ Construct URL from available data
               const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
               const fileUrl = `${baseUrl}/uploads/${userId}/${inputFileRecord.filename}`;
-              
+
               userMessageFiles = JSON.stringify([{
                 id: inputFileRecord.id,
                 name: inputFileRecord.originalName,
@@ -1077,8 +1091,8 @@ router.post(
     body('chatId').optional().isString(),
     body('aspect_ratio').optional().isIn(['16:9', '9:16', '1:1']).withMessage('Invalid aspect ratio'),
     body('negative_prompt').optional().isString(),
-    body('files').optional().isArray(), 
-    body('image_url').optional().isString(), 
+    body('files').optional().isArray(),
+    body('image_url').optional().isString(),
   ],
   authenticateToken,
   async (req, res) => {
@@ -1108,13 +1122,13 @@ router.post(
         try {
           // Find the first image file
           const imageFile = await prisma.file.findFirst({
-            where: { 
-              id: { in: files }, 
+            where: {
+              id: { in: files },
               userId,
               mimeType: { startsWith: 'image/' }
             }
           });
-          
+
           if (imageFile) {
             // Construct the full image URL
             const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
@@ -1161,14 +1175,14 @@ router.post(
 
           // ✅ Prepare user message files - handle both files array and direct image_url
           let userMessageFiles = undefined;
-          
+
           // Case 1: Files uploaded via files array
           if (files && files.length > 0) {
             try {
               const fileRecords = await prisma.file.findMany({
-                where: { 
-                  id: { in: files }, 
-                  userId 
+                where: {
+                  id: { in: files },
+                  userId
                 },
                 select: {
                   id: true,
@@ -1183,7 +1197,7 @@ router.post(
                 // ✅ Construct URL from available data
                 const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
                 const fileUrl = `${baseUrl}/uploads/${userId}/${file.filename}`;
-                
+
                 return {
                   id: file.id,
                   name: file.originalName,
@@ -1205,11 +1219,11 @@ router.post(
               // Extract filename from URL to find the file record
               const urlParts = processedImageUrl.split('/');
               const filename = urlParts[urlParts.length - 1];
-              
+
               const fileRecord = await prisma.file.findFirst({
-                where: { 
+                where: {
                   filename: filename,
-                  userId 
+                  userId
                 },
                 select: {
                   id: true,
@@ -1224,7 +1238,7 @@ router.post(
                 // ✅ Construct URL from available data
                 const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
                 const fileUrl = `${baseUrl}/uploads/${userId}/${fileRecord.filename}`;
-                
+
                 userMessageFiles = JSON.stringify([{
                   id: fileRecord.id,
                   name: fileRecord.originalName,
@@ -1233,7 +1247,7 @@ router.post(
                   url: fileUrl, // ✅ Construct URL from available data
                   path: fileRecord.path
                 }]);
-                
+
                 console.log('📎 User message file from image_url:', fileRecord.originalName);
               }
             } catch (fileError) {
@@ -1256,8 +1270,8 @@ router.post(
             data: {
               chatId,
               role: 'ASSISTANT',
-              content: processedImageUrl ? 
-                `Generating video from image: "${prompt}"...` : 
+              content: processedImageUrl ?
+                `Generating video from image: "${prompt}"...` :
                 `Generating video: "${prompt}"...`,
               tokens: 1000, // Fixed token count for video generation
               // Store video data in files field as JSON
@@ -1268,7 +1282,7 @@ router.post(
                 filename: videoResponse.data.filename,
                 prompt: prompt,
                 aspect_ratio: aspect_ratio,
-                sourceImageUrl: processedImageUrl 
+                sourceImageUrl: processedImageUrl
               }])
             }
           });

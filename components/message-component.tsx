@@ -13,6 +13,15 @@ import {
     Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
     Sparkles
 } from "lucide-react"
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogFooter,
+    DialogClose,
+    DialogTrigger,
+} from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
 import { useVoiceControls } from './voice-controls';
@@ -23,6 +32,9 @@ import rehypeKatex from 'rehype-katex'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
+import TableControls from './TableControls';
+// import ChartComponent from './chart-component';
+
 // Enhanced Message Component with Video Support
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
     message: any;
@@ -42,6 +54,25 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     const [editedContent, setEditedContent] = useState(message.content);
     const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>({});
     const [imageError, setImageError] = useState<{ [key: string]: boolean }>({});
+    const [selectedFile, setSelectedFile] = useState<any>(null);
+    const [fileContent, setFileContent] = useState<string>("");
+    const [isContentLoading, setIsContentLoading] = useState(false);
+    const [isTableExpanded, setIsTableExpanded] = useState(false);
+    const [tableData, setTableData] = useState<string[][]>([]);
+    const [tableHeaders, setTableHeaders] = useState<string[]>([]);
+
+    const [tableTitle, setTableTitle] = useState<string>('');
+    const getNodeText = (node: any): string => {
+        if (node.type === 'text') {
+            return node.value;
+        }
+        if (node.children) {
+            return node.children.map(getNodeText).join('');
+        }
+        return '';
+    };
+
+
 
     // Video-specific states
     const [videoLoading, setVideoLoading] = useState(false);
@@ -52,6 +83,27 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 
     const videoRef = React.useRef<HTMLVideoElement>(null);
     const { handleTextToSpeech } = useVoiceControls();
+
+    const handleViewFile = async (file: any) => {
+        if (!file.id) {
+            toast.error("File ID is missing. Cannot fetch content.");
+            return;
+        }
+        setSelectedFile(file);
+        setIsContentLoading(true);
+        setFileContent("");
+        try {
+            // This function will need to be created in lib/api.ts
+            const content = await apiClient.getFileContent(file.id);
+            setFileContent(content);
+        } catch (error) {
+            console.error("Failed to fetch file content:", error);
+            toast.error("Failed to load file content.");
+            setFileContent("Error: Could not load file content.");
+        } finally {
+            setIsContentLoading(false);
+        }
+    };
 
     useEffect(() => {
         setEditedContent(message.content);
@@ -130,6 +182,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             </div>
         );
     };
+
+    const ErrorMessage = ({ onRegenerate }: { onRegenerate: () => void }) => (
+        <div className="flex items-center gap-2 text-red-500 py-2 px-4 bg-red-500/10 rounded-md">
+            <AlertCircle className="h-4 w-4" />
+            <p className="text-sm font-medium">An error occurred.</p>
+            <Button onClick={onRegenerate} variant="ghost" size="sm" className="ml-auto">
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Try again
+            </Button>
+        </div>
+    );
 
 
     const isAssistant = message.role === "ASSISTANT";
@@ -342,6 +405,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             return null;
         }
 
+        // Try to render as a chart first
+        // const chart = ChartComponent({ content: message.content });
+        // if (chart) {
+        //     return <div className="w-full overflow-x-auto">{chart}</div>;
+        // }
+
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
 
@@ -359,13 +428,54 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         h2: ({ children }) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
                         h3: ({ children }) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
                         blockquote: ({ children }) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-                        table: ({ children }) => <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600">
-                            <table className="border-collapse border border-muted mb-3 min-w-[1000px]">
-                                {children}
-                            </table>
-                        </div>,
-                        th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm">{children}</th>,
-                        td: ({ children }) => <td className="border border-muted px-3 py-2 text-sm">{children}</td>,
+                        table: ({ node, children, ...props }: any) => {
+                            const tHead = node.children.find((child: any) => child.tagName === 'thead');
+                            const tBody = node.children.find((child: any) => child.tagName === 'tbody');
+                            const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
+                            console.log("tHead?.children", headers.filter((e: string) => e != "\n") ?? []);
+
+                            const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
+                            const handleExpand = () => {
+                                setTableHeaders(headers);
+                                setTableData(data);
+                                setTableTitle(title);
+                                setIsTableExpanded(true);
+                            };
+                            // Find the preceding h1, h2, or h3 to use as a title
+                            let title = '';
+                            const parent = node.parent;
+                            if (parent) {
+                                const tableIndex = parent.children.indexOf(node);
+                                for (let i = tableIndex - 1; i >= 0; i--) {
+                                    const sibling = parent.children[i];
+                                    if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
+                                        title = getNodeText(sibling);
+                                        break;
+                                    }
+                                    // Stop if we hit another element that's not a heading
+                                    if (sibling.type !== 'text' || sibling.value.trim() !== '') {
+                                        break;
+                                    }
+                                }
+                            }
+                            return (
+                                <div className="relative -mt-3">
+                                    <TableControls
+                                        content={message.content}
+                                        messageId={message.id}
+                                        onExpand={handleExpand}
+                                        title={title}
+                                    />
+                                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600">
+                                        <table className="border-collapse border border-muted mb-3 min-w-[1000px]">
+                                            {children}
+                                        </table>
+                                    </div>
+                                </div>
+                            );
+                        },
+                        th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
+                        td: ({ children }) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
                         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
                         em: ({ children }) => <em className="italic">{children}</em>,
                         a: ({ href, children, ...props }) => (
@@ -403,7 +513,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         return hasImageFiles || hasImageUrl;
     };
     const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename)
-    const getDownloadUrl = (filename: string) => apiClient.downloadVideo(filename)
 
     const VideoDisplay = () => {
         if (!isVideoMessage) return null
@@ -448,11 +557,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             }}
                         />
                         <div className="flex gap-2">
-                            <Button size="sm" variant="outline" asChild>
-                                <a href={getDownloadUrl(filename)} download>
-                                    <Download className="h-4 w-4 mr-1" />
-                                    Download
-                                </a>
+                            <Button size="sm" variant="outline" onClick={downloadVideo}>
+                                <Download className="h-4 w-4 mr-1" />
+                                Download
                             </Button>
                             <Button size="sm" variant="outline" asChild>
                                 <a href={getWatchUrl(filename)} target="_blank" rel="noopener noreferrer">
@@ -558,10 +665,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             {parsedFiles
                                 .filter((file: any) => !file.type?.startsWith('image/'))
                                 .map((file: any, index: number) => (
-                                    <div key={index} className="flex items-center gap-1 px-2 py-1 border rounded">
+                                    <button key={index} onClick={() => handleViewFile(file)} className="flex items-center gap-1 px-2 py-1 border rounded hover:bg-muted transition-colors">
                                         <FileText className="h-4 w-4" />
                                         <span className="text-xs">{file.originalName || file.name || 'File'}</span>
-                                    </div>
+                                    </button>
                                 ))}
                         </div>
                     )}
@@ -616,13 +723,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 
                 {message.role === 'ASSISTANT' && (
                     <div className="w-full max-w-[90%]">
-                        {isThinking ? (
+                        {message.error ? (
+                            <ErrorMessage onRegenerate={onRegenerate} />
+                        ) : isThinking ? (
                             <ShimmerContent />
-                        ) : (<>
-                            <MessageContent />
-                            <VideoDisplay />
-                            <FileDisplay />
-                        </>)}
+                        ) : (
+                            <>
+                                <MessageContent />
+                                <VideoDisplay />
+                                <FileDisplay />
+                            </>
+                        )}
 
 
                         {/* Action buttons for assistant messages */}
@@ -712,6 +823,80 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         {user?.name?.[0]?.toUpperCase() || 'U'}
                     </AvatarFallback>
                 </Avatar>
+            )}
+
+            <Dialog open={!!selectedFile} onOpenChange={(isOpen) => { if (!isOpen) setSelectedFile(null) }}>
+                <DialogContent className="max-w-3xl h-[80vh] flex flex-col">
+                    <DialogHeader>
+                        <DialogTitle>{selectedFile?.originalName || 'File Content'}</DialogTitle>
+                    </DialogHeader>
+                    <div className="flex-grow overflow-y-auto p-1">
+                        {isContentLoading ? (
+                            <div className="flex items-center justify-center h-full">
+                                <Loader2 className="h-8 w-8 animate-spin" />
+                            </div>
+                        ) : (
+                            <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>
+                        )}
+                    </div>
+                    <DialogFooter>
+                        <DialogClose asChild>
+                            <Button variant="outline">Close</Button>
+                        </DialogClose>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={!!selectedFile} onOpenChange={(isOpen) => { if (!isOpen) setSelectedFile(null) }}>
+                <DialogContent className="max-w-3xl h-[80vh] flex flex-col">
+                    <DialogHeader>
+                        <DialogTitle>{selectedFile?.originalName || 'File Content'}</DialogTitle>
+                    </DialogHeader>
+                    <div className="flex-grow overflow-y-auto p-1">
+                        {isContentLoading ? (
+                            <div className="flex items-center justify-center h-full">
+                                <Loader2 className="h-8 w-8 animate-spin" />
+                            </div>
+                        ) : (
+                            <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>
+                        )}
+                    </div>
+                    <DialogFooter>
+                        <DialogClose asChild>
+                            <Button variant="outline">Close</Button>
+                        </DialogClose>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+            {isTableExpanded && (
+                <div className="fixed inset-0 bg-background z-50 p-4 flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-bold">{tableTitle || 'Expanded Table View'}</h2>
+                        <Button variant="outline" onClick={() => setIsTableExpanded(false)}>Close</Button>
+                    </div>
+                    <div className="flex-grow overflow-auto border rounded-md">
+                        <div className="overflow-x-auto overflow-y-auto h-full">
+                            <table className="w-full border-collapse border border-muted" style={{ minWidth: 'max-content' }}>
+                                <thead className="sticky top-0 bg-background">
+                                    <tr>
+                                        {tableHeaders.map((header, index) => (
+                                            <th key={index} className="border border-muted px-4 py-3 bg-muted/50 text-left font-medium text-sm whitespace-nowrap min-w-[120px]">{header}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {tableData.map((row, rowIndex) => (
+                                        <tr key={rowIndex} className="hover:bg-muted/20">
+                                            {row.map((cell, cellIndex) => (
+                                                <td key={cellIndex} className="border border-muted px-4 py-3 text-sm whitespace-nowrap min-w-[120px]">{cell}</td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );
