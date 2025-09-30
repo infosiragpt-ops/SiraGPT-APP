@@ -245,7 +245,7 @@ export default function SubscriptionManager() {
                   <div>
                     <p className="text-sm font-medium">Payment Method</p>
                     <p className="text-xs text-muted-foreground">
-                      {subscriptionData.paymentMethod || 'Stripe'}
+                      Stripe
                     </p>
                   </div>
                 </div>

@@ -1,5 +1,7 @@
 "use client"
 
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuth } from "@/lib/auth-context-integrated"
 import { AuthGuard } from "@/components/auth-guard"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -9,11 +11,10 @@ import { Label } from "@/components/ui/label"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ArrowLeft, Camera, CreditCard, Shield, User, Settings } from "lucide-react"
+import { ArrowLeft, Camera, CreditCard, Shield, Eye, EyeOff } from "lucide-react"
 import Link from "next/link"
-import { useSearchParams } from "next/navigation"
-import SubscriptionManager from "@/components/subscription-manager"
+import { toast } from 'sonner'
+import { apiClient } from '@/lib/api'
 
 export default function ProfilePage() {
   return (
@@ -24,11 +25,92 @@ export default function ProfilePage() {
 }
 
 function ProfileContent() {
-  const { user } = useAuth()
-  const searchParams = useSearchParams()
-  const defaultTab = searchParams.get('tab') || 'profile'
+  const { user, refreshUser } = useAuth()
+  const router = useRouter()
+  const [loading, setLoading] = useState(false)
+  const [profileData, setProfileData] = useState({
+    name: user?.name || ''
+  })
+  const [passwordData, setPasswordData] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+  })
+  const [showPassword, setShowPassword] = useState({
+    current: false,
+    new: false,
+    confirm: false
+  })
 
   if (!user) return null
+
+  const handleSaveProfile = async () => {
+    if (!profileData.name.trim()) {
+      toast.error('Name is required')
+      return
+    }
+
+    if (profileData.name === user.name) {
+      toast.info('No changes to save')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const response = await apiClient.updateUserProfile({
+        name: profileData.name.trim()
+      })
+      console.log('Profile update response:', response)
+      if (response) {
+        toast.success('Profile updated successfully!')
+        // Refresh user data to get updated info
+        await refreshUser()
+      } else {
+        toast.error(response.message || 'Failed to update profile')
+      }
+    } catch (error) {
+      console.error('Profile update error:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleChangePassword = async () => {
+    if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
+      toast.error('Please fill in all password fields')
+      return
+    }
+
+    if (passwordData.newPassword !== passwordData.confirmPassword) {
+      toast.error('New passwords do not match')
+      return
+    }
+
+    if (passwordData.newPassword.length < 8) {
+      toast.error('Password must be at least 8 characters')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const response = await apiClient.changePassword({
+        currentPassword: passwordData.currentPassword,
+        newPassword: passwordData.newPassword
+      })
+      if (response.success) {
+        setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' })
+        toast.success('Password updated successfully!')
+      } else {
+        toast.error(response.message || 'Failed to update password')
+      }
+    } catch (error: any) {
+      console.error('Password update error:', error.message || error)
+
+      toast.error(error.message || 'Failed to update password')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background p-4">
@@ -42,28 +124,11 @@ function ProfileContent() {
             </Button>
           </Link>
           <div>
-            <h1 className="text-2xl font-bold">Account Settings</h1>
-            <p className="text-muted-foreground">Manage your profile, subscription, and preferences</p>
-          </div>
+            <h1 className="text-2xl font-bold">Profile Settings</h1>
+            <p className="text-muted-foreground">Manage your account settings and preferences</p>
+           </div>
         </div>
 
-        <Tabs defaultValue={defaultTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="profile" className="flex items-center gap-2">
-              <User className="h-4 w-4" />
-              Profile
-            </TabsTrigger>
-            <TabsTrigger value="subscription" className="flex items-center gap-2">
-              <CreditCard className="h-4 w-4" />
-              Subscription
-            </TabsTrigger>
-            {/* <TabsTrigger value="security" className="flex items-center gap-2">
-              <Shield className="h-4 w-4" />
-              Security
-            </TabsTrigger> */}
-          </TabsList>
-
-          <TabsContent value="profile" className="space-y-6">
             <div className="grid gap-6 lg:grid-cols-3">
               {/* Profile Info */}
               <div className="lg:col-span-2 space-y-6">
@@ -104,15 +169,28 @@ function ProfileContent() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="name">Full Name</Label>
-                    <Input id="name" defaultValue={user.name} />
+                    <Input 
+                      id="name" 
+                      value={profileData.name}
+                      onChange={(e) => setProfileData(prev => ({ ...prev, name: e.target.value }))}
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="email">Email</Label>
-                    <Input id="email" type="email" defaultValue={user.email} />
+                    <Input 
+                      id="email" 
+                      type="email" 
+                      value={user.email}
+                      disabled
+                      className="bg-muted"
+                    />
+                    <p className="text-xs text-muted-foreground">Email cannot be changed for security reasons</p>
                   </div>
                 </div>
 
-                <Button>Save Changes</Button>
+                <Button onClick={handleSaveProfile} disabled={loading}>
+                  {loading ? 'Saving...' : 'Save Changes'}
+                </Button>
               </CardContent>
             </Card>
 
@@ -124,17 +202,82 @@ function ProfileContent() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="current-password">Current Password</Label>
-                  <Input id="current-password" type="password" />
+                  <div className="relative">
+                    <Input 
+                      id="current-password" 
+                      type={showPassword.current ? "text" : "password"}
+                      value={passwordData.currentPassword}
+                      onChange={(e) => setPasswordData(prev => ({ ...prev, currentPassword: e.target.value }))}
+                      className="pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowPassword(prev => ({ ...prev, current: !prev.current }))}
+                    >
+                      {showPassword.current ? (
+                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="new-password">New Password</Label>
-                  <Input id="new-password" type="password" />
+                  <div className="relative">
+                    <Input 
+                      id="new-password" 
+                      type={showPassword.new ? "text" : "password"}
+                      value={passwordData.newPassword}
+                      onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
+                      className="pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowPassword(prev => ({ ...prev, new: !prev.new }))}
+                    >
+                      {showPassword.new ? (
+                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="confirm-password">Confirm New Password</Label>
-                  <Input id="confirm-password" type="password" />
+                  <div className="relative">
+                    <Input 
+                      id="confirm-password" 
+                      type={showPassword.confirm ? "text" : "password"}
+                      value={passwordData.confirmPassword}
+                      onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                      className="pr-10"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
+                      onClick={() => setShowPassword(prev => ({ ...prev, confirm: !prev.confirm }))}
+                    >
+                      {showPassword.confirm ? (
+                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
-                <Button>Update Password</Button>
+                <Button onClick={handleChangePassword} disabled={loading}>
+                  {loading ? 'Updating...' : 'Update Password'}
+                </Button>
               </CardContent>
             </Card>
           </div>
@@ -168,7 +311,7 @@ function ProfileContent() {
                   </div>
                 </div>
                 <Separator className="my-4" />
-                <Button className="w-full" variant="outline">
+                <Button className="w-full" variant="outline" onClick={() => router.push('/billing')}>
                   Manage Subscription
                 </Button>
               </CardContent>
@@ -198,69 +341,25 @@ function ProfileContent() {
               <CardContent>
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <span className="text-sm">Messages this month</span>
-                    <span className="text-sm font-medium">{user.monthlyLimit - (user.monthlyCallLimit || 0)}</span>
+                    <span className="text-sm">API calls used</span>
+                    <span className="text-sm font-medium">{user.apiUsage}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm">API calls remaining</span>
-                    <span className="text-sm font-medium">{user.monthlyCallLimit || 0}</span>
+                    <span className="text-sm font-medium">{Math.max(0, user.monthlyLimit - user.apiUsage)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm">Current plan</span>
-                    <span className="text-sm font-medium">{user.plan}</span>
+                    <span className="text-sm">Monthly limit</span>
+                    <span className="text-sm font-medium">{user.monthlyLimit}</span>
                   </div>
                 </div>
               </CardContent>
             </Card>
           </div>
         </div>
-      </TabsContent>
 
-      <TabsContent value="subscription" className="space-y-6">
-        <SubscriptionManager />
-      </TabsContent>
-
-      <TabsContent value="security" className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Security Settings</CardTitle>
-            <CardDescription>Manage your account security and privacy</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="current-password">Current Password</Label>
-              <Input id="current-password" type="password" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="new-password">New Password</Label>
-              <Input id="new-password" type="password" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirm-password">Confirm New Password</Label>
-              <Input id="confirm-password" type="password" />
-            </div>
-            <Button>Update Password</Button>
-          </CardContent>
-        </Card>
-        
-        <Card>
-          <CardHeader>
-            <CardTitle>Two-Factor Authentication</CardTitle>
-            <CardDescription>Add an extra layer of security to your account</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">2FA Status</p>
-                <p className="text-sm text-muted-foreground">Not enabled</p>
-              </div>
-              <Button variant="outline">Enable 2FA</Button>
-            </div>
-          </CardContent>
-        </Card>
-      </TabsContent>
-
-    </Tabs>
+      
+   
       </div>
     </div>
   )

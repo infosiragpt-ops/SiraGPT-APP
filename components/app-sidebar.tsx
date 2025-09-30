@@ -436,15 +436,12 @@ export function AppSidebar() {
                     <User className="mr-2 h-4 w-4" />
                     Profile
                   </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <Crown className="mr-2 h-4 w-4" />
-                    Upgrade to Pro
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
+                 
+                  <DropdownMenuItem onClick={() => router.push("/billing")}>
                     <CreditCard className="mr-2 h-4 w-4" />
                     Billing
                   </DropdownMenuItem>
-                  <DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => router.push("/settings")}>
                     <Settings className="mr-2 h-4 w-4" />
                     Settings
                   </DropdownMenuItem>
