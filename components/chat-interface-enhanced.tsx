@@ -67,6 +67,7 @@ import { webSearchService } from "@/lib/web-search-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
+import SearchSourceSelector, { SearchSources } from "./SearchSourceSelector"
 
 // Enhanced Actions Dropdown Component
 const ActionsDropdown = ({
@@ -434,7 +435,10 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
-  setChatType
+  setChatType,
+  searchSources,
+  setSearchSources,
+  isWebSearching
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
@@ -443,6 +447,9 @@ const ActiveToolsDisplay = ({
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
   setChatType: (type: any) => void;
+  searchSources: SearchSources;
+  setSearchSources: (sources: SearchSources) => void;
+  isWebSearching: boolean;
 }) => {
   const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive;
 
@@ -466,18 +473,25 @@ const ActiveToolsDisplay = ({
   return (
     <div className="flex items-center gap-2">
       {isWebSearchActive && (
-        <div className="flex items-center gap-1.5 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 px-2 py-1 rounded-full text-xs border border-green-200 dark:border-green-800">
-          <Globe className="h-3 w-3" />
-          <span className="font-medium">Web Search</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0 hover:bg-green-200 dark:hover:bg-green-800/30 rounded-full ml-1"
-            onClick={handleWebSearchClose}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
+        <>
+          <div className="flex items-center gap-1.5 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 px-2 py-1 rounded-full text-xs border border-green-200 dark:border-green-800">
+            <Globe className="h-3 w-3" />
+            <span className="font-medium">Web Search</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-4 w-4 p-0 hover:bg-green-200 dark:hover:bg-green-800/30 rounded-full ml-1"
+              onClick={handleWebSearchClose}
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+          <SearchSourceSelector
+            sources={searchSources}
+            onSourcesChange={setSearchSources}
+            disabled={isWebSearching}
+          />
+        </>
       )}
       {isImageGenerationActive && (
         <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
@@ -666,6 +680,13 @@ export default function ChatInterface() {
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
+
+  // Search sources state - all enabled by default
+  const [searchSources, setSearchSources] = React.useState<SearchSources>({
+    scopus: true,
+    pubmed: true,
+    gpt4oMini: true
+  });
 
   // No longer need dynamic padding, handled by layout
   const textareaRef = React.useRef(null);
@@ -1159,7 +1180,8 @@ export default function ChatInterface() {
             );
             return { ...prev, messages: newMessages };
           });
-        }
+        },
+        searchSources
       );
 
     } catch (error: any) {
@@ -1388,6 +1410,9 @@ export default function ChatInterface() {
                     isVideoGenerationActive={isVideoGenerationActive}
                     setIsVideoGenerationActive={setIsVideoGenerationActive}
                     setChatType={setChatType}
+                    searchSources={searchSources}
+                    setSearchSources={setSearchSources}
+                    isWebSearching={isWebSearching}
                   />
                   <div className="flex-grow" />
                   {!(isLoading && isStreaming) && (
@@ -1597,6 +1622,9 @@ export default function ChatInterface() {
                         isVideoGenerationActive={isVideoGenerationActive}
                         setIsVideoGenerationActive={setIsVideoGenerationActive}
                         setChatType={setChatType}
+                        searchSources={searchSources}
+                        setSearchSources={setSearchSources}
+                        isWebSearching={isWebSearching}
                       />
                       <div className="flex-grow" />
                       {!(isLoading && isStreaming) && (

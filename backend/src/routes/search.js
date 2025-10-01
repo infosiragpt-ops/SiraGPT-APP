@@ -285,61 +285,61 @@ const OpenAI = require('openai');
 const router = express.Router();
 
 /**
- * Check if query is meaningful for academic search
+ * Check if query is meaningful for search
  */
-function isValidAcademicQuery(query) {
+function isValidSearchQuery(query) {
   // Remove special characters and check length
   const cleanQuery = query.replace(/[^a-zA-Z0-9\s]/g, '').trim();
 
-  // Must be at least 3 characters and contain letters
-  if (cleanQuery.length < 3 || !/[a-zA-Z]/.test(cleanQuery)) {
+  // Must be at least 2 characters and contain letters
+  if (cleanQuery.length < 2 || !/[a-zA-Z]/.test(cleanQuery)) {
     return false;
   }
 
-  // Check if it's just random characters (more than 50% consecutive repeated chars)
-  const repeatedChars = cleanQuery.match(/(.)\1{2,}/g);
-  if (repeatedChars && repeatedChars.join('').length > cleanQuery.length * 0.5) {
+  // Check if it's just random characters (more than 70% consecutive repeated chars)
+  const repeatedChars = cleanQuery.match(/(.)\1{3,}/g);
+  if (repeatedChars && repeatedChars.join('').length > cleanQuery.length * 0.7) {
     return false;
   }
 
-  // Check if it contains common academic terms or is a reasonable length
-  const academicTerms = /\b(research|study|analysis|review|survey|method|model|data|technology|system|algorithm|treatment|diagnosis|therapy|medicine|clinical|patient|disease|health|cancer|covid|drug|vaccine|biology|protein|gene|cell|brain|heart|neuroscience|genetics|microbiology|biochemistry|physics|chemistry|materials|nanotechnology|energy|robotics|engineering|psychology|sociology|education|economics|behavior|policy|climate|environment|ecology|pollution|biodiversity|sustainability)\b/i;
-
-  return cleanQuery.length >= 3 && (academicTerms.test(cleanQuery) || cleanQuery.split(/\s+/).length >= 2);
+  return true;
 }
 
 /**
- * Clean and extract the core academic query from user input
- * Removes emojis, date ranges, instructions, and other noise
+ * Clean search query while preserving user intent
+ * Extracts the core search topic from natural language queries
  */
-function cleanAcademicQuery(query) {
+function cleanSearchQuery(query) {
   let cleaned = query;
-  
+
   // Remove emojis and special symbols
   cleaned = cleaned.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '');
-  
-  // Remove common search instructions (case insensitive)
+
+  // Remove common search instructions and phrases
   const instructionPatterns = [
-    /find\s+me\s+\d+\s+(scientific\s+)?(articles?|papers?|studies)/gi,
-    /show\s+me\s+\d+\s+(scientific\s+)?(articles?|papers?|studies)/gi,
-    /give\s+me\s+\d+\s+(scientific\s+)?(articles?|papers?|studies)/gi,
-    /search\s+for\s+\d+\s+(scientific\s+)?(articles?|papers?|studies)/gi,
-    /from\s+\d{4}\s+to\s+\d{4}/gi,
-    /between\s+\d{4}\s+and\s+\d{4}/gi,
-    /in\s+\d{4}(-\d{4})?/gi,
-    /published\s+in\s+\d{4}/gi,
+    /^(search\s+for|find\s+me|look\s+for|get\s+me|show\s+me|tell\s+me\s+about)\s+/gi,
+    /\s+(please|pls)$/gi,
+    /find\s+me\s+\d+\s+(scientific\s+)?(articles?|papers?|studies?)/gi,
+    /\d+\s+(scientific\s+)?(articles?|papers?|studies?)\s+on\s+/gi,
+    /\s+on\s+this\s+topic$/gi,
+    /just\s+like\s+that$/gi,
   ];
-  
+
   instructionPatterns.forEach(pattern => {
     cleaned = cleaned.replace(pattern, '');
   });
-  
-  // Remove stray parentheses, brackets without content
-  cleaned = cleaned.replace(/[()[\]{}]/g, ' ');
-  
+
+  // Extract key terms from natural language
+  // Remove question words at the beginning
+  cleaned = cleaned.replace(/^(what\s+is\s+the|what\s+are\s+the|how\s+does|how\s+do|why\s+does|why\s+do|when\s+does|when\s+do|where\s+does|where\s+do)\s+/gi, '');
+
+  // Clean up common phrases
+  cleaned = cleaned.replace(/\s+(influence\s+of|effect\s+of|impact\s+of|role\s+of)\s+/gi, ' ');
+  cleaned = cleaned.replace(/\s+(and\s+its|on\s+the|in\s+the|of\s+the|for\s+the)\s+/gi, ' ');
+
   // Remove extra whitespace and trim
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  
+
   console.log(`🧹 Query cleaned: "${query}" → "${cleaned}"`);
   return cleaned;
 }
@@ -351,7 +351,7 @@ function filterQualityResults(results, query) {
   return results.filter(result => {
     // Ensure title is a string
     const title = typeof result.title === 'string' ? result.title : String(result.title || '');
-    
+
     // Filter out results with default/placeholder values
     if (title.includes('Untitled') ||
       title === 'Article Title' ||
@@ -399,7 +399,7 @@ async function searchArXiv(query, maxResults = 30) {
         'User-Agent': 'OpenWebUI/1.0 (arXiv Search)'
       }
     });
-    
+
     if (!res.ok) {
       console.error(`arXiv API error: ${res.status} ${res.statusText}`);
       return [];
@@ -416,28 +416,28 @@ async function searchArXiv(query, maxResults = 30) {
       const published = e.published?.[0] || null;
       const updated = e.updated?.[0] || null;
       const year = published ? new Date(published).getFullYear() : null;
-      
+
       // Get all authors (not limited to 5)
       const authors = (e.author || [])
         .map((a) => a?.name?.[0])
         .filter(Boolean);
       const authorsDisplay = authors.slice(0, 5).join(', ') + (authors.length > 5 ? ` et al. (${authors.length} total)` : '');
-      
+
       // Get links
       const links = (e.link || []);
       const pdfLink = links.find(l => l.rel?.[0] === 'related' && /pdf/.test(l.title?.[0] || ''))?.href?.[0]
         || links.find(l => l.type?.[0] === 'application/pdf')?.href?.[0];
       const altLink = links.find(l => l.rel?.[0] === 'alternate')?.href?.[0];
       const url = pdfLink || altLink || null;
-      
+
       // Get categories
       const categories = (e.category || []).map(c => c.term?.[0]).filter(Boolean);
       const primaryCategory = e['arxiv:primary_category']?.[0]?.term?.[0] || categories[0] || '';
       const categoriesDisplay = categories.slice(0, 3).join(', ') + (categories.length > 3 ? '...' : '');
-      
+
       // Get arXiv ID for citation count lookup
       const arxivId = e.id?.[0]?.split('/abs/')?.[1] || '';
-      
+
       // Validate essential fields
       if (!title || title.length < 10 || !url) {
         return null;
@@ -486,7 +486,7 @@ async function searchArXiv(query, maxResults = 30) {
 /**
  * Enhanced PubMed Search with comprehensive metadata and abstracts
  */
-async function searchPubMed(query, maxResults = 30) {
+async function searchPubMed(query, maxResults = 10) {
   try {
     // Step 1: Search for PubMed IDs
     const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmax=${maxResults}&retmode=json&sort=relevance`;
@@ -500,7 +500,7 @@ async function searchPubMed(query, maxResults = 30) {
     const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${ids.join(',')}&retmode=xml`;
     const summaryRes = await fetch(summaryUrl);
     const xmlData = await summaryRes.text();
-    
+
     // Parse XML response
     const parsed = await xml2js.parseStringPromise(xmlData, { explicitArray: true, mergeAttrs: true });
     const articles = parsed?.PubmedArticleSet?.PubmedArticle || [];
@@ -508,7 +508,7 @@ async function searchPubMed(query, maxResults = 30) {
     const results = articles.map(article => {
       const medlineCitation = article?.MedlineCitation?.[0];
       const pubmedData = article?.PubmedData?.[0];
-      
+
       if (!medlineCitation) return null;
 
       const articleData = medlineCitation?.Article?.[0];
@@ -542,18 +542,18 @@ async function searchPubMed(query, maxResults = 30) {
       // Extract journal information
       const journal = articleData?.Journal?.[0];
       const journalTitle = journal?.Title?.[0] || journal?.ISOAbbreviation?.[0] || 'PubMed';
-      
+
       // Extract publication date
       const pubDate = journal?.JournalIssue?.[0]?.PubDate?.[0];
       const year = pubDate?.Year?.[0] || null;
       const month = pubDate?.Month?.[0] || '';
       const day = pubDate?.Day?.[0] || '';
-      
+
       // Extract PMID and DOI
       const pmid = medlineCitation?.PMID?.[0]?._ || medlineCitation?.PMID?.[0] || '';
       const articleIds = pubmedData?.ArticleIdList?.[0]?.ArticleId || [];
-      const doi = articleIds.find(id => id.IdType === 'doi')?._  || null;
-      
+      const doi = articleIds.find(id => id.IdType === 'doi')?._ || null;
+
       // Extract MeSH terms
       const meshTerms = medlineCitation?.MeshHeadingList?.[0]?.MeshHeading || [];
       const keywords = meshTerms
@@ -600,7 +600,7 @@ async function searchPubMed(query, maxResults = 30) {
 /**
  * Enhanced Scopus Search with quality filtering and comprehensive metadata
  */
-async function searchScopus(query, maxResults = 30) {
+async function searchScopus(query, maxResults = 10) {
   try {
     if (!process.env.SCOPUS_API_KEY) {
       console.log("Scopus API key not configured, skipping Scopus search");
@@ -656,25 +656,22 @@ async function searchScopus(query, maxResults = 30) {
         ? new Date(item["prism:coverDate"]).getFullYear()
         : null;
 
-      // Citations count
+
       const citations = item["citedby-count"] || "0";
 
-      // Document type
       const docType = item["prism:aggregationType"] || "Article";
 
-      // DOI and URL
       const doi = item["prism:doi"];
       const url = doi ? `https://doi.org/${doi}` : (item["prism:url"] || `https://www.scopus.com/record/display.uri?eid=2-s2.0-${item['eid']}&origin=resultslist`);
 
-      // Skip if no URL
       if (!url) {
         return null;
       }
 
-      // Enhanced snippet with metadata
+
       const description = item["dc:description"] || title;
       const authorKeywords = item["authkeywords"] || '';
-      
+
       const snippet = `📝 **Abstract:** ${description || title}\n\n` +
         `� **Authors:** ${authors}\n` +
         `📚 **Journal:** ${journal || 'Scopus Journal'}\n` +
@@ -946,6 +943,111 @@ async function parseSciELOHTML(html, query) {
   return results;
 }
 
+/**
+ * Enhanced Crossref Search with comprehensive metadata
+ */
+async function searchCrossref(query, maxResults = 10) {
+  try {
+    console.log(`🔗 Crossref: Searching for "${query}" (max: ${maxResults})`);
+
+    // Crossref API endpoint
+    const baseUrl = 'https://api.crossref.org/works';
+    const params = new URLSearchParams({
+      query: query,
+      rows: String(maxResults),
+      sort: 'relevance',
+      order: 'desc'
+    });
+
+    const url = `${baseUrl}?${params.toString()}`;
+    console.log(`🔗 Crossref: Request URL: ${url}`);
+
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'OpenWebUI/1.0 (mailto:contact@example.com)', // Crossref requires a User-Agent
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      console.error(`Crossref API error: ${response.status} ${response.statusText}`);
+      return [];
+    }
+
+    const data = await response.json();
+    const items = data?.message?.items || [];
+    console.log(`🔗 Crossref: Found ${items.length} raw entries`);
+
+    const results = items.map((item) => {
+      // Extract title
+      const title = Array.isArray(item.title) ? item.title[0] : item.title;
+      if (!title || title.length < 10) return null;
+
+      // Extract authors
+      const authors = item.author ?
+        item.author.slice(0, 5).map(a => `${a.given || ''} ${a.family || ''}`.trim()).filter(Boolean).join(', ') +
+        (item.author.length > 5 ? ` et al. (${item.author.length} total)` : '')
+        : 'Unknown authors';
+
+      // Extract journal/container
+      const journal = Array.isArray(item['container-title']) ?
+        item['container-title'][0] :
+        (item['container-title'] || 'Crossref Journal');
+
+      // Extract publication date
+      const publishedDate = item.published || item['published-print'] || item['published-online'];
+      const year = publishedDate ? publishedDate['date-parts']?.[0]?.[0] : null;
+
+      // Extract DOI and create URL
+      const doi = item.DOI;
+      const url = doi ? `https://doi.org/${doi}` : null;
+      if (!url) return null;
+
+      // Extract abstract or use title
+      const abstract = item.abstract || `Research article published in ${journal}`;
+
+      // Extract additional metadata
+      const type = item.type || 'journal-article';
+      const publisher = item.publisher || 'Unknown Publisher';
+      const citationCount = item['is-referenced-by-count'] || 0;
+
+      // Create comprehensive snippet
+      const snippet = `📝 **Abstract:** ${abstract}\n\n` +
+        `👥 **Authors:** ${authors}\n` +
+        `📚 **Journal:** ${journal}\n` +
+        `🏢 **Publisher:** ${publisher}\n` +
+        `📅 **Published:** ${year || 'N/A'}\n` +
+        `📊 **Citations:** ${citationCount}\n` +
+        `🔗 **DOI:** ${doi}\n` +
+        `📄 **Type:** ${type.replace('-', ' ')}`;
+
+      return {
+        title,
+        url,
+        snippet,
+        displayLink: 'doi.org',
+        authors,
+        journal,
+        year: year ? String(year) : 'N/A',
+        doi,
+        type,
+        abstract,
+        publisher,
+        citations: String(citationCount),
+        database: 'Crossref'
+      };
+    }).filter(Boolean);
+
+    console.log(`🔗 Crossref: Mapped ${results.length} valid results`);
+    const filtered = filterQualityResults(results, query);
+    console.log(`🔗 Crossref: Returning ${filtered.length} quality results`);
+    return filtered;
+  } catch (err) {
+    console.error('Crossref error:', err);
+    return [];
+  }
+}
+
 async function searchOpenAIWeb(query) {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -959,26 +1061,27 @@ async function searchOpenAIWeb(query) {
 
     console.log('🤖 OpenAI: Searching for comprehensive information...');
 
-    // Enhanced prompt for academic-style comprehensive response
+    // Enhanced prompt for better topic coverage
     const prompt = `You are a research assistant providing comprehensive information about: "${query}"
 
-Please provide:
-1. A detailed summary of current research and knowledge on this topic
-2. Key findings and important points
-3. Relevant statistics or data if applicable
-4. Recent developments or trends (as of 2025)
-5. Notable researchers or institutions working in this area
+Please provide a detailed, well-structured response covering:
+1. Definition and overview of the topic
+2. Current state of research and knowledge
+3. Key findings, facts, and important points
+4. Recent developments or trends
+5. Practical applications or implications
+6. Notable researchers, institutions, or sources if applicable
 
-Format your response as a comprehensive academic summary with rich detail.`;
+Make your response informative, accurate, and comprehensive. Focus on providing valuable insights about this specific topic.`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "You are an expert research assistant providing comprehensive, detailed academic summaries with rich information and context." },
+        { role: "system", content: "You are an expert research assistant providing comprehensive, accurate information on any topic. Provide detailed, well-structured responses with factual information." },
         { role: "user", content: prompt },
       ],
-      max_tokens: 1500,
-      temperature: 0.7,
+      max_tokens: 2000,
+      temperature: 0.3,
     });
 
     const content = completion.choices[0]?.message?.content;
@@ -987,24 +1090,24 @@ Format your response as a comprehensive academic summary with rich detail.`;
       // Format with rich metadata like other sources
       const currentDate = new Date();
       const snippet = `🤖 **AI-Generated Research Summary:**\n\n${content}\n\n` +
-        `📊 **Source:** OpenAI GPT-4o Knowledge Base\n` +
+        `📊 **Source:** OpenAI GPT-4o-mini Knowledge Base\n` +
         `📅 **Generated:** ${currentDate.toLocaleDateString()} at ${currentDate.toLocaleTimeString()}\n` +
         `🔍 **Query:** ${query}\n` +
-        `⚡ **Model:** GPT-4o (OpenAI)\n` +
+        `⚡ **Model:** GPT-4o-mini (OpenAI)\n` +
         `📚 **Type:** Comprehensive AI Research Summary`;
 
       console.log(`🤖 OpenAI: Generated comprehensive summary (${content.length} characters)`);
 
       return [{
-        title: `AI Research Summary: ${query}`,
-        url: `https://openai.com/gpt-4`,
+        title: `Comprehensive Summary: ${query}`,
+        url: `#ai-summary-${Date.now()}`, // Use a hash link instead of external URL
         snippet: snippet,
-        displayLink: "openai.com",
-        authors: "OpenAI GPT-4o",
+        displayLink: "AI Generated Summary",
+        authors: "OpenAI GPT-4o-mini",
         journal: "AI Knowledge Base",
         year: currentDate.getFullYear().toString(),
         type: "ai_research_summary",
-        database: "OpenAI"
+        database: "GPT-4o-mini-search"
       }];
     }
     return [];
@@ -1258,6 +1361,7 @@ router.post(
   [
     body('query').trim().notEmpty().withMessage('Search query is required'),
     body('chatId').optional().isString(),
+    body('sources').optional().isObject(),
   ],
   authenticateToken,
   async (req, res) => {
@@ -1267,16 +1371,25 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { query, chatId } = req.body;
+      const { query, chatId, sources } = req.body;
       const userId = req.user.id;
 
-      // Clean the query to extract core academic topic
-      const cleanedQuery = cleanAcademicQuery(query);
+      // Default sources if not provided (all enabled)
+      const searchSources = sources || {
+        scopus: true,
+        pubmed: true,
+        gpt4oMini: true
+      };
+
+      console.log('🔍 Search sources selected:', searchSources);
+
+      // Clean the query to extract core search topic
+      const cleanedQuery = cleanSearchQuery(query);
       console.log(`🔍 Original query: "${query}"`);
       console.log(`🔍 Cleaned query: "${cleanedQuery}"`);
 
       // Validate cleaned query quality
-      if (!isValidAcademicQuery(cleanedQuery)) {
+      if (!isValidSearchQuery(cleanedQuery)) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
@@ -1320,19 +1433,36 @@ router.post(
       // Debug: Log the query being searched
       console.log(`🔍 Starting search for query: "${cleanedQuery}"`);
 
-      // MODIFIED: Use a dynamic task list for promises (use cleaned query)
+      // MODIFIED: Use a dynamic task list based on selected sources
       const searchTasks = [];
-      searchTasks.push({ name: 'arXiv', promise: searchArXiv(cleanedQuery) });
-      searchTasks.push({ name: 'PubMed', promise: searchPubMed(cleanedQuery) });
-      searchTasks.push({ name: 'Scopus', promise: searchScopus(cleanedQuery) });
-      // searchTasks.push({ name: 'SciELO', promise: searchSciELO(cleanedQuery) });
+
+      // Always include arXiv for academic searches (it's free and comprehensive)
+      //searchTasks.push({ name: 'arXiv', promise: searchArXiv(cleanedQuery) });
+
+      // Add PubMed if selected
+      if (searchSources.pubmed) {
+        searchTasks.push({ name: 'PubMed', promise: searchPubMed(cleanedQuery) });
+      }
+
+      // Add Scopus if selected
+      if (searchSources.scopus) {
+        searchTasks.push({ name: 'Scopus', promise: searchScopus(cleanedQuery) });
+      }
+
+      // Add GPT-4o-mini search if selected
+      if (searchSources.gpt4oMini && process.env.OPENAI_API_KEY) {
+        searchTasks.push({ name: 'GPT-4o-mini-search', promise: searchOpenAIWeb(cleanedQuery) });
+      }
+
+      // Add Crossref search (always enabled - it's free and comprehensive)
+      searchTasks.push({ name: 'Crossref', promise: searchCrossref(cleanedQuery) });
+
+      // Optional: Add Web of Science if API key available (not in UI but can be enabled)
       if (process.env.WOS_API_KEY) {
         searchTasks.push({ name: 'Web of Science', promise: searchWebOfScience(cleanedQuery) });
       }
-      // NEW: Add OpenAI Web Search to the tasks
-      if (process.env.OPENAI_API_KEY) {
-        searchTasks.push({ name: 'OpenAI Web Search', promise: searchOpenAIWeb(cleanedQuery) });
-      }
+
+      console.log(`🔍 Enabled search tasks: ${searchTasks.map(t => t.name).join(', ')}`);
 
 
       // Stream progress updates for each search source

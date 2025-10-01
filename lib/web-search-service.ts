@@ -65,19 +65,19 @@
 //     try {
 //       // Call the backend web search API
 //       const response = await apiClient.webSearch({ query, chatId });
-      
+
 //       return {
 //         results: response.results || [],
 //         content: response.content || ''
 //       };
 //     } catch (error) {
 //       console.error("Error performing web search:", error)
-      
+
 //       // If the error is about API configuration, show a helpful message
 //       if (error instanceof Error && error.message.includes('Google Search API not configured')) {
 //         throw new Error("Google Search API is not configured. Please contact administrator.");
 //       }
-      
+
 //       throw new Error("Failed to perform web search")
 //     }
 //   }
@@ -100,17 +100,18 @@ export interface SearchResult {
 
 class WebSearchServiceImpl {
   async searchStream(
-    query: string, 
+    query: string,
     chatId: string | undefined,
     model: string | undefined,
     provider: string | undefined,
     onData: (content: string) => void,
     onComplete: () => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
+    sources?: { scopus: boolean; pubmed: boolean; gpt4oMini: boolean }
   ) {
     try {
       await apiClient.webSearchStream(
-        { query, chatId, model, provider },
+        { query, chatId, model, provider, sources },
         (chunk: any) => {
           if (chunk.type === 'content' || chunk.type === 'start') {
             onData(chunk.content);
