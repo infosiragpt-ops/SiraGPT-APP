@@ -1047,11 +1047,10 @@ async function searchCrossref(query, maxResults = 10) {
     return [];
   }
 }
-
 async function searchOpenAIWeb(query) {
   try {
     if (!process.env.OPENAI_API_KEY) {
-      console.log("OpenAI API key not configured, skipping OpenAI Web Search");
+      console.log("❌ OpenAI API key not configured");
       return [];
     }
 
@@ -1059,63 +1058,135 @@ async function searchOpenAIWeb(query) {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    console.log('🤖 OpenAI: Searching for comprehensive information...');
+    console.log('🔎 Searching with gpt-4o-mini-search-preview...');
 
-    // Enhanced prompt for better topic coverage
-    const prompt = `You are a research assistant providing comprehensive information about: "${query}"
+    const prompt = `
+Search the web for **5 recent scientific or peer-reviewed articles** related to: "${query}".
 
-Please provide a detailed, well-structured response covering:
-1. Definition and overview of the topic
-2. Current state of research and knowledge
-3. Key findings, facts, and important points
-4. Recent developments or trends
-5. Practical applications or implications
-6. Notable researchers, institutions, or sources if applicable
+Return results in structured JSON with fields:
+[
+  {
+    "title": "...",
+    "url": "...",
+    "authors": "...",
+    "journal": "...",
+    "year": "...",
+    "snippet": "Short summary of the article",
+    "database":"..."
+  }
+]
 
-Make your response informative, accurate, and comprehensive. Focus on providing valuable insights about this specific topic.`;
+Make sure each URL is a valid and reliable academic source (journal, research repository, Google Scholar, or publisher site).
+    `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o-mini-search-preview-2025-03-11", // specialized search model
       messages: [
-        { role: "system", content: "You are an expert research assistant providing comprehensive, accurate information on any topic. Provide detailed, well-structured responses with factual information." },
+        { role: "system", content: "You are a scholarly research assistant. Always return clean JSON arrays with valid links to scientific articles." },
         { role: "user", content: prompt },
       ],
-      max_tokens: 2000,
-      temperature: 0.3,
+      max_tokens: 3000,
+
     });
 
-    const content = completion.choices[0]?.message?.content;
+    const content = completion.choices[0]?.message?.content?.trim();
 
-    if (content) {
-      // Format with rich metadata like other sources
-      const currentDate = new Date();
-      const snippet = `🤖 **AI-Generated Research Summary:**\n\n${content}\n\n` +
-        `📊 **Source:** OpenAI GPT-4o-mini Knowledge Base\n` +
-        `📅 **Generated:** ${currentDate.toLocaleDateString()} at ${currentDate.toLocaleTimeString()}\n` +
-        `🔍 **Query:** ${query}\n` +
-        `⚡ **Model:** GPT-4o-mini (OpenAI)\n` +
-        `📚 **Type:** Comprehensive AI Research Summary`;
-
-      console.log(`🤖 OpenAI: Generated comprehensive summary (${content.length} characters)`);
-
-      return [{
-        title: `Comprehensive Summary: ${query}`,
-        url: `#ai-summary-${Date.now()}`, // Use a hash link instead of external URL
-        snippet: snippet,
-        displayLink: "AI Generated Summary",
-        authors: "OpenAI GPT-4o-mini",
-        journal: "AI Knowledge Base",
-        year: currentDate.getFullYear().toString(),
-        type: "ai_research_summary",
-        database: "GPT-4o-mini-search"
-      }];
+    if (!content) {
+      console.error("⚠️ No content returned from OpenAI");
+      return [];
     }
-    return [];
+
+    // Parse JSON safely
+    let articles;
+    try {
+      const cleanedContent = content
+        .replace(/^```json\s*/i, '') // remove opening ```json (case-insensitive)
+        .replace(/^```$/, '')        // optional: remove trailing ```
+        .replace(/```$/, '');
+      console.log("content", cleanedContent);
+
+      articles = JSON.parse(cleanedContent);
+    } catch (e) {
+      console.error("⚠️ Failed to parse JSON, raw content:", content);
+      return [];
+    }
+
+    console.log(`✅ Found ${articles.length} articles`);
+    return articles;
+
   } catch (err) {
     console.error("OpenAI Web Search error:", err);
     return [];
   }
 }
+// async function searchOpenAIWeb(query) {
+//   try {
+//     if (!process.env.OPENAI_API_KEY) {
+//       console.log("OpenAI API key not configured, skipping OpenAI Web Search");
+//       return [];
+//     }
+
+//     const openai = new OpenAI({
+//       apiKey: process.env.OPENAI_API_KEY,
+//     });
+
+//     console.log('🤖 OpenAI: Searching for comprehensive information...');
+
+//     // Enhanced prompt for better topic coverage
+//     const prompt = `You are a research assistant providing comprehensive information about: "${query}"
+
+// Please provide a detailed, well-structured response covering:
+// 1. Definition and overview of the topic
+// 2. Current state of research and knowledge
+// 3. Key findings, facts, and important points
+// 4. Recent developments or trends
+// 5. Practical applications or implications
+// 6. Notable researchers, institutions, or sources if applicable
+
+// Make your response informative, accurate, and comprehensive. Focus on providing valuable insights about this specific topic.`;
+
+//     const completion = await openai.chat.completions.create({
+//       model: "gpt-4o-mini",
+//       messages: [
+//         { role: "system", content: "You are an expert research assistant providing comprehensive, accurate information on any topic. Provide detailed, well-structured responses with factual information." },
+//         { role: "user", content: prompt },
+//       ],
+//       max_tokens: 2000,
+//       temperature: 0.3,
+//     });
+
+//     const content = completion.choices[0]?.message?.content;
+
+//     if (content) {
+//       // Format with rich metadata like other sources
+//       const currentDate = new Date();
+//       const snippet = `🤖 **AI-Generated Research Summary:**\n\n${content}\n\n` +
+//         `📊 **Source:** OpenAI GPT-4o-mini Knowledge Base\n` +
+//         `📅 **Generated:** ${currentDate.toLocaleDateString()} at ${currentDate.toLocaleTimeString()}\n` +
+//         `🔍 **Query:** ${query}\n` +
+//         `⚡ **Model:** GPT-4o-mini (OpenAI)\n` +
+//         `📚 **Type:** Comprehensive AI Research Summary`;
+
+//       console.log(`🤖 OpenAI: Generated comprehensive summary (${content.length} characters)`);
+
+//       return [{
+//         title: `Comprehensive Summary: ${query}`,
+//         url: `#ai-summary-${Date.now()}`, // Use a hash link instead of external URL
+//         snippet: snippet,
+//         displayLink: "AI Generated Summary",
+//         authors: "OpenAI GPT-4o-mini",
+//         journal: "AI Knowledge Base",
+//         year: currentDate.getFullYear().toString(),
+//         type: "ai_research_summary",
+//         database: "GPT-4o-mini-search"
+//       }];
+//     }
+//     return [];
+//   } catch (err) {
+//     console.error("OpenAI Web Search error:", err);
+//     return [];
+//   }
+// }
 
 /* ORIGINAL CODE - DISABLED UNTIL API SUPPORTS web_search_preview
 async function searchOpenAIWebOriginal(query) {
