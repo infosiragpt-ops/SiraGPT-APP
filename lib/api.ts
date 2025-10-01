@@ -403,11 +403,7 @@ class ApiClient {
     });
   }
 
-  async checkSubscriptionExpiration() {
-    return this.request('/payments/check-expiration', {
-      method: 'POST',
-    });
-  }
+
 
   async getSubscriptionAnalytics(period = '30d') {
     return this.request(`/payments/analytics?period=${period}`);

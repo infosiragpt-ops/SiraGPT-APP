@@ -85,25 +85,7 @@ export default function SubscriptionManager() {
   useEffect(() => {
     fetchSubscriptionData()
     
-    // Check expiration every minute for testing
-    const checkExpiration = async () => {
-      try {
-        const result = await apiClient.checkSubscriptionExpiration()
-        if (result.expired) {
-          toast.warning('Your subscription has expired')
-          await refreshUser()
-          await fetchSubscriptionData()
-        }
-      } catch (error) {
-        console.error('Error checking expiration:', error)
-      }
-    }
-    
-    // Check immediately and then every minute
-    checkExpiration()
-    const interval = setInterval(checkExpiration, 60000) // 1 minute
-    
-    return () => clearInterval(interval)
+    // No need for expiration checking with normal Stripe billing
   }, [refreshUser])
 
   const fetchSubscriptionData = async () => {
