@@ -63,7 +63,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   const planMeta: Record<Exclude<Plan, "FREE">, { price: number; creditsLabel: string; monthlyLimit: number }> = {
     BASIC: { price: 5, creditsLabel: "10,000 / month", monthlyLimit: 10000 },
     STANDARD: { price: 15, creditsLabel: "30,000 / month", monthlyLimit: 30000 },
-    ENTERPRISE: { price: 99, creditsLabel: "10,000,000 / month", monthlyLimit: 10000000 },
+    ENTERPRISE: { price: 99, creditsLabel: "100,000 / month", monthlyLimit: 100000 },
   }
 
   const subscribe = async (plan: Exclude<Plan, "FREE">) => {
@@ -245,7 +245,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                 </div>
                 <div className="text-right">
                   <div className="text-xl font-bold">$99</div>
-                  <div className="text-xs text-muted-foreground h-4">10,000,000 / month</div>
+                  <div className="text-xs text-muted-foreground h-4">100,000 / month</div>
                 </div>
               </div>
 

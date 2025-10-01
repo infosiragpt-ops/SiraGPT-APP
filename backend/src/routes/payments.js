@@ -1,14 +1,174 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const stripeService = require('../services/stripe');
 const { getPriceIdForPlan } = require('../utils/stripe-setup');
+const usageMonitor = require('../services/usage-monitor');
+// const emailService = require('../services/email'); // Commented out temporarily
+const prorationService = require('../services/proration');
+const subscriptionAnalyticsService = require('../services/subscription-analytics');
 
 const router = express.Router();
 
+// Rate limiting for payment endpoints
+const paymentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit each IP to 10 requests per windowMs
+  message: { error: 'Too many payment attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const subscriptionLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour  
+  max: 5, // Limit subscription changes
+  message: { error: 'Too many subscription changes, please try again later.' }
+});
+
+// Get usage statistics
+router.get('/usage', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const period = req.query.period || 'current_month';
+    
+    const stats = await usageMonitor.getUsageStats(userId, period);
+    res.json(stats);
+    
+  } catch (error) {
+    console.error('Error fetching usage stats:', error);
+    res.status(500).json({ error: 'Failed to fetch usage statistics' });
+  }
+});
+
+
+
+// Get notifications
+router.get('/notifications', authenticateToken, async (req, res) => {
+  try {
+    const notifications = await prisma.notification.findMany({
+      where: { userId: req.user.id },
+      orderBy: { createdAt: 'desc' },
+      take: parseInt(req.query.limit) || 50
+    });
+
+    const unreadCount = await prisma.notification.count({
+      where: { 
+        userId: req.user.id,
+        read: false
+      }
+    });
+    
+    res.json({
+      notifications,
+      unreadCount
+    });
+    
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+
+
+// Get subscription analytics (admin only)
+router.get('/analytics', authenticateToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id }
+    });
+    
+    if (!user || !user.isAdmin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    
+    const period = req.query.period || '30d';
+    const analytics = await subscriptionAnalyticsService.getSubscriptionAnalytics(period);
+    
+    res.json(analytics);
+    
+  } catch (error) {
+    console.error('Error fetching analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch analytics' });
+  }
+});
+
+// Mark notification as read
+router.put('/notifications/:id/read', authenticateToken, async (req, res) => {
+  try {
+    await prisma.notification.update({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id 
+      },
+      data: { 
+        read: true,
+        readAt: new Date()
+      }
+    });
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    res.status(500).json({ error: 'Failed to update notification' });
+  }
+});
+
+// Preview plan change
+router.post('/plan-change/preview', subscriptionLimiter, [
+  body('newPlan').isIn(['BASIC', 'STANDARD', 'ENTERPRISE']).withMessage('Invalid plan')
+], authenticateToken, async (req, res) => {
+  try {
+    const { newPlan } = req.body;
+    const userId = req.user.id;
+    
+    const preview = await prorationService.previewPlanChange(userId, newPlan);
+    res.json(preview);
+    
+  } catch (error) {
+    console.error('Error previewing plan change:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Execute plan change
+router.post('/plan-change/execute', subscriptionLimiter, [
+  body('newPlan').isIn(['BASIC', 'STANDARD', 'ENTERPRISE']).withMessage('Invalid plan'),
+  body('immediate').isBoolean().withMessage('Immediate must be boolean')
+], authenticateToken, async (req, res) => {
+  try {
+    const { newPlan, immediate = true } = req.body;
+    const userId = req.user.id;
+    
+    const result = await prorationService.changePlan(userId, newPlan, immediate);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Error executing plan change:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Cancel scheduled plan change
+router.post('/plan-change/cancel', subscriptionLimiter, authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const result = await prorationService.cancelScheduledPlanChange(userId);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('Error cancelling scheduled plan change:', error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Create Stripe checkout session
-router.post('/stripe', [
+router.post('/stripe', paymentLimiter, [
   body('plan').isIn(['BASIC', 'STANDARD', 'ENTERPRISE']).withMessage('Invalid plan')
 ], authenticateToken, async (req, res) => {
   try {
@@ -245,20 +405,25 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
           }
         });
 
-        // Update user subscription - same logic as webhook
+        // Update user subscription - ADD new plan limits to existing monthlyLimit
         const planCredits = {
           BASIC: 10000,
           STANDARD: 30000,
           ENTERPRISE: 100000
         };
 
+        // Get current user to add to existing limits
+        const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+        const newTotalLimit = (currentUser.monthlyLimit || 0) + planCredits[payment.plan];
+
         const updatedUser = await prisma.user.update({
           where: { id: req.user.id },
           data: {
             plan: payment.plan,
-            monthlyLimit: planCredits[payment.plan],
+            monthlyLimit: newTotalLimit,
             stripeSubscriptionId: session.subscription,
             subscriptionStatus: 'active'
+            // monthlyCallLimit: NOT UPDATED - preserve current usage
           }
         });
 
@@ -278,19 +443,24 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
           data: { status: 'COMPLETED' }
         });
 
-        // Update user subscription
+        // Update user subscription - ADD new plan limits to existing monthlyLimit
         const planCredits = {
           BASIC: 10000,
           STANDARD: 30000,
-          ENTERPRISE: 10000000
+          ENTERPRISE: 100000
         };
+
+        // Get current user to add to existing limits
+        const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+        const newTotalLimit = (currentUser.monthlyLimit || 0) + planCredits[payment.plan];
 
         const updatedUser = await prisma.user.update({
           where: { id: req.user.id },
           data: {
             plan: payment.plan,
-            monthlyLimit: planCredits[payment.plan],
+            monthlyLimit: newTotalLimit,
             subscriptionStatus: 'active'
+            // monthlyCallLimit: NOT UPDATED - preserve current usage
           }
         });
 
@@ -373,7 +543,7 @@ router.post(
       const planCredits = {
         BASIC: 10000,
         STANDARD: 30000,
-        ENTERPRISE: 10000000,
+        ENTERPRISE: 100000,
       };
 
       const add = typeof monthlyLimit !== 'undefined' && monthlyLimit !== null
@@ -486,20 +656,26 @@ async function handleCheckoutSessionCompleted(session) {
       }
     });
 
-    // Update user subscription
+    // Update user subscription - ADD new plan limits to existing monthlyLimit
     const planCredits = {
       BASIC: 10000,
       STANDARD: 30000,
-      ENTERPRISE: 10000000
+      ENTERPRISE: 100000
     };
+
+    // Get current user to add to existing limits
+    const currentUser = await prisma.user.findUnique({ where: { id: userId } });
+    const newTotalLimit = (currentUser.monthlyLimit || 0) + planCredits[plan];
 
     await prisma.user.update({
       where: { id: userId },
       data: {
         plan,
-        monthlyLimit: planCredits[plan],
+        monthlyLimit: newTotalLimit,
         stripeSubscriptionId: session.subscription,
-        subscriptionStatus: 'active'
+        subscriptionStatus: 'active',
+        subscriptionEndDate: null // Let Stripe handle the billing cycle
+        // monthlyCallLimit: NOT UPDATED - preserve current usage
       }
     });
 
@@ -534,6 +710,22 @@ async function handleInvoicePaymentSucceeded(invoice) {
       }
     });
 
+    // Reset monthly usage for new billing period
+    await usageMonitor.resetMonthlyUsage(user.id);
+    
+    // Record subscription event
+    await prisma.subscriptionEvent.create({
+      data: {
+        userId: user.id,
+        eventType: 'payment_succeeded',
+        eventData: {
+          invoiceId: invoice.id,
+          amount: invoice.amount_paid / 100,
+          currency: invoice.currency
+        }
+      }
+    });
+
     console.log(`Invoice payment succeeded for user ${user.id}`);
     
   } catch (error) {
@@ -563,6 +755,41 @@ async function handleInvoicePaymentFailed(invoice) {
       }
     });
 
+    // Send payment failure email
+    // await emailService.sendPaymentFailureAlert(user, {
+    //   amount: invoice.amount_due / 100,
+    //   currency: invoice.currency,
+    //   nextRetry: 'Within 24 hours'
+    // }); // Commented out temporarily
+    
+    // Create in-app notification
+    await prisma.notification.create({
+      data: {
+        userId: user.id,
+        type: 'payment_failed',
+        title: 'Payment Failed',
+        message: `Your payment of $${invoice.amount_due / 100} could not be processed. We'll retry automatically.`,
+        severity: 'warning',
+        metadata: {
+          invoiceId: invoice.id,
+          amount: invoice.amount_due / 100
+        }
+      }
+    });
+    
+    // Record subscription event
+    await prisma.subscriptionEvent.create({
+      data: {
+        userId: user.id,
+        eventType: 'payment_failed',
+        eventData: {
+          invoiceId: invoice.id,
+          amount: invoice.amount_due / 100,
+          reason: invoice.last_finalization_error?.message || 'Payment declined'
+        }
+      }
+    });
+
     console.log(`Invoice payment failed for user ${user.id}`);
     
   } catch (error) {
@@ -585,12 +812,29 @@ async function handleSubscriptionCreated(subscription) {
     }
 
     // Update user with subscription info
-    await prisma.user.update({
+    const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: {
         stripeSubscriptionId: subscription.id,
         subscriptionStatus: subscription.status,
         subscriptionEndDate: new Date(subscription.current_period_end * 1000)
+      }
+    });
+
+    // Send welcome email
+    // await emailService.sendWelcomeEmail(updatedUser); // Commented out temporarily
+    
+    // Record subscription event
+    await prisma.subscriptionEvent.create({
+      data: {
+        userId: user.id,
+        eventType: 'created',
+        newPlan: updatedUser.plan,
+        eventData: {
+          subscriptionId: subscription.id,
+          planName: subscription.items.data[0]?.price?.nickname || updatedUser.plan
+        },
+        stripeEventId: subscription.id
       }
     });
 
@@ -650,7 +894,7 @@ async function handleSubscriptionDeleted(subscription) {
       where: { id: user.id },
       data: {
         plan: 'FREE',
-         monthlyLimit: 10000,
+         monthlyLimit: 1000,
         monthlyCallLimit: 3,
         subscriptionStatus: 'canceled',
         subscriptionEndDate: new Date(subscription.ended_at * 1000)
@@ -711,7 +955,7 @@ router.get('/subscription', authenticateToken, async (req, res) => {
 });
 
 // Cancel subscription
-router.post('/subscription/cancel', authenticateToken, async (req, res) => {
+router.post('/subscription/cancel', subscriptionLimiter, authenticateToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id }
@@ -748,7 +992,7 @@ router.post('/subscription/cancel', authenticateToken, async (req, res) => {
 });
 
 // Reactivate subscription
-router.post('/subscription/reactivate', authenticateToken, async (req, res) => {
+router.post('/subscription/reactivate', subscriptionLimiter, authenticateToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id }

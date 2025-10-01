@@ -30,8 +30,8 @@ class StripeService {
       ENTERPRISE: {
         name: 'Enterprise Plan',
         price: 9900, // $99.00 in cents
-        credits: 10000000,
-        features: ['10,000,000 API calls per month', 'All features', 'Dedicated support', 'Custom integrations', 'SLA guaranteed']
+        credits: 100000,
+        features: ['10,000,0 API calls per month', 'All features', 'Dedicated support', 'Custom integrations', 'SLA guaranteed']
       }
     };
   }
@@ -81,7 +81,7 @@ class StripeService {
             unit_amount: planData.price,
             currency: 'usd',
             recurring: {
-              interval: 'month'
+              interval: 'day'
             },
             metadata: {
               plan: planKey

@@ -18,11 +18,15 @@ import {
   Zap,
   TrendingUp,
   Users,
-  Settings
+  Settings,
+  ArrowUpDown,
+  X
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
+import PlanChangeManager from './plan-change-manager'
+import AnalyticsDashboard from './analytics-dashboard'
 
 interface SubscriptionData {
   status: string
@@ -38,6 +42,8 @@ export default function SubscriptionManager() {
   const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [showPlanChange, setShowPlanChange] = useState(false)
+  const [activeTab, setActiveTab] = useState('overview')
 
   const planInfo: Record<string, { 
     color: string, 
@@ -78,7 +84,27 @@ export default function SubscriptionManager() {
 
   useEffect(() => {
     fetchSubscriptionData()
-  }, [])
+    
+    // Check expiration every minute for testing
+    const checkExpiration = async () => {
+      try {
+        const result = await apiClient.checkSubscriptionExpiration()
+        if (result.expired) {
+          toast.warning('Your subscription has expired')
+          await refreshUser()
+          await fetchSubscriptionData()
+        }
+      } catch (error) {
+        console.error('Error checking expiration:', error)
+      }
+    }
+    
+    // Check immediately and then every minute
+    checkExpiration()
+    const interval = setInterval(checkExpiration, 60000) // 1 minute
+    
+    return () => clearInterval(interval)
+  }, [refreshUser])
 
   const fetchSubscriptionData = async () => {
     try {
@@ -155,12 +181,60 @@ export default function SubscriptionManager() {
 
   const currentPlan = user.plan || 'FREE'
   const currentPlanInfo = planInfo[currentPlan]
-  const usagePercentage = user.monthlyLimit > 0 ? ((user.monthlyLimit - (user.monthlyCallLimit || 0)) / user.monthlyLimit) * 100 : 0
+  
+  // Calculate usage correctly based on plan type
+  let usedAmount, totalLimit, remainingAmount, usagePercentage
+  
+  if (currentPlan === 'FREE') {
+    // For free users: monthlyCallLimit is remaining calls (countdown)
+    totalLimit = 3
+    remainingAmount = user.monthlyCallLimit || 0
+    usedAmount = totalLimit - remainingAmount
+    usagePercentage = totalLimit > 0 ? (usedAmount / totalLimit) * 100 : 0
+  } else {
+    // For paid users: apiUsage is tokens used, monthlyLimit is total tokens allowed
+    totalLimit = user.monthlyLimit || 0
+    usedAmount = user.apiUsage || 0
+    remainingAmount = Math.max(0, totalLimit - usedAmount)
+    usagePercentage = totalLimit > 0 ? (usedAmount / totalLimit) * 100 : 0
+  }
 
   return (
     <div className="space-y-6">
-      {/* Current Plan Overview */}
-      <Card className="relative overflow-hidden">
+      {/* Tabs */}
+      <div className="border-b">
+        <nav className="flex space-x-8">
+          <button
+            onClick={() => setActiveTab('overview')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'overview'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Overview
+          </button>
+          {/* {user?.isAdmin && (
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'analytics'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Analytics
+            </button>
+          )} */}
+        </nav>
+      </div>
+
+      {activeTab === 'analytics' ? (
+        <AnalyticsDashboard isAdmin={user?.isAdmin || false} />
+      ) : (
+        <div className="space-y-6">
+          {/* Current Plan Overview */}
+          <Card className="relative overflow-hidden">
         <div className={`absolute inset-0 bg-gradient-to-br ${currentPlanInfo?.color} opacity-5`} />
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -194,14 +268,14 @@ export default function SubscriptionManager() {
           {/* Usage Progress */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium">API Usage This Month</span>
+              <span className="text-sm font-medium">{currentPlan === 'FREE' ? 'API Calls This Month' : 'Token Usage This Month'}</span>
               <span className="text-sm text-muted-foreground">
-                {user.monthlyLimit - (user.monthlyCallLimit || 0)}/{user.monthlyLimit}
+                {usedAmount.toLocaleString()}/{totalLimit.toLocaleString()}
               </span>
             </div>
             <Progress value={usagePercentage} className="h-2" />
             <p className="text-xs text-muted-foreground mt-1">
-              {user.monthlyCallLimit || 0} calls remaining
+              {remainingAmount.toLocaleString()} {currentPlan === 'FREE' ? 'calls' : 'tokens'} remaining
             </p>
           </div>
 
@@ -308,6 +382,23 @@ export default function SubscriptionManager() {
               </div>
             )}
 
+            {/* <div className="flex items-center justify-between p-4 border rounded-lg">
+              <div>
+                <p className="font-medium">Change Plan</p>
+                <p className="text-sm text-muted-foreground">
+                  Upgrade or downgrade with added limits (preserves current usage)
+                </p>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => setShowPlanChange(true)}
+              >
+                <ArrowUpDown className="h-3 w-3 mr-2" />
+                Change Plan
+              </Button>
+            </div> */}
+
             <Separator />
 
             <div className="flex items-center justify-between p-4 border rounded-lg">
@@ -369,12 +460,12 @@ export default function SubscriptionManager() {
         <CardContent>
           <div className="grid gap-4 md:grid-cols-3">
             <div className="text-center p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{user.monthlyLimit - (user.monthlyCallLimit || 0)}</p>
-              <p className="text-sm text-muted-foreground">Calls Used This Month</p>
+              <p className="text-2xl font-bold">{usedAmount.toLocaleString()}</p>
+              <p className="text-sm text-muted-foreground">{currentPlan === 'FREE' ? 'Calls' : 'Tokens'} Used This Month</p>
             </div>
             <div className="text-center p-4 bg-muted/50 rounded-lg">
-              <p className="text-2xl font-bold">{user.monthlyCallLimit || 0}</p>
-              <p className="text-sm text-muted-foreground">Calls Remaining</p>
+              <p className="text-2xl font-bold">{remainingAmount.toLocaleString()}</p>
+              <p className="text-sm text-muted-foreground">{currentPlan === 'FREE' ? 'Calls' : 'Tokens'} Remaining</p>
             </div>
             <div className="text-center p-4 bg-muted/50 rounded-lg">
               <p className="text-2xl font-bold">{Math.round(usagePercentage)}%</p>
@@ -383,6 +474,54 @@ export default function SubscriptionManager() {
           </div>
         </CardContent>
       </Card>
+        </div>
+      )}
+
+      {/* Plan Change Modal - Large and Beautiful */}
+      {showPlanChange && currentPlan !== 'FREE' && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-background border rounded-2xl shadow-2xl w-full max-w-6xl max-h-[95vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="sticky top-0 bg-background/95 backdrop-blur-md border-b px-8 py-6 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <div className="h-12 w-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                    <ArrowUpDown className="h-6 w-6 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                      Change Your Plan
+                    </h2>
+                    <p className="text-muted-foreground mt-1">
+                      Upgrade or downgrade with instant proration calculations
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="lg"
+                  onClick={() => setShowPlanChange(false)}
+                  className="rounded-full h-12 w-12 p-0"
+                >
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
+            </div>
+            
+            {/* Modal Content */}
+            <div className="p-8">
+              <PlanChangeManager
+                currentPlan={currentPlan}
+                onPlanChanged={() => {
+                  setShowPlanChange(false)
+                  fetchSubscriptionData()
+                  refreshUser()
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

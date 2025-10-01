@@ -44,7 +44,7 @@ function BillingContent() {
         </div>
 
         <Tabs defaultValue={defaultTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-1">
             <TabsTrigger value="subscription" className="flex items-center gap-2">
               <CreditCard className="h-4 w-4" />
               Subscription
@@ -53,10 +53,10 @@ function BillingContent() {
               <CreditCard className="h-4 w-4" />
               Payment Methods
             </TabsTrigger> */}
-            <TabsTrigger value="billing-history" className="flex items-center gap-2">
-              <Receipt className="h-4 w-4" />
-              Billing History
-            </TabsTrigger>
+              {/* <TabsTrigger value="billing-history" className="flex items-center gap-2">
+                <Receipt className="h-4 w-4" />
+                Billing History
+              </TabsTrigger> */}
           </TabsList>
 
           <TabsContent value="subscription" className="space-y-6">
@@ -67,9 +67,9 @@ function BillingContent() {
             <PaymentMethods />
           </TabsContent> */}
 
-          <TabsContent value="billing-history" className="space-y-6">
+          {/* <TabsContent value="billing-history" className="space-y-6">
             <BillingHistory />
-          </TabsContent>
+          </TabsContent> */}
         </Tabs>
       </div>
     </div>

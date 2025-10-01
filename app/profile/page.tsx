@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from "@/lib/auth-context-integrated"
 import { AuthGuard } from "@/components/auth-guard"
@@ -41,8 +41,46 @@ function ProfileContent() {
     new: false,
     confirm: false
   })
+  const [subscriptionData, setSubscriptionData] = useState<any>(null)
+
+  // Fetch subscription data
+  useEffect(() => {
+    if (user) {
+      fetchSubscriptionData()
+    }
+  }, [user])
+
+  const fetchSubscriptionData = async () => {
+    try {
+      const data = await apiClient.getSubscriptionInfo()
+      setSubscriptionData(data)
+    } catch (error) {
+      console.error('Error fetching subscription data:', error)
+      // Set fallback data for free users
+      setSubscriptionData({
+        plan: user?.plan || 'FREE',
+        status: 'active',
+        endDate: null
+      })
+    }
+  }
 
   if (!user) return null
+
+  // Calculate real usage stats based on plan type
+  let usedCalls, remainingCalls, totalLimit
+  
+  if (user.plan === 'FREE') {
+    // For free users: monthlyCallLimit is remaining calls (countdown)
+    totalLimit = 3 // Free users get 3 calls per month
+    remainingCalls = user.monthlyCallLimit || 0
+    usedCalls = totalLimit - remainingCalls
+  } else {
+    // For paid users: apiUsage is tokens used, monthlyLimit is total tokens allowed
+    totalLimit = user.monthlyLimit || 0
+    usedCalls = user.apiUsage || 0
+    remainingCalls = Math.max(0, totalLimit - usedCalls)
+  }
 
   const handleSaveProfile = async () => {
     if (!profileData.name.trim()) {
@@ -296,18 +334,31 @@ function ProfileContent() {
                   <div className="flex justify-between">
                     <span className="text-sm">Current Plan</span>
                     <Badge
-                      variant={user.plan === "Enterprise" ? "default" : user.plan === "Pro" ? "secondary" : "outline"}
+                      variant={user.plan === "ENTERPRISE" ? "default" : user.plan === "STANDARD" ? "secondary" : "outline"}
                     >
-                      {user.plan}
+                      {user.plan || 'FREE'}
                     </Badge>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm">Status</span>
-                    <span className="text-sm text-green-600">Active</span>
+                    <span className={`text-sm ${
+                      subscriptionData?.stripeSubscription?.status === 'active' ? 'text-green-600' : 
+                      subscriptionData?.status === 'active' ? 'text-green-600' :
+                      'text-yellow-600'
+                    }`}>
+                      {subscriptionData?.stripeSubscription?.status.toUpperCase() || subscriptionData?.status.toUpperCase() || 'Active'}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm">Next Billing</span>
-                    <span className="text-sm">Jan 15, 2024</span>
+                    <span className="text-sm">
+                      {subscriptionData?.stripeSubscription?.currentPeriodEnd 
+                        ? new Date(subscriptionData.stripeSubscription.currentPeriodEnd).toLocaleDateString()
+                        : subscriptionData?.endDate 
+                        ? new Date(subscriptionData.endDate).toLocaleDateString()
+                        : user.plan === 'FREE' ? 'N/A' : 'Loading...'
+                      }
+                    </span>
                   </div>
                 </div>
                 <Separator className="my-4" />
@@ -341,16 +392,22 @@ function ProfileContent() {
               <CardContent>
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <span className="text-sm">API calls used</span>
-                    <span className="text-sm font-medium">{user.apiUsage}</span>
+                    <span className="text-sm">{user.plan === 'FREE' ? 'API calls used' : 'Tokens used'}</span>
+                    <span className="text-sm font-medium">{usedCalls.toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm">API calls remaining</span>
-                    <span className="text-sm font-medium">{Math.max(0, user.monthlyLimit - user.apiUsage)}</span>
+                    <span className="text-sm">{user.plan === 'FREE' ? 'Calls remaining' : 'Tokens remaining'}</span>
+                    <span className="text-sm font-medium">{remainingCalls.toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm">Monthly limit</span>
-                    <span className="text-sm font-medium">{user.monthlyLimit}</span>
+                    <span className="text-sm">{user.plan === 'FREE' ? 'Monthly calls limit' : 'Monthly tokens limit'}</span>
+                    <span className="text-sm font-medium">{totalLimit.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm">Usage percentage</span>
+                    <span className="text-sm font-medium">
+                      {totalLimit > 0 ? Math.round((usedCalls / totalLimit) * 100) : 0}%
+                    </span>
                   </div>
                 </div>
               </CardContent>
