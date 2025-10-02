@@ -56,6 +56,7 @@ import { cn } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
+// import NotificationCenter from "./notification-center" // Commented out to stop repeated API calls
 
 // Generation Types with enhanced functionality
 const generationTypes = [
@@ -224,7 +225,10 @@ export function AppSidebar() {
               <span className="text-xs text-muted-foreground">AI Platform</span>
             </div>
           </div>
-          <SidebarTrigger />
+          <div className="flex items-center gap-1">
+            {/* <NotificationCenter /> */} {/* Commented out to stop repeated API calls */}
+            <SidebarTrigger />
+          </div>
         </div>
         {/* Jab sidebar close ho to sirf yeh logo dikhega (hover effect ke saath) */}
         <div className={cn("relative", state === "open" && "hidden")}>
@@ -436,15 +440,12 @@ export function AppSidebar() {
                     <User className="mr-2 h-4 w-4" />
                     Profile
                   </DropdownMenuItem>
-                  <DropdownMenuItem>
-                    <Crown className="mr-2 h-4 w-4" />
-                    Upgrade to Pro
-                  </DropdownMenuItem>
-                  <DropdownMenuItem>
+                 
+                  <DropdownMenuItem onClick={() => router.push("/billing")}>
                     <CreditCard className="mr-2 h-4 w-4" />
                     Billing
                   </DropdownMenuItem>
-                  <DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => router.push("/settings")}>
                     <Settings className="mr-2 h-4 w-4" />
                     Settings
                   </DropdownMenuItem>

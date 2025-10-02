@@ -436,9 +436,6 @@ const ActiveToolsDisplay = ({
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   setChatType,
-  searchSources,
-  setSearchSources,
-  isWebSearching
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
@@ -447,9 +444,6 @@ const ActiveToolsDisplay = ({
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
   setChatType: (type: any) => void;
-  searchSources: SearchSources;
-  setSearchSources: (sources: SearchSources) => void;
-  isWebSearching: boolean;
 }) => {
   const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive;
 
@@ -486,11 +480,7 @@ const ActiveToolsDisplay = ({
               <X className="h-3 w-3" />
             </Button>
           </div>
-          <SearchSourceSelector
-            sources={searchSources}
-            onSourcesChange={setSearchSources}
-            disabled={isWebSearching}
-          />
+
         </>
       )}
       {isImageGenerationActive && (
@@ -682,11 +672,6 @@ export default function ChatInterface() {
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
 
   // Search sources state - all enabled by default
-  const [searchSources, setSearchSources] = React.useState<SearchSources>({
-    scopus: true,
-    pubmed: true,
-    gpt4oMini: true
-  });
 
   // No longer need dynamic padding, handled by layout
   const textareaRef = React.useRef(null);
@@ -1181,7 +1166,7 @@ export default function ChatInterface() {
             return { ...prev, messages: newMessages };
           });
         },
-        searchSources
+
       );
 
     } catch (error: any) {
@@ -1410,9 +1395,6 @@ export default function ChatInterface() {
                     isVideoGenerationActive={isVideoGenerationActive}
                     setIsVideoGenerationActive={setIsVideoGenerationActive}
                     setChatType={setChatType}
-                    searchSources={searchSources}
-                    setSearchSources={setSearchSources}
-                    isWebSearching={isWebSearching}
                   />
                   <div className="flex-grow" />
                   {!(isLoading && isStreaming) && (
@@ -1616,15 +1598,13 @@ export default function ChatInterface() {
                       />
                       <ActiveToolsDisplay
                         isWebSearchActive={isWebSearchActive}
+
                         setIsWebSearchActive={setIsWebSearchActive}
                         isImageGenerationActive={isImageGenerationActive}
                         setIsImageGenerationActive={setIsImageGenerationActive}
                         isVideoGenerationActive={isVideoGenerationActive}
                         setIsVideoGenerationActive={setIsVideoGenerationActive}
                         setChatType={setChatType}
-                        searchSources={searchSources}
-                        setSearchSources={setSearchSources}
-                        isWebSearching={isWebSearching}
                       />
                       <div className="flex-grow" />
                       {!(isLoading && isStreaming) && (

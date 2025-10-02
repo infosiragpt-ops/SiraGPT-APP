@@ -356,10 +356,66 @@ class ApiClient {
   }
 
   // Payment endpoints
-  async createStripePayment(data: { plan: string; priceId: string }) {
+  async createStripePayment(data: { plan: string }) {
     return this.request('/payments/stripe', {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  async verifyPaymentSession(sessionId: string) {
+    return this.request(`/payments/verify-session?session_id=${sessionId}`);
+  }
+
+  async getSubscriptionInfo() {
+    return this.request('/payments/subscription');
+  }
+
+  async cancelSubscription() {
+    return this.request('/payments/subscription/cancel', {
+      method: 'POST',
+    });
+  }
+
+  async reactivateSubscription() {
+    return this.request('/payments/subscription/reactivate', {
+      method: 'POST',
+    });
+  }
+
+  async previewPlanChange(data: { newPlan: string }) {
+    return this.request('/payments/plan-change/preview', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async executePlanChange(data: { newPlan: string; immediate: boolean }) {
+    return this.request('/payments/plan-change/execute', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async cancelScheduledPlanChange() {
+    return this.request('/payments/plan-change/cancel', {
+      method: 'POST',
+    });
+  }
+
+
+
+  async getSubscriptionAnalytics(period = '30d') {
+    return this.request(`/payments/analytics?period=${period}`);
+  }
+
+  async getNotifications(limit = 50) {
+    return this.request(`/payments/notifications?limit=${limit}`);
+  }
+
+  async markNotificationRead(notificationId: string) {
+    return this.request(`/payments/notifications/${notificationId}/read`, {
+      method: 'PUT',
     });
   }
 
@@ -407,6 +463,70 @@ class ApiClient {
 
   async deleteAccount() {
     return this.request('/users/account', { method: 'DELETE' });
+  }
+
+  // User preferences endpoints
+  async getUserPreferences() {
+    return this.request('/users/preferences');
+  }
+
+  async updateUserPreferences(data: any) {
+    return this.request('/users/preferences', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // Payment method endpoints
+  async getPaymentMethods() {
+    return this.request('/payments/methods');
+  }
+
+  async addPaymentMethod(data: any) {
+    return this.request('/payments/methods', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async removePaymentMethod(id: string) {
+    return this.request(`/payments/methods/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async setDefaultPaymentMethod(id: string) {
+    return this.request(`/payments/methods/${id}/default`, {
+      method: 'PUT',
+    });
+  }
+
+  // Billing address endpoints
+  async getBillingAddress() {
+    return this.request('/payments/billing-address');
+  }
+
+  async updateBillingAddress(data: any) {
+    return this.request('/payments/billing-address', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // Invoice endpoints
+  async downloadInvoice(paymentId: string) {
+    const response = await fetch(`${this.baseURL}/payments/invoice/${paymentId}`, {
+      headers: {
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Network error' }));
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    return response.blob();
   }
 
   // Admin endpoints
@@ -635,7 +755,7 @@ class ApiClient {
 
   // Web Search endpoints
   async webSearchStream(
-    data: { query: string; chatId?: string; model?: string; provider?: string; sources?: { scopus: boolean; pubmed: boolean; gpt4oMini: boolean } },
+    data: { query: string; chatId?: string; model?: string; provider?: string },
     onData: (chunk: any) => void,
     onComplete: () => void,
     onError: (error: Error) => void

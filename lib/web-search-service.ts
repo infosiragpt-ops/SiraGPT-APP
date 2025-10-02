@@ -111,7 +111,7 @@ class WebSearchServiceImpl {
   ) {
     try {
       await apiClient.webSearchStream(
-        { query, chatId, model, provider, sources },
+        { query, chatId, model, provider },
         (chunk: any) => {
           if (chunk.type === 'content' || chunk.type === 'start') {
             onData(chunk.content);
