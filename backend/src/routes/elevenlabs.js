@@ -51,8 +51,6 @@ router.get('/voices', authenticateToken, async (req, res) => {
 
     console.log('Fetching voices from ElevenLabs...');
     const voices = await elevenlabs.voices.getAll();
-    console.log('Voices fetched:', voices?.voices?.length || voices?.length || 0);
-    console.log('First voice sample:', voices?.voices?.[0] || voices?.[0]);
 
     // ElevenLabs API might return { voices: [...] } or just [...]
     // Ensure we always return { voices: [...] } format
@@ -435,18 +433,18 @@ router.post('/generate-music', [
       duration = 10, // Default 10 seconds
       // prompt_influence = 0.3, // Default prompt influence
       // normalize_output = true
-           output_format = 'mp3_44100_128',
+      output_format = 'mp3_44100_128',
       model_id = 'music_v1'
     } = req.body;
 
-    console.log('Music generation request received:', { 
-      text: text.substring(0, 50) + '...', 
-      duration, 
+    console.log('Music generation request received:', {
+      text: text.substring(0, 50) + '...',
+      duration,
     });
 
     // Generate music using ElevenLabs Music API
     console.log('Calling ElevenLabs Music Generation API...');
-    
+
     const musicResponse = await fetch('https://api.elevenlabs.io/v1/music', {
       method: 'POST',
       headers: {
@@ -459,7 +457,7 @@ router.post('/generate-music', [
       //   prompt_influence,
       //   normalize_output
       // })
-       body: JSON.stringify({
+      body: JSON.stringify({
         prompt: text,
         music_length_ms: duration * 1000,  // convert seconds → ms
         model_id,
@@ -470,18 +468,18 @@ router.post('/generate-music', [
     if (!musicResponse.ok) {
       const errorData = await musicResponse.text();
       console.error('ElevenLabs Music API error:', musicResponse.status, errorData);
-      
+
       if (musicResponse.status === 402) {
-        return res.status(402).json({ 
-          error: 'Insufficient credits for music generation. Please upgrade your ElevenLabs subscription.' 
+        return res.status(402).json({
+          error: 'Insufficient credits for music generation. Please upgrade your ElevenLabs subscription.'
         });
       } else if (musicResponse.status === 400) {
-        return res.status(400).json({ 
-          error: 'Invalid music generation parameters. Please check your input.' 
+        return res.status(400).json({
+          error: 'Invalid music generation parameters. Please check your input.'
         });
       } else {
-        return res.status(musicResponse.status).json({ 
-          error: `Music generation failed: ${errorData}` 
+        return res.status(musicResponse.status).json({
+          error: `Music generation failed: ${errorData}`
         });
       }
     }

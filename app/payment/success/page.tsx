@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { CheckCircle, XCircle, Loader2, Crown, Sparkles, ArrowRight, Settings, CreditCard, Calendar, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,10 +11,10 @@ import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
 
-export default function PaymentSuccessPage() {
+function PaymentSuccessContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { user,refreshUser } = useAuth()
+  const { user, refreshUser } = useAuth()
   const [loading, setLoading] = useState(true)
   const [success, setSuccess] = useState(false)
   const [sessionInfo, setSessionInfo] = useState<any>(null)
@@ -23,12 +23,12 @@ export default function PaymentSuccessPage() {
   const sessionId = searchParams.get('session_id')
 
   // Plan features mapping
-  const planFeatures: Record<string, { 
-    color: string, 
-    badge: string, 
-    icon: any, 
-    limit: string, 
-    features: string[] 
+  const planFeatures: Record<string, {
+    color: string,
+    badge: string,
+    icon: any,
+    limit: string,
+    features: string[]
   }> = {
     BASIC: {
       color: 'from-blue-500 to-cyan-500',
@@ -38,7 +38,7 @@ export default function PaymentSuccessPage() {
       features: ['AI Chat', 'Text Generation', 'Basic Support']
     },
     STANDARD: {
-      color: 'from-purple-500 to-pink-500', 
+      color: 'from-purple-500 to-pink-500',
       badge: 'bg-purple-500',
       icon: Sparkles,
       limit: '30,000 calls/month',
@@ -46,7 +46,7 @@ export default function PaymentSuccessPage() {
     },
     ENTERPRISE: {
       color: 'from-amber-500 to-orange-500',
-      badge: 'bg-amber-500', 
+      badge: 'bg-amber-500',
       icon: Crown,
       limit: '10M calls/month',
       features: ['Everything in Standard', 'Audio Generation', 'Video Generation', 'Dedicated Support', 'Custom Integration']
@@ -73,7 +73,7 @@ export default function PaymentSuccessPage() {
           const data = await response.json()
           setSuccess(true)
           setSessionInfo(data)
-          
+
           // Fetch updated user data and update context
           try {
             refreshUser();
@@ -94,7 +94,7 @@ export default function PaymentSuccessPage() {
           } catch (userError) {
             console.warn('Failed to update user context:', userError)
           }
-          
+
           toast.success('Payment successful! Your subscription has been activated.')
         } else {
           setSuccess(false)
@@ -179,7 +179,7 @@ export default function PaymentSuccessPage() {
                       <span className="font-medium">Monthly Limit</span>
                       <span className="text-lg font-bold">{currentPlanInfo?.limit}</span>
                     </div>
-                    
+
                     <div>
                       <h4 className="font-semibold mb-3 flex items-center">
                         <Sparkles className="h-4 w-4 mr-2" />
@@ -205,7 +205,7 @@ export default function PaymentSuccessPage() {
                       <div>
                         <p className="text-muted-foreground">Next Billing</p>
                         <p className="font-semibold">
-                          {subscriptionInfo?.nextBilling ? 
+                          {subscriptionInfo?.nextBilling ?
                             new Date(subscriptionInfo.nextBilling).toLocaleDateString() :
                             'Monthly'
                           }
@@ -229,19 +229,19 @@ export default function PaymentSuccessPage() {
                         <Sparkles className="h-4 w-4 mr-2" />
                         Start Creating with AI
                       </Button>
-                      
+
                       <div className="grid grid-cols-2 gap-3">
-                        <Button 
-                          variant="outline" 
+                        <Button
+                          variant="outline"
                           onClick={() => router.push('/profile')}
                           className="flex-col h-auto py-4"
                         >
                           <Users className="h-5 w-5 mb-1" />
                           <span className="text-xs">View Profile</span>
                         </Button>
-                        
-                        <Button 
-                          variant="outline" 
+
+                        <Button
+                          variant="outline"
                           onClick={() => router.push('/gpts')}
                           className="flex-col h-auto py-4"
                         >
@@ -270,7 +270,7 @@ export default function PaymentSuccessPage() {
                           Active
                         </Badge>
                       </div>
-                      
+
                       <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                         <div className="flex items-center">
                           <CreditCard className="h-4 w-4 mr-2 text-muted-foreground" />
@@ -279,9 +279,9 @@ export default function PaymentSuccessPage() {
                         <span className="text-sm font-medium">Monthly</span>
                       </div>
 
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
+                      <Button
+                        variant="outline"
+                        size="sm"
                         className="w-full"
                         onClick={() => router.push('/profile?tab=subscription')}
                       >
@@ -334,8 +334,8 @@ export default function PaymentSuccessPage() {
                     <Button onClick={() => router.push('/chat')} className="w-full">
                       Try Again
                     </Button>
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       onClick={() => router.push('/profile')}
                       className="w-full"
                     >
@@ -349,5 +349,27 @@ export default function PaymentSuccessPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function PaymentSuccessPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-6">
+            <div className="flex flex-col items-center space-y-4">
+              <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+              <h2 className="text-xl font-semibold">Loading...</h2>
+              <p className="text-sm text-muted-foreground text-center">
+                Please wait while we load your payment details.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    }>
+      <PaymentSuccessContent />
+    </Suspense>
   )
 }
