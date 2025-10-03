@@ -122,8 +122,8 @@ export function AppSidebar() {
   }
 
   const handleNewChat = () => {
-     setCurrentChat(null);
-  localStorage.removeItem('currentChatId');
+    setCurrentChat(null);
+    localStorage.removeItem('currentChatId');
     // Navigate to chat if not already there
     if (!pathname.startsWith('/chat')) {
       router.push('/chat')
@@ -217,11 +217,17 @@ export function AppSidebar() {
           )}
         >
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-              <Bot className="h-4 w-4 text-primary-foreground" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary">
+
+              <img
+                src="/sira-gpt.png"
+                alt="Icon"
+                className="h-10 w-10 "
+              />
+
             </div>
             <div className="flex flex-col">
-              <span className="text-sm font-semibold">OpenWebUI</span>
+              <span className="text-sm font-semibold">Sira GPT</span>
               <span className="text-xs text-muted-foreground">AI Platform</span>
             </div>
           </div>
@@ -440,7 +446,7 @@ export function AppSidebar() {
                     <User className="mr-2 h-4 w-4" />
                     Profile
                   </DropdownMenuItem>
-                 
+
                   <DropdownMenuItem onClick={() => router.push("/billing")}>
                     <CreditCard className="mr-2 h-4 w-4" />
                     Billing
