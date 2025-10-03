@@ -1327,28 +1327,7 @@ export default function ChatInterface() {
 
             <div className="space-y-3">
 
-              <div className="relative rounded-3xl  border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"
-                style={{
-                  border: "2px solid rgba(255,255,255,0.05)", // halka thin border
-                  boxShadow: `
-                              /* Overall subtle ambient glow (thoda neela-purple) */
-                  0 0 20px 3px rgba(120, 80, 250, 0.15),
-
-                  /* Left Side: Orange-Red glow (image mein bottom-left par prominent) */
-                    -7px 7px 25px 3px rgba(255, 100, 0, 0.7),
-
-                  /* Right Side: Blue-Purple glow (image mein bottom-right par prominent) */
-                  0px 7px 25px px rgba(0, 50, 255, 0.7),
-
-                  /* Top Side: Soft light blue/cyan glow */
-                  0 -5px 15px 0px rgba(0, 200, 255, 0.4),
-
-                  /* Bottom Side: Pink/Magenta glow (yeh bottom-left aur bottom-right ke colors mein blend ho jayega) */
-                  0 5px 15px 0px rgba(255, 0, 150, 0.4)
-                `,
-                  backdropFilter: "blur(8px)", // soft blur
-                }}
-              >
+              <div className="relative rounded-3xl   focus-within:ring-1 focus-within:ring-ring overflow-hidden neon-box">
                 <ActiveOptionsDisplay
                   uploadedFiles={uploadedFiles}
                   removeFile={removeFile}
