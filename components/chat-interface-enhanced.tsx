@@ -1249,12 +1249,12 @@ export default function ChatInterface() {
         <div className="flex flex-1 items-center justify-center p-4">
           <div className="w-full max-w-4xl space-y-6">
             <div className="text-center space-y-2">
-              <h1 className="text-3xl font-bold">Welcome to AI Chat</h1>
+              <h1 className="text-3xl font-bold">Welcome to Sira GPT</h1>
               <p className="text-muted-foreground">Ask anything, generate images, or create videos with AI.</p>
             </div>
 
             {/* Example prompts */}
-            {chatType === 'text' && (
+            {/* {chatType === 'text' && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
                 <Button
                   variant="outline"
@@ -1287,7 +1287,7 @@ export default function ChatInterface() {
                   </div>
                 </Button>
               </div>
-            )}
+            )} */}
 
             {/* Video generation prompts */}
             {chatType === 'video' && (
@@ -1327,7 +1327,28 @@ export default function ChatInterface() {
 
             <div className="space-y-3">
 
-              <div className="relative rounded-3xl  border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+              <div className="relative rounded-3xl  border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"
+                style={{
+                  border: "2px solid rgba(255,255,255,0.05)", // halka thin border
+                  boxShadow: `
+                              /* Overall subtle ambient glow (thoda neela-purple) */
+                  0 0 20px 3px rgba(120, 80, 250, 0.15),
+
+                  /* Left Side: Orange-Red glow (image mein bottom-left par prominent) */
+                    -7px 7px 25px 3px rgba(255, 100, 0, 0.7),
+
+                  /* Right Side: Blue-Purple glow (image mein bottom-right par prominent) */
+                  0px 7px 25px px rgba(0, 50, 255, 0.7),
+
+                  /* Top Side: Soft light blue/cyan glow */
+                  0 -5px 15px 0px rgba(0, 200, 255, 0.4),
+
+                  /* Bottom Side: Pink/Magenta glow (yeh bottom-left aur bottom-right ke colors mein blend ho jayega) */
+                  0 5px 15px 0px rgba(255, 0, 150, 0.4)
+                `,
+                  backdropFilter: "blur(8px)", // soft blur
+                }}
+              >
                 <ActiveOptionsDisplay
                   uploadedFiles={uploadedFiles}
                   removeFile={removeFile}
@@ -1517,7 +1538,7 @@ export default function ChatInterface() {
           ) : (
             <>
               {/* Messages */}
-              <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+              <ScrollArea className="flex-1 p-4 mb-6" ref={scrollAreaRef}>
                 <div className="space-y-4 max-w-4xl mx-auto">
                   {currentChat?.messages.map((message) => (
                     <MessageComponent
@@ -1537,7 +1558,8 @@ export default function ChatInterface() {
                 <div className="max-w-4xl mx-auto space-y-3">
                   {/* Input Area */}
 
-                  <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+                  {/* <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"> */}
+                  <div className="relative rounded-3xl .card border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
                     <ActiveOptionsDisplay
                       uploadedFiles={uploadedFiles}
                       removeFile={removeFile}
@@ -1658,7 +1680,8 @@ export default function ChatInterface() {
             </>
           )}
         </>
-      )}
-    </div>
+      )
+      }
+    </div >
   )
 }

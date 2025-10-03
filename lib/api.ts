@@ -309,8 +309,9 @@ class ApiClient {
             try {
               const jsonData = JSON.parse(line.substring(6));
               if (jsonData.content) {
-
                 onData(jsonData.content); // Data ko component mein bhejein
+              } else if (jsonData.error) {
+                onError(new Error(jsonData.error));
               }
             } catch (e) {
               // JSON parse error ko ignore karein

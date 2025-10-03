@@ -405,3 +405,125 @@
   border-radius: 9999px;
   /* fully rounded */
 }
+
+/* Example: styles/GlowEffect.css */
+
+.glow-container {
+  position: relative;
+  /* `rounded-3xl` Tailwind class `border-radius: 1.5rem;` ke barabar hai */
+  border-radius: 1.5rem;
+  border: 2px solid rgba(255, 255, 255, 0.05);
+  /* Aapki existing subtle border */
+  background: var(--background);
+  /* Tailwind background color */
+  backdrop-filter: blur(2px);
+  /* Aapka existing blur */
+  overflow: hidden;
+  /* Important to contain the glows within the element */
+
+  /* Animation apply karein */
+  animation: diagonalGlowAnimation 10s ease-in-out infinite alternate;
+  /* animation-fill-mode: forwards; */
+  /* Agar animation end state par rukna ho */
+}
+
+@keyframes diagonalGlowAnimation {
+  0% {
+    box-shadow:
+      /* Top-Left (Orange) */
+      -15px -15px 20px 5px rgba(255, 140, 0, 0.7),
+      /* Top-Right (Cyan) */
+      15px -15px 20px 5px rgba(0, 255, 255, 0.7),
+      /* Bottom-Left (Magenta) */
+      -15px 15px 20px 5px rgba(255, 0, 255, 0.7),
+      /* Bottom-Right (Green) */
+      15px 15px 20px 5px rgba(0, 255, 0, 0.7);
+  }
+
+  25% {
+    box-shadow:
+      /* Top-Left moves towards Bottom-Right diagonally */
+      -5px -5px 20px 7px rgba(255, 140, 0, 0.8),
+      /* Top-Right shifts slightly */
+      10px -18px 15 4px rgba(0, 255, 255, 0.6),
+      /* Bottom-Left shifts slightly */
+      -18px 10px 15 4px rgba(255, 0, 255, 0.6),
+      /* Bottom-Right moves towards Top-Left diagonally */
+      5px 5px 20px 7px rgba(0, 255, 0, 0.8);
+  }
+
+  50% {
+    box-shadow:
+      /* Top-Left shifts more towards center-bottom-right */
+      5px 5px 20px 5px rgba(255, 140, 0, 0.7),
+      /* Top-Right moves towards Bottom-Left diagonally */
+      -5px -5px 20px 5px rgba(0, 255, 255, 0.7),
+      /* Bottom-Left moves towards Top-Right diagonally */
+      5px 5px 20px 5px rgba(255, 0, 255, 0.7),
+      /* Bottom-Right shifts more towards center-top-left */
+      -5px -5px 20px 5px rgba(0, 255, 0, 0.7);
+  }
+
+  75% {
+    box-shadow:
+      /* Top-Left shifts slightly */
+      -18px -10px 15 4px rgba(255, 140, 0, 0.6),
+      /* Top-Right moves towards Bottom-Left diagonally */
+      -5px -5px 20px 7px rgba(0, 255, 255, 0.8),
+      /* Bottom-Left moves towards Top-Right diagonally */
+      5px 5px 20px 7px rgba(255, 0, 255, 0.8),
+      /* Bottom-Right shifts slightly */
+      18px 10px 15 4px rgba(0, 255, 0, 0.6);
+  }
+
+  100% {
+    /* Back to initial state */
+    box-shadow:
+      -15px -15px 40px 5px rgba(255, 140, 0, 0.7),
+      15px -15px 40px 5px rgba(0, 255, 255, 0.7),
+      -15px 15px 40px 5px rgba(255, 0, 255, 0.7),
+      15px 15px 40px 5px rgba(0, 255, 0, 0.7);
+  }
+}
+
+
+
+.neon-box {
+  position: relative;
+  animation: neonGlow 4s infinite alternate ease-in-out;
+  box-shadow:
+    0 0 18px 3px rgba(120, 100, 250, 0.15),
+    -6px 6px 22px 0px rgba(255, 140, 60, 0.55),
+    6px 6px 22px 0px rgba(60, 130, 255, 0.55),
+    0 -4px 12px 0px rgba(0, 200, 255, 0.25),
+    0 4px 12px 0px rgba(255, 0, 180, 0.25);
+}
+
+@keyframes neonGlow {
+  0% {
+    box-shadow:
+      0 0 18px 3px rgba(120, 100, 250, 0.2),
+      -6px 6px 25px 0px rgba(255, 140, 60, 0.7),
+      6px 6px 25px 0px rgba(60, 130, 255, 0.7),
+      0 -4px 15px 0px rgba(0, 200, 255, 0.35),
+      0 4px 15px 0px rgba(255, 0, 180, 0.35);
+  }
+
+  50% {
+    box-shadow:
+      0 0 25px 5px rgba(120, 100, 250, 0.25),
+      -8px 8px 28px 0px rgba(255, 140, 60, 0.8),
+      8px 8px 28px 0px rgba(60, 130, 255, 0.8),
+      0 -6px 18px 0px rgba(0, 200, 255, 0.4),
+      0 6px 18px 0px rgba(255, 0, 180, 0.4);
+  }
+
+  100% {
+    box-shadow:
+      0 0 20px 3px rgba(120, 100, 250, 0.15),
+      -6px 6px 22px 0px rgba(255, 140, 60, 0.55),
+      6px 6px 22px 0px rgba(60, 130, 255, 0.55),
+      0 -4px 12px 0px rgba(0, 200, 255, 0.25),
+      0 4px 12px 0px rgba(255, 0, 180, 0.25);
+  }
+}

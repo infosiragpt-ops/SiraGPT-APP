@@ -97,8 +97,10 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
             <div className="flex items-center space-x-2">
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                            <Download className="h-5 w-5" />
+                        <Button variant="ghost" size="icon" className="transition-transform transform hover:scale-110">
+                            {/* <Download className="h-5 w-5" /> */}
+                            <Download className="h-5 w-5 cursor-pointer hover:opacity-75 transition" />
+
                         </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent>
@@ -110,8 +112,9 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
                         </DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
-                <Button variant="ghost" size="icon" onClick={onExpand}>
-                    <Expand className="h-5 w-5" />
+                <Button variant="ghost" size="icon" onClick={onExpand} className="transition-transform transform hover:scale-110">
+                    <Expand className="h-5 w-5 cursor-pointer hover:opacity-75 transition" />
+
                 </Button>
             </div>
         </div>

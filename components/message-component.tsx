@@ -199,7 +199,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     const isUser = message.role === "USER";
 
     // Ahem Condition: Kya yeh ek khali AI message hai?
-    const isThinking = isAssistant && !message.content;
+    // const isThinking = isAssistant && !message.content;
+    const isThinking = isAssistant && message.content === null;
+
     // For Share Functioanlity
     const handleShare = async () => {
         try {
@@ -432,7 +434,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             const tHead = node.children.find((child: any) => child.tagName === 'thead');
                             const tBody = node.children.find((child: any) => child.tagName === 'tbody');
                             const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
-                            console.log("tHead?.children", headers.filter((e: string) => e != "\n") ?? []);
 
                             const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
                             const handleExpand = () => {
