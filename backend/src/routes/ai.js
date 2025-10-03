@@ -832,7 +832,7 @@ router.post(
 
 
 // Helper function to save a base64 encoded image to the filesystem
-async function saveBase64Image(base64Data) {
+async function saveBase64Image(base64Data, userId, prompt) {
   if (!base64Data) {
     throw new Error('No base64 data provided to save.');
   }
@@ -858,9 +858,21 @@ async function saveBase64Image(base64Data) {
 
   const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
   const imageUrl = `${baseUrl}/uploads/images/${filename}`;
+// Create a file record in the database
+  const newFile = await prisma.file.create({
+    data: {
+      userId: userId,
+      filename: filename,
+      originalName: prompt.substring(0, 100), // Use the prompt as the original name
+      mimeType: 'image/png',
+      size: imageBuffer.length,
+      path: filepath,
+    },
+  });
 
-  console.log("Image saved locally. URL:", imageUrl);
-  return imageUrl;
+  console.log("Image saved locally and record created. URL:", imageUrl);
+  return { imageUrl, fileId: newFile.id };
+ 
 }
 
 router.post(
@@ -878,23 +890,22 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      const { prompt, chatId, provider, model, fileId } = req.body;
+      let { prompt, chatId, provider, model, fileId } = req.body;
       const userId = req.user.id;
-      console.log("file ID", fileId);
-
+        console.log('userId',userId);
+        
       let openai;
       if (provider === "Gemini") {
         openai = new OpenAI({
           apiKey: process.env.GEMINI_API_KEY,
           baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
         });
-      } else { // This will now handle OpenAI
+      } else {
         openai = new OpenAI({
           apiKey: process.env.OPENAI_API_KEY
         });
       }
 
-      // ✅ Check monthly limit
       if (req.user.apiUsage >= req.user.monthlyLimit) {
         return res.status(429).json({
           error: 'Monthly API limit exceeded',
@@ -902,9 +913,32 @@ router.post(
         });
       }
 
-      let imageUrl;
       let imagePath;
-      const tokens = 1000;
+      // If fileId is not provided, check the last message in the chat for an image
+      if (!fileId && chatId) {
+        const lastMessage = await prisma.message.findFirst({
+          where: {
+            chatId: chatId,
+            role: 'ASSISTANT',
+            files: {
+              not: null
+            }
+          },
+          orderBy: {
+            timestamp: 'desc'
+          }
+        });
+
+        if (lastMessage && lastMessage.files) {
+          const files = JSON.parse(lastMessage.files);
+          const lastImage = files.find(f => f.type === 'image' && f.fileId);
+          if (lastImage) {
+            fileId = lastImage.fileId;
+            console.log(`Found last image in chat with fileId: ${fileId}`);
+          }
+        }
+      }
+
       if (fileId) {
         const inputFileRecord = await prisma.file.findFirst({
           where: { id: fileId, userId: userId }
@@ -913,162 +947,94 @@ router.post(
         if (!inputFileRecord) {
           return res.status(404).json({ error: 'Input image file not found.' });
         }
-
         imagePath = inputFileRecord.path;
-
-        let imageBuffer;
-        try {
-          imageBuffer = await fs.readFile(imagePath);
-        } catch (readError) {
-          console.error('Error reading input image file:', readError);
-          return res.status(500).json({ error: 'Failed to read input image file.' });
-        }
       }
 
-      try {
-        let response;
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Image generation timeout')), 50000);
-        });
+      let response;
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Image generation timeout')), 80000);
+      });
 
-        if (fileId) {
-          const imagePromise = aiService.generateImageFromImage(imagePath, prompt, provider)
+      if (imagePath) { // If there's an image to edit
+        const imagePromise = aiService.generateImageFromImage(imagePath, prompt, provider);
+        response = await Promise.race([imagePromise, timeoutPromise]);
+      } else { // If we are generating a new image from a prompt
+        if (provider === "Gemini") {
+          const imagePromise = openai.images.generate({
+            model: "imagen-3.0-generate-002",
+            prompt: prompt,
+            response_format: "b64_json",
+            n: 1,
+            size: "1024x1024"
+          });
           response = await Promise.race([imagePromise, timeoutPromise]);
-          const base64Data = response;
-          imageUrl = await saveBase64Image(base64Data);
+        } else {
+          const imagePromise = openai.images.generate({
+            model: 'dall-e-3',
+            prompt: prompt,
+            n: 1,
+            size: '1024x1024',
+            quality: 'standard',
+            response_format: 'b64_json',
+          });
+          response = await Promise.race([imagePromise, timeoutPromise]);
         }
-        else {
-          if (provider === "Gemini") {
-            const imagePromise = openai.images.generate({
-              model: "imagen-3.0-generate-002",
-              prompt: prompt,
-              response_format: "b64_json",
-              n: 1,
-              size: "1024x1024"
-            });
-            response = await Promise.race([imagePromise, timeoutPromise]);
-          } else {
-            const imagePromise = openai.images.generate({
-              model: 'dall-e-3',
-              prompt: prompt,
-              n: 1,
-              size: '1024x1024',
-              quality: 'standard',
-              response_format: 'b64_json',
-            });
-            response = await Promise.race([imagePromise, timeoutPromise]);
-          }
-          const base64Data = response.data[0].b64_json;
-          imageUrl = await saveBase64Image(base64Data);
-        }
+         const { b64_json, ...rest } = response.data[0];
 
-      } catch (apiError) {
-        console.error(`${provider} Image API error:`, apiError);
-        if (apiError.message === 'Image generation timeout') {
-          return res.status(408).json({ error: 'Image generation timed out. Please try again.' });
-        }
-        return res.status(500).json({
-          error: 'Image generation failed. Please try again.',
-          details: apiError.message
-        });
+        response = response.data[0].b64_json;
+
+  console.log("📦 Remaining fields in imageData (excluding b64_json):", rest);
       }
 
-      // ✅ Save messages and track usage (Enhanced with complete file info)
+      const { imageUrl, fileId: newFileId } = await saveBase64Image(response, userId, prompt);
+
       if (chatId) {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (!chat) {
           return res.status(404).json({ error: 'Chat not found' });
         }
 
-        // ✅ Prepare complete file information for user message if fileId provided
-        let userMessageFiles = undefined;
-        if (fileId) {
-          try {
-            const inputFileRecord = await prisma.file.findFirst({
-              where: { id: fileId, userId },
-              select: {
-                id: true,
-                originalName: true,
-                filename: true,
-                mimeType: true,
-                path: true, // ✅ Use 'path' instead of 'url'
-              }
-            });
-
-            if (inputFileRecord) {
-              // ✅ Construct URL from available data
-              const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-              const fileUrl = `${baseUrl}/uploads/${userId}/${inputFileRecord.filename}`;
-
-              userMessageFiles = JSON.stringify([{
-                id: inputFileRecord.id,
-                name: inputFileRecord.originalName,
-                filename: inputFileRecord.filename,
-                type: inputFileRecord.mimeType,
-                url: fileUrl, // ✅ Construct URL from available data
-                path: inputFileRecord.path
-              }]);
-              console.log('📎 Input image file prepared for user message display');
-            }
-          } catch (fileError) {
-            console.error('Error fetching input file for user message:', fileError);
+        await prisma.message.create({
+          data: {
+            chatId,
+            role: 'USER',
+            content: prompt,
           }
-        }
+        });
 
-        try {
-          await prisma.$transaction([
-            // Operation 1: USER message with complete file info
-            prisma.message.create({
-              data: {
-                chatId,
-                role: 'USER',
-                content: prompt,
-                files: userMessageFiles // ✅ Now includes complete file info for display
-              }
-            }),
+        await prisma.message.create({
+          data: {
+            chatId,
+            role: 'ASSISTANT',
+            content: imageUrl,
+            tokens: 1000,
+            files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt, fileId: newFileId }])
+          }
+        });
 
-            // Operation 2: ASSISTANT image message
-            prisma.message.create({
-              data: {
-                chatId,
-                role: 'ASSISTANT',
-                content: imageUrl,
-                tokens,
-                files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt }])
-              }
-            }),
-
-            // Operation 3: Update chat
-            prisma.chat.update({
-              where: { id: chatId },
-              data: {
-                updatedAt: new Date(),
-                title: chat.title === 'New Chat'
-                  ? `Image: ${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}`
-                  : chat.title
-              }
-            })
-          ]);
-
-        } catch (error) {
-          console.error("Transaction failed:", error);
-          return res.status(500).json({ error: "Failed to save chat history." });
-        }
+        await prisma.chat.update({
+          where: { id: chatId },
+          data: {
+            updatedAt: new Date(),
+            title: chat.title === 'New Chat'
+              ? `Image: ${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}`
+              : chat.title
+          }
+        });
       }
 
-      // ✅ Track usage
       await prisma.apiUsage.create({
-        data: { userId, model, tokens, cost: tokens * 0.001 }
+        data: { userId, model, tokens: 1000, cost: 1000 * 0.001 }
       });
 
       const updatedUser = await prisma.user.update({
         where: { id: userId },
-        data: { apiUsage: { increment: tokens } }
+        data: { apiUsage: { increment: 1000 } }
       });
 
       res.json({
         imageUrl,
-        tokens,
+        tokens: 1000,
         usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
       });
 

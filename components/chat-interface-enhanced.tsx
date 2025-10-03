@@ -1326,8 +1326,8 @@ export default function ChatInterface() {
             )}
 
             <div className="space-y-3">
-
-              <div className="relative rounded-3xl   focus-within:ring-1 focus-within:ring-ring overflow-hidden neon-box">
+<div className="border-wrapper">
+              <div className="relative rounded-3xl   focus-within:ring-1 focus-within:ring-ring overflow-hidden  ">
                 <ActiveOptionsDisplay
                   uploadedFiles={uploadedFiles}
                   removeFile={removeFile}
@@ -1349,7 +1349,7 @@ export default function ChatInterface() {
                           ? "Enter your search query..."
                           : "Type your message here..."
                   }
-                  className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200`}
+                  className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200`}
                   style={{
                     minHeight: "60px",
                     maxHeight: "350px",
@@ -1448,7 +1448,7 @@ export default function ChatInterface() {
                   )}
 
                 </div>
-              </div>
+              </div></div>
 
               <p className="text-center text-xs text-muted-foreground">
                 {isImageGenerationActive
@@ -1538,7 +1538,8 @@ export default function ChatInterface() {
                   {/* Input Area */}
 
                   {/* <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"> */}
-                  <div className="relative rounded-3xl .card border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden  neon-box">
+                  <div className="border-wrapper">
+                  <div className="relative  rounded-3xl .card border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden ">
                     <ActiveOptionsDisplay
                       uploadedFiles={uploadedFiles}
                       removeFile={removeFile}
@@ -1642,6 +1643,7 @@ export default function ChatInterface() {
                         </Button>
                       )}
                     </div>
+                  </div>
                   </div>
 
                   <p className="text-center text-xs text-muted-foreground">

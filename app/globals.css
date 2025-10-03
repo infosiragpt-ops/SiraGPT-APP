@@ -408,81 +408,30 @@
 
 /* Example: styles/GlowEffect.css */
 
-.glow-container {
+.border-wrapper {
   position: relative;
-  /* `rounded-3xl` Tailwind class `border-radius: 1.5rem;` ke barabar hai */
-  border-radius: 1.5rem;
-  border: 2px solid rgba(255, 255, 255, 0.05);
-  /* Aapki existing subtle border */
-  background: var(--background);
-  /* Tailwind background color */
-  backdrop-filter: blur(2px);
-  /* Aapka existing blur */
-  overflow: hidden;
-  /* Important to contain the glows within the element */
-
-  /* Animation apply karein */
-  animation: diagonalGlowAnimation 10s ease-in-out infinite alternate;
-  /* animation-fill-mode: forwards; */
-  /* Agar animation end state par rukna ho */
+  padding: 2px; /* border thickness */
+  border-radius: 1.5rem; /* same as child */
+  background: linear-gradient(
+    270deg,
+    #ff8c3c,
+    #3c82ff,
+    #00c8ff,
+    #ff00b4,
+    #7864fa,
+    #ff8c3c
+  );
+  background-size: 600% 600%;
+  animation: borderRun 6s linear infinite;
 }
 
-@keyframes diagonalGlowAnimation {
+ 
+@keyframes borderRun {
   0% {
-    box-shadow:
-      /* Top-Left (Orange) */
-      -15px -15px 20px 5px rgba(255, 140, 0, 0.7),
-      /* Top-Right (Cyan) */
-      15px -15px 20px 5px rgba(0, 255, 255, 0.7),
-      /* Bottom-Left (Magenta) */
-      -15px 15px 20px 5px rgba(255, 0, 255, 0.7),
-      /* Bottom-Right (Green) */
-      15px 15px 20px 5px rgba(0, 255, 0, 0.7);
+    background-position: 0% 50%;
   }
-
-  25% {
-    box-shadow:
-      /* Top-Left moves towards Bottom-Right diagonally */
-      -5px -5px 20px 7px rgba(255, 140, 0, 0.8),
-      /* Top-Right shifts slightly */
-      10px -18px 15 4px rgba(0, 255, 255, 0.6),
-      /* Bottom-Left shifts slightly */
-      -18px 10px 15 4px rgba(255, 0, 255, 0.6),
-      /* Bottom-Right moves towards Top-Left diagonally */
-      5px 5px 20px 7px rgba(0, 255, 0, 0.8);
-  }
-
-  50% {
-    box-shadow:
-      /* Top-Left shifts more towards center-bottom-right */
-      5px 5px 20px 5px rgba(255, 140, 0, 0.7),
-      /* Top-Right moves towards Bottom-Left diagonally */
-      -5px -5px 20px 5px rgba(0, 255, 255, 0.7),
-      /* Bottom-Left moves towards Top-Right diagonally */
-      5px 5px 20px 5px rgba(255, 0, 255, 0.7),
-      /* Bottom-Right shifts more towards center-top-left */
-      -5px -5px 20px 5px rgba(0, 255, 0, 0.7);
-  }
-
-  75% {
-    box-shadow:
-      /* Top-Left shifts slightly */
-      -18px -10px 15 4px rgba(255, 140, 0, 0.6),
-      /* Top-Right moves towards Bottom-Left diagonally */
-      -5px -5px 20px 7px rgba(0, 255, 255, 0.8),
-      /* Bottom-Left moves towards Top-Right diagonally */
-      5px 5px 20px 7px rgba(255, 0, 255, 0.8),
-      /* Bottom-Right shifts slightly */
-      18px 10px 15 4px rgba(0, 255, 0, 0.6);
-  }
-
   100% {
-    /* Back to initial state */
-    box-shadow:
-      -15px -15px 40px 5px rgba(255, 140, 0, 0.7),
-      15px -15px 40px 5px rgba(0, 255, 255, 0.7),
-      -15px 15px 40px 5px rgba(255, 0, 255, 0.7),
-      15px 15px 40px 5px rgba(0, 255, 0, 0.7);
+    background-position: 100% 50%;
   }
 }
 
