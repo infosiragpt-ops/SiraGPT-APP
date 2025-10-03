@@ -1538,7 +1538,7 @@ export default function ChatInterface() {
                   {/* Input Area */}
 
                   {/* <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"> */}
-                  <div className="relative rounded-3xl .card border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden">
+                  <div className="relative rounded-3xl .card border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden  neon-box">
                     <ActiveOptionsDisplay
                       uploadedFiles={uploadedFiles}
                       removeFile={removeFile}
