@@ -88,7 +88,7 @@ export function AdminSidebar() {
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-semibold">Admin Panel</span>
-            <span className="text-xs text-muted-foreground">OpenWebUI</span>
+            <span className="text-xs text-muted-foreground">Sira Gpt</span>
           </div>
         </div>
       </SidebarHeader>

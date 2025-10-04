@@ -74,11 +74,16 @@ export default function RegisterPage() {
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
             <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary">
-              <Bot className="h-6 w-6 text-primary-foreground" />
+
+              <img
+                src="/sira-gpt.png"
+                alt="Icon"
+                className="h-10 w-10 text-primary-foreground"
+              />
             </div>
           </div>
           <CardTitle className="text-2xl">Create account</CardTitle>
-          <CardDescription>Join OpenWebUI and start chatting with AI</CardDescription>
+          <CardDescription>Join Sira Gpt and start chatting with AI</CardDescription>
         </CardHeader>
 
         <CardContent>

@@ -858,7 +858,7 @@ async function saveBase64Image(base64Data, userId, prompt) {
 
   const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
   const imageUrl = `${baseUrl}/uploads/images/${filename}`;
-// Create a file record in the database
+  // Create a file record in the database
   const newFile = await prisma.file.create({
     data: {
       userId: userId,
@@ -872,7 +872,7 @@ async function saveBase64Image(base64Data, userId, prompt) {
 
   console.log("Image saved locally and record created. URL:", imageUrl);
   return { imageUrl, fileId: newFile.id };
- 
+
 }
 
 router.post(
@@ -892,8 +892,8 @@ router.post(
       }
       let { prompt, chatId, provider, model, fileId } = req.body;
       const userId = req.user.id;
-        console.log('userId',userId);
-        
+      console.log('userId', userId);
+
       let openai;
       if (provider === "Gemini") {
         openai = new OpenAI({
@@ -939,11 +939,26 @@ router.post(
         }
       }
 
+      let userMessageFiles = undefined;
       if (fileId) {
         const inputFileRecord = await prisma.file.findFirst({
           where: { id: fileId, userId: userId }
         });
+        if (inputFileRecord) {
+          // ✅ Construct URL from available data
+          const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+          const fileUrl = `${baseUrl}/uploads/${userId}/${inputFileRecord.filename}`;
 
+          userMessageFiles = JSON.stringify([{
+            id: inputFileRecord.id,
+            name: inputFileRecord.originalName,
+            filename: inputFileRecord.filename,
+            type: inputFileRecord.mimeType,
+            url: fileUrl, // ✅ Construct URL from available data
+            path: inputFileRecord.path
+          }]);
+          console.log('📎 Input image file prepared for user message display');
+        }
         if (!inputFileRecord) {
           return res.status(404).json({ error: 'Input image file not found.' });
         }
@@ -979,11 +994,11 @@ router.post(
           });
           response = await Promise.race([imagePromise, timeoutPromise]);
         }
-         const { b64_json, ...rest } = response.data[0];
+        const { b64_json, ...rest } = response.data[0];
 
         response = response.data[0].b64_json;
 
-  console.log("📦 Remaining fields in imageData (excluding b64_json):", rest);
+        console.log("📦 Remaining fields in imageData (excluding b64_json):", rest);
       }
 
       const { imageUrl, fileId: newFileId } = await saveBase64Image(response, userId, prompt);
@@ -999,6 +1014,7 @@ router.post(
             chatId,
             role: 'USER',
             content: prompt,
+            files: userMessageFiles
           }
         });
 

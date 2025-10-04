@@ -13,7 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({
-    siteName: "OpenWebUI Platform",
+    siteName: "Sira Gpt Platform",
     siteDescription: "Multi-LLM AI Platform with Text, Image, Audio & Video Generation",
     adminEmail: "admin@openwebui.com",
     supportEmail: "support@openwebui.com",

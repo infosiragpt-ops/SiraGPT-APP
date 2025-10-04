@@ -75,7 +75,7 @@ export function AdminDashboard() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-          <p className="text-muted-foreground">Overview of your OpenWebUI platform</p>
+          <p className="text-muted-foreground">Overview of your Sira Gpt platform</p>
         </div>
         <div className="flex items-center gap-2">
           <ThemeToggle />

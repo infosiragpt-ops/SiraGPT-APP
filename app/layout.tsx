@@ -11,7 +11,7 @@ import 'katex/dist/katex.min.css';
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "OpenWebUI Platform",
+  title: "Sira Gpt Platform",
   description: "Multi-LLM AI Platform with Text, Image, Audio & Video Generation",
   generator: 'v0.dev'
 }

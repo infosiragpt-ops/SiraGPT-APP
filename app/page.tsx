@@ -28,8 +28,13 @@ export default function Home() {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.6 }}
           >
-            <Bot className="h-8 w-8 text-primary" />
-            <h1 className="text-2xl font-bold">OpenWebUI</h1>
+
+            <img
+              src="/sira-gpt.png"
+              alt="Icon"
+              className="h-10 w-10 brightness-0 dark:brightness-0 dark:invert"
+            />
+            <h1 className="text-2xl font-bold">Sira Gpt</h1>
           </motion.div>
           <motion.div
             className="flex items-center space-x-4"
@@ -80,7 +85,7 @@ export default function Home() {
             animate="visible"
             custom={3}
           >
-           <Link href="/auth/register">
+            <Link href="/auth/register">
               <Button size="lg" className="w-full sm:w-auto">
                 Start Chatting
               </Button>

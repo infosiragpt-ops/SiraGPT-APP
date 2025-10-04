@@ -55,11 +55,17 @@ export default function LoginPage() {
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
             <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary">
-              <Bot className="h-6 w-6 text-primary-foreground" />
+              {/* // <Bot className="h-6 w-6 text-primary-foreground" /> */}
+              <img
+                src="/sira-gpt.png"
+                alt="Icon"
+                className="h-10 w-10 invert dark:invert-0"
+              />
+
             </div>
           </div>
           <CardTitle className="text-2xl">Welcome back</CardTitle>
-          <CardDescription>Sign in to your OpenWebUI account</CardDescription>
+          <CardDescription>Sign in to your Sira Gpt account</CardDescription>
         </CardHeader>
 
         <CardContent>
