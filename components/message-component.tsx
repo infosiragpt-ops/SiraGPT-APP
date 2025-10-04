@@ -199,8 +199,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     const isUser = message.role === "USER";
 
     // Ahem Condition: Kya yeh ek khali AI message hai?
-    // const isThinking = isAssistant && !message.content;
-    const isThinking = isAssistant && message.content === null;
+    const isThinking = isAssistant && !message.content && !message.error;
+    // const isThinking = isAssistant && message.content === null;
 
     // For Share Functioanlity
     const handleShare = async () => {

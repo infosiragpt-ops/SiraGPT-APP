@@ -498,18 +498,33 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
         historyMessages = await prisma.message.findMany({
           where: { chatId },
           orderBy: { timestamp: 'asc' },
-          select: { role: true, content: true }
+          select: { role: true, content: true, files: true }
         });
       }
 
       const messages = [systemInstruction];
       if (historyMessages.length) {
-        messages.push(
-          ...historyMessages.map(m => ({
+        historyMessages.forEach(m => {
+          let messageContent = m.content;
+          if (m.files) {
+            try {
+              const parsedFiles = JSON.parse(m.files);
+              if (Array.isArray(parsedFiles) && parsedFiles.length > 0) {
+                const fileContext = parsedFiles.map(f => {
+                  const content = f.extractedText || 'Binary file - content not available';
+                  return `\n\nAttached file: ${f.name}\nContent: ${content}`;
+                }).join('');
+                messageContent += fileContext;
+              }
+            } catch (e) {
+              console.warn("Could not parse files from history message:", e);
+            }
+          }
+          messages.push({
             role: m.role === 'USER' ? 'user' : 'assistant',
-            content: m.content
-          }))
-        );
+            content: messageContent
+          });
+        });
       }
 
       let finalPrompt = prompt;

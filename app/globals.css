@@ -410,26 +410,27 @@
 
 .border-wrapper {
   position: relative;
-  padding: 2px; /* border thickness */
-  border-radius: 1.5rem; /* same as child */
-  background: linear-gradient(
-    270deg,
-    #ff8c3c,
-    #3c82ff,
-    #00c8ff,
-    #ff00b4,
-    #7864fa,
-    #ff8c3c
-  );
+  padding: 2px;
+  /* border thickness */
+  border-radius: 1.5rem;
+  /* same as child */
+  background: linear-gradient(270deg,
+      #ff8c3c,
+      #3c82ff,
+      #00c8ff,
+      #ff00b4,
+      #7864fa,
+      #ff8c3c);
   background-size: 600% 600%;
   animation: borderRun 6s linear infinite;
 }
 
- 
+
 @keyframes borderRun {
   0% {
     background-position: 0% 50%;
   }
+
   100% {
     background-position: 100% 50%;
   }
@@ -475,4 +476,25 @@
       0 -4px 12px 0px rgba(0, 200, 255, 0.25),
       0 4px 12px 0px rgba(255, 0, 180, 0.25);
   }
+}
+
+/* Custom scrollbar for Textarea */
+.textarea-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.textarea-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.textarea-scrollbar::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.textarea-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.7);
 }

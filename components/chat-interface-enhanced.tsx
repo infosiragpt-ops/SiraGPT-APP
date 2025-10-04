@@ -674,7 +674,24 @@ export default function ChatInterface() {
   // Search sources state - all enabled by default
 
   // No longer need dynamic padding, handled by layout
-  const textareaRef = React.useRef(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+
+  React.useEffect(() => {
+    if (textareaRef.current) {
+      const textarea = textareaRef.current;
+      textarea.style.height = 'auto'; // Reset height to recalculate
+      const scrollHeight = textarea.scrollHeight;
+      const maxHeight = 350; // As defined in style
+
+      if (scrollHeight > maxHeight) {
+        textarea.style.height = `${maxHeight}px`;
+        textarea.style.overflowY = 'auto';
+      } else {
+        textarea.style.height = `${scrollHeight}px`;
+        textarea.style.overflowY = 'hidden';
+      }
+    }
+  }, [input]);
 
 
 
@@ -768,7 +785,7 @@ export default function ChatInterface() {
           }
         }
         if (finalTranscript) {
-          setInput(prevInput => prevInput.trim() + (prevInput ? ' ' : '') + finalTranscript);
+          setInput((prevInput: any) => prevInput.trim() + (prevInput ? ' ' : '') + finalTranscript);
         }
       };
 
@@ -1549,7 +1566,7 @@ export default function ChatInterface() {
                                 ? "Enter your search query..."
                                 : "Type your message here..."
                         }
-                        className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200`}
+                        className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
                         style={{
                           minHeight: "60px",
                           maxHeight: "350px",

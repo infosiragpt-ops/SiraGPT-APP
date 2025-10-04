@@ -90,16 +90,16 @@ Do not include any other text or explanations in your response. Just the JSON ob
             };
 
 
-            if (model.includes('gpt-5')) {
+            // if (model.includes('gpt-5')) {
 
-                console.log(`Using special parameter 'max_completion_tokens' for model: ${model}`);
-                payload.max_completion_tokens = 8192;
+            //     console.log(`Using special parameter 'max_completion_tokens' for model: ${model}`);
+            //     payload.max_completion_tokens = 8192;
 
-            } else {
+            // } else {
 
-                console.log(`Using standard parameter 'max_tokens' for model: ${model}`);
-                payload.max_tokens = 8192;
-            }
+            //     console.log(`Using standard parameter 'max_tokens' for model: ${model}`);
+            //     payload.max_tokens = 8192;
+            // }
             const stream = await client.chat.completions.create(payload, { signal });
 
             // Stream se data parhein aur client ko bhejein
