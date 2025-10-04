@@ -460,7 +460,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 }
                             }
                             return (
-                                <div className="relative -mt-3">
+                                <div className="relative mt-3 ">
                                     <TableControls
                                         content={message.content}
                                         messageId={message.id}
