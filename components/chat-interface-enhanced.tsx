@@ -676,17 +676,7 @@ export default function ChatInterface() {
   // No longer need dynamic padding, handled by layout
   const textareaRef = React.useRef(null);
 
-  const autoResize = (target: any) => {
-    target.style.height = "auto"; // reset height
-    target.style.height = `${target.scrollHeight}px`; // fit text height
-  };
-
-  React.useEffect(() => {
-    if (textareaRef.current) {
-      autoResize(textareaRef.current);
-    }
-  }, [input]);
-
+  
 
   // Instant upgrade function
   const instantUpgrade = async (plan: 'BASIC' | 'STANDARD' | 'ENTERPRISE') => {
@@ -1337,7 +1327,6 @@ export default function ChatInterface() {
                   value={input}
                   onChange={(e) => {
                     setInput(e.target.value);
-                    autoResize(e.target);
                   }}
                   onKeyPress={handleKeyPress}
                   placeholder={
@@ -1549,7 +1538,6 @@ export default function ChatInterface() {
                       value={input}
                       onChange={(e) => {
                         setInput(e.target.value);
-                        autoResize(e.target);
                       }}
                       onKeyPress={handleKeyPress}
                       placeholder={

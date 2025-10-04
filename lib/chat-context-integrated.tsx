@@ -386,8 +386,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setIsStreaming(false); // ✅ Streaming error ke saath khatam
         setCurrentStreamId(null);
         // abortControllerRef.current = null; // AbortController ko reset karein
+      } finally {
+        setIsLoading(false);
+        setIsStreaming(false);
+        setCurrentStreamId(null);
       }
-
     },
     [currentChat, user, token, selectedModel, uploadedFiles]
   );

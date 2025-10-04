@@ -21,7 +21,7 @@ export default function Home() {
     <div className="min-h-screen bg-background antialiased">
       {/* Header */}
       <header className="border-b">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="container mx-auto flex flex-col items-center justify-between gap-4 px-4 py-4 sm:flex-row">
           <motion.div
             className="flex items-center space-x-2"
             initial={{ opacity: 0, x: -50 }}
