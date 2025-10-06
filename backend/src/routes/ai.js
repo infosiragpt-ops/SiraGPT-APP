@@ -1653,4 +1653,80 @@ router.post("/createVisualizeChart", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+
+router.post(
+    '/generate-chart',
+    [
+        body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+        body('chatId').isString().withMessage('chatId is required'),
+        body('fileId').optional().isString(),
+    ],
+    authenticateToken,
+    async (req, res) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({ errors: errors.array() });
+            }
+
+            const { prompt, chatId, fileId } = req.body;
+            const userId = req.user.id;
+
+            // Fetch chat history from the database
+            const historyMessages = await prisma.message.findMany({
+                where: { chatId, chat: { userId } },
+                orderBy: { timestamp: 'asc' },
+                select: { role: true, content: true }
+            });
+
+            // Format messages for the AI service
+            const messages = historyMessages.map(m => ({
+                role: m.role.toLowerCase(),
+                content: m.content
+            }));
+
+            // Add the new user prompt
+            messages.push({ role: 'user', content: prompt });
+
+            const { imageUrl, pythonCode, response } = await aiService.generateChartWithCodeInterpreter(messages, fileId);
+
+            // Save user's prompt to the database
+            await prisma.message.create({
+                data: {
+                    chatId,
+                    role: 'USER',
+                    content: prompt,
+                }
+            });
+
+            // Save assistant's response to the database
+            const assistantMessage = await prisma.message.create({
+                data: {
+                    chatId,
+                    role: 'ASSISTANT',
+                    content: `Generated chart for: "${prompt}"`,
+                    files: JSON.stringify([{
+                        type: 'chart',
+                        imageUrl: imageUrl,
+                        pythonCode: pythonCode,
+                    }])
+                }
+            });
+
+            res.json({
+                message: "Chart generation process completed.",
+                imageUrl,
+                pythonCode,
+                fullResponse: response,
+                assistantMessage,
+            });
+
+        } catch (error) {
+            console.error('Chart generation error:', error);
+            res.status(500).json({ error: error.message || 'Chart generation failed' });
+        }
+    }
+);
+
 module.exports = router;

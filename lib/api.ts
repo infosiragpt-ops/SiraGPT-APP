@@ -879,6 +879,13 @@ class ApiClient {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/library/media-library${query ? `?${query}` : ''}`);
   }
+
+  async generateChart(data: { prompt: string; chatId?: string, fileId?: string }) {
+    return this.request('/ai/generate-chart', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+  }
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);

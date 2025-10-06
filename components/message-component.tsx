@@ -33,7 +33,40 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
-// import ChartComponent from './chart-component';
+import ChartComponent from './chart-component';
+
+// Chart Display Component
+const ChartDisplay = ({ files }: { files: any[] }) => {
+    const chartFile = files.find(f => f.type === 'chart');
+    if (!chartFile) return null;
+
+    const { imageUrl, pythonCode } = chartFile;
+
+    return (
+        <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
+            <div className="flex items-center gap-2 text-sm mb-2">
+                <Wand2 className="h-4 w-4" />
+                <span className="font-medium">Generated Chart</span>
+            </div>
+            {imageUrl && (
+                <img
+                    src={imageUrl}
+                    alt="Generated chart"
+                    className="max-w-full h-auto rounded-lg mb-2"
+                />
+            )}
+            {pythonCode && (
+                <details>
+                    <summary className="text-xs text-muted-foreground cursor-pointer">View Python Code</summary>
+                    <pre className="text-xs bg-gray-800 text-white p-2 rounded-md mt-1 overflow-x-auto">
+                        <code>{pythonCode}</code>
+                    </pre>
+                </details>
+            )}
+        </div>
+    );
+};
+
 
 // Enhanced Message Component with Video Support
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
@@ -733,6 +766,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 <MessageContent />
                                 <VideoDisplay />
                                 <FileDisplay />
+                                <ChartDisplay files={parsedFiles} />
                             </>
                         )}
 

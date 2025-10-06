@@ -326,60 +326,87 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const streamId = crypto.randomUUID();
       setCurrentStreamId(streamId);
       try {
-        // STEP 3: Nayi streaming API call karein
-        await apiClient.generateAIStream(
-          {
-            provider: selectProvider,
-            model: selectedModel,
-            prompt: content,
-            chatId: activeChat.id,
-            files: fileIds || [],
-            streamId: streamId,
-          },
-          (chunk) => {
-            // onData: Jab bhi backend se naya text aaye
-            // Hum state mein AI message ke content ko update karte rahenge
-            setCurrentChat((prevChat) => {
-              if (!prevChat) return prevChat;
+        const chartKeywords = ['chart', 'graph', 'plot', 'diagram', 'visualize', 'pie chart', 'bar chart'];
+        const isChartRequest = chartKeywords.some(keyword => content.toLowerCase().includes(keyword));
 
-              const newMessages = prevChat.messages.map((msg) => {
-                if (msg.id === aiMessagePlaceholder.id) {
-                  // Placeholder ke content mein naya chunk jodein
-                  return { ...msg, content: msg.content + chunk };
-                }
-                return msg;
-              });
-              return { ...prevChat, messages: newMessages };
+        if (isChartRequest) {
+            const fileId = uploadedFiles.length > 0 ? uploadedFiles[0].id : undefined;
+            const chartResponse = await apiClient.generateChart({
+                prompt: content,
+                chatId: activeChat.id,
+                fileId,
             });
-          },
-          () => {
-            // onClose: Jab stream khatam ho jaye
-            setIsLoading(false);
-            setIsStreaming(false); // ✅ Streaming khatam ho gayi
-            // abortControllerRef.current = null; // AbortController ko reset karein
-            setCurrentStreamId(null);
-          },
-          (error) => {
-            console.error("Streaming failed:", error);
-            setIsLoading(false);
-            setIsStreaming(false); // ✅ Streaming error ke saath khatam
-            setCurrentStreamId(null);
-            abortControllerRef.current = null; // AbortController ko reset karein
-            // if (error.name !== 'AbortError') { // Agar AbortError nahi hai, toh hi toast dikhayein
-            //   setCurrentChat((prevChat) => {
-            //     if (!prevChat) return prevChat;
-            //     const newMessages = prevChat.messages.map((msg) => {
-            //       if (msg.id === aiMessagePlaceholder.id) {
-            //         return { ...msg, content: "Sorry, an error occurred. Please try again." };
-            //       }
-            //       return msg;
-            //     });
-            //     return { ...prevChat, messages: newMessages };
-            //   });
-            // }
-          },
 
-        );
+            const { assistantMessage } = chartResponse;
+
+            setCurrentChat((prevChat) => {
+                if (!prevChat) return prevChat;
+                const newMessages = prevChat.messages.map((msg) =>
+                    msg.id === aiMessagePlaceholder.id ? assistantMessage : msg
+                );
+                return { ...prevChat, messages: newMessages };
+            });
+
+            setIsLoading(false);
+            setIsStreaming(false);
+            setCurrentStreamId(null);
+
+        } else {
+            // STEP 3: Nayi streaming API call karein
+            await apiClient.generateAIStream(
+              {
+                provider: selectProvider,
+                model: selectedModel,
+                prompt: content,
+                chatId: activeChat.id,
+                files: fileIds || [],
+                streamId: streamId,
+              },
+              (chunk) => {
+                // onData: Jab bhi backend se naya text aaye
+                // Hum state mein AI message ke content ko update karte rahenge
+                setCurrentChat((prevChat) => {
+                  if (!prevChat) return prevChat;
+    
+                  const newMessages = prevChat.messages.map((msg) => {
+                    if (msg.id === aiMessagePlaceholder.id) {
+                      // Placeholder ke content mein naya chunk jodein
+                      return { ...msg, content: msg.content + chunk };
+                    }
+                    return msg;
+                  });
+                  return { ...prevChat, messages: newMessages };
+                });
+              },
+              () => {
+                // onClose: Jab stream khatam ho jaye
+                setIsLoading(false);
+                setIsStreaming(false); // ✅ Streaming khatam ho gayi
+                // abortControllerRef.current = null; // AbortController ko reset karein
+                setCurrentStreamId(null);
+              },
+              (error) => {
+                console.error("Streaming failed:", error);
+                setIsLoading(false);
+                setIsStreaming(false); // ✅ Streaming error ke saath khatam
+                setCurrentStreamId(null);
+                abortControllerRef.current = null; // AbortController ko reset karein
+                // if (error.name !== 'AbortError') { // Agar AbortError nahi hai, toh hi toast dikhayein
+                //   setCurrentChat((prevChat) => {
+                //     if (!prevChat) return prevChat;
+                //     const newMessages = prevChat.messages.map((msg) => {
+                //       if (msg.id === aiMessagePlaceholder.id) {
+                //         return { ...msg, content: "Sorry, an error occurred. Please try again." };
+                //       }
+                //       return msg;
+                //     });
+                //     return { ...prevChat, messages: newMessages };
+                //   });
+                // }
+              },
+    
+            );
+        }
       } catch (error) {
         console.error("Failed to start AI stream:", error);
         setIsLoading(false);
