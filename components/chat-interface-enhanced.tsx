@@ -516,6 +516,7 @@ const ActiveToolsDisplay = ({
 };
 
 // Enhanced Model Selector
+let selectedVideoModelData;
 const NavbarModelSelector = ({
   selectedModel,
   setSelectedModel,
@@ -529,16 +530,44 @@ const NavbarModelSelector = ({
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
+    const videoModels = [
+      { name: 'veo-fast', displayName: 'Veo Fast (8s)' },
+      { name: 'kling-1.6-pro', displayName: 'Kling 1.6 Pro (10s)' },
+      { name: 'kling-2-master', displayName: 'Kling 2 Master (10s)' }
+    ];
+    selectedVideoModelData = videoModels.find(m => m.name === selectedModel);
+    // setSelectedModel('veo-fast');
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
-        <Bot className="h-4 w-4" />
-        <span className="text-sm font-medium">Google Veo 3</span>
-        <div className="flex items-center gap-1">
-          <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
-        </div>
-      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
+          <Video className="h-4 w-4" />
+          <span className="text-sm font-medium">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
+          <div className="flex items-center gap-1">
+            <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
+            <ChevronDown className="h-4 w-4 opacity-70" />
+          </div>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          {videoModels.map((model) => (
+            <DropdownMenuItem
+              key={model.name}
+              onSelect={() => {
+                setSelectedModel(model.name);
+              }}
+              className="flex items-center gap-2 py-2"
+            >
+              <Video className="h-5 w-5 flex-shrink-0" />
+              <div className="flex flex-col flex-1">
+                <span className="text-sm">{model.displayName}</span>
+              </div>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     );
   }
+
+
 
   // If this chat is associated with a custom GPT, show GPT info instead of model selector
   if (currentChat?.customGptId || currentChat?.customGpt) {

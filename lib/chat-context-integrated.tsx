@@ -905,7 +905,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         aspect_ratio: '16:9',
         chatId: activeChat.id,
         files: fileIds,
-        ...(imageUrl && { image_url: imageUrl })
+        ...(imageUrl && { image_url: imageUrl }),
+        model: selectedModel
       });
 
       console.log(' Video generation response:', videoResponse);

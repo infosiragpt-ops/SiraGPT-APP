@@ -822,6 +822,7 @@ class ApiClient {
     chatId?: string;
     files?: string[];
     image_url?: string;
+    model?: string;
   }) {
     return this.request('/ai/generate-video', {
       method: 'POST',
