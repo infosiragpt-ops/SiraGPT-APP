@@ -68,6 +68,8 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 import SearchSourceSelector, { SearchSources } from "./SearchSourceSelector"
+import { VirtualScroll } from "./virtual-scroll"
+import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 
 // Enhanced Actions Dropdown Component
 const ActionsDropdown = ({
@@ -618,6 +620,10 @@ const NavbarModelSelector = ({
 };
 
 export default function ChatInterface() {
+  // Performance monitoring disabled to prevent overhead
+  // const renderStartTime = performance.now()
+  // const performanceOptimizer = PerformanceOptimizer.getInstance()
+
   const { user } = useAuth()
   const {
     currentChat,
@@ -1522,18 +1528,38 @@ export default function ChatInterface() {
             </div>
           ) : (
             <>
-              {/* Messages */}
+              {/* Messages with Performance Optimization */}
               <ScrollArea className="flex-1 p-4 mb-6" ref={scrollAreaRef}>
                 <div className="space-y-4 max-w-4xl mx-auto">
-                  {currentChat?.messages.map((message) => (
-                    <MessageComponent
-                      key={message.id}
-                      message={message}
-                      user={user}
-                      onRegenerate={regenerateLastMessage}
-                      updateMessageInChat={editAndRegenerate}
+                  {currentChat?.messages && currentChat.messages.length > 50 ? (
+                    // Use virtual scrolling for large chats - improved performance
+                    <VirtualScroll
+                      items={currentChat.messages}
+                      itemHeight={200}
+                      containerHeight={window.innerHeight - 300}
+                      renderItem={(message) => (
+                        <MessageComponent
+                          message={message}
+                          user={user}
+                          onRegenerate={regenerateLastMessage}
+                          updateMessageInChat={editAndRegenerate}
+                        />
+                      )}
                     />
-                  ))}
+                  ) : (
+                    // Standard rendering for smaller chats with React.memo optimization
+                    <>
+                      {currentChat?.messages.map((message) => (
+                        <MessageComponent
+                          key={message.id}
+                          message={message}
+                          user={user}
+                          onRegenerate={regenerateLastMessage}
+                          updateMessageInChat={editAndRegenerate}
+                        />
+                      ))}
+                    </>
+                  )}
                 </div>
               </ScrollArea>
 

@@ -57,6 +57,34 @@ class AIService {
             const chartKeywords = ['chart', 'graph', 'plot', 'diagram', 'visualize'];
             const isChartRequest = chartKeywords.some(keyword => lastUserMessage.includes(keyword));
 
+            // Enhanced web development detection - covers all possible web projects
+            const webDevKeywords = [
+                // General web development
+                'website', 'webpage', 'web page', 'web app', 'web application', 'site', 'html', 'css', 'javascript', 'js',
+                'frontend', 'front-end', 'ui', 'user interface', 'responsive', 'mobile-first', 'bootstrap', 'tailwind',
+                
+                // Specific project types
+                'portfolio', 'landing page', 'home page', 'dashboard', 'admin panel', 'login page', 'register', 'signup',
+                'ecommerce', 'e-commerce', 'online store', 'shop', 'shopping cart', 'product page', 'checkout',
+                'blog', 'news site', 'article', 'cms', 'content management',
+                'social media', 'social network', 'chat app', 'messaging', 'forum', 'community',
+                'business site', 'corporate', 'company website', 'agency', 'startup',
+                'restaurant', 'menu', 'booking', 'reservation', 'hotel', 'travel',
+                'education', 'learning', 'course', 'school', 'university', 'academy',
+                'real estate', 'property', 'listing', 'gallery', 'photography',
+                'medical', 'healthcare', 'clinic', 'doctor', 'appointment',
+                'fitness', 'gym', 'workout', 'health', 'nutrition',
+                'finance', 'banking', 'investment', 'calculator', 'budget',
+                'game', 'gaming', 'quiz', 'interactive', 'animation',
+                
+                // Actions
+                'create', 'build', 'make', 'design', 'develop', 'code', 'generate'
+            ];
+            
+            const isWebDevRequest = webDevKeywords.some(keyword => 
+                lastUserMessage.includes(keyword.toLowerCase())
+            );
+
             if (isChartRequest) {
                 // Modify the system prompt to request JSON for charts
                 const systemMessage = {
@@ -82,6 +110,50 @@ Do not include any other text or explanations in your response. Just the JSON ob
                 messages.unshift(systemMessage);
             }
 
+            if (isWebDevRequest) {
+                // Enhanced prompt for web development requests with performance optimization
+                const webDevSystemMessage = {
+                    role: 'system',
+                    content: `You are an expert web developer. Create modern, responsive websites with the following guidelines:
+
+**PERFORMANCE OPTIMIZATION:**
+- Write efficient, clean code with minimal bloat
+- Use modern CSS and JavaScript techniques
+- Optimize for fast rendering and low memory usage
+- Focus on essential functionality first
+- Add progressive enhancement for advanced features
+
+**CODE STRUCTURE:**
+1. **Use proper code blocks:** \`\`\`html, \`\`\`css, \`\`\`javascript
+2. **Single HTML file approach** - embed CSS/JS inline for easy testing
+3. **Modern, responsive design** - mobile-first, flexbox/grid
+4. **Clean, semantic HTML** with accessibility features
+5. **Efficient CSS** - use CSS variables, modern techniques
+6. **Functional JavaScript** - ES6+, event delegation, clean code
+
+**DESIGN PRINCIPLES:**
+- Modern UI with good contrast and typography
+- Responsive design (mobile, tablet, desktop)
+- Professional color schemes and spacing
+- Smooth animations and interactions
+- Cross-browser compatibility
+- Fast loading and optimized performance
+
+**PROJECT TYPES TO SUPPORT:**
+- Portfolios, landing pages, business sites
+- E-commerce, product pages, shopping carts  
+- Dashboards, admin panels, forms
+- Blogs, news sites, content management
+- Social media, chat apps, forums
+- Educational, booking, gallery sites
+- And any other web application requested
+
+**OUTPUT FORMAT:**
+Provide complete, working code that users can immediately copy, paste, and run. Focus on core functionality and modern design patterns.`
+                };
+                messages.unshift(webDevSystemMessage);
+            }
+
 
             const payload = {
                 model: model,
@@ -102,16 +174,59 @@ Do not include any other text or explanations in your response. Just the JSON ob
             // }
             const stream = await client.chat.completions.create(payload, { signal });
 
-            // Stream se data parhein aur client ko bhejein
+            // Advanced streaming with adaptive batching and memory management
+            let chunkCount = 0;
+            let batchBuffer = '';
+            let totalLength = 0;
+            const dynamicBatchSize = 75; // Optimized for large responses
+            const flushInterval = 80; // Reduced for better responsiveness
+            const maxResponseSize = 100000; // 100KB limit per response for memory safety
+            let lastFlush = Date.now();
+            
             for await (const chunk of stream) {
-
                 const contentChunk = chunk.choices[0]?.delta?.content || '';
                 if (contentChunk) {
+                    // Memory safety check
+                    if (totalLength + contentChunk.length > maxResponseSize) {
+                        console.warn(`Response size limit reached: ${totalLength} chars`);
+                        break;
+                    }
+                    
                     fullResponseContent += contentChunk;
-                    // Client ko data chunk bhejein
-                    res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+                    batchBuffer += contentChunk;
+                    totalLength += contentChunk.length;
+                    chunkCount++;
+                    
+                    // Adaptive batching based on content type and size
+                    const isCodeBlock = contentChunk.includes('```');
+                    const hasLineBreaks = contentChunk.includes('\n');
+                    const currentBatchSize = isCodeBlock ? dynamicBatchSize * 2 : dynamicBatchSize;
+                    
+                    const shouldFlush = batchBuffer.length >= currentBatchSize || 
+                                       (Date.now() - lastFlush) > flushInterval ||
+                                       (hasLineBreaks && batchBuffer.length > 30) || // Quick flush for readability
+                                       isCodeBlock; // Immediate flush for code blocks
+                    
+                    if (shouldFlush && batchBuffer.trim()) {
+                        res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
+                        batchBuffer = '';
+                        lastFlush = Date.now();
+                        
+                        // Periodic memory cleanup for very large responses
+                        if (chunkCount % 100 === 0 && global.gc) {
+                            setImmediate(() => global.gc());
+                        }
+                    }
                 }
             }
+            
+            // Flush remaining content
+            if (batchBuffer.trim()) {
+                res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
+            }
+            
+            console.log(`Stream completed: ${fullResponseContent.length} chars, ${chunkCount} chunks (batched)`);
+        
 
             return fullResponseContent;
         } catch (apiError) {

@@ -26,6 +26,7 @@ import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
 import { useVoiceControls } from './voice-controls';
 import ReactMarkdown from 'react-markdown'
+import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -33,15 +34,20 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
+import CodePreview from './code-preview';
+import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 // import ChartComponent from './chart-component';
 
-// Enhanced Message Component with Video Support
+// Enhanced Message Component with Performance Optimizations
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
     message: any;
     user: any;
     onRegenerate: () => void;
     updateMessageInChat: (messageId: string, newContent: string) => void
 }) => {
+    // Performance monitoring disabled to prevent overhead
+    // const renderStartTime = performance.now()
+    // const performanceOptimizer = PerformanceOptimizer.getInstance()
     const [isCopied, setIsCopied] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
@@ -62,6 +68,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     const [tableHeaders, setTableHeaders] = useState<string[]>([]);
 
     const [tableTitle, setTableTitle] = useState<string>('');
+    
+    // Code preview states (now memoized for performance)
+    
     const getNodeText = (node: any): string => {
         if (node.type === 'text') {
             return node.value;
@@ -108,6 +117,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     useEffect(() => {
         setEditedContent(message.content);
     }, [message.content]);
+
+    // Optimized code detection with memoization to prevent repeated parsing
+    const parsedCode = useMemo(() => {
+        if (message.content && (message.role === 'assistant' || message.role === 'ASSISTANT')) {
+            return parseCodeFromContent(message.content);
+        }
+        return null;
+    }, [message.content, message.role]);
+    
+    const showCodePreview = useMemo(() => {
+        return parsedCode && (parsedCode.hasWebCode || parsedCode.html || parsedCode.css || parsedCode.js || parsedCode.combinedCode);
+    }, [parsedCode]);
 
     // Cleanup audio when component unmounts
     useEffect(() => {
@@ -716,6 +737,27 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 <FileDisplay />
                                 <div className="mt-2" />
                                 <MessageContent />
+                                
+                                {/* Lazy Code Preview for HTML/CSS/JS */}
+                                {showCodePreview && parsedCode && (
+                                    <React.Suspense fallback={
+                                        <div className="mt-4 p-4 border rounded-lg bg-muted/20">
+                                            <div className="flex items-center gap-2">
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                <span className="text-sm">Loading preview...</span>
+                                            </div>
+                                        </div>
+                                    }>
+                                        <CodePreview
+                                            htmlCode={parsedCode.html}
+                                            cssCode={parsedCode.css}
+                                            jsCode={parsedCode.js}
+                                            combinedCode={parsedCode.combinedCode}
+                                            title="Live Preview"
+                                            className="mt-4"
+                                        />
+                                    </React.Suspense>
+                                )}
 
                             </>
                         )}
@@ -731,6 +773,30 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         ) : (
                             <>
                                 <MessageContent />
+                                
+                                {/* Lazy Code Preview for HTML/CSS/JS */}
+                                {showCodePreview && parsedCode && (
+                                    <React.Suspense fallback={
+                                        <div className="mt-4 p-4 border rounded-lg bg-muted/20">
+                                            <div className="flex items-center gap-2">
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                <span className="text-sm">Loading preview...</span>
+                                            </div>
+                                        </div>
+                                    }>
+                                        <CodePreview
+                                            htmlCode={parsedCode.html}
+                                            cssCode={parsedCode.css}
+                                            jsCode={parsedCode.js}
+                                            combinedCode={parsedCode.combinedCode}
+                                            title="Live Preview"
+                                            className="mt-4"
+                                        />
+                                    </React.Suspense>
+                                )}
+                                
+
+                                
                                 <VideoDisplay />
                                 <FileDisplay />
                             </>
