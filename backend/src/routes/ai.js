@@ -1656,77 +1656,128 @@ router.post("/createVisualizeChart", async (req, res) => {
 
 
 router.post(
-    '/generate-chart',
-    [
-        body('prompt').trim().notEmpty().withMessage('Prompt is required'),
-        body('chatId').isString().withMessage('chatId is required'),
-        body('fileId').optional().isString(),
-    ],
-    authenticateToken,
-    async (req, res) => {
-        try {
-            const errors = validationResult(req);
-            if (!errors.isEmpty()) {
-                return res.status(400).json({ errors: errors.array() });
+  '/generate-chart',
+  [
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('chatId').isString().withMessage('chatId is required'),
+    body('fileId').optional().isString(),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      let { prompt, chatId, fileId } = req.body;
+      const userId = req.user.id;
+
+      // If fileId is not provided in the request, try to find one from the recent chat history
+      if (!fileId) {
+        const lastMessageWithFile = await prisma.message.findFirst({
+          where: {
+            chatId: chatId,
+            role: 'USER',
+            files: {
+              not: null,
+              not: '[]'
             }
+          },
+          orderBy: {
+            timestamp: 'desc'
+          }
+        });
 
-            const { prompt, chatId, fileId } = req.body;
-            const userId = req.user.id;
-
-            // Fetch chat history from the database
-            const historyMessages = await prisma.message.findMany({
-                where: { chatId, chat: { userId } },
-                orderBy: { timestamp: 'asc' },
-                select: { role: true, content: true }
-            });
-
-            // Format messages for the AI service
-            const messages = historyMessages.map(m => ({
-                role: m.role.toLowerCase(),
-                content: m.content
-            }));
-
-            // Add the new user prompt
-            messages.push({ role: 'user', content: prompt });
-
-            const { imageUrl, pythonCode, response } = await aiService.generateChartWithCodeInterpreter(messages, fileId);
-
-            // Save user's prompt to the database
-            await prisma.message.create({
-                data: {
-                    chatId,
-                    role: 'USER',
-                    content: prompt,
-                }
-            });
-
-            // Save assistant's response to the database
-            const assistantMessage = await prisma.message.create({
-                data: {
-                    chatId,
-                    role: 'ASSISTANT',
-                    content: `Generated chart for: "${prompt}"`,
-                    files: JSON.stringify([{
-                        type: 'chart',
-                        imageUrl: imageUrl,
-                        pythonCode: pythonCode,
-                    }])
-                }
-            });
-
-            res.json({
-                message: "Chart generation process completed.",
-                imageUrl,
-                pythonCode,
-                fullResponse: response,
-                assistantMessage,
-            });
-
-        } catch (error) {
-            console.error('Chart generation error:', error);
-            res.status(500).json({ error: error.message || 'Chart generation failed' });
+        if (lastMessageWithFile && lastMessageWithFile.files) {
+          try {
+            const files = JSON.parse(lastMessageWithFile.files);
+            // Find the first file that is not an image, or take any file if that's all there is
+            const dataFile = files.find(f => f.type && !f.type.startsWith('image/')) || files[0];
+            if (dataFile && dataFile.id) {
+              fileId = dataFile.id;
+              console.log(`Chart generation: No fileId provided, using file ${fileId} from recent history.`);
+            }
+          } catch (e) {
+            console.error("Chart generation: Error parsing files from history message:", e);
+          }
         }
+      }
+
+      // Fetch chat history from the database
+      const historyMessages = await prisma.message.findMany({
+        where: { chatId, chat: { userId } },
+        orderBy: { timestamp: 'asc' },
+        select: { role: true, content: true }
+      });
+
+      // Format messages for the AI service
+      const messages = historyMessages.map(m => ({
+        role: m.role.toLowerCase(),
+        content: m.content
+      }));
+
+      // Add the new user prompt, including file content if available
+      let finalPrompt = prompt;
+      if (fileId) {
+        const file = await prisma.file.findFirst({
+          where: { id: fileId, userId: userId }
+        });
+
+        if (file && file.extractedText) {
+          const fileContext = `\n\n--- Attached File Data: ${file.originalName} ---\n${file.extractedText}\n--- End of File Data ---`;
+          finalPrompt += fileContext;
+          console.log(`Chart generation: Appended content from file ${file.originalName} to the prompt.`);
+        } else {
+          console.warn(`Chart generation: fileId ${fileId} was provided, but no file or extractedText was found.`);
+        }
+      }
+      messages.push({ role: 'user', content: finalPrompt });
+
+      const { imageUrl, pythonCode, response } = await aiService.generateChartWithCodeInterpreter(messages, fileId);
+
+      // Save user's prompt to the database
+      await prisma.message.create({
+        data: {
+          chatId,
+          role: 'USER',
+          content: prompt,
+        }
+      });
+
+      // Determine the content for the assistant's message
+      let assistantContent = `Generated chart for: "${prompt}"`;
+      if (!imageUrl && response && response.length > 0 && response[0].content && response[0].content.length > 0 && response[0].content[0].text) {
+        assistantContent = response[0].content[0].text;
+      }
+
+      // Save assistant's response to the database
+      const assistantMessage = await prisma.message.create({
+        data: {
+          chatId,
+          role: 'ASSISTANT',
+          content: assistantContent,
+          files: JSON.stringify([{
+            type: 'chart',
+            imageUrl: imageUrl,
+            pythonCode: pythonCode,
+          }])
+        }
+      });
+
+      res.json({
+        message: "Chart generation process completed.",
+        imageUrl,
+        pythonCode,
+        fullResponse: response,
+        assistantMessage,
+      });
+
+    } catch (error) {
+      console.error('Chart generation error:', error);
+      res.status(500).json({ error: error.message || 'Chart generation failed' });
     }
+  }
 );
 
 module.exports = router;

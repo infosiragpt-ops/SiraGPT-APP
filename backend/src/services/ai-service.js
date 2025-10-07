@@ -216,50 +216,50 @@ Do not include any other text or explanations in your response. Just the JSON ob
 
         // Combine messages into a single string prompt for the 'input' field
         const prompt = messages.map(m => `${m.role}: ${m.content}`).join('\\n\\n');
-        const instructions = `
+        let instructions = `
 You are a data visualization expert. Based on the conversation history, when asked to create a chart or graph,
 write and run Python code to generate the visualization.
 You must save the output as an image file and provide a reference to it.
-you are profeesional developer i will give you a scenirio you understand that and create a cahrt accordingly. whenever talk about chart or graph so you write and run code using the python tool to answer the question.
+You are a professional developer; I will give you a scenario, you understand that and create a chart accordingly. Whenever a chart or graph is discussed, you write and run code using the python tool to answer the question.
 `;
-       /* let temp;
-        if (fileId) {
-            temp = await client.containers.create({
-                name: "test-container",
 
-            });
+        let containerId = null;
+        let tempContainer = null;
+
+        if (fileId) {
             const fileRecord = await prisma.file.findUnique({ where: { id: fileId } });
             if (!fileRecord || !fs.existsSync(fileRecord.path)) {
-                throw new Error("File not found or path is invalid.");
+                throw new Error("File not found or path is invalid for chart generation.");
             }
 
-            var uploadedFile = await this.uploadFileToContainer(
-                fileRecord.path, // e.g., "./data/sales.csv"
-                temp.id
-            );
-        }*/
+            tempContainer = await client.containers.create({
+                name: `chart-gen-container-${Date.now()}`,
+            });
+            containerId = tempContainer.id;
 
+            await this.uploadFileToContainer(fileRecord.path, containerId);
+            console.log(`File ${fileRecord.originalName} uploaded to container ${containerId} for chart generation.`);
+
+            // Update instructions to inform the AI about the uploaded file
+            instructions += `\n\nA file named '${fileRecord.originalName}' has been uploaded and is available in your environment. Please use this file to generate the requested chart.`;
+        }
 
         const resp = await client.responses.create({
             model: "gpt-4.1",
             tools: [
                 {
                     type: "code_interpreter",
-                    container: { type: "auto" },
-                    // container: temp.id
-
+                    container: containerId ? containerId : { type: "auto" },
                 },
             ],
             instructions,
             input: prompt,
-            // tool_choice: "required",
-
         });
 
         let pythonCode = null;
         let imageUrl = null;
-       
-        
+
+
         // Find the code and the file citation from the response
         for (const output of resp.output) {
             if (output.type === 'code_interpreter_call') {
@@ -274,7 +274,7 @@ you are profeesional developer i will give you a scenirio you understand that an
                                 const { file_id, container_id } = annotation;
                                 if (file_id && container_id) {
                                     console.log(`Found file citation: container_id=${container_id}, file_id=${file_id}`);
-                                    
+
                                     // Download the image
                                     const downloadUrl = `https://api.openai.com/v1/containers/${container_id}/files/${file_id}/content`;
                                     const imageResponse = await axios.get(downloadUrl, {
@@ -285,11 +285,11 @@ you are profeesional developer i will give you a scenirio you understand that an
                                     // Save the image to local storage
                                     const uploadsDir = path.join(__dirname, '../../uploads/images');
                                     await fs.promises.mkdir(uploadsDir, { recursive: true });
-                                    
+
                                     const timestamp = Date.now();
                                     const filename = `chart-${timestamp}.png`;
                                     const filepath = path.join(uploadsDir, filename);
-                                    
+
                                     await fs.promises.writeFile(filepath, imageResponse.data);
 
                                     // Construct the accessible URL
