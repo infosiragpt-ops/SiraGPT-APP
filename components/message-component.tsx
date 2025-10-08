@@ -11,7 +11,8 @@ import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
     Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
-    Sparkles
+    Sparkles,
+    ExternalLink
 } from "lucide-react"
 import {
     Dialog,
@@ -34,7 +35,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
-import CodePreview from './code-preview';
+// import CodePreview from './code-preview';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 // import ChartComponent from './chart-component';
 
@@ -126,15 +127,24 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         return null;
     }, [message.content, message.role]);
     
-    const showCodePreview = useMemo(() => {
+    const canPreviewMessage = useMemo(() => {
         if (!parsedCode) return false;
         if (!parsedCode.hasWebCode) return false;
-        // If non-web code exists, only show when we extracted a complete HTML document
         if (parsedCode.hasNonWebCode && !parsedCode.combinedCode) return false;
-        // Ensure we actually have something renderable: complete doc or HTML snippet
-        const hasRenderable = !!(parsedCode.combinedCode || parsedCode.html);
-        return hasRenderable;
+        return !!(parsedCode.combinedCode || parsedCode.html);
     }, [parsedCode]);
+
+    const openPreviewInNewTab = () => {
+        if (!parsedCode) return;
+        let htmlDoc = parsedCode.combinedCode;
+        if (!htmlDoc) {
+            htmlDoc = combineWebCode(parsedCode.html || '', parsedCode.css || '', parsedCode.js || '', 'Live Preview');
+        }
+        const blob = new Blob([htmlDoc], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        // Let the browser reclaim URL when tab is closed naturally; no revoke here to avoid revoking early.
+    };
 
     // Cleanup audio when component unmounts
     useEffect(() => {
@@ -405,10 +415,22 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             <div className="my-4 rounded-md bg-gray-900/80 border border-gray-700 relative">
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-800/50 rounded-t-md border-b border-gray-700">
                     <span className="text-xs font-sans text-gray-400">{language}</span>
-                    <button onClick={handleCodeCopy} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-                        {isCodeCopied ? <Check size={14} /> : <Clipboard size={14} />}
-                        {isCodeCopied ? 'Copied!' : 'Copy code'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {canPreviewMessage && (
+                            <button
+                                onClick={openPreviewInNewTab}
+                                className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+                                title="Open preview in a new tab"
+                            >
+                                <ExternalLink size={14} className="opacity-80" />
+      Preview
+                            </button>
+                        )}
+                        <button onClick={handleCodeCopy} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
+                            {isCodeCopied ? <Check size={14} /> : <Clipboard size={14} />}
+                            {isCodeCopied ? 'Copied!' : 'Copy code'}
+                        </button>
+                    </div>
                 </div>
                 <SyntaxHighlighter
                     style={oneDark}
@@ -744,26 +766,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 <div className="mt-2" />
                                 <MessageContent />
                                 
-                                {/* Lazy Code Preview for HTML/CSS/JS */}
-                                {showCodePreview && parsedCode && (
-                                    <React.Suspense fallback={
-                                        <div className="mt-4 p-4 border rounded-lg bg-muted/20">
-                                            <div className="flex items-center gap-2">
-                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                <span className="text-sm">Loading preview...</span>
-                                            </div>
-                                        </div>
-                                    }>
-                                        <CodePreview
-                                            htmlCode={parsedCode.html}
-                                            cssCode={parsedCode.css}
-                                            jsCode={parsedCode.js}
-                                            combinedCode={parsedCode.combinedCode}
-                                            title="Live Preview"
-                                            className="mt-4"
-                                        />
-                                    </React.Suspense>
-                                )}
+                                {/* Preview is now an on-demand button within each code block header */}
 
                             </>
                         )}
@@ -780,26 +783,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                             <>
                                 <MessageContent />
                                 
-                                {/* Lazy Code Preview for HTML/CSS/JS */}
-                                {showCodePreview && parsedCode && (
-                                    <React.Suspense fallback={
-                                        <div className="mt-4 p-4 border rounded-lg bg-muted/20">
-                                            <div className="flex items-center gap-2">
-                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                <span className="text-sm">Loading preview...</span>
-                                            </div>
-                                        </div>
-                                    }>
-                                        <CodePreview
-                                            htmlCode={parsedCode.html}
-                                            cssCode={parsedCode.css}
-                                            jsCode={parsedCode.js}
-                                            combinedCode={parsedCode.combinedCode}
-                                            title="Live Preview"
-                                            className="mt-4"
-                                        />
-                                    </React.Suspense>
-                                )}
+                                {/* Preview is now an on-demand button within each code block header */}
                                 
 
                                 
