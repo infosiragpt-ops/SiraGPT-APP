@@ -9,6 +9,71 @@ const { GoogleGenAI, Modality } = require("@google/genai");
 const path = require('path');
 class AIService {
     /**
+     * Dynamically detect whether the recent user text asks for a front-end website (HTML/CSS/JS UI)
+     * Strategy: quick heuristics first; if inconclusive, fall back to a tiny classification call.
+     */
+    async  detectWebIntent(client, model, recentText) {
+  try {
+    // --- 1️⃣ Quick heuristic checks (fast path) ---
+    // Detects direct code snippets or HTML content
+    if (/```(html|css|javascript|js|jsx|tsx)/i.test(recentText)) return true;
+    if (/<(html|body|div|section|nav|form|button|input|footer|header)/i.test(recentText)) return true;
+
+    // --- 2️⃣ Multilingual direct pattern for "web" (broad detection) ---
+    const webish = /(web\s*app|website|web\s*page|pagina\s*web|page\s*web|サイト|网站|сайт)/i.test(recentText);
+    if (webish) return true;
+
+    // --- 3️⃣ AI-based classification (slow but powerful) ---
+    if (recentText && recentText.trim().length > 3) {
+      const cls = await client.chat.completions.create({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: `
+You are an intent classifier.
+Output ONLY one token: WEB_UI or OTHER.
+
+Classify as WEB_UI if the message indicates the user wants to create or see 
+a visual user interface in a web browser using HTML, CSS, or JS — 
+such as a page, form, dashboard, UI component, or interactive element.
+
+Classify as OTHER for requests about backend logic, APIs, data, or general explanations.
+
+You must understand all languages (English, Urdu, Arabic, Spanish, Japanese, etc.).
+Examples of WEB_UI:
+- "Make a login page"
+- "Create signup form"
+- "Design dashboard UI"
+- "Página de inicio de sesión"
+- "صفحة تسجيل الدخول"
+- "Formulario de registro"
+
+Examples of OTHER:
+- "Explain HTML tags"
+- "Build Node.js API"
+- "Database schema"
+- "CLI app"
+`
+          },
+          { role: "user", content: recentText }
+        ],
+        temperature: 0,
+        max_tokens: 3
+      });
+
+      const intent = cls?.choices?.[0]?.message?.content?.trim()?.toUpperCase() || "";
+      if (intent.includes("WEB_UI")) return true;
+    }
+  } catch (err) {
+    console.warn("Web intent detection failed:", err.message || err);
+  }
+
+  // --- 4️⃣ Default fallback ---
+  return false;
+}
+
+    /**
      * Provider ke naam ke hisab se sahi configured AI client return karta hai.
      * @param {string} provider - Provider ka naam (e.g., "OpenAI", "Gemini", "OpenRouter")
      * @returns {OpenAI} - OpenAI client ka instance
@@ -52,38 +117,25 @@ class AIService {
         try {
             const client = this.getClient(provider);
 
-            // Check if the user is asking for a chart
-            const lastUserMessage = messages[messages.length - 1].content.toLowerCase();
-            const chartKeywords = ['chart', 'graph', 'plot', 'diagram', 'visualize'];
-            const isChartRequest = chartKeywords.some(keyword => lastUserMessage.includes(keyword));
+            // Helpers for detection (normalize lightly to be robust across languages/diacritics)
+            const normalize = (s = '') => s
+                .toString()
+                .toLowerCase()
+                .normalize('NFD')
+                .replace(/\p{Diacritic}+/gu, '');
+            const pickRecentText = (msgs, count = 2) => {
+                const userMsgs = msgs.filter(m => (m.role === 'user' || m.role === 'USER'));
+                const slice = userMsgs.slice(-count);
+                return normalize(slice.map(m => (m.content || '')).join(' \n '));
+            };
+            const recentText = pickRecentText(messages, 2);
 
-            // Enhanced web development detection - covers all possible web projects
-            const webDevKeywords = [
-                // General web development
-                'website', 'webpage', 'web page', 'web app', 'web application', 'site', 'html', 'css', 'javascript', 'js',
-                'frontend', 'front-end', 'ui', 'user interface', 'responsive', 'mobile-first', 'bootstrap', 'tailwind',
-                
-                // Specific project types
-                'portfolio', 'landing page', 'home page', 'dashboard', 'admin panel', 'login page', 'register', 'signup',
-                'ecommerce', 'e-commerce', 'online store', 'shop', 'shopping cart', 'product page', 'checkout',
-                'blog', 'news site', 'article', 'cms', 'content management',
-                'social media', 'social network', 'chat app', 'messaging', 'forum', 'community',
-                'business site', 'corporate', 'company website', 'agency', 'startup',
-                'restaurant', 'menu', 'booking', 'reservation', 'hotel', 'travel',
-                'education', 'learning', 'course', 'school', 'university', 'academy',
-                'real estate', 'property', 'listing', 'gallery', 'photography',
-                'medical', 'healthcare', 'clinic', 'doctor', 'appointment',
-                'fitness', 'gym', 'workout', 'health', 'nutrition',
-                'finance', 'banking', 'investment', 'calculator', 'budget',
-                'game', 'gaming', 'quiz', 'interactive', 'animation',
-                
-                // Actions
-                'create', 'build', 'make', 'design', 'develop', 'code', 'generate'
-            ];
-            
-            const isWebDevRequest = webDevKeywords.some(keyword => 
-                lastUserMessage.includes(keyword.toLowerCase())
-            );
+            // Check if the user is asking for a chart (basic English trigger retained)
+            const chartKeywords = ['chart', 'graph', 'plot', 'diagram', 'visualize'];
+            const isChartRequest = chartKeywords.some(keyword => recentText.includes(keyword));
+
+            // Dynamic intent detection (heuristics + tiny classifier fallback)
+            const isWebDevRequest = await this.detectWebIntent(client, model, recentText);
 
             if (isChartRequest) {
                 // Modify the system prompt to request JSON for charts
@@ -114,7 +166,7 @@ Do not include any other text or explanations in your response. Just the JSON ob
                 // Enhanced prompt for web development requests with performance optimization
                 const webDevSystemMessage = {
                     role: 'system',
-                    content: `You are an expert web developer. Create modern, responsive websites with the following guidelines:
+                    content: `You are an expert front-end web developer. Create modern, responsive websites with the following guidelines:
 
 **PERFORMANCE OPTIMIZATION:**
 - Write efficient, clean code with minimal bloat
@@ -124,8 +176,8 @@ Do not include any other text or explanations in your response. Just the JSON ob
 - Add progressive enhancement for advanced features
 
 **CODE STRUCTURE:**
-1. **Use proper code blocks:** \`\`\`html, \`\`\`css, \`\`\`javascript
-2. **Single HTML file approach** - embed CSS/JS inline for easy testing
+1. Prefer a SINGLE code block with a complete HTML document (\`\`\`html ... \`\`\`) that includes inline <style> and <script> so it runs standalone in a browser preview.
+2. If multiple blocks are necessary, use \`\`\`html, \`\`\`css, and \`\`\`javascript only.
 3. **Modern, responsive design** - mobile-first, flexbox/grid
 4. **Clean, semantic HTML** with accessibility features
 5. **Efficient CSS** - use CSS variables, modern techniques
@@ -139,6 +191,10 @@ Do not include any other text or explanations in your response. Just the JSON ob
 - Cross-browser compatibility
 - Fast loading and optimized performance
 
+**BEHAVIORAL RULES:**
+- Do NOT output backend server code unless explicitly requested. If the user mentions Python/Flask or Node/Express, still provide a front-end that can run standalone in the browser. You may optionally include a short comment indicating how to integrate with a backend, but keep output focused on front-end.
+- Ensure the output can be copied and run immediately in a browser.
+
 **PROJECT TYPES TO SUPPORT:**
 - Portfolios, landing pages, business sites
 - E-commerce, product pages, shopping carts  
@@ -149,7 +205,8 @@ Do not include any other text or explanations in your response. Just the JSON ob
 - And any other web application requested
 
 **OUTPUT FORMAT:**
-Provide complete, working code that users can immediately copy, paste, and run. Focus on core functionality and modern design patterns.`
+- Output a single, complete \`\`\`html code block whenever possible. Avoid extra explanations before/after the code block.
+- The document should include inline <style> and <script> with the required interactivity.`
                 };
                 messages.unshift(webDevSystemMessage);
             }
@@ -178,19 +235,14 @@ Provide complete, working code that users can immediately copy, paste, and run. 
             let chunkCount = 0;
             let batchBuffer = '';
             let totalLength = 0;
-            const dynamicBatchSize = 75; // Optimized for large responses
-            const flushInterval = 80; // Reduced for better responsiveness
-            const maxResponseSize = 100000; // 100KB limit per response for memory safety
+            const dynamicBatchSize = 75; // adaptive below for code blocks
+            const flushInterval = 80; // ms
             let lastFlush = Date.now();
             
             for await (const chunk of stream) {
                 const contentChunk = chunk.choices[0]?.delta?.content || '';
                 if (contentChunk) {
-                    // Memory safety check
-                    if (totalLength + contentChunk.length > maxResponseSize) {
-                        console.warn(`Response size limit reached: ${totalLength} chars`);
-                        break;
-                    }
+                    // No hard cap by default; accumulate content
                     
                     fullResponseContent += contentChunk;
                     batchBuffer += contentChunk;

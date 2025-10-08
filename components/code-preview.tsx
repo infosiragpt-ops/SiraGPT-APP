@@ -355,9 +355,9 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
             <div className="flex items-center gap-2">
               <FileCode className="h-4 w-4 text-primary" />
               <CardTitle className="text-sm font-medium text-card-foreground">{title}</CardTitle>
-              <Badge variant="secondary" className="text-xs bg-primary/10 text-primary border-primary/20">
+              {/* <Badge variant="secondary" className="text-xs bg-primary/10 text-primary border-primary/20">
                 {language.toUpperCase()}
-              </Badge>
+              </Badge> */}
             </div>
             
             <div className="flex items-center gap-1">

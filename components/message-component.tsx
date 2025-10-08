@@ -127,7 +127,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
     }, [message.content, message.role]);
     
     const showCodePreview = useMemo(() => {
-        return parsedCode && (parsedCode.hasWebCode || parsedCode.html || parsedCode.css || parsedCode.js || parsedCode.combinedCode);
+        if (!parsedCode) return false;
+        if (!parsedCode.hasWebCode) return false;
+        // If non-web code exists, only show when we extracted a complete HTML document
+        if (parsedCode.hasNonWebCode && !parsedCode.combinedCode) return false;
+        // Ensure we actually have something renderable: complete doc or HTML snippet
+        const hasRenderable = !!(parsedCode.combinedCode || parsedCode.html);
+        return hasRenderable;
     }, [parsedCode]);
 
     // Cleanup audio when component unmounts

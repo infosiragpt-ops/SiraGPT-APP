@@ -5,6 +5,8 @@ export interface ParsedCode {
   css: string
   js: string
   hasWebCode: boolean
+  // True when message contains any non-web language blocks (python, ts, java, etc.)
+  hasNonWebCode?: boolean
   combinedCode?: string
   files: Array<{
     name: string
@@ -91,6 +93,7 @@ export function parseCodeFromContent(content: string): ParsedCode {
       css: '',
       js: '',
       hasWebCode: false,
+      hasNonWebCode: false,
       combinedCode: '',
       files: []
     }
@@ -103,17 +106,11 @@ export function parseCodeFromContent(content: string): ParsedCode {
     css: '',
     js: '',
     hasWebCode: false,
+    hasNonWebCode: false,
     files: []
   }
 
-  // Simple check - if content contains HTML-like tags and code blocks, enable preview
-  const hasHtmlTags = /<[a-zA-Z][^>]*>/.test(content);
-  const hasCodeBlocks = /```/.test(content);
-  
-  if (hasHtmlTags && hasCodeBlocks) {
-    console.log('Quick detection: HTML tags and code blocks found');
-    result.hasWebCode = true;
-  }
+  // Note: Avoid naive quick detection as it causes false positives (e.g., HTML inside Python strings)
 
   const codeBlocks: Array<{ language: string; content: string; filename?: string }> = []
   
@@ -147,36 +144,70 @@ export function parseCodeFromContent(content: string): ParsedCode {
   
   // Code blocks processed
 
+  const ALLOWED_WEB_LANGS = new Set(['html', 'css', 'javascript', 'js'])
+
   // Process code blocks and categorize them
   for (const block of codeBlocks) {
     const { language, content } = block
     // Categorizing code block by language
     
-    // Detect and categorize by language
-    if (language === 'html' || isHtmlContent(content)) {
-      result.html += content + '\n'
+    // Explicit language handling
+    if (language === 'html') {
+      if (isCompleteHtmlDocument(content)) {
+        result.combinedCode = content
+      } else {
+        result.html += content + '\n'
+      }
       result.hasWebCode = true
-    } else if (language === 'css' || isCssContent(content)) {
+      continue
+    }
+
+    if (language === 'css') {
       result.css += content + '\n'
       result.hasWebCode = true
-    } else if (['javascript', 'js'].includes(language) || isJavaScriptContent(content)) {
+      continue
+    }
+
+    if (language === 'javascript' || language === 'js') {
       result.js += content + '\n'
       result.hasWebCode = true
-    } else if (isCompleteHtmlDocument(content)) {
-      // If it's a complete HTML document, use it as combined code
-      result.combinedCode = content
-      result.hasWebCode = true
-    } else if (language === 'text' || !language) {
-      // Fallback: try to detect content type for unlabeled code blocks
+      continue
+    }
+
+    // Unlabeled/text blocks: infer only if they clearly look like web code
+    if (language === 'text' || !language) {
+      if (isCompleteHtmlDocument(content)) {
+        result.combinedCode = content
+        result.hasWebCode = true
+        continue
+      }
       if (isHtmlContent(content)) {
         result.html += content + '\n'
         result.hasWebCode = true
-      } else if (isCssContent(content)) {
+        continue
+      }
+      if (isCssContent(content)) {
         result.css += content + '\n'
         result.hasWebCode = true
-      } else if (isJavaScriptContent(content)) {
+        continue
+      }
+      if (isJavaScriptContent(content)) {
         result.js += content + '\n'
         result.hasWebCode = true
+        continue
+      }
+    }
+
+    // Any other labeled language is considered non-web for preview gating
+    if (!ALLOWED_WEB_LANGS.has(language)) {
+      result.hasNonWebCode = true
+      // Try to extract a full HTML document embedded within this non-web block
+      if (!result.combinedCode) {
+        const extracted = extractCompleteHtmlFromText(content)
+        if (extracted) {
+          result.combinedCode = extracted
+          result.hasWebCode = true
+        }
       }
     }
   }
@@ -230,6 +261,35 @@ function isCompleteHtmlDocument(content: string): boolean {
   return /<!DOCTYPE\s+html/i.test(content) && 
          /<html/i.test(content) && 
          /<\/html>/i.test(content)
+}
+
+/**
+ * Attempt to extract a complete HTML document from within non-web code blocks
+ * e.g., Python triple-quoted strings wrapping an HTML page
+ */
+function extractCompleteHtmlFromText(content: string): string | null {
+  if (!content) return null
+
+  // Search triple-quoted strings (Python-style)
+  const tripleQuotedRegex = /(["']{3})([\s\S]*?)\1/g
+  let tqMatch: RegExpExecArray | null
+  while ((tqMatch = tripleQuotedRegex.exec(content)) !== null) {
+    const inner = tqMatch[2]
+    if (isCompleteHtmlDocument(inner)) return inner
+  }
+
+  // Fallback: scan whole content for a full HTML document segment
+  const startIdx = content.search(/<!DOCTYPE\s+html|<html/i)
+  if (startIdx !== -1) {
+    const tail = content.slice(startIdx)
+    const endRel = tail.search(/<\/html>/i)
+    if (endRel !== -1) {
+      const html = content.slice(startIdx, startIdx + endRel + 7)
+      if (isCompleteHtmlDocument(html)) return html
+    }
+  }
+
+  return null
 }
 
 /**
