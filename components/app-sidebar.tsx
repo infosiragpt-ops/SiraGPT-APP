@@ -252,8 +252,8 @@ export function AppSidebar() {
       {/* New Chat, Search, and Library buttons */}
       <div
         className={cn(
-          "transition-all flex flex-col gap-2",
-          state === "open" ? "p-4 pt-2" : "p-2",
+          "transition-all flex flex-col ",
+          state === "open" ? "p-4 pt-2 pl-2" : "p-2",
           "mt-4"
         )}
       >

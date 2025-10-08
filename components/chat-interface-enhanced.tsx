@@ -29,7 +29,8 @@ import {
   Film,
   Bolt,
   FileSpreadsheet,
-  File
+  File,
+  ArrowUp
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -1442,12 +1443,12 @@ export default function ChatInterface() {
                           onClick={handleSend}
                           disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
                           size="sm"
-                          className="h-8 w-8 p-0"
+                          className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                         >
                           {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
-                            <Send className="h-4 w-4" />
+                            <ArrowUp className="h-4 w-4" />
                           )}
                         </Button>
                       </>
@@ -1653,12 +1654,12 @@ export default function ChatInterface() {
                               onClick={handleSend}
                               disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
                               size="sm"
-                              className="h-8 w-8 p-0"
+                              className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                             >
                               {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
-                                <Send className="h-4 w-4" />
+                                <ArrowUp className="h-4 w-4" />
                               )}
                             </Button>
                           </>

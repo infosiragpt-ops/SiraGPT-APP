@@ -36,32 +36,15 @@ export const LiquidButton: React.FC<LiquidButtonProps> = ({
 
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const { resolvedTheme } = useTheme()
-  const isDark = resolvedTheme === "dark"
-  // useEffect(() => {
-  //   const updateTheme = () => {
-  //     setIsDark(
-  //       document.documentElement.classList.contains('dark') ||
-  //       window.matchMedia('(prefers-color-scheme: dark)').matches
-  //     )
-  //   }
+  const [mounted, setMounted] = useState(false)
 
-  //   updateTheme()
+  // Ensure theme is loaded before rendering theme-dependent content
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
-  //   // Listen for theme changes
-  //   const observer = new MutationObserver(updateTheme)
-  //   observer.observe(document.documentElement, {
-  //     attributes: true,
-  //     attributeFilter: ['class']
-  //   })
-
-  //   const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-  //   mediaQuery.addEventListener('change', updateTheme)
-
-  //   return () => {
-  //     observer.disconnect()
-  //     mediaQuery.removeEventListener('change', updateTheme)
-  //   }
-  // }, [])
+  // Use fallback during initial render to prevent hydration mismatch
+  const isDark = mounted ? resolvedTheme === "dark" : false
 
   const mouseX = useMotionValue(0)
   const mouseY = useMotionValue(0)
