@@ -1284,10 +1284,10 @@ export default function ChatInterface() {
       {isInitial ? (
         <div className="flex flex-1 items-center justify-center p-4">
           <div className="w-full max-w-4xl space-y-6">
-            <div className="text-center space-y-2">
+            {/* <div className="text-center space-y-2">
               <h1 className="text-3xl font-bold">Welcome to Sira GPT</h1>
               <p className="text-muted-foreground">Ask anything, generate images, or create videos with AI.</p>
-            </div>
+            </div> */}
 
             {/* Example prompts */}
             {/* {chatType === 'text' && (
@@ -1485,7 +1485,7 @@ export default function ChatInterface() {
                   </div>
                 </div></div>
 
-              <p className="text-center text-xs text-muted-foreground">
+              {/* <p className="text-center text-xs text-muted-foreground">
                 {isImageGenerationActive
                   ? 'Press Enter to generate image, Shift+Enter for new line'
                   : isVideoGenerationActive
@@ -1494,7 +1494,7 @@ export default function ChatInterface() {
                       ? 'Press Enter to search the web, Shift+Enter for new line'
                       : 'Press Enter to send, Shift+Enter for new line'
                 }
-              </p>
+              </p> */}
             </div>
           </div>
         </div>

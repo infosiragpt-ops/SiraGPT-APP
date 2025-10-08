@@ -464,7 +464,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
-
             >
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
@@ -731,11 +730,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 
     return (
         <div className="flex gap-4 my-4">
-            {message.role === "ASSISTANT" && (
+            {/* {message.role === "ASSISTANT" && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
                     <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
                 </Avatar>
-            )}
+            )} */}
 
             <div className={`flex flex-col w-full ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
@@ -868,13 +867,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 )}
             </div>
 
-            {message.role === "USER" && !isImageOnlyMessage() && !isVideoMessage && (
+            {/* {message.role === "USER" && !isImageOnlyMessage() && !isVideoMessage && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
                     <AvatarFallback className="bg-muted text-muted-foreground text-xs">
                         {user?.name?.[0]?.toUpperCase() || 'U'}
                     </AvatarFallback>
                 </Avatar>
-            )}
+            )} */}
 
             <Dialog open={!!selectedFile} onOpenChange={(isOpen) => { if (!isOpen) setSelectedFile(null) }}>
                 <DialogContent className="max-w-3xl h-[80vh] flex flex-col">

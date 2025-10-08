@@ -23,6 +23,7 @@ import {
   Images,
   LayoutGrid,
   Loader2,
+  PenSquare,
 } from "lucide-react"
 import {
   Sidebar,
@@ -217,12 +218,12 @@ export function AppSidebar() {
           )}
         >
           <div className="flex items-center gap-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg  ">
 
               <img
                 src="/sira-gpt.png"
                 alt="Icon"
-                className="h-10 w-10 "
+                className="h-10 w-10  brightness-0 dark:brightness-0 dark:invert"
               />
 
             </div>
@@ -259,10 +260,10 @@ export function AppSidebar() {
         <SidebarMenuButton
           onClick={handleNewChat}
           className="w-full justify-start h-9 px-3"
-          variant="outline"
+
         >
-          <Plus className="h-4 w-4" />
-          <span className="group-data-[state=closed]:hidden ml-2">New Chat</span>
+          <PenSquare className="h-4 w-4" />
+          <span className="group-data-[state=closed]:hidden -ml-0.2">New Chat</span>
         </SidebarMenuButton>
 
         <SidebarMenuButton
@@ -271,7 +272,7 @@ export function AppSidebar() {
           variant="default"
         >
           <Search className="h-4 w-4" />
-          <span className="group-data-[state=closed]:hidden ml-2">Search chats</span>
+          <span className="group-data-[state=closed]:hidden -ml-0.2">Search chats</span>
         </SidebarMenuButton>
 
         <SidebarMenuButton
@@ -280,7 +281,7 @@ export function AppSidebar() {
           variant="default"
         >
           <Images className="h-4 w-4" />
-          <span className="group-data-[state=closed]:hidden ml-2">Library</span>
+          <span className="group-data-[state=closed]:hidden -ml-0.2">Library</span>
         </SidebarMenuButton>
 
         <SidebarMenuButton
@@ -292,7 +293,7 @@ export function AppSidebar() {
           variant="default"
         >
           <LayoutGrid className="h-4 w-4" />
-          <span className="group-data-[state=closed]:hidden ml-2">GPTs</span>
+          <span className="group-data-[state=closed]:hidden -ml-0.2">GPTs</span>
         </SidebarMenuButton>
       </div>
 
