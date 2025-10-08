@@ -9,6 +9,7 @@ const usageMonitor = require('../services/usage-monitor');
 // const emailService = require('../services/email'); // Commented out temporarily
 const prorationService = require('../services/proration');
 const subscriptionAnalyticsService = require('../services/subscription-analytics');
+const axios = require('axios');
 
 const router = express.Router();
 
@@ -516,6 +517,143 @@ router.get('/', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get payments error:', error);
     res.status(500).json({ error: 'Failed to fetch payments' });
+  }
+});
+
+// List Stripe invoices for current user
+router.get('/stripe/invoices', authenticateToken, async (req, res) => {
+  try {
+    if (!stripeService.isConfigured) {
+      return res.status(503).json({ error: 'Stripe not configured' });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user || !user.stripeCustomerId) {
+      return res.json({ invoices: [] });
+    }
+
+    const invoices = await stripeService.stripe.invoices.list({
+      customer: user.stripeCustomerId,
+      limit: 50
+    });
+
+    res.json({
+      invoices: invoices.data.map(inv => ({
+        id: inv.id,
+        number: inv.number,
+        status: inv.status,
+        amountPaid: (inv.amount_paid || 0) / 100,
+        currency: inv.currency,
+        hostedInvoiceUrl: inv.hosted_invoice_url,
+        invoicePdf: inv.invoice_pdf,
+        created: new Date(inv.created * 1000),
+        periodStart: inv.lines.data[0]?.period?.start ? new Date(inv.lines.data[0].period.start * 1000) : null,
+        periodEnd: inv.lines.data[0]?.period?.end ? new Date(inv.lines.data[0].period.end * 1000) : null
+      }))
+    });
+  } catch (error) {
+    console.error('Error listing invoices:', error);
+    res.status(500).json({ error: 'Failed to list invoices' });
+  }
+});
+
+// Download a specific invoice PDF (proxy/redirect)
+router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => {
+  try {
+    if (!stripeService.isConfigured) {
+      return res.status(503).json({ error: 'Stripe not configured' });
+    }
+
+    const { invoiceId } = req.params;
+    const invoice = await stripeService.stripe.invoices.retrieve(invoiceId);
+
+    // Optional: ensure invoice belongs to the current user
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user || !user.stripeCustomerId || invoice.customer !== user.stripeCustomerId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Prefer direct invoice PDF if available
+    if (invoice.invoice_pdf) {
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=invoice-${invoice.number || invoice.id}.pdf`);
+      return response.data.pipe(res);
+    }
+
+    // Fallback: redirect to hosted invoice URL
+    if (invoice.hosted_invoice_url) {
+      return res.redirect(invoice.hosted_invoice_url);
+    }
+
+    return res.status(404).json({ error: 'Invoice PDF not available' });
+  } catch (error) {
+    console.error('Error downloading invoice:', error);
+    res.status(500).json({ error: 'Failed to download invoice' });
+  }
+});
+
+// Download invoice by payment ID (maps payment -> related Stripe invoice)
+router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
+  try {
+    if (!stripeService.isConfigured) {
+      return res.status(503).json({ error: 'Stripe not configured' });
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: { id: req.params.paymentId, userId: req.user.id }
+    });
+
+    if (!payment) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
+
+    if (!payment.stripeCustomerId) {
+      return res.status(400).json({ error: 'No Stripe customer associated with this payment' });
+    }
+
+    // Strategy: if we have a subscription ID, list invoices for that subscription first; otherwise list by customer
+    let invoice = null;
+
+    if (payment.stripeSubscriptionId) {
+      const list = await stripeService.stripe.invoices.list({
+        subscription: payment.stripeSubscriptionId,
+        limit: 20
+      });
+      invoice = list.data.find(inv => inv.status === 'paid') || list.data[0] || null;
+    }
+
+    if (!invoice) {
+      const list = await stripeService.stripe.invoices.list({
+        customer: payment.stripeCustomerId,
+        limit: 50
+      });
+      // Pick closest by created date to the payment
+      const targetTime = payment.createdAt.getTime();
+      invoice = list.data
+        .sort((a, b) => Math.abs(a.created * 1000 - targetTime) - Math.abs(b.created * 1000 - targetTime))[0] || null;
+    }
+
+    if (!invoice) {
+      return res.status(404).json({ error: 'No related invoice found for this payment' });
+    }
+
+    // Stream PDF if available, else redirect to hosted URL
+    if (invoice.invoice_pdf) {
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=invoice-${invoice.number || invoice.id}.pdf`);
+      return response.data.pipe(res);
+    }
+
+    if (invoice.hosted_invoice_url) {
+      return res.redirect(invoice.hosted_invoice_url);
+    }
+
+    return res.status(404).json({ error: 'Invoice PDF not available' });
+  } catch (error) {
+    console.error('Download invoice by payment error:', error);
+    res.status(500).json({ error: 'Failed to download invoice' });
   }
 });
 

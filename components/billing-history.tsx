@@ -5,17 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { 
-  Receipt, 
-  Download, 
-  ExternalLink, 
-  Calendar,
-  CreditCard,
-  CheckCircle,
-  XCircle,
-  Clock,
-  AlertTriangle
-} from 'lucide-react'
+import { Receipt, Download, ExternalLink, Calendar, CreditCard, CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
 import { toast } from 'sonner'
@@ -31,6 +21,7 @@ interface BillingRecord {
   createdAt: string
   updatedAt: string
 }
+
 
 export default function BillingHistory() {
   const { user } = useAuth()
@@ -88,40 +79,18 @@ export default function BillingHistory() {
     return '💳' // Only Stripe supported
   }
 
-  const handleDownloadInvoice = async (paymentId: string) => {
+  const handleDownloadPaymentInvoice = async (paymentId: string) => {
     try {
-      // Generate invoice content as text (in real app, this would be API call)
-      const payment = billingData.find((p: BillingRecord) => p.id === paymentId)
-      if (!payment) {
-        toast.error('Payment not found')
-        return
-      }
-
-      const invoiceContent = `
-INVOICE
--------
-Payment ID: ${payment.id}
-Date: ${new Date(payment.createdAt).toLocaleDateString()}
-Amount: $${payment.amount} ${payment.currency}
-Status: ${payment.status}
-Plan: ${payment.plan}
-Provider: ${payment.provider}
-
-Thank you for your payment!
-      `
-
-      // Create and download the invoice as text file
-      const blob = new Blob([invoiceContent], { type: 'text/plain' })
+      const blob = await apiClient.downloadInvoice(paymentId)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `invoice-${payment.id}.txt`
+      a.download = `invoice-${paymentId}.pdf`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
-
-      toast.success('Invoice downloaded successfully')
+      toast.success('Invoice downloaded')
     } catch (error) {
       toast.error('Failed to download invoice')
     }
@@ -187,8 +156,14 @@ Thank you for your payment!
               </div>
             </div>
 
-            {/* Billing Table */}
+            {/* Payments (App internal records) */}
             <div className="border rounded-lg overflow-hidden">
+              <div className="px-4 py-3 border-b text-sm font-medium flex items-center justify-between">
+                <div>
+                  Payments
+                  <span className="text-muted-foreground ml-2 text-xs">(internal history)</span>
+                </div>
+              </div>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -236,23 +211,13 @@ Thank you for your payment!
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => handleDownloadInvoice(payment.id)}
+                              onClick={() => handleDownloadPaymentInvoice(payment.id)}
                             >
                               <Download className="h-3 w-3 mr-1" />
                               Invoice
                             </Button>
                           )}
-                          {payment.providerId && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                toast.info(`Payment ID: ${payment.providerId}`)
-                              }}
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </Button>
-                          )}
+                    
                         </div>
                       </TableCell>
                     </TableRow>
@@ -260,6 +225,7 @@ Thank you for your payment!
                 </TableBody>
               </Table>
             </div>
+
           </div>
         )}
       </CardContent>

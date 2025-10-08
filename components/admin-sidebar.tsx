@@ -33,11 +33,16 @@ const adminMenuItems = [
     icon: Bot,
     url: "/admin/models",
   },
-  {
-    title: "Payments",
-    icon: CreditCard,
-    url: "/admin/payments",
-  },
+   {
+     title: "Payments",
+     icon: CreditCard,
+     url: "/admin/payments",
+   },
+   {
+     title: "Invoices",
+     icon: FileText,
+     url: "/admin/invoices",
+   },
   {
     title: "Analytics",
     icon: Activity,
