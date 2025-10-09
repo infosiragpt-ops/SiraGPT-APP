@@ -85,11 +85,12 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
 
 
 // Enhanced Message Component with Video Support
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
+const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming }: {
     message: any;
     user: any;
     onRegenerate: () => void;
-    updateMessageInChat: (messageId: string, newContent: string) => void
+    updateMessageInChat: (messageId: string, newContent: string) => void;
+    isStreaming?: boolean;
 }) => {
     const [isCopied, setIsCopied] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
@@ -424,7 +425,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         };
 
         return !inline && match ? (
-            <div className="my-4 rounded-md bg-gray-900/80 border border-gray-700 relative">
+            <div className="rounded-md bg-gray-900/80 border border-gray-700 relative">
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-800/50 rounded-t-md border-b border-gray-700">
                     <span className="text-xs font-sans text-gray-400">{language}</span>
                     <button onClick={handleCodeCopy} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
@@ -437,7 +438,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                     language={language}
                     PreTag="div"
                     {...props}
-                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent' }}
+                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent',fontSize:"14px" }}
                 >
                     {String(children).replace(/\n$/, '')}
                 </SyntaxHighlighter>
@@ -456,11 +457,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             return null;
         }
 
-        // Try to render as a chart first
-        // const chart = ChartComponent({ content: message.content });
-        // if (chart) {
-        //     return <div className="w-full overflow-x-auto">{chart}</div>;
+        // ✅ PERFORMANCE FIX: Use simple rendering for streaming messages
+        // if (isStreaming) {
+        //     return (
+        //         <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
+        //             <p className="mb-3 text-base whitespace-pre-wrap">{message.content}</p>
+        //         </div>
+        //     );
         // }
+        
 
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"

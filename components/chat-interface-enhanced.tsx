@@ -1702,23 +1702,44 @@ export default function ChatInterface() {
           ) : (
             <>
               {/* Messages */}
-              <ScrollArea className="flex-1 p-4 mb-6" ref={scrollAreaRef}>
-                <div className="space-y-4 max-w-4xl mx-auto">
-                  {currentChat?.messages.map((message) => (
-                    <MessageComponent
-                      key={message.id}
-                      message={message}
-                      user={user}
-                      onRegenerate={regenerateLastMessage}
-                      updateMessageInChat={editAndRegenerate}
-                    />
-                  ))}
+              <ScrollArea className="flex-1 p-2 md:p-4 mb-6" ref={scrollAreaRef}>
+                <div className="space-y-4 max-w-4xl mx-auto w-full">
+                  {(() => {
+                    const messages = currentChat?.messages || [];
+                    const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
+                    const streamingMessage = isStreaming ? messages[messages.length - 1] : null;
+
+                    return (
+                      <>
+                        {stableMessages.map((message) => (
+                          <MessageComponent
+                            key={message.id}
+                            message={message}
+                            user={user}
+                            onRegenerate={regenerateLastMessage}
+                            updateMessageInChat={editAndRegenerate}
+                            isStreaming={false}
+                          />
+                        ))}
+                        {streamingMessage && (
+                          <MessageComponent
+                            key={streamingMessage.id}
+                            message={streamingMessage}
+                            user={user}
+                            onRegenerate={regenerateLastMessage}
+                            updateMessageInChat={editAndRegenerate}
+                            isStreaming={true}
+                          />
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </ScrollArea>
 
               {/* Input & Actions */}
 
-              <div className="">
+              <div className="px-2 md:px-0">
                 <div className="max-w-4xl mx-auto space-y-3">
                   {/* Input Area */}
 
