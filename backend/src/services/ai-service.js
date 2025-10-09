@@ -2,7 +2,6 @@
 
 const OpenAI = require('openai');
 const { toFile } = require('openai');
-const { GoogleGenerativeAI } = require('@google/generative-ai'); // Make sure to install this package: npm install @google/generative-ai
 const fs = require('fs');
 const prisma = require('../config/database');
 const { GoogleGenAI, Modality } = require("@google/genai");
@@ -38,27 +37,63 @@ class AIService {
     }
 
     /**
+     * Helper function to convert image file to base64 format for vision API
+     * @param {string} imagePath - Path to the image file
+     * @param {string} mimeType - MIME type of the image
+     * @returns {object} - Formatted image object for vision API
+     */
+    async prepareImageForVision(imagePath, mimeType) {
+        try {
+            const fullPath = path.isAbsolute(imagePath) 
+                ? imagePath 
+                : path.join(__dirname, '../../', imagePath);
+            
+            if (!fs.existsSync(fullPath)) {
+                console.error(`Image file not found: ${fullPath}`);
+                return null;
+            }
+
+            const imageData = fs.readFileSync(fullPath);
+            const base64Image = imageData.toString('base64');
+            
+            return {
+                type: 'image_url',
+                image_url: {
+                    url: `data:${mimeType};base64,${base64Image}`,
+                    detail: 'high' // Use high detail for better analysis
+                }
+            };
+        } catch (error) {
+            console.error('Error preparing image for vision:', error);
+            return null;
+        }
+    }
+
+    /**
      * AI se response generate karta hai aur client ko stream karta hai.
      * @param {object} options - Options ka object
      * @param {string} options.provider - Istemaal hone wala provider
      * @param {string} options.model - Istemaal hone wala model
      * @param {Array<object>} options.messages - AI ko bhejne ke liye messages ka array
      * @param {import('express').Response} options.res - Express response object jis par stream likha jayega
+     * @param {Array<object>} options.files - Uploaded files ka array (optional)
      * @returns {Promise<string>} - Poora generate kiya hua content
      */
-
-
-
-
     async generateStream({ provider, model, messages, res, signal, streamId, files }) {
         let fullResponseContent = '';
         try {
             const client = this.getClient(provider);
 
             // Check if the user is asking for a chart
-            const lastUserMessage = messages[messages.length - 1].content.toLowerCase();
+            const lastUserMessage = messages[messages.length - 1].content;
+            const lastMessageText = typeof lastUserMessage === 'string' 
+                ? lastUserMessage 
+                : lastUserMessage.find(item => item.type === 'text')?.text || '';
+            
             const chartKeywords = ['chart', 'graph', 'plot', 'diagram', 'visualize'];
-            const isChartRequest = chartKeywords.some(keyword => lastUserMessage.includes(keyword));
+            const isChartRequest = chartKeywords.some(keyword => 
+                lastMessageText.toLowerCase().includes(keyword)
+            );
 
             if (isChartRequest) {
                 // Modify the system prompt to request JSON for charts
@@ -85,26 +120,35 @@ Do not include any other text or explanations in your response. Just the JSON ob
                 messages.unshift(systemMessage);
             }
 
+            // ✅ IMPROVED: Handle images properly for vision API
             if (files && files.length > 0) {
-                const imageFile = files.find(f => f.mimeType && f.mimeType.startsWith('image/'));
-                if (imageFile) {
-                    const imagePath = path.join(__dirname, '../../', imageFile.path);
-                    const imageData = fs.readFileSync(imagePath);
-                    const base64Image = imageData.toString('base64');
-
+                const imageFiles = files.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
+                
+                if (imageFiles.length > 0) {
+                    console.log(`📸 Processing ${imageFiles.length} image(s) for vision API`);
+                    
                     const lastMessage = messages[messages.length - 1];
-                    lastMessage.content = [
-                        { type: 'text', text: lastMessage.content },
-                        {
-                            type: 'image_url',
-                            image_url: {
-                                url: `data:${imageFile.mimeType};base64,${base64Image}`,
-                            },
-                        },
+                    const textContent = typeof lastMessage.content === 'string' 
+                        ? lastMessage.content 
+                        : lastMessage.content.find(item => item.type === 'text')?.text || '';
+                    
+                    // Build content array with text and images
+                    const contentArray = [
+                        { type: 'text', text: textContent }
                     ];
+                    
+                    // Add all images to the content
+                    for (const imageFile of imageFiles) {
+                        const imageContent = await this.prepareImageForVision(imageFile.path, imageFile.mimeType);
+                        if (imageContent) {
+                            contentArray.push(imageContent);
+                            console.log(`✅ Added image to vision API: ${imageFile.name}`);
+                        }
+                    }
+                    
+                    lastMessage.content = contentArray;
                 }
             }
-
 
             const payload = {
                 model: model,
@@ -112,22 +156,13 @@ Do not include any other text or explanations in your response. Just the JSON ob
                 stream: true,
             };
 
+            console.log(`🤖 Generating response with ${provider} - ${model}`);
+            console.log(`📝 Messages count: ${messages.length}`);
 
-            // if (model.includes('gpt-5')) {
-
-            //     console.log(`Using special parameter 'max_completion_tokens' for model: ${model}`);
-            //     payload.max_completion_tokens = 8192;
-
-            // } else {
-
-            //     console.log(`Using standard parameter 'max_tokens' for model: ${model}`);
-            //     payload.max_tokens = 8192;
-            // }
             const stream = await client.chat.completions.create(payload, { signal });
 
             // Stream se data parhein aur client ko bhejein
             for await (const chunk of stream) {
-
                 const contentChunk = chunk.choices[0]?.delta?.content || '';
                 if (contentChunk) {
                     fullResponseContent += contentChunk;
@@ -136,15 +171,14 @@ Do not include any other text or explanations in your response. Just the JSON ob
                 }
             }
 
+            console.log(`✅ Response generated successfully (${fullResponseContent.length} characters)`);
             return fullResponseContent;
         } catch (apiError) {
             if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
                 console.warn(`AI stream aborted by client for provider: ${provider}.`);
-                // Agar request abort ho gayi hai, toh koi error message client ko na bhejein
-                // aur jo content receive hua hai, wahi return karein
                 return fullResponseContent;
             }
-            console.error(`Error from ${provider} API:`, apiError);
+            console.error(`❌ Error from ${provider} API:`, apiError.message || apiError);
             res.write(`data: ${JSON.stringify({ error: `AI service (${provider}) is temporarily unavailable or stream was interrupted.` })}\n\n`);
             throw apiError;
         }
@@ -201,7 +235,6 @@ Do not include any other text or explanations in your response. Just the JSON ob
 
                 const image_base64 = response.data[0].b64_json;
                 return image_base64;
-
             }
         } catch (error) {
             console.error("Error:", error.message);
@@ -219,7 +252,7 @@ Do not include any other text or explanations in your response. Just the JSON ob
             form,
             {
                 headers: {
-                    ...form.getHeaders(), // include multipart/form-data headers
+                    ...form.getHeaders(),
                     Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
                 },
                 maxContentLength: Infinity,
@@ -227,9 +260,8 @@ Do not include any other text or explanations in your response. Just the JSON ob
             }
         );
 
-        return response.data; // contains file ID
+        return response.data;
     }
-
 
     async generateChartWithCodeInterpreter(messages, fileId) {
         const client = this.getClient("OpenAI");
@@ -260,7 +292,6 @@ You are a professional developer; I will give you a scenario, you understand tha
             await this.uploadFileToContainer(fileRecord.path, containerId);
             console.log(`File ${fileRecord.originalName} uploaded to container ${containerId} for chart generation.`);
 
-            // Update instructions to inform the AI about the uploaded file
             instructions += `\n\nA file named '${fileRecord.originalName}' has been uploaded and is available in your environment. Please use this file to generate the requested chart.`;
         }
 
@@ -279,12 +310,10 @@ You are a professional developer; I will give you a scenario, you understand tha
         let pythonCode = null;
         let imageUrl = null;
 
-
         // Find the code and the file citation from the response
         for (const output of resp.output) {
             if (output.type === 'code_interpreter_call') {
                 pythonCode = output.code;
-
             }
             if (output.type === 'message' && output.content) {
                 for (const contentItem of output.content) {
@@ -295,14 +324,12 @@ You are a professional developer; I will give you a scenario, you understand tha
                                 if (file_id && container_id) {
                                     console.log(`Found file citation: container_id=${container_id}, file_id=${file_id}`);
 
-                                    // Download the image
                                     const downloadUrl = `https://api.openai.com/v1/containers/${container_id}/files/${file_id}/content`;
                                     const imageResponse = await axios.get(downloadUrl, {
                                         headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` },
                                         responseType: 'arraybuffer'
                                     });
 
-                                    // Save the image to local storage
                                     const uploadsDir = path.join(__dirname, '../../uploads/images');
                                     await fs.promises.mkdir(uploadsDir, { recursive: true });
 
@@ -312,7 +339,6 @@ You are a professional developer; I will give you a scenario, you understand tha
 
                                     await fs.promises.writeFile(filepath, imageResponse.data);
 
-                                    // Construct the accessible URL
                                     const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
                                     imageUrl = `${baseUrl}/uploads/images/${filename}`;
                                     console.log(`Image saved successfully at: ${imageUrl}`);
@@ -328,6 +354,4 @@ You are a professional developer; I will give you a scenario, you understand tha
     }
 }
 
-
-// Service ka ek hi instance banayein aur export karein
 module.exports = new AIService();

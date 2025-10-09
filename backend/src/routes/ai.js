@@ -14,6 +14,7 @@ const crypto = require('crypto');
 
 // Dependencies ko file ke top par import karen
 const fs = require('fs').promises;
+const fsSync = require('fs'); // ✅ For synchronous file operations
 const path = require('path');
 
 // Initialize OpenAI client
@@ -493,7 +494,7 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
         };
       }
 
-      // Step 1: get previous chat history
+      // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
       if (canPersist) {
         historyMessages = await prisma.message.findMany({
@@ -505,27 +506,98 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`
 
       const messages = [systemInstruction];
       if (historyMessages.length) {
-        historyMessages.forEach(m => {
-          let messageContent = m.content;
+        for (const m of historyMessages) {
+          const messageRole = m.role === 'USER' ? 'user' : 'assistant';
+          
+          // Parse files if present
+          let parsedFiles = [];
           if (m.files) {
             try {
-              const parsedFiles = JSON.parse(m.files);
-              if (Array.isArray(parsedFiles) && parsedFiles.length > 0) {
-                const fileContext = parsedFiles.map(f => {
-                  const content = f.extractedText || 'Binary file - content not available';
-                  return `\n\nAttached file: ${f.name}\nContent: ${content}`;
-                }).join('');
-                messageContent += fileContext;
+              parsedFiles = JSON.parse(m.files);
+              if (!Array.isArray(parsedFiles)) {
+                parsedFiles = [];
               }
             } catch (e) {
               console.warn("Could not parse files from history message:", e);
+              parsedFiles = [];
             }
           }
-          messages.push({
-            role: m.role === 'USER' ? 'user' : 'assistant',
-            content: messageContent
-          });
-        });
+          
+          // ✅ Check if message contains images
+          const imageFiles = parsedFiles.filter(f => 
+            f.mimeType && f.mimeType.startsWith('image/') || 
+            f.type && f.type.startsWith('image/')
+          );
+          
+          const nonImageFiles = parsedFiles.filter(f => 
+            !(f.mimeType && f.mimeType.startsWith('image/')) && 
+            !(f.type && f.type.startsWith('image/'))
+          );
+          
+          if (imageFiles.length > 0) {
+            // ✅ Build content array for messages with images
+            const contentArray = [
+              { type: 'text', text: m.content }
+            ];
+            
+            // Add images in proper vision format
+            for (const imgFile of imageFiles) {
+              try {
+                const imagePath = imgFile.path;
+                if (imagePath && fsSync.existsSync(imagePath)) {
+                  const imageData = fsSync.readFileSync(imagePath);
+                  const base64Image = imageData.toString('base64');
+                  const mimeType = imgFile.mimeType || imgFile.type || 'image/png';
+                  
+                  contentArray.push({
+                    type: 'image_url',
+                    image_url: {
+                      url: `data:${mimeType};base64,${base64Image}`,
+                      detail: 'high'
+                    }
+                  });
+                  console.log(`📸 Added image from history: ${imgFile.name || 'unknown'}`);
+                } else {
+                  console.warn(`Image file not found in history: ${imagePath}`);
+                }
+              } catch (imgError) {
+                console.error('Error processing image from history:', imgError);
+              }
+            }
+            
+            // Add text context for non-image files
+            if (nonImageFiles.length > 0) {
+              const textContext = nonImageFiles.map(f => {
+                const content = f.extractedText || 'Binary file - content not available';
+                return `\n\nAttached file: ${f.name}\nContent: ${content}`;
+              }).join('');
+              
+              contentArray[0].text += textContext;
+            }
+            
+            messages.push({
+              role: messageRole,
+              content: contentArray
+            });
+          } else {
+            // ✅ Regular text message (no images)
+            let messageContent = m.content;
+            
+            // Add context for non-image files
+            if (nonImageFiles.length > 0) {
+              const fileContext = nonImageFiles.map(f => {
+                const content = f.extractedText || 'Binary file - content not available';
+                return `\n\nAttached file: ${f.name}\nContent: ${content}`;
+              }).join('');
+              messageContent += fileContext;
+            }
+            
+            messages.push({
+              role: messageRole,
+              content: messageContent
+            });
+          }
+        }
       }
 
       let finalPrompt = prompt;

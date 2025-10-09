@@ -685,14 +685,24 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 )}
             {parsedFiles && parsedFiles.length > 0 && message.role === "USER" && (
                 <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
-                    {parsedFiles.some((file: any) => file.type?.startsWith('image/')) ? (
+                    {parsedFiles.some((file: any) => file.type?.startsWith('image/') || file.mimeType?.startsWith('image/')) ? (
                         // Only images, aligned right
                         <div className="flex flex-wrap gap-1 ml-auto">
                             {parsedFiles
-                                .filter((file: any) => file.type?.startsWith("image/"))
+                                .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
                                 .map((file: any, index: number) => {
                                     let imageUrl = file.url || file.base64;
 
+                                  
+                                    if (!imageUrl && file.path) {
+                                        // Extract the part of the path after 'uploads/'
+                                        const relativePath = file.path.split('uploads/')[1];
+                                        if (relativePath) {
+                                            const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
+                                            imageUrl = `${baseUrl}/uploads/${relativePath}`;
+                                        }
+                                    }
+                                    
                                     if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
                                         imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:3000", "")}`;
                                     }
@@ -701,7 +711,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                         <img
                                             key={index}
                                             src={imageUrl}
-                                            alt={file.name || "Image"}
+                                            alt={file.name || file.originalName || "Image"}
                                             className="max-w-full h-auto rounded-lg max-h-[350px] object-cover"
                                         />
                                     );
@@ -712,7 +722,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         // Only non-image files, aligned left
                         <div className="flex flex-wrap gap-1">
                             {parsedFiles
-                                .filter((file: any) => !file.type?.startsWith('image/'))
+                                .filter((file: any) => !file.type?.startsWith('image/') && !file.mimeType?.startsWith('image/'))
                                 .map((file: any, index: number) => (
                                     <button key={index} onClick={() => handleViewFile(file)} className="flex items-center gap-1 px-2 py-1 border rounded hover:bg-muted transition-colors">
                                         <FileText className="h-4 w-4" />
