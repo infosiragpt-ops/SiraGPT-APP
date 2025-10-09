@@ -181,18 +181,49 @@ class ApiClient {
   // File endpoints
   async uploadFiles(files: FileList) {
     const formData = new FormData();
-    Array.from(files).forEach(file => {
+    
+    // Debug: Check files
+    console.log('Files to upload:', files.length);
+    Array.from(files).forEach((file, index) => {
+      console.log(`File ${index}:`, file.name, file.type, file.size);
       formData.append('files', file);
     });
 
-    return this.request('/files/upload', {
+    const url = `${this.baseURL}/files/upload`;
+    const headers: HeadersInit = {};
+    
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+      console.log('Token present:', this.token.substring(0, 20) + '...');
+    } else {
+      console.warn('No token found!');
+    }
+    
+    // Debug: Check FormData
+    console.log('FormData entries:');
+    for (let pair of formData.entries()) {
+      console.log(pair[0], pair[1]);
+    }
+    
+    // Don't set Content-Type - browser will set it with boundary for FormData
+    const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        // Remove Content-Type to let browser set it with boundary
-        ...(this.token && { Authorization: `Bearer ${this.token}` }),
-      },
+      headers,
+      credentials: 'include',
       body: formData,
     });
+
+    console.log('Upload response status:', response.status);
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+      console.error('Upload error:', error);
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('Upload result:', result);
+    return result;
   }
 
   async getFiles(params?: { page?: number; limit?: number; type?: string }) {
