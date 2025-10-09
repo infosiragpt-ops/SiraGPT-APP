@@ -50,7 +50,7 @@ class AIService {
 
 
 
-    async generateStream({ provider, model, messages, res, signal, streamId }) {
+    async generateStream({ provider, model, messages, res, signal, streamId, files }) {
         let fullResponseContent = '';
         try {
             const client = this.getClient(provider);
@@ -83,6 +83,26 @@ class AIService {
 Do not include any other text or explanations in your response. Just the JSON object.`
                 };
                 messages.unshift(systemMessage);
+            }
+
+            if (files && files.length > 0) {
+                const imageFile = files.find(f => f.mimeType && f.mimeType.startsWith('image/'));
+                if (imageFile) {
+                    const imagePath = path.join(__dirname, '../../', imageFile.path);
+                    const imageData = fs.readFileSync(imagePath);
+                    const base64Image = imageData.toString('base64');
+
+                    const lastMessage = messages[messages.length - 1];
+                    lastMessage.content = [
+                        { type: 'text', text: lastMessage.content },
+                        {
+                            type: 'image_url',
+                            image_url: {
+                                url: `data:${imageFile.mimeType};base64,${base64Image}`,
+                            },
+                        },
+                    ];
+                }
             }
 
 
