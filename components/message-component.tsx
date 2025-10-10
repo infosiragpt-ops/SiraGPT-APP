@@ -439,12 +439,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     PreTag="div"
                     {...props}
                     customStyle={{ margin: 0, padding: '1rem', background: 'transparent',fontSize:"14px" }}
+                    wrapLongLines={true}
+                    codeTagProps={{ style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }}
                 >
                     {String(children).replace(/\n$/, '')}
                 </SyntaxHighlighter>
             </div>
         ) : (
-            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>
+            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {children}
             </code>
         );
@@ -521,7 +523,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                         title={title}
                                     />
                                     <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600">
-                                        <table className="border-collapse border border-muted mb-3 min-w-[1000px]">
+                                        <table className="border-collapse border border-muted mb-3 w-full">
                                             {children}
                                         </table>
                                     </div>
@@ -755,7 +757,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 {message.role === 'USER' && (
                     <Card className="group relative p-3 w-auto max-w-[85%] bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ">
                         {isEditing ? (
-                            <div className="space-y-2 w-full min-w-[400px]">
+                            <div className="space-y-2 w-full">
                                 <Textarea
                                     value={editedContent}
                                     onChange={(e) => setEditedContent(e.target.value)}

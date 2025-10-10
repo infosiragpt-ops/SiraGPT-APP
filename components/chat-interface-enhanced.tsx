@@ -17,6 +17,7 @@ import {
   ChevronDown,
   X,
   Upload,
+  Menu,
   Settings,
   Eye,
   Download,
@@ -69,6 +70,7 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 import SearchSourceSelector, { SearchSources } from "./SearchSourceSelector"
+ 
 
 // Enhanced Actions Dropdown Component
 const ActionsDropdown = ({
@@ -695,6 +697,7 @@ const NavbarModelSelector = ({
 
 export default function ChatInterface() {
   const { user } = useAuth()
+ 
   const {
     currentChat,
     setCurrentChat,
@@ -1397,7 +1400,15 @@ export default function ChatInterface() {
       {/* Header */}
       <div className=" border-border/40 p-4">
         <div className="flex items-center justify-between">
-          <div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden"
+              
+            >
+              <Menu className="h-6 w-6" />
+            </Button>
             {!showAudioPanel ? (
               <>
                 <NavbarModelSelector
@@ -1739,7 +1750,7 @@ export default function ChatInterface() {
 
               {/* Input & Actions */}
 
-              <div className="px-2 md:px-0">
+              <div className="px-2 md:px-4">
                 <div className="max-w-4xl mx-auto space-y-3">
                   {/* Input Area */}
 
