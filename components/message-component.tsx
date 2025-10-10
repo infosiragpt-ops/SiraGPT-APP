@@ -515,21 +515,37 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 }
                             }
                             return (
-                                <div className="relative mt-3 ">
+                                <div className="relative mt-3">
                                     <TableControls
                                         content={message.content}
                                         messageId={message.id}
                                         onExpand={handleExpand}
                                         title={title}
                                     />
-                                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600">
-                                        <table className="border-collapse border border-muted mb-3 w-full">
+                                    {/* Responsive table wrapper */}
+                                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600"
+                                        style={{
+                                            WebkitOverflowScrolling: 'touch',
+                                            maxWidth: '100vw',
+                                        }}
+                                    >
+                                        <table
+                                            className="border-collapse border border-muted mb-3 w-full"
+                                            style={{
+                                                minWidth: "520px",
+                                            }}
+                                        >
                                             {children}
                                         </table>
+                                    </div>
+                                    {/* Mobile fallback: Scroll hint */}
+                                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">
+                                        Swipe left/right to view the table
                                     </div>
                                 </div>
                             );
                         },
+
                         th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
                         td: ({ children }) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
                         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
