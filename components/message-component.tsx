@@ -438,7 +438,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     language={language}
                     PreTag="div"
                     {...props}
-                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent',fontSize:"14px" }}
+                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent', fontSize: "14px" }}
                 >
                     {String(children).replace(/\n$/, '')}
                 </SyntaxHighlighter>
@@ -465,7 +465,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         //         </div>
         //     );
         // }
-        
+
 
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
@@ -698,16 +698,21 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 .map((file: any, index: number) => {
                                     let imageUrl = file.url || file.base64;
 
-                                  
+
                                     if (!imageUrl && file.path) {
                                         // Extract the part of the path after 'uploads/'
-                                        const relativePath = file.path.split('uploads/')[1];
+                                        const normalizedPath = file.path.replace(/\\/g, '/');
+                                        console.log("normalizedPath:", normalizedPath);
+
+                                        // Extract the part after 'uploads/'
+                                        const relativePath = normalizedPath.split('uploads/')[1];
+                                        console.log("relativePath:", relativePath);
                                         if (relativePath) {
                                             const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
                                             imageUrl = `${baseUrl}/uploads/${relativePath}`;
                                         }
                                     }
-                                    
+
                                     if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
                                         imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:3000", "")}`;
                                     }
