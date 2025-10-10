@@ -70,7 +70,13 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 import SearchSourceSelector, { SearchSources } from "./SearchSourceSelector"
- 
+import { AppSidebar } from "./app-sidebar"
+import {
+  SidebarProvider,
+  Sidebar,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
+
 
 // Enhanced Actions Dropdown Component
 const ActionsDropdown = ({
@@ -414,7 +420,7 @@ const ActiveOptionsDisplay = ({
                     ) : (
                       getFileIcon(file)
                     )}
-                    
+
                     {/* Upload Progress Overlay */}
                     {isUploading && (
                       <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
@@ -448,7 +454,7 @@ const ActiveOptionsDisplay = ({
                     {isUploading && (
                       <div className="flex items-center gap-1 mt-1">
                         <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden">
-                          <div 
+                          <div
                             className="h-full bg-blue-500 transition-all duration-300"
                             style={{ width: `${progress}%` }}
                           />
@@ -696,8 +702,16 @@ const NavbarModelSelector = ({
 };
 
 export default function ChatInterface() {
+  return (
+    <SidebarProvider>
+      <ChatInterfaceContent />
+    </SidebarProvider>
+  )
+}
+
+function ChatInterfaceContent() {
   const { user } = useAuth()
- 
+
   const {
     currentChat,
     setCurrentChat,
@@ -959,9 +973,9 @@ export default function ChatInterface() {
   // File upload logic with instant preview and progress
   const handleAndUploadFiles = async (files: FileList) => {
     if (files.length === 0) return;
-    
+
     let filesToUpload = Array.from(files);
-    
+
     if (chatType === 'video' || chatType === 'image') {
       const imageFiles = filesToUpload.filter(file => file.type.startsWith('image/'));
 
@@ -1026,7 +1040,7 @@ export default function ChatInterface() {
       filesToUpload.forEach(file => {
         dataTransfer.items.add(file);
       });
-      
+
       // Actual upload with proper FileList
       const response = await apiClient.uploadFiles(dataTransfer.files);
 
@@ -1072,11 +1086,11 @@ export default function ChatInterface() {
     } catch (error) {
       console.error('File upload failed:', error);
       toast.error('File upload failed');
-      
+
       // Remove temp files on error
       const filteredFiles = uploadedFiles.filter((f: any) => !tempFiles.find(tf => tf.tempId === f.tempId));
       setUploadedFiles(filteredFiles);
-      
+
       // Clean up previews
       tempFiles.forEach(tf => {
         if (tf.preview) {
@@ -1401,14 +1415,14 @@ export default function ChatInterface() {
       <div className=" border-border/40 p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="md:hidden"
-              
-            >
-              <Menu className="h-6 w-6" />
-            </Button>
+            <div className="md:hidden">
+              <Sidebar>
+                <AppSidebar />
+              </Sidebar>
+              <SidebarTrigger>
+                <Menu className="h-6 w-6" />
+              </SidebarTrigger>
+            </div>
             {!showAudioPanel ? (
               <>
                 <NavbarModelSelector

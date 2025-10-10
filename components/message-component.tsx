@@ -438,7 +438,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     language={language}
                     PreTag="div"
                     {...props}
-                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent',fontSize:"14px" }}
+                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent', fontSize: "14px" }}
                     wrapLongLines={true}
                     codeTagProps={{ style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }}
                 >
@@ -467,7 +467,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         //         </div>
         //     );
         // }
-        
+
 
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
@@ -657,7 +657,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                 : `data:image/jpeg;base64,${file.url}`
                                         }
                                         alt="Generated image"
-                                        className="max-w-full h-auto rounded-lg max-h-[400px] object-contain"
+                                        className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain"
                                         loading="lazy"
                                         onLoad={() => {
                                             setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
@@ -699,19 +699,33 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
                                 .map((file: any, index: number) => {
                                     let imageUrl = file.url || file.base64;
+                                    {
+                                        console.log(!imageUrl && file.path);
+                                    }
 
-                                  
+
                                     if (!imageUrl && file.path) {
+                                        console.log("file.path.", file.path);
+
                                         // Extract the part of the path after 'uploads/'
-                                        const relativePath = file.path.split('uploads/')[1];
+                                        const normalizedPath = file.path.replace(/\\/g, '/');
+                                        console.log("normalizedPath:", normalizedPath);
+
+                                        // Extract the part after 'uploads/'
+                                        const relativePath = normalizedPath.split('uploads/')[1];
+                                        console.log("relativePath:", relativePath);
+
                                         if (relativePath) {
                                             const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
                                             imageUrl = `${baseUrl}/uploads/${relativePath}`;
+                                            console.log("imageUrl", imageUrl);
+
                                         }
                                     }
-                                    
+
                                     if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
-                                        imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:3000", "")}`;
+                                        imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:5000", "")}`;
+
                                     }
 
                                     return (
@@ -755,7 +769,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
             <div className={`flex flex-col w-full ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
-                    <Card className="group relative p-3 w-auto max-w-[85%] bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ">
+                    <Card className="group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white">
                         {isEditing ? (
                             <div className="space-y-2 w-full">
                                 <Textarea
@@ -788,7 +802,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 )}
 
                 {message.role === 'ASSISTANT' && (
-                    <div className="w-full max-w-[90%]">
+                    <div className="w-full max-w-[90%] md:max-w-3xl">
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (
