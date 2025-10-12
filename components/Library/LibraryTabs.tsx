@@ -369,8 +369,7 @@ const MediaLibrary: React.FC = () => {
             <Head>
                 <title>Media Library</title>
             </Head>
-            <h1 className="text-3xl font-bold mb-6 text-gray-800">Your Media Library</h1>
-
+            <h1 className="text-3xl font-bold mb-6 text-gray-800 dark:text-white">Your Media Library</h1>
             <div className="flex border-b border-gray-200 mb-6">
                 <button
                     onClick={() => handleTabChange('all')}

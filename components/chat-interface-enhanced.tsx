@@ -1675,41 +1675,77 @@ function ChatInterfaceContent() {
         </div>
       ) : (
         <>
-          {showAudioPanel ? (
-            // Voice Studio inline view
-            <div className="flex flex-1">
-              <div className="w-56 border-r border-border/40 p-4 space-y-4">
-                <div>
-                  <div className="text-sm font-medium mb-2">Voice Studio</div>
-                  <div className="space-y-2">
-                    <Button
-                      variant={audioTab === 'tts' ? 'default' : 'outline'}
-                      className="w-full justify-start"
-                      onClick={() => setAudioTab('tts')}
-                    >
-                      <Square className="h-4 w-4 mr-2" />
-                      Text-to-Speech
-                    </Button>
-                    <Button
-                      variant={audioTab === 'stt' ? 'default' : 'outline'}
-                      className="w-full justify-start"
-                      onClick={() => setAudioTab('stt')}
-                    >
-                      <Mic className="h-4 w-4 mr-2" />
-                      Speech-to-Text
-                    </Button>
-                    <Button
-                      variant={audioTab === 'music' ? 'default' : 'outline'}
-                      className="w-full justify-start"
-                      onClick={() => setAudioTab('music')}
-                    >
-                      <Music className="h-4 w-4 mr-2" />
-                      Music
-                    </Button>
-                  </div>
+            {showAudioPanel ? (
+            // Voice Studio responsive view
+            <div className="flex flex-1 flex-col lg:flex-row">
+              {/* Navigation - Mobile: horizontal tabs, Desktop: vertical sidebar */}
+              <div className="lg:w-56 lg:border-r border-border/40 p-3 sm:p-4">
+                <div className="text-sm font-medium mb-2 hidden lg:block">Voice Studio</div>
+                
+                {/* Mobile: Horizontal scrollable tabs */}
+                <div className="flex lg:hidden overflow-x-auto gap-2 pb-2">
+                  <Button
+                    variant={audioTab === 'tts' ? 'default' : 'outline'}
+                    size="sm"
+                    className="flex-shrink-0"
+                    onClick={() => setAudioTab('tts')}
+                  >
+                    <Square className="h-4 w-4 mr-1" />
+                    <span className="text-xs">TTS</span>
+                  </Button>
+                  <Button
+                    variant={audioTab === 'stt' ? 'default' : 'outline'}
+                    size="sm"
+                    className="flex-shrink-0"
+                    onClick={() => setAudioTab('stt')}
+                  >
+                    <Mic className="h-4 w-4 mr-1" />
+                    <span className="text-xs">STT</span>
+                  </Button>
+                  <Button
+                    variant={audioTab === 'music' ? 'default' : 'outline'}
+                    size="sm"
+                    className="flex-shrink-0"
+                    onClick={() => setAudioTab('music')}
+                  >
+                    <Music className="h-4 w-4 mr-1" />
+                    <span className="text-xs">Music</span>
+                  </Button>
+                 
+                </div>
+
+                {/* Desktop: Vertical buttons */}
+                <div className="hidden lg:block space-y-2">
+                  <Button
+                    variant={audioTab === 'tts' ? 'default' : 'outline'}
+                    className="w-full justify-start"
+                    onClick={() => setAudioTab('tts')}
+                  >
+                    <Square className="h-4 w-4 mr-2" />
+                    Text-to-Speech
+                  </Button>
+                  <Button
+                    variant={audioTab === 'stt' ? 'default' : 'outline'}
+                    className="w-full justify-start"
+                    onClick={() => setAudioTab('stt')}
+                  >
+                    <Mic className="h-4 w-4 mr-2" />
+                    Speech-to-Text
+                  </Button>
+                  <Button
+                    variant={audioTab === 'music' ? 'default' : 'outline'}
+                    className="w-full justify-start"
+                    onClick={() => setAudioTab('music')}
+                  >
+                    <Music className="h-4 w-4 mr-2" />
+                    Music
+                  </Button>
+                 
                 </div>
               </div>
-              <div className="flex-1 p-4">
+
+              {/* Content area */}
+              <div className="flex-1 p-3 sm:p-4">
                 {audioTab === 'tts' && (
                   <TextToSpeechComponent />
                 )}
