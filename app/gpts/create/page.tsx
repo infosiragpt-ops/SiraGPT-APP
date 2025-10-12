@@ -42,6 +42,7 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Slider } from "@/components/ui/slider"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { toast } from "sonner"
@@ -154,8 +155,8 @@ export default function CreateGPTPage() {
         greetingMessage: gpt.greetingMessage || "",
         modelName: gpt.modelName,
         temperature: gpt.temperature,
-        maxTokens: gpt.maxTokens,
-        conversationStarters: gpt.conversationStarters?.length > 0
+        maxTokens: gpt.maxTokens || null,
+        conversationStarters: gpt.conversationStarters && gpt.conversationStarters.length > 0
           ? [...gpt.conversationStarters, ...Array(2).fill("")].slice(0, 4)
           : ["", ""],
         visibility: gpt.visibility,
@@ -258,7 +259,7 @@ export default function CreateGPTPage() {
         greetingMessage: formData.greetingMessage.trim() || undefined,
         modelName: formData.modelName,
         temperature: formData.temperature,
-        maxTokens: formData.maxTokens,
+        maxTokens: formData.maxTokens || undefined,
         conversationStarters: formData.conversationStarters.filter(s => s.trim()),
         visibility: formData.visibility,
         category: formData.category || undefined,
@@ -510,37 +511,42 @@ export default function CreateGPTPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-full bg-background">
       {/* Header */}
       <div className="border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="sm" onClick={() => router.back()}>
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back
+        <div className="w-full px-3 sm:px-4 lg:px-6 py-3 sm:py-4">
+          <div className="flex items-center justify-between gap-2 sm:gap-4">
+            <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+              <SidebarTrigger className="md:hidden" />
+              <Button variant="ghost" size="sm" onClick={() => router.back()} className="flex-shrink-0">
+                <ArrowLeft className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">Back</span>
               </Button>
-              <div className="flex items-center gap-2">
-                <Bot className="h-6 w-6 text-primary" />
-                <h1 className="text-2xl font-bold">
+              <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+                <Bot className="h-5 w-5 sm:h-6 sm:w-6 text-primary flex-shrink-0" />
+                <h1 className="text-lg sm:text-xl lg:text-2xl font-bold truncate">
                   {isEditMode ? 'Edit GPT' : 'Create GPT'}
                 </h1>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
               <Button
                 variant="outline"
+                size="sm"
                 onClick={() => setIsPreviewOpen(true)}
                 disabled={!formData.name}
+                className="h-8 sm:h-9 px-2 sm:px-3"
               >
-                <Eye className="h-4 w-4 mr-2" />
-                Preview
+                <Eye className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">Preview</span>
               </Button>
               <Button
                 onClick={handleSave}
                 disabled={isSaving || !formData.name}
+                size="sm"
+                className="h-8 sm:h-9 px-2 sm:px-3 text-xs sm:text-sm"
               >
-                {isSaving ? "Saving..." : isEditMode ? "Update GPT" : "Create GPT"}
+                {isSaving ? "Saving..." : isEditMode ? "Update" : "Create"}
               </Button>
             </div>
           </div>
@@ -548,28 +554,28 @@ export default function CreateGPTPage() {
       </div>
 
       {/* Main Content */}
-      <div className="container mx-auto px-4 py-6">
-        <div className="max-w-4xl mx-auto space-y-8">
+      <div className="w-full px-3 sm:px-4 lg:px-6 py-4 sm:py-6">
+        <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8">
 
           {/* Basic Information Section */}
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Bot className="h-5 w-5" />
-                Basic Information
+            <CardHeader className="pb-4 sm:pb-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <Bot className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+                <span>Basic Information</span>
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-xs sm:text-sm">
                 Define the basic properties of your GPT
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
+            <CardContent className="space-y-4 sm:space-y-6 pt-0">
               {/* Avatar Selection */}
-              <div className="space-y-4">
-                <Label>Avatar</Label>
+              <div className="space-y-3 sm:space-y-4">
+                <Label className="text-sm sm:text-base">Avatar</Label>
 
                 {/* Avatar Preview */}
-                <div className="flex items-start gap-6">
-                  <div className="relative w-20 h-20 rounded-xl flex items-center justify-center text-3xl font-bold shadow-lg overflow-hidden">
+                <div className="flex flex-col sm:flex-row items-start gap-4 sm:gap-6">
+                  <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl flex items-center justify-center text-2xl sm:text-3xl font-bold shadow-lg overflow-hidden flex-shrink-0">
                     {uploadedImage ? (
                       <>
                         <img
@@ -579,9 +585,9 @@ export default function CreateGPTPage() {
                         />
                         <button
                           onClick={removeImage}
-                          className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs hover:bg-red-600"
+                          className="absolute -top-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs hover:bg-red-600"
                         >
-                          <X className="w-3 h-3" />
+                          <X className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                         </button>
                       </>
                     ) : formData.iconUrl ? (
@@ -595,16 +601,16 @@ export default function CreateGPTPage() {
                     )}
                   </div>
 
-                  <div className="flex-1 space-y-3">
+                  <div className="flex-1 space-y-3 w-full">
                     {/* Emoji Options */}
                     <div>
-                      <Label className="text-sm">Quick Icons</Label>
-                      <div className="flex flex-wrap gap-2 mt-2">
+                      <Label className="text-xs sm:text-sm">Quick Icons</Label>
+                      <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2">
                         {emojiOptions.map((emoji) => (
                           <button
                             key={emoji}
                             onClick={() => handleEmojiIcon(emoji)}
-                            className={`w-8 h-8 rounded-lg border-2 flex items-center justify-center text-lg hover:border-primary transition-colors ${formData.iconUrl === emoji ? 'border-primary bg-primary/10' : 'border-border'
+                            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg border-2 flex items-center justify-center text-base sm:text-lg hover:border-primary transition-colors ${formData.iconUrl === emoji ? 'border-primary bg-primary/10' : 'border-border'
                               }`}
                           >
                             {emoji}
@@ -643,13 +649,14 @@ export default function CreateGPTPage() {
 
               {/* Name */}
               <div className="space-y-2">
-                <Label htmlFor="name">Name *</Label>
+                <Label htmlFor="name" className="text-sm sm:text-base">Name *</Label>
                 <Input
                   id="name"
-                  placeholder="e.g., Code Reviewer, Creative Writer, Data Analyst"
+                  placeholder="e.g., Code Reviewer, Creative Writer"
                   value={formData.name}
                   onChange={(e) => handleInputChange("name", e.target.value)}
                   maxLength={100}
+                  className="text-sm sm:text-base"
                 />
                 <div className="text-xs text-muted-foreground">
                   {formData.name.length}/100 characters
@@ -658,7 +665,7 @@ export default function CreateGPTPage() {
 
               {/* Description */}
               <div className="space-y-2">
-                <Label htmlFor="description">Description *</Label>
+                <Label htmlFor="description" className="text-sm sm:text-base">Description *</Label>
                 <Textarea
                   id="description"
                   placeholder="Describe what your GPT does and how it helps users. Be specific about its capabilities and use cases."
@@ -666,6 +673,7 @@ export default function CreateGPTPage() {
                   onChange={(e) => handleInputChange("description", e.target.value)}
                   maxLength={500}
                   rows={3}
+                  className="text-sm sm:text-base resize-none"
                 />
                 <div className="text-xs text-muted-foreground">
                   {formData.description.length}/500 characters
@@ -674,9 +682,9 @@ export default function CreateGPTPage() {
 
               {/* Category */}
               <div className="space-y-2">
-                <Label htmlFor="category">Category</Label>
+                <Label htmlFor="category" className="text-sm sm:text-base">Category</Label>
                 <Select value={formData.category} onValueChange={(value) => handleInputChange("category", value)}>
-                  <SelectTrigger>
+                  <SelectTrigger className="text-sm sm:text-base">
                     <SelectValue placeholder="Select a category" />
                   </SelectTrigger>
                   <SelectContent>
@@ -684,7 +692,7 @@ export default function CreateGPTPage() {
                       <SelectItem key={category.name} value={category.name}>
                         <div className="flex items-center gap-2">
                           {category.icon}
-                          {category.name}
+                          <span className="text-sm sm:text-base">{category.name}</span>
                         </div>
                       </SelectItem>
                     ))}
@@ -737,16 +745,16 @@ export default function CreateGPTPage() {
 
           {/* Behavior Configuration Section */}
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MessageSquare className="h-5 w-5" />
-                Behavior Configuration
+            <CardHeader className="pb-4 sm:pb-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <MessageSquare className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+                <span>Behavior Configuration</span>
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-xs sm:text-sm">
                 Define how your GPT should behave and respond to users
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
+            <CardContent className="space-y-4 sm:space-y-6 pt-0">
               {/* Instructions */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -805,28 +813,28 @@ export default function CreateGPTPage() {
 
           {/* Model Settings Section */}
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Settings className="h-5 w-5" />
-                Model & Visibility Settings
+            <CardHeader className="pb-4 sm:pb-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <Settings className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+                <span>Model & Visibility Settings</span>
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-xs sm:text-sm">
                 Configure the AI model and who can access your GPT
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
+            <CardContent className="space-y-4 sm:space-y-6 pt-0">
               {/* Model Selection */}
               <div className="space-y-2">
-                <Label>AI Model *</Label>
+                <Label className="text-sm sm:text-base">AI Model *</Label>
                 <Select value={formData.modelName} onValueChange={(value) => handleInputChange("modelName", value)}>
-                  <SelectTrigger>
+                  <SelectTrigger className="text-sm sm:text-base">
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
                     {availableModels.map((model) => (
                       <SelectItem key={model.name} value={model.name}>
                         <div className="flex flex-col">
-                          <span className="font-medium">{model.displayName || model.name}</span>
+                          <span className="font-medium text-sm sm:text-base">{model.displayName || model.name}</span>
                           {model.description && (
                             <span className="text-xs text-muted-foreground">{model.description}</span>
                           )}
@@ -862,35 +870,35 @@ export default function CreateGPTPage() {
 
               {/* Visibility */}
               <div className="space-y-2">
-                <Label>Visibility</Label>
-                <Select value={formData.visibility} onValueChange={(value: "PRIVATE" | "UNLISTED" | "PUBLIC") => handleInputChange("visibility", value)}>
-                  <SelectTrigger>
+                <Label className="text-sm sm:text-base">Visibility</Label>
+                <Select value={formData.visibility} onValueChange={(value) => handleInputChange("visibility", value as "PRIVATE" | "UNLISTED" | "PUBLIC")}>
+                  <SelectTrigger className="text-sm sm:text-base">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="PRIVATE">
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                        <div className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0"></div>
                         <div>
-                          <div className="font-medium">Private</div>
+                          <div className="font-medium text-sm sm:text-base">Private</div>
                           <div className="text-xs text-muted-foreground">Only you can access</div>
                         </div>
                       </div>
                     </SelectItem>
                     <SelectItem value="UNLISTED">
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                        <div className="w-2 h-2 bg-yellow-500 rounded-full flex-shrink-0"></div>
                         <div>
-                          <div className="font-medium">Unlisted</div>
+                          <div className="font-medium text-sm sm:text-base">Unlisted</div>
                           <div className="text-xs text-muted-foreground">Accessible via link only</div>
                         </div>
                       </div>
                     </SelectItem>
                     <SelectItem value="PUBLIC">
                       <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                        <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"></div>
                         <div>
-                          <div className="font-medium">Public</div>
+                          <div className="font-medium text-sm sm:text-base">Public</div>
                           <div className="text-xs text-muted-foreground">Anyone can discover and use</div>
                         </div>
                       </div>
@@ -906,18 +914,18 @@ export default function CreateGPTPage() {
 
       {/* Preview Dialog */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>GPT Preview</DialogTitle>
-            <DialogDescription>
+        <DialogContent className="max-w-2xl mx-auto p-4 sm:p-6">
+          <DialogHeader className="pb-4">
+            <DialogTitle className="text-lg sm:text-xl">GPT Preview</DialogTitle>
+            <DialogDescription className="text-sm">
               Preview how your GPT will appear to users in the store
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {/* GPT Card Preview */}
-            <div className="bg-white dark:bg-card rounded-lg p-6 border border-border">
-              <div className="flex items-start space-x-4">
-                <div className="w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold overflow-hidden">
+            <div className="bg-white dark:bg-card rounded-lg p-3 sm:p-4 md:p-6 border border-border">
+              <div className="flex items-start space-x-3 sm:space-x-4">
+                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-lg sm:text-xl font-bold overflow-hidden flex-shrink-0">
                   {uploadedImage ? (
                     <img
                       src={uploadedImage}
@@ -935,21 +943,21 @@ export default function CreateGPTPage() {
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-foreground mb-1 truncate">
+                  <h3 className="font-semibold text-foreground mb-1 text-sm sm:text-base truncate">
                     {formData.name || "Untitled GPT"}
                   </h3>
-                  <p className="text-muted-foreground text-sm mb-2 line-clamp-2">
+                  <p className="text-muted-foreground text-xs sm:text-sm mb-2 line-clamp-2">
                     {formData.description || "No description"}
                   </p>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-4 text-xs text-muted-foreground">
-                      <span>By {user?.name || 'You'}</span>
-                      <div className="flex items-center space-x-1">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="flex items-center flex-wrap gap-2 sm:gap-4 text-xs text-muted-foreground">
+                      <span className="truncate">By {user?.name || 'You'}</span>
+                      <div className="flex items-center space-x-1 flex-shrink-0">
                         <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
                         <span>New</span>
                       </div>
                     </div>
-                    <Button size="sm" className="px-3 py-1 text-xs">
+                    <Button size="sm" className="px-2 sm:px-3 py-1 text-xs self-start sm:self-auto">
                       Chat
                     </Button>
                   </div>
@@ -957,7 +965,7 @@ export default function CreateGPTPage() {
               </div>
 
               {formData.category && (
-                <Badge variant="outline" className="mt-3">
+                <Badge variant="outline" className="mt-3 text-xs">
                   {formData.category}
                 </Badge>
               )}

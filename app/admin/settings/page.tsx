@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({
@@ -45,25 +46,31 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">System Settings</h1>
-          <p className="text-muted-foreground">Configure platform settings and preferences</p>
+    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <SidebarTrigger className="md:hidden" />
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold">System Settings</h1>
+              <p className="text-muted-foreground text-sm sm:text-base mt-1">Configure platform settings and preferences</p>
+            </div>
+          </div>
         </div>
-        <Button onClick={handleSave} disabled={isSaving}>
-          {isSaving ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-          {isSaving ? "Saving..." : "Save Changes"}
+        <Button onClick={handleSave} disabled={isSaving} size="sm" className="flex-shrink-0 text-sm">
+          {isSaving ? <RefreshCw className="mr-2 h-3 w-3 sm:h-4 sm:w-4 animate-spin" /> : <Save className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />}
+          <span className="hidden sm:inline">{isSaving ? "Saving..." : "Save Changes"}</span>
+          <span className="sm:hidden">Save</span>
         </Button>
       </div>
 
       <Tabs defaultValue="general" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="users">Users</TabsTrigger>
-          <TabsTrigger value="email">Email</TabsTrigger>
-          <TabsTrigger value="security">Security</TabsTrigger>
-          <TabsTrigger value="limits">Limits</TabsTrigger>
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5 text-xs sm:text-sm">
+          <TabsTrigger value="general" className="text-xs sm:text-sm">General</TabsTrigger>
+          <TabsTrigger value="users" className="text-xs sm:text-sm">Users</TabsTrigger>
+          <TabsTrigger value="email" className="text-xs sm:text-sm">Email</TabsTrigger>
+          <TabsTrigger value="security" className="text-xs sm:text-sm">Security</TabsTrigger>
+          <TabsTrigger value="limits" className="text-xs sm:text-sm">Limits</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="space-y-4">

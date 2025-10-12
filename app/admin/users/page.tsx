@@ -5,6 +5,7 @@ import { Search, MoreHorizontal, UserPlus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 import {
   Table,
   TableBody,
@@ -338,16 +339,22 @@ const handleEditUser = async () => {
   const plans = useMemo(() => ["All", "FREE", "BASIC", "STANDARD", "ENTERPRISE"], [])
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">User Management</h1>
-          <p className="text-muted-foreground">Manage all platform users and their permissions</p>
+    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <SidebarTrigger className="md:hidden" />
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold">User Management</h1>
+              <p className="text-muted-foreground text-sm sm:text-base mt-1">Manage all platform users and their permissions</p>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <Button onClick={openAddModal}>
-            <UserPlus className="mr-2 h-4 w-4" />
-            Add User
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <Button onClick={openAddModal} size="sm" className="text-sm">
+            <UserPlus className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
+            <span className="hidden sm:inline">Add User</span>
+            <span className="sm:hidden">Add</span>
           </Button>
         </div>
       </div>
@@ -358,7 +365,7 @@ const handleEditUser = async () => {
           <CardTitle>Filters</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex gap-4 items-center">
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
             <div className="flex-1">
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -366,15 +373,15 @@ const handleEditUser = async () => {
                   placeholder="Search users..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-8"
+                  className="pl-8 text-sm"
                 />
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-shrink-0">
               <Label className="text-sm">Plan</Label>
               <Select value={selectedPlan} onValueChange={(v) => setSelectedPlan(v)}>
-                <SelectTrigger className="w-40">
+                <SelectTrigger className="w-32 sm:w-40 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

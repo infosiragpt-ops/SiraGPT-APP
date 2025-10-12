@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 
 export function AdminDashboard() {
   const [analytics, setAnalytics] = useState<any>(null)
@@ -30,10 +31,15 @@ export function AdminDashboard() {
 
   if (!analytics) {
     return (
-      <div className="flex-1 space-y-6 p-6">
+      <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
         <div className="animate-pulse">
-          <div className="h-8 bg-muted rounded w-1/4 mb-2"></div>
-          <div className="h-4 bg-muted rounded w-1/2"></div>
+          <div className="flex items-center gap-2 sm:gap-3 mb-3 sm:mb-4">
+            <SidebarTrigger className="md:hidden" />
+            <div>
+              <div className="h-6 sm:h-8 bg-muted rounded w-32 sm:w-48 mb-2"></div>
+              <div className="h-3 sm:h-4 bg-muted rounded w-48 sm:w-64"></div>
+            </div>
+          </div>
         </div>
       </div>
     )
@@ -71,20 +77,25 @@ export function AdminDashboard() {
   ]
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-          <p className="text-muted-foreground">Overview of your Sira Gpt platform</p>
+    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <SidebarTrigger className="md:hidden" />
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold">Admin Dashboard</h1>
+              <p className="text-muted-foreground text-sm sm:text-base mt-1">Overview of your Sira Gpt platform</p>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <ThemeToggle />
-          <Button>Refresh Data</Button>
+          <Button size="sm" className="text-sm">Refresh Data</Button>
         </div>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
           <Card key={stat.title}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

@@ -5,5 +5,11 @@ export default function GPTsLayout({
 }: {
   children: React.ReactNode
 }) {
-  return <>{children}</>
+  return (
+    <div className="flex flex-col h-full w-full">
+      <div className="flex-1 overflow-auto">
+        {children}
+      </div>
+    </div>
+  )
 }

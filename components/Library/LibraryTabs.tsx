@@ -289,6 +289,7 @@ import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
 import apiClient from '@/lib/api';
 import { Download } from 'lucide-react';
+import { SidebarTrigger } from '@/components/ui/sidebar';
 
 interface MediaItem {
     messageId: string;
@@ -369,7 +370,10 @@ const MediaLibrary: React.FC = () => {
             <Head>
                 <title>Media Library</title>
             </Head>
-            <h1 className="text-3xl font-bold mb-6 text-gray-800 dark:text-white">Your Media Library</h1>
+            <div className="flex items-center gap-3 mb-6">
+                <SidebarTrigger className="md:hidden" />
+                <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Your Media Library</h1>
+            </div>
             <div className="flex border-b border-gray-200 mb-6">
                 <button
                     onClick={() => handleTabChange('all')}

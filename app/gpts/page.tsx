@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card" // Added CardTitle
 import { Badge } from "@/components/ui/badge"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -108,14 +109,14 @@ const GPTAvatar = ({ gpt }: { gpt: CustomGPT }) => {
       <img
         src={gpt.iconUrl}
         alt={`${gpt.name} icon`}
-        className="w-12 h-12 rounded-full object-cover flex-shrink-0"
+        className="w-10 h-10 sm:w-12 sm:h-12 rounded-full object-cover flex-shrink-0"
       />
     )
   }
 
   // If iconUrl is text/emoji or no iconUrl
   return (
-    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-xl font-semibold flex-shrink-0">
+    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-lg sm:text-xl font-semibold flex-shrink-0">
       {gpt.iconUrl || (gpt.name ? gpt.name[0].toUpperCase() : "🤖")}
     </div>
   )
@@ -163,48 +164,48 @@ const GPTCard = ({
   }
 
   return (
-    <div className="bg-white dark:bg-card rounded-lg p-6 hover:shadow-lg transition-shadow border border-border">
-      <div className="flex items-start space-x-4">
+    <div className="bg-white dark:bg-card rounded-lg p-3 sm:p-4 md:p-6 hover:shadow-lg transition-shadow border border-border">
+      <div className="flex items-start space-x-3 sm:space-x-4">
         <GPTAvatar gpt={gpt} />
         <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-foreground mb-1 truncate">{gpt.name}</h3>
-          <p className="text-muted-foreground text-sm mb-2 line-clamp-2">{gpt.description}</p>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4 text-xs text-muted-foreground">
-              <span>By {gpt.creator?.name || 'Unknown'}</span>
+          <h3 className="font-semibold text-foreground mb-1 text-sm sm:text-base truncate">{gpt.name}</h3>
+          <p className="text-muted-foreground text-xs sm:text-sm mb-2 sm:mb-3 line-clamp-2">{gpt.description}</p>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0">
+            <div className="flex items-center flex-wrap gap-2 sm:gap-4 text-xs text-muted-foreground">
+              <span className="truncate">By {gpt.creator?.name || 'Unknown'}</span>
               {gpt._count?.conversations && gpt._count.conversations > 0 && (
-                <div className="flex items-center space-x-1">
+                <div className="flex items-center space-x-1 flex-shrink-0">
                   <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
                   <span>4.5</span>
                 </div>
               )}
               {gpt._count?.conversations && (
-                <span>{gpt._count.conversations.toLocaleString()} users</span>
+                <span className="flex-shrink-0">{gpt._count.conversations.toLocaleString()} users</span>
               )}
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-1 sm:gap-2 flex-wrap">
               {isOwner && onEdit && (
                 <button
                   onClick={handleEdit}
-                  className="flex items-center px-3 py-1 text-xs bg-muted hover:bg-muted/80 text-muted-foreground rounded-lg transition-colors"
+                  className="flex items-center px-2 sm:px-3 py-1 text-xs bg-muted hover:bg-muted/80 text-muted-foreground rounded-md sm:rounded-lg transition-colors flex-shrink-0"
                 >
                   <Edit className="w-3 h-3 mr-1" />
-                  Edit
+                  <span className="hidden sm:inline">Edit</span>
                 </button>
               )}
               {isOwner && onDelete && (
                 <button
                   onClick={handleDelete}
-                  className="flex items-center px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-600 rounded-lg transition-colors"
+                  className="flex items-center px-2 sm:px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-600 rounded-md sm:rounded-lg transition-colors flex-shrink-0"
                 >
                   <Trash2 className="w-3 h-3 mr-1" />
-                  Delete
+                  <span className="hidden sm:inline">Delete</span>
                 </button>
               )}
               <button
                 onClick={handleStartChat}
                 disabled={isLoadingChat}
-                className="flex items-center px-3 py-1 text-xs bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center px-2 sm:px-3 py-1 text-xs bg-primary text-primary-foreground hover:bg-primary/90 rounded-md sm:rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
               >
                 {isLoadingChat ? (
                   <Loader2 className="w-3 h-3 animate-spin" />
@@ -225,21 +226,21 @@ const CategoryNav = ({ selectedCategory, onSelectCategory }: {
   selectedCategory: string,
   onSelectCategory: (category: string) => void
 }) => (
-  <nav className="flex flex-wrap gap-2 lg:gap-3 mb-8">
+  <nav className="flex flex-wrap gap-1.5 sm:gap-2 lg:gap-3 mb-6 sm:mb-8 overflow-x-auto scrollbar-hide">
     {categories.map((category) => (
       <Button
         key={category.name}
         variant={selectedCategory === category.name ? "default" : "outline"}
         onClick={() => onSelectCategory(category.name)}
         className={cn(
-          "px-4 py-2 text-sm rounded-full transition-all duration-200",
+          "px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 text-xs sm:text-sm rounded-full transition-all duration-200 flex-shrink-0 whitespace-nowrap",
           selectedCategory === category.name
             ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
             : "border-border bg-card text-muted-foreground hover:bg-muted hover:border-muted-foreground"
         )}
       >
-        {category.icon && <span className="mr-2">{category.icon}</span>}
-        {category.name}
+        {category.icon && <span className="mr-1 sm:mr-2 flex-shrink-0">{category.icon}</span>}
+        <span className="truncate">{category.name}</span>
       </Button>
     ))}
   </nav>
@@ -369,38 +370,41 @@ export default function GPTsPage() {
   const userOwnedGPTs = allDisplayGPTs.filter(gpt => gpt.creator?.id === user?.id)
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8 max-w-7xl">
+    <div className="min-h-full bg-background text-foreground">
+      <div className="h-full w-full px-3 sm:px-4 md:px-6 lg:px-8 py-4 md:py-6 lg:py-8 max-w-7xl mx-auto">
         {/* Header and Create Button */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2 text-foreground">
-              <Bot className="h-6 w-6 text-primary" />
-              GPTs Store
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-4 sm:mb-6">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <SidebarTrigger className="md:hidden" />
+              <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold flex items-center gap-2 text-foreground">
+                <Bot className="h-5 w-5 sm:h-6 sm:w-6 text-primary flex-shrink-0" />
+                <span className="truncate">GPTs Store</span>
+              </h1>
+            </div>
+            <p className="text-xs sm:text-sm text-muted-foreground mt-1 line-clamp-2 ml-0 sm:ml-0">
               Discover and create custom AI assistants for any task
             </p>
           </div>
 
           <Button
             onClick={handleCreateNew}
-            className="h-9 px-4 text-sm bg-primary hover:bg-primary/90 text-primary-foreground shadow transition-transform hover:scale-[1.01]"
+            className="h-8 sm:h-9 px-3 sm:px-4 text-xs sm:text-sm bg-primary hover:bg-primary/90 text-primary-foreground shadow transition-transform hover:scale-[1.01] flex-shrink-0 w-full sm:w-auto"
           >
-            <Plus className="h-4 w-4 mr-1" />
+            <Plus className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
             Create New GPT
           </Button>
         </div>
 
         {/* Search and Categories */}
-        <div className="mb-10">
-          <div className="relative mb-6">
-            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+        <div className="mb-6 sm:mb-8 lg:mb-10">
+          <div className="relative mb-4 sm:mb-6">
+            <Search className="absolute left-3 sm:left-4 top-1/2 transform -translate-y-1/2 h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground" />
             <Input
               placeholder="Search for GPTs..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-12 pr-4 py-3 text-base rounded-full border-border bg-card shadow-sm focus-visible:ring-offset-background"
+              className="pl-10 sm:pl-12 pr-3 sm:pr-4 py-2.5 sm:py-3 text-sm sm:text-base rounded-full border-border bg-card shadow-sm focus-visible:ring-offset-background"
             />
           </div>
 
@@ -409,12 +413,12 @@ export default function GPTsPage() {
 
         {/* User's GPTs Section (only if user has GPTs) */}
         {userOwnedGPTs.length > 0 && (
-          <section className="mb-12">
-            <div className="mb-6">
-              <h2 className="text-3xl font-bold text-foreground">Your GPTs</h2>
+          <section className="mb-8 sm:mb-10 lg:mb-12">
+            <div className="mb-4 sm:mb-6">
+              <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-foreground">Your GPTs</h2>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 md:gap-6">
               {userOwnedGPTs.slice(0, 3).map((gpt) => (
                 <GPTCard
                   key={`user-${gpt.id}`}
@@ -431,31 +435,31 @@ export default function GPTsPage() {
         )}
 
         {/* All GPTs / Category Results */}
-        <section className="mb-12">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-3xl font-bold text-foreground">
+        <section className="mb-8 sm:mb-10 lg:mb-12">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4 mb-4 sm:mb-6">
+            <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-foreground">
               {selectedCategory === "All"
                 ? "Discover GPTs"
                 : selectedCategory === "Trending"
                   ? "Trending GPTs"
                   : `${selectedCategory} GPTs`}
             </h2>
-            <p className="text-muted-foreground text-sm">
+            <p className="text-muted-foreground text-xs sm:text-sm">
               {allDisplayGPTs.length} GPT{allDisplayGPTs.length !== 1 ? 's' : ''}
             </p>
           </div>
 
           {loading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 md:gap-6">
               {[1, 2, 3, 4, 5, 6].map((i) => (
-                <div key={i} className="bg-white dark:bg-card rounded-lg p-6 border border-border">
+                <div key={i} className="bg-white dark:bg-card rounded-lg p-3 sm:p-4 md:p-6 border border-border">
                   <div className="animate-pulse">
-                    <div className="flex items-start space-x-4">
-                      <div className="w-12 h-12 bg-muted rounded-full"></div>
-                      <div className="flex-1">
-                        <div className="h-4 bg-muted rounded mb-2"></div>
-                        <div className="h-3 bg-muted rounded mb-2"></div>
-                        <div className="h-3 bg-muted rounded w-3/4"></div>
+                    <div className="flex items-start space-x-3 sm:space-x-4">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-muted rounded-full flex-shrink-0"></div>
+                      <div className="flex-1 min-w-0">
+                        <div className="h-3 sm:h-4 bg-muted rounded mb-2 w-3/4"></div>
+                        <div className="h-2.5 sm:h-3 bg-muted rounded mb-2"></div>
+                        <div className="h-2.5 sm:h-3 bg-muted rounded w-1/2"></div>
                       </div>
                     </div>
                   </div>
@@ -463,7 +467,7 @@ export default function GPTsPage() {
               ))}
             </div>
           ) : allDisplayGPTs.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 md:gap-6">
               {allDisplayGPTs.map((gpt) => (
                 <GPTCard
                   key={gpt.id}
@@ -477,20 +481,20 @@ export default function GPTsPage() {
               ))}
             </div>
           ) : (
-            <div className="text-center py-16 px-4">
-              <Bot className="h-16 w-16 text-muted-foreground mx-auto mb-6" />
-              <h3 className="text-2xl font-semibold mb-3 text-foreground">
+            <div className="text-center py-8 sm:py-12 lg:py-16 px-4">
+              <Bot className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4 sm:mb-6" />
+              <h3 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-2 sm:mb-3 text-foreground">
                 {debouncedSearchQuery ? "No GPTs found" : `No GPTs in "${selectedCategory}"`}
               </h3>
-              <p className="text-muted-foreground max-w-md mx-auto leading-relaxed">
+              <p className="text-muted-foreground max-w-md mx-auto leading-relaxed text-sm sm:text-base">
                 {debouncedSearchQuery
                   ? "Try adjusting your search terms or exploring different categories."
                   : "It looks a little empty here! Be the first to create a GPT in this category and share your innovation."
                 }
               </p>
               {!debouncedSearchQuery && (selectedCategory === "All" || selectedCategory === "Trending") && (
-                <Button onClick={handleCreateNew} className="mt-8 h-10 px-5 text-base">
-                  <Plus className="h-4 w-4 mr-2" />
+                <Button onClick={handleCreateNew} className="mt-6 sm:mt-8 h-9 sm:h-10 px-4 sm:px-5 text-sm sm:text-base">
+                  <Plus className="h-3 w-3 sm:h-4 sm:w-4 mr-2" />
                   Create Your First GPT
                 </Button>
               )}
@@ -500,24 +504,24 @@ export default function GPTsPage() {
 
         {/* Share Dialog */}
         <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
-          <DialogContent className="bg-card border-border p-6 rounded-lg shadow-xl">
+          <DialogContent className="bg-card border-border p-4 sm:p-6 rounded-lg shadow-xl max-w-md sm:max-w-lg mx-auto">
             <DialogHeader className="mb-4">
-              <DialogTitle className="text-2xl font-bold text-foreground">Share GPT</DialogTitle>
-              <DialogDescription className="text-muted-foreground text-base">
+              <DialogTitle className="text-lg sm:text-xl lg:text-2xl font-bold text-foreground">Share GPT</DialogTitle>
+              <DialogDescription className="text-muted-foreground text-sm sm:text-base">
                 Share "<strong>{selectedGPT?.name}</strong>" with others.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4">
-              <label htmlFor="share-link" className="text-sm font-medium text-foreground">Shareable Link</label>
+            <div className="space-y-3 sm:space-y-4">
+              <label htmlFor="share-link" className="text-xs sm:text-sm font-medium text-foreground">Shareable Link</label>
               <div className="flex items-center gap-2">
                 <Input
                   id="share-link"
                   value={selectedGPT ? gptsService.getShareUrl(selectedGPT.shareId) : ''}
                   readOnly
-                  className="flex-1 bg-muted/50 border-border text-foreground text-sm h-10"
+                  className="flex-1 bg-muted/50 border-border text-foreground text-xs sm:text-sm h-9 sm:h-10"
                 />
-                <Button onClick={copyShareLink} size="icon" className="h-10 w-10 shrink-0">
-                  <Copy className="h-4 w-4" />
+                <Button onClick={copyShareLink} size="icon" className="h-9 w-9 sm:h-10 sm:w-10 shrink-0">
+                  <Copy className="h-3 w-3 sm:h-4 sm:w-4" />
                   <span className="sr-only">Copy link</span>
                 </Button>
               </div>
@@ -525,8 +529,13 @@ export default function GPTsPage() {
                 Anyone with this link can use your GPT if its visibility is set to Public or Unlisted.
               </p>
             </div>
-            <DialogFooter className="mt-6">
-              <Button type="button" variant="secondary" onClick={() => setShareDialogOpen(false)}>
+            <DialogFooter className="mt-4 sm:mt-6">
+              <Button 
+                type="button" 
+                variant="secondary" 
+                onClick={() => setShareDialogOpen(false)}
+                className="w-full sm:w-auto text-sm"
+              >
                 Close
               </Button>
             </DialogFooter>

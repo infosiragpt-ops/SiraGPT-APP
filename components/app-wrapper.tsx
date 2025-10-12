@@ -36,7 +36,7 @@ export function AppWrapper({ children }: AppWrapperProps) {
   if (needsChatContext) {
     return (
       <ChatProvider>
-        <SidebarProvider defaultOpen={true}>
+        <SidebarProvider>
           <AppShell>
             {children}
           </AppShell>
@@ -47,7 +47,7 @@ export function AppWrapper({ children }: AppWrapperProps) {
 
   // For pages that only need sidebar (shouldn't happen with current setup, but future-proof)
   return (
-    <SidebarProvider defaultOpen={true}>
+    <SidebarProvider>
       <AppShell>
         {children}
       </AppShell>

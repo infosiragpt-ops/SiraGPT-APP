@@ -18,6 +18,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { db } from "@/lib/database"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 
 const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042"]
 
@@ -66,30 +67,55 @@ export default function AnalyticsPage() {
 
   if (!analytics) {
     return (
-      <div className="flex-1 space-y-6 p-6">
+      <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
         <div className="animate-pulse">
-          <div className="h-8 bg-muted rounded w-1/4 mb-2"></div>
-          <div className="h-4 bg-muted rounded w-1/2"></div>
+          <div className="flex items-center gap-2 sm:gap-3 mb-3 sm:mb-4">
+            <SidebarTrigger className="md:hidden" />
+            <div>
+              <div className="h-6 sm:h-8 bg-muted rounded w-32 sm:w-48 mb-2"></div>
+              <div className="h-3 sm:h-4 bg-muted rounded w-48 sm:w-64"></div>
+            </div>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Analytics</h1>
-          <p className="text-muted-foreground">Detailed insights and performance metrics</p>
+    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <SidebarTrigger className="md:hidden" />
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold">Analytics</h1>
+              <p className="text-muted-foreground text-sm sm:text-base mt-1">Detailed insights and performance metrics</p>
+            </div>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant={timeRange === "7d" ? "default" : "outline"} onClick={() => setTimeRange("7d")}>
+        <div className="flex gap-1 sm:gap-2 flex-shrink-0 flex-wrap">
+          <Button 
+            variant={timeRange === "7d" ? "default" : "outline"} 
+            onClick={() => setTimeRange("7d")}
+            size="sm"
+            className="text-xs sm:text-sm"
+          >
             7 Days
           </Button>
-          <Button variant={timeRange === "30d" ? "default" : "outline"} onClick={() => setTimeRange("30d")}>
+          <Button 
+            variant={timeRange === "30d" ? "default" : "outline"} 
+            onClick={() => setTimeRange("30d")}
+            size="sm"
+            className="text-xs sm:text-sm"
+          >
             30 Days
           </Button>
-          <Button variant={timeRange === "90d" ? "default" : "outline"} onClick={() => setTimeRange("90d")}>
+          <Button 
+            variant={timeRange === "90d" ? "default" : "outline"} 
+            onClick={() => setTimeRange("90d")}
+            size="sm"
+            className="text-xs sm:text-sm"
+          >
             90 Days
           </Button>
         </div>
@@ -148,7 +174,7 @@ export default function AnalyticsPage() {
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
