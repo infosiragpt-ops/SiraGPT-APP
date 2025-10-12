@@ -546,8 +546,27 @@ class ApiClient {
   }
 
   // Invoice endpoints
+  async listStripeInvoices() {
+    return this.request('/payments/stripe/invoices');
+  }
+
   async downloadInvoice(paymentId: string) {
     const response = await fetch(`${this.baseURL}/payments/invoice/${paymentId}`, {
+      headers: {
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Network error' }));
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    return response.blob();
+  }
+
+  async downloadStripeInvoice(invoiceId: string) {
+    const response = await fetch(`${this.baseURL}/payments/stripe/invoice/${invoiceId}`, {
       headers: {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
@@ -596,6 +615,27 @@ class ApiClient {
 
   async getSystemStats() {
     return this.request('/admin/stats');
+  }
+
+  // Admin invoices
+  async getAdminStripeInvoices(params?: { limit?: number; starting_after?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/stripe/invoices${query ? `?${query}` : ''}`);
+  }
+
+  async downloadAdminStripeInvoice(invoiceId: string) {
+    const response = await fetch(`${this.baseURL}/admin/stripe/invoice/${invoiceId}`, {
+      headers: {
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Network error' }));
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    return response.blob();
   }
 
   // Download endpoints

@@ -5,6 +5,8 @@ const { body, validationResult } = require('express-validator');
 const { ProviderType, ModelType } = require('@prisma/client'); // Enums ko import karein
 const bcrypt = require('bcryptjs');
 const router = express.Router();
+const stripeService = require('../services/stripe');
+const axios = require('axios');
 
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
@@ -469,3 +471,71 @@ router.get('/stats', async (req, res) => {
 });
 
 module.exports = router;
+// Stripe invoices (admin)
+router.get('/stripe/invoices', async (req, res) => {
+  try {
+    if (!stripeService.isConfigured) {
+      return res.status(503).json({ error: 'Stripe not configured' });
+    }
+
+    const { limit = 50, starting_after } = req.query;
+
+    const invoices = await stripeService.stripe.invoices.list({
+      limit: Math.min(parseInt(limit, 10) || 50, 100),
+      ...(starting_after ? { starting_after } : {})
+    });
+
+    const customerIds = Array.from(new Set(invoices.data.map(i => String(i.customer))));
+    const users = await prisma.user.findMany({
+      where: { stripeCustomerId: { in: customerIds } },
+      select: { id: true, name: true, email: true, stripeCustomerId: true }
+    });
+    const userByCustomer = new Map(users.map(u => [u.stripeCustomerId, u]));
+
+    res.json({
+      invoices: invoices.data.map(inv => ({
+        id: inv.id,
+        number: inv.number,
+        status: inv.status,
+        amountPaid: (inv.amount_paid || 0) / 100,
+        currency: inv.currency,
+        hostedInvoiceUrl: inv.hosted_invoice_url,
+        invoicePdf: inv.invoice_pdf,
+        customer: String(inv.customer),
+        created: new Date(inv.created * 1000),
+        user: userByCustomer.get(String(inv.customer)) || null
+      })),
+      has_more: invoices.has_more
+    });
+  } catch (error) {
+    console.error('Admin list invoices error:', error);
+    res.status(500).json({ error: 'Failed to list invoices' });
+  }
+});
+
+router.get('/stripe/invoice/:invoiceId', async (req, res) => {
+  try {
+    if (!stripeService.isConfigured) {
+      return res.status(503).json({ error: 'Stripe not configured' });
+    }
+
+    const invoice = await stripeService.stripe.invoices.retrieve(req.params.invoiceId);
+
+    // Stream PDF if available
+    if (invoice.invoice_pdf) {
+      const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=invoice-${invoice.number || invoice.id}.pdf`);
+      return response.data.pipe(res);
+    }
+
+    if (invoice.hosted_invoice_url) {
+      return res.redirect(invoice.hosted_invoice_url);
+    }
+
+    return res.status(404).json({ error: 'Invoice PDF not available' });
+  } catch (error) {
+    console.error('Admin download invoice error:', error);
+    res.status(500).json({ error: 'Failed to download invoice' });
+  }
+});

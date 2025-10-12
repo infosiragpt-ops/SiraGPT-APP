@@ -106,11 +106,11 @@ class ProrationService {
         stripeResult = await this.scheduleNextCyclePlanChange(user, newPlan, newPriceId);
       }
 
-      // Update database - ADD new plan limits to existing monthlyLimit
+      // Update database - SET monthlyLimit to plan baseline credits (no accumulation)
       const planLimits = {
         'BASIC': { monthlyLimit: 10000 },
         'STANDARD': { monthlyLimit: 30000 },
-        'ENTERPRISE': { monthlyLimit: 10000000 }
+        'ENTERPRISE': { monthlyLimit: 100000 }
       };
 
       // Get current user data to add to existing limits
