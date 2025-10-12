@@ -97,22 +97,22 @@ function useDebounce<T>(value: T, delay: number): T {
 const GPTAvatar = ({ gpt }: { gpt: CustomGPT }) => {
   // Check if iconUrl is a valid image URL (starts with http/https or data:)
   const isImageUrl = gpt.iconUrl && (
-    gpt.iconUrl.startsWith('http') || 
-    gpt.iconUrl.startsWith('https') || 
+    gpt.iconUrl.startsWith('http') ||
+    gpt.iconUrl.startsWith('https') ||
     gpt.iconUrl.startsWith('data:')
   )
-  
+
   if (isImageUrl) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img 
-        src={gpt.iconUrl} 
-        alt={`${gpt.name} icon`} 
-        className="w-12 h-12 rounded-full object-cover flex-shrink-0" 
+      <img
+        src={gpt.iconUrl}
+        alt={`${gpt.name} icon`}
+        className="w-12 h-12 rounded-full object-cover flex-shrink-0"
       />
     )
   }
-  
+
   // If iconUrl is text/emoji or no iconUrl
   return (
     <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-xl font-semibold flex-shrink-0">
@@ -122,12 +122,11 @@ const GPTAvatar = ({ gpt }: { gpt: CustomGPT }) => {
 }
 
 // GPT Card Component - Updated for click behavior and ownership controls
-const GPTCard = ({ 
-  gpt, 
-  onStartChat, 
-  onEdit, 
-  onDelete, 
-  onShare, 
+const GPTCard = ({
+  gpt,
+  onStartChat,
+  onEdit,
+  onDelete,
   showActions = false,
   isOwner = false,
 }: {
@@ -135,7 +134,6 @@ const GPTCard = ({
   onStartChat: (gpt: CustomGPT) => void
   onEdit?: (gpt: CustomGPT) => void
   onDelete?: (gpt: CustomGPT) => void
-  onShare?: (gpt: CustomGPT) => void
   showActions?: boolean
   isOwner?: boolean
 }) => {
@@ -164,11 +162,6 @@ const GPTCard = ({
     if (onDelete) onDelete(gpt)
   }
 
-  const handleShare = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (onShare) onShare(gpt)
-  }
-
   return (
     <div className="bg-white dark:bg-card rounded-lg p-6 hover:shadow-lg transition-shadow border border-border">
       <div className="flex items-start space-x-4">
@@ -189,35 +182,29 @@ const GPTCard = ({
                 <span>{gpt._count.conversations.toLocaleString()} users</span>
               )}
             </div>
-            <div className="flex space-x-2">
+            <div className="flex items-center space-x-2">
               {isOwner && onEdit && (
                 <button
                   onClick={handleEdit}
-                  className="px-3 py-1 text-xs bg-muted hover:bg-muted/80 text-muted-foreground rounded-lg transition-colors"
+                  className="flex items-center px-3 py-1 text-xs bg-muted hover:bg-muted/80 text-muted-foreground rounded-lg transition-colors"
                 >
+                  <Edit className="w-3 h-3 mr-1" />
                   Edit
-                </button>
-              )}
-              {/* {isOwner && onShare && (
-                <button
-                  onClick={handleShare}
-                  className="px-3 py-1 text-xs bg-muted hover:bg-muted/80 text-muted-foreground rounded-lg transition-colors"
-                >
-                  Share
                 </button>
               )}
               {isOwner && onDelete && (
                 <button
                   onClick={handleDelete}
-                  className="px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-600 rounded-lg transition-colors"
+                  className="flex items-center px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-600 rounded-lg transition-colors"
                 >
+                  <Trash2 className="w-3 h-3 mr-1" />
                   Delete
                 </button>
-              )} */}
-              <button 
+              )}
+              <button
                 onClick={handleStartChat}
                 disabled={isLoadingChat}
-                className="px-3 py-1 text-xs bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center px-3 py-1 text-xs bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors disabled:opacity-50"
               >
                 {isLoadingChat ? (
                   <Loader2 className="w-3 h-3 animate-spin" />
@@ -262,7 +249,7 @@ export default function GPTsPage() {
   const { user } = useAuth()
   const { selectChat } = useChat()
   const router = useRouter()
-  
+
   // State management
   const [gpts, setGpts] = useState<CustomGPT[]>([])
   const [loading, setLoading] = useState(true)
@@ -286,7 +273,7 @@ export default function GPTsPage() {
 
       console.log('Fetching GPTs with filters:', filters)
       let fetchedGPTs = await gptsService.getGPTs(filters)
-      
+
       // Simulate "Trending" by sorting by conversations
       if (selectedCategory === "Trending") {
         fetchedGPTs = fetchedGPTs
@@ -314,11 +301,11 @@ export default function GPTsPage() {
     try {
       const chat = await gptsService.startChatWithGPT(gpt.id)
       console.log('Started chat:', chat)
-      
+
       router.push(`/chat?id=${chat.id}`)
       localStorage.setItem('currentChatId', chat.id)
 
-        selectChat(chat.id)
+      selectChat(chat.id)
 
       toast.success(`Started chat with ${gpt.name}`)
     } catch (error: any) {
@@ -337,7 +324,7 @@ export default function GPTsPage() {
     })
 
     if (!confirmed) return
-    
+
     try {
       await gptsService.deleteGPT(gpt.id)
       setGpts(gpts.filter(g => g.id !== gpt.id))
@@ -385,25 +372,25 @@ export default function GPTsPage() {
     <div className="min-h-screen bg-background text-foreground">
       <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8 max-w-7xl">
         {/* Header and Create Button */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-  <div>
-    <h1 className="text-2xl font-bold flex items-center gap-2 text-foreground">
-      <Bot className="h-6 w-6 text-primary" />
-      GPTs Store
-    </h1>
-    <p className="text-sm text-muted-foreground mt-1">
-      Discover and create custom AI assistants for any task
-    </p>
-  </div>
-  
-  <Button 
-    onClick={handleCreateNew} 
-    className="h-9 px-4 text-sm bg-primary hover:bg-primary/90 text-primary-foreground shadow transition-transform hover:scale-[1.01]"
-  >
-    <Plus className="h-4 w-4 mr-1" />
-    Create New GPT
-  </Button>
-</div>
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2 text-foreground">
+              <Bot className="h-6 w-6 text-primary" />
+              GPTs Store
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Discover and create custom AI assistants for any task
+            </p>
+          </div>
+
+          <Button
+            onClick={handleCreateNew}
+            className="h-9 px-4 text-sm bg-primary hover:bg-primary/90 text-primary-foreground shadow transition-transform hover:scale-[1.01]"
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            Create New GPT
+          </Button>
+        </div>
 
         {/* Search and Categories */}
         <div className="mb-10">
@@ -426,8 +413,8 @@ export default function GPTsPage() {
             <div className="mb-6">
               <h2 className="text-3xl font-bold text-foreground">Your GPTs</h2>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-6">
               {userOwnedGPTs.slice(0, 3).map((gpt) => (
                 <GPTCard
                   key={`user-${gpt.id}`}
@@ -435,7 +422,6 @@ export default function GPTsPage() {
                   onStartChat={handleStartChat}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
-                  onShare={handleShare}
                   showActions={true}
                   isOwner={true}
                 />
@@ -448,9 +434,9 @@ export default function GPTsPage() {
         <section className="mb-12">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-3xl font-bold text-foreground">
-              {selectedCategory === "All" 
-                ? "Discover GPTs" 
-                : selectedCategory === "Trending" 
+              {selectedCategory === "All"
+                ? "Discover GPTs"
+                : selectedCategory === "Trending"
                   ? "Trending GPTs"
                   : `${selectedCategory} GPTs`}
             </h2>
@@ -458,9 +444,9 @@ export default function GPTsPage() {
               {allDisplayGPTs.length} GPT{allDisplayGPTs.length !== 1 ? 's' : ''}
             </p>
           </div>
-          
+
           {loading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-6">
               {[1, 2, 3, 4, 5, 6].map((i) => (
                 <div key={i} className="bg-white dark:bg-card rounded-lg p-6 border border-border">
                   <div className="animate-pulse">
@@ -477,7 +463,7 @@ export default function GPTsPage() {
               ))}
             </div>
           ) : allDisplayGPTs.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-6">
               {allDisplayGPTs.map((gpt) => (
                 <GPTCard
                   key={gpt.id}
@@ -485,7 +471,6 @@ export default function GPTsPage() {
                   onStartChat={handleStartChat}
                   onEdit={gpt.creator?.id === user?.id ? handleEdit : undefined}
                   onDelete={gpt.creator?.id === user?.id ? handleDelete : undefined}
-                  onShare={gpt.creator?.id === user?.id ? handleShare : undefined}
                   showActions={gpt.creator?.id === user?.id}
                   isOwner={gpt.creator?.id === user?.id}
                 />
@@ -498,7 +483,7 @@ export default function GPTsPage() {
                 {debouncedSearchQuery ? "No GPTs found" : `No GPTs in "${selectedCategory}"`}
               </h3>
               <p className="text-muted-foreground max-w-md mx-auto leading-relaxed">
-                {debouncedSearchQuery 
+                {debouncedSearchQuery
                   ? "Try adjusting your search terms or exploring different categories."
                   : "It looks a little empty here! Be the first to create a GPT in this category and share your innovation."
                 }
@@ -525,10 +510,10 @@ export default function GPTsPage() {
             <div className="space-y-4">
               <label htmlFor="share-link" className="text-sm font-medium text-foreground">Shareable Link</label>
               <div className="flex items-center gap-2">
-                <Input 
+                <Input
                   id="share-link"
-                  value={selectedGPT ? gptsService.getShareUrl(selectedGPT.shareId) : ''} 
-                  readOnly 
+                  value={selectedGPT ? gptsService.getShareUrl(selectedGPT.shareId) : ''}
+                  readOnly
                   className="flex-1 bg-muted/50 border-border text-foreground text-sm h-10"
                 />
                 <Button onClick={copyShareLink} size="icon" className="h-10 w-10 shrink-0">

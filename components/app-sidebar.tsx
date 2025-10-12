@@ -109,7 +109,7 @@ export function AppSidebar() {
   const router = useRouter()
   const pathname = usePathname()
   const [selectedType, setSelectedType] = React.useState("Text Chat")
-  const { state, toggleSidebar } = useSidebar()
+  const { state, toggleSidebar, isMobile, setOpenMobile } = useSidebar()
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
 
@@ -128,6 +128,11 @@ export function AppSidebar() {
     // Navigate to chat if not already there
     if (!pathname.startsWith('/chat')) {
       router.push('/chat')
+    }
+    if (isMobile) {
+      setTimeout(() => {
+        setOpenMobile(false);
+      }, 500);
     }
   }
 
@@ -175,6 +180,11 @@ export function AppSidebar() {
     // Navigate to chat page if not already there
     if (!pathname.startsWith('/chat')) {
       router.push(`/chat?id=${chatId}`)
+    }
+    if (isMobile) {
+      setTimeout(() => {
+        setOpenMobile(false);
+      }, 500);
     }
   }
 

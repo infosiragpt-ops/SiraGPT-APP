@@ -85,11 +85,12 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
 
 
 // Enhanced Message Component with Video Support
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: {
+const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming }: {
     message: any;
     user: any;
     onRegenerate: () => void;
-    updateMessageInChat: (messageId: string, newContent: string) => void
+    updateMessageInChat: (messageId: string, newContent: string) => void;
+    isStreaming?: boolean;
 }) => {
     const [isCopied, setIsCopied] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
@@ -424,7 +425,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
         };
 
         return !inline && match ? (
-            <div className="my-4 rounded-md bg-gray-900/80 border border-gray-700 relative">
+            <div className="rounded-md bg-gray-900/80 border border-gray-700 relative">
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-800/50 rounded-t-md border-b border-gray-700">
                     <span className="text-xs font-sans text-gray-400">{language}</span>
                     <button onClick={handleCodeCopy} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
@@ -437,13 +438,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                     language={language}
                     PreTag="div"
                     {...props}
-                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent' }}
+                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent', fontSize: "14px" }}
+                    wrapLongLines={true}
+                    codeTagProps={{ style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }}
                 >
                     {String(children).replace(/\n$/, '')}
                 </SyntaxHighlighter>
             </div>
         ) : (
-            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>
+            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {children}
             </code>
         );
@@ -456,11 +459,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
             return null;
         }
 
-        // Try to render as a chart first
-        // const chart = ChartComponent({ content: message.content });
-        // if (chart) {
-        //     return <div className="w-full overflow-x-auto">{chart}</div>;
+        // ✅ PERFORMANCE FIX: Use simple rendering for streaming messages
+        // if (isStreaming) {
+        //     return (
+        //         <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
+        //             <p className="mb-3 text-base whitespace-pre-wrap">{message.content}</p>
+        //         </div>
+        //     );
         // }
+
 
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
@@ -508,21 +515,37 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                 }
                             }
                             return (
-                                <div className="relative mt-3 ">
+                                <div className="relative mt-3">
                                     <TableControls
                                         content={message.content}
                                         messageId={message.id}
                                         onExpand={handleExpand}
                                         title={title}
                                     />
-                                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600">
-                                        <table className="border-collapse border border-muted mb-3 min-w-[1000px]">
+                                    {/* Responsive table wrapper */}
+                                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600"
+                                        style={{
+                                            WebkitOverflowScrolling: 'touch',
+                                            maxWidth: '100vw',
+                                        }}
+                                    >
+                                        <table
+                                            className="border-collapse border border-muted mb-3 w-full"
+                                            style={{
+                                                minWidth: "520px",
+                                            }}
+                                        >
                                             {children}
                                         </table>
+                                    </div>
+                                    {/* Mobile fallback: Scroll hint */}
+                                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">
+                                        Swipe left/right to view the table
                                     </div>
                                 </div>
                             );
                         },
+
                         th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
                         td: ({ children }) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
                         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
@@ -650,7 +673,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                                                 : `data:image/jpeg;base64,${file.url}`
                                         }
                                         alt="Generated image"
-                                        className="max-w-full h-auto rounded-lg max-h-[400px] object-contain"
+                                        className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain"
                                         loading="lazy"
                                         onLoad={() => {
                                             setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
@@ -685,23 +708,47 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 )}
             {parsedFiles && parsedFiles.length > 0 && message.role === "USER" && (
                 <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
-                    {parsedFiles.some((file: any) => file.type?.startsWith('image/')) ? (
+                    {parsedFiles.some((file: any) => file.type?.startsWith('image/') || file.mimeType?.startsWith('image/')) ? (
                         // Only images, aligned right
                         <div className="flex flex-wrap gap-1 ml-auto">
                             {parsedFiles
-                                .filter((file: any) => file.type?.startsWith("image/"))
+                                .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
                                 .map((file: any, index: number) => {
                                     let imageUrl = file.url || file.base64;
+                                    {
+                                        console.log(!imageUrl && file.path);
+                                    }
+
+
+                                    if (!imageUrl && file.path) {
+                                        console.log("file.path.", file.path);
+
+                                        // Extract the part of the path after 'uploads/'
+                                        const normalizedPath = file.path.replace(/\\/g, '/');
+                                        console.log("normalizedPath:", normalizedPath);
+
+                                        // Extract the part after 'uploads/'
+                                        const relativePath = normalizedPath.split('uploads/')[1];
+                                        console.log("relativePath:", relativePath);
+
+                                        if (relativePath) {
+                                            const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
+                                            imageUrl = `${baseUrl}/uploads/${relativePath}`;
+                                            console.log("imageUrl", imageUrl);
+
+                                        }
+                                    }
 
                                     if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
-                                        imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:3000", "")}`;
+                                        imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:5000", "")}`;
+
                                     }
 
                                     return (
                                         <img
                                             key={index}
                                             src={imageUrl}
-                                            alt={file.name || "Image"}
+                                            alt={file.name || file.originalName || "Image"}
                                             className="max-w-full h-auto rounded-lg max-h-[350px] object-cover"
                                         />
                                     );
@@ -712,7 +759,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                         // Only non-image files, aligned left
                         <div className="flex flex-wrap gap-1">
                             {parsedFiles
-                                .filter((file: any) => !file.type?.startsWith('image/'))
+                                .filter((file: any) => !file.type?.startsWith('image/') && !file.mimeType?.startsWith('image/'))
                                 .map((file: any, index: number) => (
                                     <button key={index} onClick={() => handleViewFile(file)} className="flex items-center gap-1 px-2 py-1 border rounded hover:bg-muted transition-colors">
                                         <FileText className="h-4 w-4" />
@@ -738,9 +785,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
 
             <div className={`flex flex-col w-full ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
-                    <Card className="group relative p-3 w-auto max-w-[85%] bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ">
+                    <Card className="group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white">
                         {isEditing ? (
-                            <div className="space-y-2 w-full min-w-[400px]">
+                            <div className="space-y-2 w-full">
                                 <Textarea
                                     value={editedContent}
                                     onChange={(e) => setEditedContent(e.target.value)}
@@ -771,7 +818,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat }: 
                 )}
 
                 {message.role === 'ASSISTANT' && (
-                    <div className="w-full max-w-[90%]">
+                    <div className="w-full max-w-[90%] md:max-w-3xl">
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (

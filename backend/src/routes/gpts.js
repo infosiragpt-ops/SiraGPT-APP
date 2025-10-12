@@ -102,10 +102,11 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // GET /api/gpts/:id - Get specific GPT
-router.get('/:id', async (req, res) => {
+router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    
+    const userId = req.user?.id;
+
     const gpt = await prisma.customGpt.findUnique({
       where: { id },
       include: {
@@ -125,7 +126,7 @@ router.get('/:id', async (req, res) => {
     }
 
     // Check if user can access this GPT
-    if (gpt.visibility === 'PRIVATE' && gpt.creatorId !== req.user?.id) {
+    if (gpt.visibility === 'PRIVATE' && gpt.creatorId !== userId) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -140,7 +141,7 @@ router.get('/:id', async (req, res) => {
 router.get('/share/:shareId', async (req, res) => {
   try {
     const { shareId } = req.params;
-    
+
     const gpt = await prisma.customGpt.findUnique({
       where: { shareId },
       include: {
@@ -399,7 +400,7 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
     }
 
     // Check access permissions
-    if (gpt.visibility === 'PRIVATE' && gpt.creatorId !== userId) {
+    if (gpt.creatorId !== userId) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -435,7 +436,7 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       }
     });
 
-    res.status(201).json({ 
+    res.status(201).json({
       chat,
       // Include GPT info for frontend
       gptInfo: {
@@ -459,9 +460,9 @@ router.get('/chat/:chatId', authenticateToken, async (req, res) => {
     const userId = req.user.id;
 
     const chat = await prisma.chat.findFirst({
-      where: { 
-        id: chatId, 
-        userId 
+      where: {
+        id: chatId,
+        userId
       },
       include: {
         customGpt: {
@@ -500,7 +501,7 @@ router.get('/chat/:chatId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Chat not found' });
     }
 
-    res.json({ 
+    res.json({
       chat,
       isCustomGpt: !!chat.customGpt,
       gptInfo: chat.customGpt ? {

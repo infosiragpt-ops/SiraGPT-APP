@@ -17,6 +17,7 @@ import {
   ChevronDown,
   X,
   Upload,
+  Menu,
   Settings,
   Eye,
   Download,
@@ -69,6 +70,13 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 import SearchSourceSelector, { SearchSources } from "./SearchSourceSelector"
+import { AppSidebar } from "./app-sidebar"
+import {
+  SidebarProvider,
+  Sidebar,
+  SidebarTrigger,
+} from "@/components/ui/sidebar"
+
 
 // Enhanced Actions Dropdown Component
 const ActionsDropdown = ({
@@ -362,10 +370,12 @@ const getFileIcon = (file: any) => {
 // Active Options Display Component - Renders above the textarea
 const ActiveOptionsDisplay = ({
   uploadedFiles,
-  removeFile
+  removeFile,
+  uploadProgress
 }: {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
+  uploadProgress: { [key: string]: number };
 }) => {
   if (uploadedFiles.length === 0) return null;
 
@@ -375,6 +385,10 @@ const ActiveOptionsDisplay = ({
         {/* Uploaded Files iterate karein */}
         {uploadedFiles.map((file, index) => {
           const isImage = file.type?.startsWith('image/');
+          const fileId = file.id || file.tempId;
+          const progress = uploadProgress[fileId] || 0;
+          const isUploading = progress > 0 && progress < 100;
+          const isComplete = progress === 100 || file.url;
 
           return (
             <div
@@ -389,36 +403,76 @@ const ActiveOptionsDisplay = ({
             >
               {isImage ? (
                 <>
-                  {/* Image files ke liye: badi image aur uske upar 'X' button */}
-                  <div className="h-full w-full rounded-md overflow-hidden bg-gray-100 flex items-center justify-center">
-                    {getFileIcon(file)} {/* Ab sirf <img> tag return ho raha hai */}
+                  {/* Image files ke liye: badi image aur uske upar progress/X button */}
+                  <div className="h-full w-full rounded-md overflow-hidden bg-gray-100 flex items-center justify-center relative">
+                    {file.preview ? (
+                      <img
+                        src={file.preview}
+                        alt={file.name}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : file.url ? (
+                      <img
+                        src={`${process.env.NEXT_PUBLIC_IMAGE_URL || ""}${file.url}`}
+                        alt={file.name}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      getFileIcon(file)
+                    )}
+
+                    {/* Upload Progress Overlay */}
+                    {isUploading && (
+                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                        <div className="text-center">
+                          <Loader2 className="h-6 w-6 animate-spin text-white mx-auto mb-1" />
+                          <span className="text-white text-xs font-medium">{Math.round(progress)}%</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="absolute top-1  right-1 h-6 w-6 p-0 bg-white rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
-                    onClick={() => removeFile(index)}
-                  >
-                    <X className="h-4 w-4 text-gray-600" />
-                  </Button>
+                  {!isUploading && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="absolute top-1 right-1 h-6 w-6 p-0 bg-white rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                      onClick={() => removeFile(index)}
+                    >
+                      <X className="h-4 w-4 text-gray-600" />
+                    </Button>
+                  )}
                 </>
               ) : (
                 <>
-                  {/* Non-image files ke liye: purana structure (icon, naam, aur 'X' button side mein) */}
+                  {/* Non-image files ke liye: purana structure (icon, naam, progress aur 'X' button) */}
                   {getFileIcon(file)}
-                  <span className="max-w-50 truncate font-medium text-[13px]">
-                    {file.name}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
-                    onClick={() => removeFile(index)}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
+                  <div className="flex flex-col flex-1 min-w-0">
+                    <span className="truncate font-medium text-[13px]">
+                      {file.name}
+                    </span>
+                    {isUploading && (
+                      <div className="flex items-center gap-1 mt-1">
+                        <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500 transition-all duration-300"
+                            style={{ width: `${progress}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">{Math.round(progress)}%</span>
+                      </div>
+                    )}
+                  </div>
+                  {!isUploading && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
+                      onClick={() => removeFile(index)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
                 </>
               )}
             </div>
@@ -648,7 +702,16 @@ const NavbarModelSelector = ({
 };
 
 export default function ChatInterface() {
+  return (
+    <SidebarProvider>
+      <ChatInterfaceContent />
+    </SidebarProvider>
+  )
+}
+
+function ChatInterfaceContent() {
   const { user } = useAuth()
+
   const {
     currentChat,
     setCurrentChat,
@@ -684,6 +747,7 @@ export default function ChatInterface() {
 
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
+  const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
 
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
@@ -906,32 +970,133 @@ export default function ChatInterface() {
     }
   }, [currentChat, createNewChat, availableModels, selectedModel, selectChat]);
 
-  // File upload logic
+  // File upload logic with instant preview and progress
   const handleAndUploadFiles = async (files: FileList) => {
     if (files.length === 0) return;
+
+    let filesToUpload = Array.from(files);
+
     if (chatType === 'video' || chatType === 'image') {
-      const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
+      const imageFiles = filesToUpload.filter(file => file.type.startsWith('image/'));
 
       if (imageFiles.length === 0) {
         toast.error("Only image files are allowed in image/video mode.");
         return;
       }
 
-      files = imageFiles as unknown as FileList;
+      filesToUpload = imageFiles;
     }
+
+    // Create temporary file objects with previews immediately
+    const tempFiles = await Promise.all(
+      filesToUpload.map(async (file) => {
+        const tempId = `temp-${Date.now()}-${Math.random()}`;
+        let preview = null;
+
+        // Create preview for images
+        if (file.type.startsWith('image/')) {
+          preview = URL.createObjectURL(file);
+        }
+
+        return {
+          tempId,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          preview,
+          file, // Keep reference to original file
+        };
+      })
+    );
+
+    // Add temp files to UI immediately
+    setUploadedFiles([...uploadedFiles, ...tempFiles]);
+
+    // Initialize progress for each file
+    const initialProgress: { [key: string]: number } = {};
+    tempFiles.forEach(tf => {
+      initialProgress[tf.tempId] = 0;
+    });
+    setUploadProgress(prev => ({ ...prev, ...initialProgress }));
+
     setIsUploading(true);
+
     try {
-      const response = await apiClient.uploadFiles(files);
+      // Simulate upload progress (since we don't have real progress from API)
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => {
+          const newProgress = { ...prev };
+          tempFiles.forEach(tf => {
+            if (newProgress[tf.tempId] < 90) {
+              newProgress[tf.tempId] = Math.min(90, newProgress[tf.tempId] + 10);
+            }
+          });
+          return newProgress;
+        });
+      }, 200);
+
+      // Create a new FileList-like object from the actual File objects
+      const dataTransfer = new DataTransfer();
+      filesToUpload.forEach(file => {
+        dataTransfer.items.add(file);
+      });
+
+      // Actual upload with proper FileList
+      const response = await apiClient.uploadFiles(dataTransfer.files);
+
+      clearInterval(progressInterval);
+
       if (response.files) {
-        setUploadedFiles([...uploadedFiles, ...response.files]);
+        // Update progress to 100%
+        const finalProgress: { [key: string]: number } = {};
+        tempFiles.forEach(tf => {
+          finalProgress[tf.tempId] = 100;
+        });
+        setUploadProgress(prev => ({ ...prev, ...finalProgress }));
+
+        // Replace temp files with actual uploaded files
+        const withoutTemp = uploadedFiles.filter((f: any) => !tempFiles.find(tf => tf.tempId === f.tempId));
+        setUploadedFiles([...withoutTemp, ...response.files]);
+
+        // Clean up previews
+        tempFiles.forEach(tf => {
+          if (tf.preview) {
+            URL.revokeObjectURL(tf.preview);
+          }
+        });
+
+        // Clear progress after a short delay
+        setTimeout(() => {
+          setUploadProgress(prev => {
+            const newProgress = { ...prev };
+            tempFiles.forEach(tf => {
+              delete newProgress[tf.tempId];
+            });
+            return newProgress;
+          });
+        }, 500);
+
         toast.success(`${response.files.length} file(s) uploaded successfully`);
-        console.log("response ", response);
       } else {
         toast.error('File upload failed');
+        // Remove temp files on failure
+        const filteredFiles = uploadedFiles.filter((f: any) => !tempFiles.find(tf => tf.tempId === f.tempId));
+        setUploadedFiles(filteredFiles);
       }
     } catch (error) {
       console.error('File upload failed:', error);
       toast.error('File upload failed');
+
+      // Remove temp files on error
+      const filteredFiles = uploadedFiles.filter((f: any) => !tempFiles.find(tf => tf.tempId === f.tempId));
+      setUploadedFiles(filteredFiles);
+
+      // Clean up previews
+      tempFiles.forEach(tf => {
+        if (tf.preview) {
+          URL.revokeObjectURL(tf.preview);
+        }
+      });
     } finally {
       setIsUploading(false);
     }
@@ -1249,7 +1414,15 @@ export default function ChatInterface() {
       {/* Header */}
       <div className=" border-border/40 p-4">
         <div className="flex items-center justify-between">
-          <div>
+          <div className="flex items-center gap-2">
+            <div className="md:hidden">
+              <Sidebar>
+                <AppSidebar />
+              </Sidebar>
+              <SidebarTrigger>
+                <Menu className="h-6 w-6" />
+              </SidebarTrigger>
+            </div>
             {!showAudioPanel ? (
               <>
                 <NavbarModelSelector
@@ -1368,6 +1541,7 @@ export default function ChatInterface() {
                   <ActiveOptionsDisplay
                     uploadedFiles={uploadedFiles}
                     removeFile={removeFile}
+                    uploadProgress={uploadProgress}
                   />
                   <Textarea
                     ref={textareaRef}
@@ -1553,23 +1727,44 @@ export default function ChatInterface() {
           ) : (
             <>
               {/* Messages */}
-              <ScrollArea className="flex-1 p-4 mb-6" ref={scrollAreaRef}>
-                <div className="space-y-4 max-w-4xl mx-auto">
-                  {currentChat?.messages.map((message) => (
-                    <MessageComponent
-                      key={message.id}
-                      message={message}
-                      user={user}
-                      onRegenerate={regenerateLastMessage}
-                      updateMessageInChat={editAndRegenerate}
-                    />
-                  ))}
+              <ScrollArea className="flex-1 p-2 md:p-4 mb-6" ref={scrollAreaRef}>
+                <div className="space-y-4 max-w-4xl mx-auto w-full">
+                  {(() => {
+                    const messages = currentChat?.messages || [];
+                    const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
+                    const streamingMessage = isStreaming ? messages[messages.length - 1] : null;
+
+                    return (
+                      <>
+                        {stableMessages.map((message) => (
+                          <MessageComponent
+                            key={message.id}
+                            message={message}
+                            user={user}
+                            onRegenerate={regenerateLastMessage}
+                            updateMessageInChat={editAndRegenerate}
+                            isStreaming={false}
+                          />
+                        ))}
+                        {streamingMessage && (
+                          <MessageComponent
+                            key={streamingMessage.id}
+                            message={streamingMessage}
+                            user={user}
+                            onRegenerate={regenerateLastMessage}
+                            updateMessageInChat={editAndRegenerate}
+                            isStreaming={true}
+                          />
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               </ScrollArea>
 
               {/* Input & Actions */}
 
-              <div className="">
+              <div className="px-2 md:px-4">
                 <div className="max-w-4xl mx-auto space-y-3">
                   {/* Input Area */}
 
@@ -1579,6 +1774,7 @@ export default function ChatInterface() {
                       <ActiveOptionsDisplay
                         uploadedFiles={uploadedFiles}
                         removeFile={removeFile}
+                        uploadProgress={uploadProgress}
                       />
                       <Textarea
                         ref={textareaRef}
