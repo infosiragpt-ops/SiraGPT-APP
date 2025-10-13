@@ -8,47 +8,28 @@ import {
   Square,
   Loader2,
   FileText,
-  ImageIcon,
   Video,
-  Wand2,
   Globe,
-  Sparkles,
   Bot,
   ChevronDown,
   X,
   Upload,
-  Settings,
-  Eye,
-  Download,
   Palette,
-  Camera,
   Plus,
-  MessageSquare,
-  Check,
   Music,
-  Film,
-  Bolt,
   FileSpreadsheet,
   File
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Card } from "@/components/ui/card"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { Dialog, DialogContent, DialogTrigger, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { apiClient } from "@/lib/api"
 import { aiService } from "@/lib/ai-service"
 import { toast } from "sonner"
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,8 +39,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import MessageComponent from "./message-component"
 import VoiceControls from "./voice-controls"
-import { Message } from "react-hook-form"
-import ElevenLabsInterface from "./elevenlabs-interface"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
@@ -67,9 +46,6 @@ import { webSearchService } from "@/lib/web-search-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
-import SearchSourceSelector, { SearchSources } from "./SearchSourceSelector"
-import { VirtualScroll } from "./virtual-scroll"
-import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 
 // Enhanced Actions Dropdown Component
 const ActionsDropdown = ({
@@ -620,10 +596,6 @@ const NavbarModelSelector = ({
 };
 
 export default function ChatInterface() {
-  // Performance monitoring disabled to prevent overhead
-  // const renderStartTime = performance.now()
-  // const performanceOptimizer = PerformanceOptimizer.getInstance()
-
   const { user } = useAuth()
   const {
     currentChat,
@@ -1531,35 +1503,15 @@ export default function ChatInterface() {
               {/* Messages with Performance Optimization */}
               <ScrollArea className="flex-1 p-4 mb-6" ref={scrollAreaRef}>
                 <div className="space-y-4 max-w-4xl mx-auto">
-                  {currentChat?.messages && currentChat.messages.length > 50 ? (
-                    // Use virtual scrolling for large chats - improved performance
-                    <VirtualScroll
-                      items={currentChat.messages}
-                      itemHeight={200}
-                      containerHeight={window.innerHeight - 300}
-                      renderItem={(message) => (
-                        <MessageComponent
-                          message={message}
-                          user={user}
-                          onRegenerate={regenerateLastMessage}
-                          updateMessageInChat={editAndRegenerate}
-                        />
-                      )}
-                    />
-                  ) : (
-                    // Standard rendering for smaller chats with React.memo optimization
-                    <>
-                      {currentChat?.messages.map((message) => (
-                        <MessageComponent
-                          key={message.id}
+                  {currentChat?.messages.map((message) => (
+                    <MessageComponent
+                      key={message.id}
                           message={message}
                           user={user}
                           onRegenerate={regenerateLastMessage}
                           updateMessageInChat={editAndRegenerate}
                         />
                       ))}
-                    </>
-                  )}
                 </div>
               </ScrollArea>
 
