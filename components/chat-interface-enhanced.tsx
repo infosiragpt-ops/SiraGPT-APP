@@ -89,6 +89,8 @@ const ActionsDropdown = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  isPPTGenerationActive,
+  setIsPPTGenerationActive,
   setShowAudioPanel,
   setAudioTab,
   handleAndUploadFiles,
@@ -96,7 +98,8 @@ const ActionsDropdown = ({
   isWebSearching,
   isLoading,
   isGeneratingImage,
-  isGeneratingVideo
+  isGeneratingVideo,
+  isGeneratingPPT
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
@@ -307,6 +310,47 @@ const ActionsDropdown = ({
             )}
           </div>
         </DropdownMenuItem>
+
+        {/* PPT Generation */}
+        <DropdownMenuItem
+          onClick={() => {
+            const newState = !isPPTGenerationActive;
+            if (newState) {
+              setIsWebSearchActive(false);
+              setIsImageGenerationActive(false);
+              setIsVideoGenerationActive(false);
+              setChatType('text');
+            }
+            setIsPPTGenerationActive(newState);
+          }}
+          disabled={currentPlan === "FREE" || isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isPPTGenerationActive
+              ? 'bg-blue-100 dark:bg-blue-900/20'
+              : 'bg-blue-100 dark:bg-blue-900/20'
+              }`}>
+              <FileText className={`h-4 w-4 ${isPPTGenerationActive
+                ? 'text-blue-600 dark:text-blue-400'
+                : 'text-blue-600 dark:text-blue-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isPPTGenerationActive ? 'PPT Generation Active' : 'PPT Generation'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Create PowerPoint presentations
+              </div>
+            </div>
+            {isPPTGenerationActive && (
+              <div className="w-2 h-2 bg-blue-500 rounded-full" />
+            )}
+            {currentPlan === "FREE" && (
+              <Badge variant="secondary" className="text-xs">Pro</Badge>
+            )}
+          </div>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -490,6 +534,8 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  isPPTGenerationActive,
+  setIsPPTGenerationActive,
   setChatType,
 }: {
   isWebSearchActive: boolean;
@@ -498,9 +544,11 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive: (value: boolean) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
+  isPPTGenerationActive: boolean;
+  setIsPPTGenerationActive: (value: boolean) => void;
   setChatType: (type: any) => void;
 }) => {
-  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive;
+  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || isPPTGenerationActive;
 
   if (!hasActiveTools) return null;
 
@@ -516,6 +564,11 @@ const ActiveToolsDisplay = ({
 
   const handleVideoGenerationClose = () => {
     setIsVideoGenerationActive(false);
+    setChatType('text');
+  };
+
+  const handlePPTGenerationClose = () => {
+    setIsPPTGenerationActive(false);
     setChatType('text');
   };
 
@@ -561,6 +614,20 @@ const ActiveToolsDisplay = ({
             size="sm"
             className="h-4 w-4 p-0 hover:bg-orange-200 dark:hover:bg-orange-800/30 rounded-full ml-1"
             onClick={handleVideoGenerationClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+      {isPPTGenerationActive && (
+        <div className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
+          <FileText className="h-3 w-3" />
+          <span className="font-medium">PPT Generation</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-800/30 rounded-full ml-1"
+            onClick={handlePPTGenerationClose}
           >
             <X className="h-3 w-3" />
           </Button>
@@ -742,6 +809,7 @@ function ChatInterfaceContent() {
   const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
+  const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
 
@@ -761,6 +829,7 @@ function ChatInterfaceContent() {
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
+  const [isPPTGenerationActive, setIsPPTGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
@@ -1148,6 +1217,8 @@ function ChatInterfaceContent() {
 
       } else if (isVideoGenerationActive) {
         await handleVideoGeneration(msg);
+      } else if (isPPTGenerationActive) {
+        await handlePPTGeneration(msg);
       } else {
         const filesToSend = [...uploadedFiles];
         setUploadedFiles([]); // Clear UI immediately
@@ -1258,6 +1329,47 @@ function ChatInterfaceContent() {
       // Don't auto-reset - user must manually remove
     }
   }
+
+  const handlePPTGeneration = async (prompt: string) => {
+    setIsGeneratingPPT(true);
+    try {
+      if (!currentChat) {
+        await createNewChat('text', `📊 PPT: ${prompt}`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      const userMessage = {
+        id: `msg-user-${Date.now()}`,
+        chatId: currentChat?.id || '',
+        role: 'USER' as const,
+        content: prompt,
+        timestamp: new Date().toISOString(),
+      };
+
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), userMessage];
+        return { ...prevChat, messages: updatedMessages };
+      });
+
+      const payload = {
+        prompt,
+        chatId: currentChat?.id || '',
+        provider: selectProvider,
+        model: selectedModel,
+      };
+
+      const response = await apiClient.generatePPT(payload);
+      await selectChat(currentChat?.id ?? "");
+      toast.success(`Presentation created with ${response.slideCount} slides!`);
+      setIsPPTGenerationActive(false);
+    } catch (error: any) {
+      console.error('PPT generation failed:', error);
+      toast.error(error.message || 'PPT generation failed');
+    } finally {
+      setIsGeneratingPPT(false);
+    }
+  };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1588,6 +1700,8 @@ function ChatInterfaceContent() {
                       setIsImageGenerationActive={setIsImageGenerationActive}
                       isVideoGenerationActive={isVideoGenerationActive}
                       setIsVideoGenerationActive={setIsVideoGenerationActive}
+                      isPPTGenerationActive={isPPTGenerationActive}
+                      setIsPPTGenerationActive={setIsPPTGenerationActive}
                       setShowAudioPanel={setShowAudioPanel}
                       setAudioTab={setAudioTab}
                       handleAndUploadFiles={handleAndUploadFiles}
@@ -1596,6 +1710,7 @@ function ChatInterfaceContent() {
                       isLoading={isLoading}
                       isGeneratingImage={isGeneratingImage}
                       isGeneratingVideo={isGeneratingVideo}
+                      isGeneratingPPT={isGeneratingPPT}
                     />
                     <ActiveToolsDisplay
                       isWebSearchActive={isWebSearchActive}
@@ -1604,6 +1719,8 @@ function ChatInterfaceContent() {
                       setIsImageGenerationActive={setIsImageGenerationActive}
                       isVideoGenerationActive={isVideoGenerationActive}
                       setIsVideoGenerationActive={setIsVideoGenerationActive}
+                      isPPTGenerationActive={isPPTGenerationActive}
+                      setIsPPTGenerationActive={setIsPPTGenerationActive}
                       setChatType={setChatType}
                     />
                     <div className="flex-grow" />
@@ -1675,13 +1792,13 @@ function ChatInterfaceContent() {
         </div>
       ) : (
         <>
-            {showAudioPanel ? (
+          {showAudioPanel ? (
             // Voice Studio responsive view
             <div className="flex flex-1 flex-col lg:flex-row">
               {/* Navigation - Mobile: horizontal tabs, Desktop: vertical sidebar */}
               <div className="lg:w-56 lg:border-r border-border/40 p-3 sm:p-4">
                 <div className="text-sm font-medium mb-2 hidden lg:block">Voice Studio</div>
-                
+
                 {/* Mobile: Horizontal scrollable tabs */}
                 <div className="flex lg:hidden overflow-x-auto gap-2 pb-2">
                   <Button
@@ -1711,7 +1828,7 @@ function ChatInterfaceContent() {
                     <Music className="h-4 w-4 mr-1" />
                     <span className="text-xs">Music</span>
                   </Button>
-                 
+
                 </div>
 
                 {/* Desktop: Vertical buttons */}
@@ -1740,7 +1857,7 @@ function ChatInterfaceContent() {
                     <Music className="h-4 w-4 mr-2" />
                     Music
                   </Button>
-                 
+
                 </div>
               </div>
 
@@ -1856,6 +1973,8 @@ function ChatInterfaceContent() {
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isPPTGenerationActive={isPPTGenerationActive}
+                          setIsPPTGenerationActive={setIsPPTGenerationActive}
                           setShowAudioPanel={setShowAudioPanel}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
@@ -1864,15 +1983,17 @@ function ChatInterfaceContent() {
                           isLoading={isLoading}
                           isGeneratingImage={isGeneratingImage}
                           isGeneratingVideo={isGeneratingVideo}
+                          isGeneratingPPT={isGeneratingPPT}
                         />
                         <ActiveToolsDisplay
                           isWebSearchActive={isWebSearchActive}
-
                           setIsWebSearchActive={setIsWebSearchActive}
                           isImageGenerationActive={isImageGenerationActive}
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isPPTGenerationActive={isPPTGenerationActive}
+                          setIsPPTGenerationActive={setIsPPTGenerationActive}
                           setChatType={setChatType}
                         />
                         <div className="flex-grow" />

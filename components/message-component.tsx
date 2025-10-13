@@ -11,7 +11,7 @@ import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
     Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
-    Sparkles
+    Sparkles, Eye
 } from "lucide-react"
 import {
     Dialog,
@@ -34,6 +34,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
 import ChartComponent from './chart-component';
+import { PresentationView } from './presentation-view';
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
@@ -110,6 +111,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const [isTableExpanded, setIsTableExpanded] = useState(false);
     const [tableData, setTableData] = useState<string[][]>([]);
     const [tableHeaders, setTableHeaders] = useState<string[]>([]);
+    const [showPresentation, setShowPresentation] = useState(false);
 
     const [tableTitle, setTableTitle] = useState<string>('');
     const getNodeText = (node: any): string => {
@@ -576,6 +578,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     )
     const isVideoMessage = !!videoEntry
 
+    const pptEntry = useMemo(
+        () => parsedFiles.find((f: any) => f?.type === 'presentation' || f?.type === 'ppt'),
+        [parsedFiles]
+    )
+    const isPPTMessage = !!pptEntry
+
 
     // Check if this is an image-only message
     const isImageOnlyMessage = () => {
@@ -585,6 +593,67 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         return hasImageFiles || hasImageUrl;
     };
     const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename)
+
+    const PPTDisplay = () => {
+        if (!isPPTMessage) return null;
+
+        const presentationData = {
+            title: pptEntry.title || 'AI Presentation',
+            slides: pptEntry.structure?.slides || [],
+            filename: pptEntry.filename || pptEntry.path,
+        };
+        const slideCount = pptEntry.slideCount || 0;
+
+
+        const getPPTUrl = () => {
+            const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
+            return `${baseUrl}/uploads/presentations/${presentationData.filename}`;
+        };
+
+        const downloadPPT = async () => {
+            try {
+                const url = getPPTUrl();
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = presentationData.filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                toast.success('Presentation downloaded successfully!');
+            } catch (error) {
+                console.error('Download failed:', error);
+                toast.error('Failed to download presentation');
+            }
+        };
+
+        return (
+            <div className="mt-3 p-4 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20">
+                <div className="flex items-center gap-2 text-sm mb-2">
+                    <FileText className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                    <span className="font-semibold text-blue-900 dark:text-blue-100">{presentationData.title}</span>
+                </div>
+                <div className="text-sm text-blue-700 dark:text-blue-300 mb-3">
+                    📊 {slideCount} slides • PowerPoint Presentation
+                </div>
+                <div className="flex gap-2">
+                    <Button size="sm" variant="default" onClick={() => setShowPresentation(true)} className="bg-blue-600 hover:bg-blue-700">
+                        <Eye className="h-4 w-4 mr-2" />
+                        Preview
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={downloadPPT}>
+                        <Download className="h-4 w-4 mr-2" />
+                        Download
+                    </Button>
+                </div>
+                {showPresentation && (
+                    <PresentationView
+                        presentation={presentationData}
+                        onClose={() => setShowPresentation(false)}
+                    />
+                )}
+            </div>
+        );
+    };
 
     const VideoDisplay = () => {
         if (!isVideoMessage) return null
@@ -826,6 +895,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         ) : (
                             <>
                                 <MessageContent />
+                                <PPTDisplay />
                                 <VideoDisplay />
                                 <FileDisplay />
                                 <ChartDisplay files={parsedFiles} fullResponse={message.fullResponse} />

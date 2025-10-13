@@ -8,6 +8,7 @@ const { GoogleGenAI, Modality } = require("@google/genai");
 const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
+const PptxGenJS = require('pptxgenjs');
 
 class AIService {
     /**
@@ -44,10 +45,10 @@ class AIService {
      */
     async prepareImageForVision(imagePath, mimeType) {
         try {
-            const fullPath = path.isAbsolute(imagePath) 
-                ? imagePath 
+            const fullPath = path.isAbsolute(imagePath)
+                ? imagePath
                 : path.join(__dirname, '../../', imagePath);
-            
+
             if (!fs.existsSync(fullPath)) {
                 console.error(`Image file not found: ${fullPath}`);
                 return null;
@@ -55,7 +56,7 @@ class AIService {
 
             const imageData = fs.readFileSync(fullPath);
             const base64Image = imageData.toString('base64');
-            
+
             return {
                 type: 'image_url',
                 image_url: {
@@ -86,12 +87,12 @@ class AIService {
 
             // Check if the user is asking for a chart
             const lastUserMessage = messages[messages.length - 1].content;
-            const lastMessageText = typeof lastUserMessage === 'string' 
-                ? lastUserMessage 
+            const lastMessageText = typeof lastUserMessage === 'string'
+                ? lastUserMessage
                 : lastUserMessage.find(item => item.type === 'text')?.text || '';
-            
+
             const chartKeywords = ['chart', 'graph', 'plot', 'diagram', 'visualize'];
-            const isChartRequest = chartKeywords.some(keyword => 
+            const isChartRequest = chartKeywords.some(keyword =>
                 lastMessageText.toLowerCase().includes(keyword)
             );
 
@@ -123,20 +124,20 @@ Do not include any other text or explanations in your response. Just the JSON ob
             // ✅ IMPROVED: Handle images properly for vision API
             if (files && files.length > 0) {
                 const imageFiles = files.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
-                
+
                 if (imageFiles.length > 0) {
                     console.log(`📸 Processing ${imageFiles.length} image(s) for vision API`);
-                    
+
                     const lastMessage = messages[messages.length - 1];
-                    const textContent = typeof lastMessage.content === 'string' 
-                        ? lastMessage.content 
+                    const textContent = typeof lastMessage.content === 'string'
+                        ? lastMessage.content
                         : lastMessage.content.find(item => item.type === 'text')?.text || '';
-                    
+
                     // Build content array with text and images
                     const contentArray = [
                         { type: 'text', text: textContent }
                     ];
-                    
+
                     // Add all images to the content
                     for (const imageFile of imageFiles) {
                         const imageContent = await this.prepareImageForVision(imageFile.path, imageFile.mimeType);
@@ -145,7 +146,7 @@ Do not include any other text or explanations in your response. Just the JSON ob
                             console.log(`✅ Added image to vision API: ${imageFile.name}`);
                         }
                     }
-                    
+
                     lastMessage.content = contentArray;
                 }
             }
@@ -261,6 +262,220 @@ Do not include any other text or explanations in your response. Just the JSON ob
         );
 
         return response.data;
+    }
+
+    /**
+     * Generate a PowerPoint presentation using AI
+     * @param {string} prompt - User's request for PPT content
+     * @param {string} provider - AI provider to use
+     * @param {string} model - AI model to use
+     * @returns {Promise<object>} - Generated PPT file information
+     */
+    async generatePPT(prompt, provider = "OpenAI", model = "gpt-4o") {
+        try {
+            const client = this.getClient(provider);
+
+            // Create a detailed prompt for generating PPT structure
+            const systemMessage = {
+                role: 'system',
+                content: `You are an expert presentation creator. When asked to create a PowerPoint presentation, you must respond with a JSON object that contains the presentation structure. The JSON should have this format:
+{
+  "title": "Presentation Title",
+  "slides": [
+    {
+      "type": "title",
+      "title": "Main Title",
+      "subtitle": "A concise and engaging subtitle for the presentation"
+    },
+    {
+      "type": "content",
+      "title": "Slide Title",
+      "content": [
+        "Bullet point 1",
+        "Bullet point 2",
+        "Bullet point 3"
+      ]
+    },
+    {
+      "type": "two-column",
+      "title": "Slide Title",
+      "leftContent": ["Point 1", "Point 2"],
+      "rightContent": ["Point A", "Point B"]
+    }
+  ]
+}
+
+Available slide types: "title", "content", "two-column".
+The first slide must always be of type "title" and must include a subtitle.
+Generate 5-10 slides based on the topic. Make content clear, concise, and professional.
+Only respond with the JSON object, no additional text.`
+            };
+
+            const messages = [
+                systemMessage,
+                {
+                    role: 'user',
+                    content: `Create a professional PowerPoint presentation about: ${prompt}`
+                }
+            ];
+
+            console.log('🎨 Generating PPT structure with AI...');
+
+            const response = await client.chat.completions.create({
+                model: model,
+                messages: messages,
+                temperature: 0.7,
+            });
+
+            const aiResponse = response.choices[0].message.content;
+
+            // Parse JSON response
+            let pptStructure;
+            try {
+                // Try to extract JSON if wrapped in markdown code blocks
+                const jsonMatch = aiResponse.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+                const jsonString = jsonMatch ? jsonMatch[1] : aiResponse;
+                pptStructure = JSON.parse(jsonString.trim());
+            } catch (parseError) {
+                console.error('Failed to parse AI response as JSON:', parseError);
+                throw new Error('AI did not return valid JSON structure');
+            }
+
+            // Generate the actual PPT file
+            const ppt = new PptxGenJS();
+
+            // Set presentation properties
+            ppt.author = 'AI Assistant';
+            ppt.company = 'Your Company';
+            ppt.subject = pptStructure.title || 'AI Generated Presentation';
+            ppt.title = pptStructure.title || 'Presentation';
+
+            // Define color scheme
+            const colors = {
+                primary: '0078D4',
+                secondary: '4A5568',
+                accent: '38B2AC',
+                background: 'FFFFFF',
+                text: '1A202C'
+            };
+
+            // Process each slide
+            for (const slideData of pptStructure.slides) {
+                const slide = ppt.addSlide();
+
+                if (slideData.type === 'title') {
+                    // Title slide
+                    slide.background = { color: colors.primary };
+                    slide.addText(slideData.title, {
+                        x: 0.5,
+                        y: 2.0,
+                        w: 9.0,
+                        h: 1.5,
+                        fontSize: 44,
+                        bold: true,
+                        color: 'FFFFFF',
+                        align: 'center'
+                    });
+                    if (slideData.subtitle) {
+                        slide.addText(slideData.subtitle, {
+                            x: 0.5,
+                            y: 3.8,
+                            w: 9.0,
+                            h: 0.8,
+                            fontSize: 24,
+                            color: 'FFFFFF',
+                            align: 'center'
+                        });
+                    }
+                } else if (slideData.type === 'content') {
+                    // Content slide with bullet points
+                    slide.addText(slideData.title, {
+                        x: 0.5,
+                        y: 0.5,
+                        w: 9.0,
+                        h: 0.8,
+                        fontSize: 32,
+                        bold: true,
+                        color: colors.primary
+                    });
+
+                    const bulletPoints = slideData.content.map(point => ({
+                        text: point,
+                        options: { bullet: true, fontSize: 18, color: colors.text }
+                    }));
+
+                    slide.addText(bulletPoints, {
+                        x: 0.5,
+                        y: 1.5,
+                        w: 9.0,
+                        h: 4.0,
+                        fontSize: 18,
+                        color: colors.text
+                    });
+                } else if (slideData.type === 'two-column') {
+                    // Two-column slide
+                    slide.addText(slideData.title, {
+                        x: 0.5,
+                        y: 0.5,
+                        w: 9.0,
+                        h: 0.8,
+                        fontSize: 32,
+                        bold: true,
+                        color: colors.primary
+                    });
+
+                    // Left column
+                    const leftBullets = slideData.leftContent.map(point => ({
+                        text: point,
+                        options: { bullet: true, fontSize: 16, color: colors.text }
+                    }));
+                    slide.addText(leftBullets, {
+                        x: 0.5,
+                        y: 1.5,
+                        w: 4.25,
+                        h: 4.0
+                    });
+
+                    // Right column
+                    const rightBullets = slideData.rightContent.map(point => ({
+                        text: point,
+                        options: { bullet: true, fontSize: 16, color: colors.text }
+                    }));
+                    slide.addText(rightBullets, {
+                        x: 5.25,
+                        y: 1.5,
+                        w: 4.25,
+                        h: 4.0
+                    });
+                }
+            }
+
+            // Save the presentation
+            const uploadsDir = path.join(__dirname, '../../uploads/presentations');
+            await fs.promises.mkdir(uploadsDir, { recursive: true });
+
+            const timestamp = Date.now();
+            const filename = `presentation-${timestamp}.pptx`;
+            const filepath = path.join(uploadsDir, filename);
+
+            await ppt.writeFile({ fileName: filepath });
+
+            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+            const downloadUrl = `${baseUrl}/uploads/presentations/${filename}`;
+
+            console.log('✅ PPT generated successfully:', filename);
+
+            return {
+                filename,
+                downloadUrl,
+                structure: pptStructure,
+                slideCount: pptStructure.slides.length
+            };
+
+        } catch (error) {
+            console.error('❌ Error generating PPT:', error);
+            throw error;
+        }
     }
 
     async generateChartWithCodeInterpreter(messages, fileId) {

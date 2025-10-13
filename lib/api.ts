@@ -181,7 +181,7 @@ class ApiClient {
   // File endpoints
   async uploadFiles(files: FileList) {
     const formData = new FormData();
-    
+
     // Debug: Check files
     console.log('Files to upload:', files.length);
     Array.from(files).forEach((file, index) => {
@@ -191,20 +191,20 @@ class ApiClient {
 
     const url = `${this.baseURL}/files/upload`;
     const headers: HeadersInit = {};
-    
+
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
       console.log('Token present:', this.token.substring(0, 20) + '...');
     } else {
       console.warn('No token found!');
     }
-    
+
     // Debug: Check FormData
     console.log('FormData entries:');
     for (let pair of formData.entries()) {
       console.log(pair[0], pair[1]);
     }
-    
+
     // Don't set Content-Type - browser will set it with boundary for FormData
     const response = await fetch(url, {
       method: 'POST',
@@ -953,9 +953,38 @@ class ApiClient {
 
   async generateChart(data: { prompt: string; chatId?: string, fileId?: string }) {
     return this.request('/ai/generate-chart', {
-        method: 'POST',
-        body: JSON.stringify(data),
+      method: 'POST',
+      body: JSON.stringify(data),
     });
+  }
+
+  // PPT Generation endpoint
+  async generatePPT(data: {
+    prompt: string;
+    chatId: string;
+    provider?: string;
+    model?: string;
+  }) {
+    return this.request('/ai/generate-ppt', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // Download PPT file
+  async downloadPPT(filename: string) {
+    const url = `${this.apiBaseURL}/uploads/presentations/${filename}`;
+    const response = await fetch(url, {
+      headers: {
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to download presentation');
+    }
+
+    return response.blob();
   }
 }
 
