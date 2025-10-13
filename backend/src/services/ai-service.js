@@ -160,7 +160,7 @@ Examples of OTHER:
                 lastMessageText.toLowerCase().includes(keyword)
             );
    // Dynamic intent detection (heuristics + tiny classifier fallback)
-            const isWebDevRequest = await this.detectWebIntent(client, model, recentText);
+            const isWebDevRequest = await this.detectWebIntent(client, model, lastMessageText);
 
             if (isChartRequest) {
                 // Modify the system prompt to request JSON for charts
