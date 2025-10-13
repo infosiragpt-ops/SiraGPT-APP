@@ -11,7 +11,8 @@ import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
     Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
-    Sparkles
+    Sparkles,
+    ExternalLink
 } from "lucide-react"
 import {
     Dialog,
@@ -26,6 +27,7 @@ import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
 import { useVoiceControls } from './voice-controls';
 import ReactMarkdown from 'react-markdown'
+import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -33,6 +35,8 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
+// import CodePreview from './code-preview';
+import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 import ChartComponent from './chart-component';
 
 // Chart Display Component
@@ -92,6 +96,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     updateMessageInChat: (messageId: string, newContent: string) => void;
     isStreaming?: boolean;
 }) => {
+    // Performance monitoring disabled to prevent overhead
+    // const renderStartTime = performance.now()
+    // const performanceOptimizer = PerformanceOptimizer.getInstance()
     const [isCopied, setIsCopied] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
@@ -112,6 +119,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const [tableHeaders, setTableHeaders] = useState<string[]>([]);
 
     const [tableTitle, setTableTitle] = useState<string>('');
+    
+    // Code preview states (now memoized for performance)
+    
     const getNodeText = (node: any): string => {
         if (node.type === 'text') {
             return node.value;
@@ -158,6 +168,33 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     useEffect(() => {
         setEditedContent(message.content);
     }, [message.content]);
+
+    // Optimized code detection with memoization to prevent repeated parsing
+    const parsedCode = useMemo(() => {
+        if (message.content && (message.role === 'assistant' || message.role === 'ASSISTANT')) {
+            return parseCodeFromContent(message.content);
+        }
+        return null;
+    }, [message.content, message.role]);
+    
+    const canPreviewMessage = useMemo(() => {
+        if (!parsedCode) return false;
+        if (!parsedCode.hasWebCode) return false;
+        if (parsedCode.hasNonWebCode && !parsedCode.combinedCode) return false;
+        return !!(parsedCode.combinedCode || parsedCode.html);
+    }, [parsedCode]);
+
+    const openPreviewInNewTab = () => {
+        if (!parsedCode) return;
+        let htmlDoc = parsedCode.combinedCode;
+        if (!htmlDoc) {
+            htmlDoc = combineWebCode(parsedCode.html || '', parsedCode.css || '', parsedCode.js || '', 'Live Preview');
+        }
+        const blob = new Blob([htmlDoc], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        // Let the browser reclaim URL when tab is closed naturally; no revoke here to avoid revoking early.
+    };
 
     // Cleanup audio when component unmounts
     useEffect(() => {
@@ -428,10 +465,22 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             <div className="rounded-md bg-gray-900/80 border border-gray-700 relative">
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-800/50 rounded-t-md border-b border-gray-700">
                     <span className="text-xs font-sans text-gray-400">{language}</span>
-                    <button onClick={handleCodeCopy} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-                        {isCodeCopied ? <Check size={14} /> : <Clipboard size={14} />}
-                        {isCodeCopied ? 'Copied!' : 'Copy code'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {canPreviewMessage && (
+                            <button
+                                onClick={openPreviewInNewTab}
+                                className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
+                                title="Open preview in a new tab"
+                            >
+                                <ExternalLink size={14} className="opacity-80" />
+      Preview
+                            </button>
+                        )}
+                        <button onClick={handleCodeCopy} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
+                            {isCodeCopied ? <Check size={14} /> : <Clipboard size={14} />}
+                            {isCodeCopied ? 'Copied!' : 'Copy code'}
+                        </button>
+                    </div>
                 </div>
                 <SyntaxHighlighter
                     style={oneDark}
@@ -811,6 +860,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <FileDisplay />
                                 <div className="mt-2" />
                                 <MessageContent />
+                                
+                                {/* Preview is now an on-demand button within each code block header */}
 
                             </>
                         )}
@@ -826,6 +877,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         ) : (
                             <>
                                 <MessageContent />
+                                
+                                {/* Preview is now an on-demand button within each code block header */}
+                                
+
+                                
                                 <VideoDisplay />
                                 <FileDisplay />
                                 <ChartDisplay files={parsedFiles} fullResponse={message.fullResponse} />
