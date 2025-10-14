@@ -4,6 +4,7 @@ import type React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
+import { aiService } from "./ai-service"
 
 interface Message {
   id: string
@@ -326,25 +327,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const streamId = crypto.randomUUID();
       setCurrentStreamId(streamId);
       try {
-        const chartKeywords = [
-          // English
-          'chart', 'graph', 'plot', 'diagram', 'visualize', 'pie chart', 'bar chart',
-          // Spanish
-          'gráfico', 'diagrama', 'tabla', 'visualización', 'esquema', 'cuadro', 'crear gráfico', 'hacer un gráfico', 'genera un diagrama',
-          // French
-          'graphique', 'diagramme', 'tableau', 'visualisation', 'créer un graphique', 'faire un graphique',
-          // German
-          'diagramm', 'grafik',
-          // Urdu
-          'چارٹ', 'گراف',
-          // Hindi
-          'चार्ट', 'ग्राफ़',
-          // Arabic
-          'رسم بياني', 'مخطط',
-        ];
-        const isChartRequest = chartKeywords.some(keyword => content.toLowerCase().includes(keyword));
+        const intent = await aiService.classifyIntent(content);
+        console.log('intent', intent);
 
-        if (isChartRequest) {
+        if (intent === 'chart') {
           const fileId = uploadedFiles.length > 0 ? uploadedFiles[0].id : undefined;
           const chartResponse = await apiClient.generateChart({
             prompt: content,

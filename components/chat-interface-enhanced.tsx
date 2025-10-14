@@ -76,6 +76,7 @@ import {
   Sidebar,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { PresentationView } from "./presentation-view"
 
 
 // Enhanced Actions Dropdown Component
@@ -85,12 +86,8 @@ const ActionsDropdown = ({
   currentPlan,
   isWebSearchActive,
   setIsWebSearchActive,
-  isImageGenerationActive,
-  setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
-  isPPTGenerationActive,
-  setIsPPTGenerationActive,
   setShowAudioPanel,
   setAudioTab,
   handleAndUploadFiles,
@@ -119,35 +116,14 @@ const ActionsDropdown = ({
 
   // Function to handle single selection - deactivate others when one is selected
   const handleWebSearchToggle = () => {
-    setChatType('text');
-    if (!isWebSearchActive) {
-      // Deactivate other options
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-    }
     setIsWebSearchActive(!isWebSearchActive);
   };
-
-  const handleImageGenerationToggle = () => {
-    const newState = !isImageGenerationActive;
-
-    if (newState) {
-      setIsWebSearchActive(false);
-      setIsVideoGenerationActive(false);
-      setChatType('image');
-    } else {
-      setChatType('text');
-    }
-
-    setIsImageGenerationActive(newState);
-  };
-
   const handleVideoGenerationToggle = () => {
     const newState = !isVideoGenerationActive;
 
     if (newState) {
       setIsWebSearchActive(false);
-      setIsImageGenerationActive(false);
+
       setChatType('video');
     } else {
       setChatType('text');
@@ -155,7 +131,6 @@ const ActionsDropdown = ({
 
     setIsVideoGenerationActive(newState);
   };
-
   const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching;
 
   return (
@@ -246,39 +221,6 @@ const ActionsDropdown = ({
             )}
           </div>
         </DropdownMenuItem>
-
-        {/* Image Generation */}
-        <DropdownMenuItem
-          onClick={handleImageGenerationToggle}
-          disabled={currentPlan === "FREE" || isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
-              ? 'bg-pink-100 dark:bg-pink-900/20'
-              : 'bg-pink-100 dark:bg-pink-900/20'
-              }`}>
-              <Palette className={`h-4 w-4 ${isImageGenerationActive
-                ? 'text-pink-600 dark:text-pink-400'
-                : 'text-pink-600 dark:text-pink-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isImageGenerationActive ? 'Image Generation Active' : 'Image Generation'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Generate images with DALL-E 3
-              </div>
-            </div>
-            {isImageGenerationActive && (
-              <div className="w-2 h-2 bg-pink-500 rounded-full" />
-            )}
-            {currentPlan === "FREE" && (
-              <Badge variant="secondary" className="text-xs">Pro</Badge>
-            )}
-          </div>
-        </DropdownMenuItem>
-
         {/* Video Generation */}
         <DropdownMenuItem
           onClick={handleVideoGenerationToggle}
@@ -309,49 +251,7 @@ const ActionsDropdown = ({
               <Badge variant="secondary" className="text-xs">Pro</Badge>
             )}
           </div>
-        </DropdownMenuItem>
-
-        {/* PPT Generation */}
-        <DropdownMenuItem
-          onClick={() => {
-            const newState = !isPPTGenerationActive;
-            if (newState) {
-              setIsWebSearchActive(false);
-              setIsImageGenerationActive(false);
-              setIsVideoGenerationActive(false);
-              setChatType('text');
-            }
-            setIsPPTGenerationActive(newState);
-          }}
-          disabled={currentPlan === "FREE" || isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isPPTGenerationActive
-              ? 'bg-blue-100 dark:bg-blue-900/20'
-              : 'bg-blue-100 dark:bg-blue-900/20'
-              }`}>
-              <FileText className={`h-4 w-4 ${isPPTGenerationActive
-                ? 'text-blue-600 dark:text-blue-400'
-                : 'text-blue-600 dark:text-blue-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isPPTGenerationActive ? 'PPT Generation Active' : 'PPT Generation'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Create PowerPoint presentations
-              </div>
-            </div>
-            {isPPTGenerationActive && (
-              <div className="w-2 h-2 bg-blue-500 rounded-full" />
-            )}
-            {currentPlan === "FREE" && (
-              <Badge variant="secondary" className="text-xs">Pro</Badge>
-            )}
-          </div>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
+        </DropdownMenuItem>      </DropdownMenuContent>
     </DropdownMenu>
   );
 };
@@ -530,25 +430,17 @@ const ActiveOptionsDisplay = ({
 const ActiveToolsDisplay = ({
   isWebSearchActive,
   setIsWebSearchActive,
-  isImageGenerationActive,
-  setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
-  isPPTGenerationActive,
-  setIsPPTGenerationActive,
   setChatType,
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
-  isImageGenerationActive: boolean;
-  setIsImageGenerationActive: (value: boolean) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
-  isPPTGenerationActive: boolean;
-  setIsPPTGenerationActive: (value: boolean) => void;
   setChatType: (type: any) => void;
 }) => {
-  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || isPPTGenerationActive;
+  const hasActiveTools = isWebSearchActive;
 
   if (!hasActiveTools) return null;
 
@@ -556,22 +448,10 @@ const ActiveToolsDisplay = ({
     setIsWebSearchActive(false);
     setChatType('text');
   };
-
-  const handleImageGenerationClose = () => {
-    setIsImageGenerationActive(false);
-    setChatType('text');
-  };
-
   const handleVideoGenerationClose = () => {
     setIsVideoGenerationActive(false);
     setChatType('text');
   };
-
-  const handlePPTGenerationClose = () => {
-    setIsPPTGenerationActive(false);
-    setChatType('text');
-  };
-
   return (
     <div className="flex items-center gap-2">
       {isWebSearchActive && (
@@ -591,20 +471,6 @@ const ActiveToolsDisplay = ({
 
         </>
       )}
-      {isImageGenerationActive && (
-        <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
-          <Palette className="h-3 w-3" />
-          <span className="font-medium">Image Generation</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0 hover:bg-pink-200 dark:hover:bg-pink-800/30 rounded-full ml-1"
-            onClick={handleImageGenerationClose}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
-      )}
       {isVideoGenerationActive && (
         <div className="flex items-center gap-1.5 bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 px-2 py-1 rounded-full text-xs border border-orange-200 dark:border-orange-800">
           <Video className="h-3 w-3" />
@@ -614,20 +480,6 @@ const ActiveToolsDisplay = ({
             size="sm"
             className="h-4 w-4 p-0 hover:bg-orange-200 dark:hover:bg-orange-800/30 rounded-full ml-1"
             onClick={handleVideoGenerationClose}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
-      )}
-      {isPPTGenerationActive && (
-        <div className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
-          <FileText className="h-3 w-3" />
-          <span className="font-medium">PPT Generation</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-800/30 rounded-full ml-1"
-            onClick={handlePPTGenerationClose}
           >
             <X className="h-3 w-3" />
           </Button>
@@ -827,12 +679,13 @@ function ChatInterfaceContent() {
 
   const [isWebSearching, setIsWebSearching] = React.useState(false)
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
-  const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
-  const [isPPTGenerationActive, setIsPPTGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
+  const [showPresentationPreview, setShowPresentationPreview] = React.useState(false);
+  const [selectedPresentation, setSelectedPresentation] = React.useState<any>(null);
+
 
   // Search sources state - all enabled by default
 
@@ -915,6 +768,20 @@ function ChatInterfaceContent() {
       setIsSubscribing(false);
     }
   };
+
+  React.useEffect(() => {
+    const handlePreview = (event: any) => {
+      const { presentation } = event.detail;
+      setSelectedPresentation(presentation);
+      setShowPresentationPreview(true);
+    };
+
+    window.addEventListener('preview-presentation', handlePreview);
+
+    return () => {
+      window.removeEventListener('preview-presentation', handlePreview);
+    };
+  }, []);
 
   React.useEffect(() => {
     function handleOpenUpgrade(e: any) {
@@ -1015,7 +882,6 @@ function ChatInterfaceContent() {
   React.useEffect(() => {
     // Reset generation modes when switching chats
     setIsWebSearchActive(false);
-    setIsImageGenerationActive(false);
     setIsVideoGenerationActive(false);
     setChatType('text'); // Always default to text when switching chats
   }, []); // Only trigger when chat ID changes
@@ -1198,7 +1064,9 @@ function ChatInterfaceContent() {
     setInput("")
 
     try {
-      if (chatType === 'image' || chatType === 'video') {
+      const intent = await aiService.classifyIntent(msg);
+
+      if (intent === 'image' || chatType === 'video') {
         const hasNonImageFiles = uploadedFiles.some(
           (file) => !file.type?.startsWith('image/')
         );
@@ -1208,26 +1076,21 @@ function ChatInterfaceContent() {
           return;
         }
       }
+
       if (isWebSearchActive) {
-        await handleWebSearch(); // Changed to await
-      } else if (isImageGenerationActive) {
+        await handleWebSearch(); // Web search remains a manual toggle
+      } else if (intent === 'image') {
         await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
-
-
-
       } else if (isVideoGenerationActive) {
         await handleVideoGeneration(msg);
-      } else if (isPPTGenerationActive) {
+      } else if (intent === 'ppt') {
         await handlePPTGeneration(msg);
       } else {
         const filesToSend = [...uploadedFiles];
         setUploadedFiles([]); // Clear UI immediately
 
         if (!currentChat) {
-          console.log("1s1");
-          await createNewChat(chatType, msg, filesToSend);
-        } else if (chatType === 'image') {
-          await handleImageGeneration(msg, filesToSend.map(f => f.id));
+          await createNewChat('text', msg, filesToSend);
         } else if (chatType === 'video') {
           await handleVideoGeneration(msg);
         } else {
@@ -1362,7 +1225,6 @@ function ChatInterfaceContent() {
       const response = await apiClient.generatePPT(payload);
       await selectChat(currentChat?.id ?? "");
       toast.success(`Presentation created with ${response.slideCount} slides!`);
-      setIsPPTGenerationActive(false);
     } catch (error: any) {
       console.error('PPT generation failed:', error);
       toast.error(error.message || 'PPT generation failed');
@@ -1523,60 +1385,62 @@ function ChatInterfaceContent() {
         </div>
       )}
 
-      {/* Header */}
-      <div className=" border-border/40 p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="md:hidden">
-              <Sidebar>
-                <AppSidebar />
-              </Sidebar>
-              <SidebarTrigger>
-                <Menu className="h-6 w-6" />
-              </SidebarTrigger>
-            </div>
-            {!showAudioPanel ? (
-              <>
-                <NavbarModelSelector
-                  selectedModel={selectedModel}
-                  setSelectedModel={setSelectedModel}
-                  availableModels={availableModels}
-                  setSelectedProvider={setSelectedProivder}
-                  chatTypes={chatType}
-                  currentChat={currentChat}
-                />
-              </>
-            ) : (
-              <div className="flex flex-col">
-                <div className="text-lg font-semibold">Voice Studio</div>
-                <div className="text-xs text-muted-foreground">Text-to-Speech, Speech-to-Text, Music & Video</div>
+      <div className="flex flex-1 overflow-hidden">
+        <div className={`flex flex-col h-full ${showPresentationPreview ? 'w-1/2' : 'w-full'}`}>
+          {/* Header */}
+          <div className=" border-border/40 p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="md:hidden">
+                  <Sidebar>
+                    <AppSidebar />
+                  </Sidebar>
+                  <SidebarTrigger>
+                    <Menu className="h-6 w-6" />
+                  </SidebarTrigger>
+                </div>
+                {!showAudioPanel ? (
+                  <>
+                    <NavbarModelSelector
+                      selectedModel={selectedModel}
+                      setSelectedModel={setSelectedModel}
+                      availableModels={availableModels}
+                      setSelectedProvider={setSelectedProivder}
+                      chatTypes={chatType}
+                      currentChat={currentChat}
+                    />
+                  </>
+                ) : (
+                  <div className="flex flex-col">
+                    <div className="text-lg font-semibold">Voice Studio</div>
+                    <div className="text-xs text-muted-foreground">Text-to-Speech, Speech-to-Text, Music & Video</div>
+                  </div>
+                )}
               </div>
-            )}
+              <div className="flex items-center gap-2">
+                <ThemeToggle />
+                <Button variant="outline" size="sm" onClick={() => setSubscribeOpen(true)}>
+                  {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
+                </Button>
+                <UpgradeModal
+                  open={subscribeOpen}
+                  onOpenChange={setSubscribeOpen}
+                  user={currentUserInfo || user}
+                />
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <Button variant="outline" size="sm" onClick={() => setSubscribeOpen(true)}>
-              {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
-            </Button>
-            <UpgradeModal
-              open={subscribeOpen}
-              onOpenChange={setSubscribeOpen}
-              user={currentUserInfo || user}
-            />
-          </div>
-        </div>
-      </div>
 
-      {isInitial ? (
-        <div className="flex flex-1 items-center justify-center p-4">
-          <div className="w-full max-w-4xl space-y-6">
-            {/* <div className="text-center space-y-2">
+          {isInitial ? (
+            <div className="flex flex-1 items-center justify-center p-4">
+              <div className="w-full max-w-4xl space-y-6">
+                {/* <div className="text-center space-y-2">
               <h1 className="text-3xl font-bold">Welcome to Sira GPT</h1>
               <p className="text-muted-foreground">Ask anything, generate images, or create videos with AI.</p>
             </div> */}
 
-            {/* Example prompts */}
-            {/* {chatType === 'text' && (
+                {/* Example prompts */}
+                {/* {chatType === 'text' && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
                 <Button
                   variant="outline"
@@ -1611,319 +1475,45 @@ function ChatInterfaceContent() {
               </div>
             )} */}
 
-            {/* Video generation prompts */}
-            {chatType === 'video' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("A majestic eagle soaring through mountain peaks at sunset")}
-                >
-                  <div>
-                    <div className="font-medium">Nature Scene</div>
-                    <div className="text-xs text-muted-foreground">Beautiful wildlife and landscapes</div>
-                  </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("A futuristic cityscape with flying cars and neon lights")}
-                >
-                  <div>
-                    <div className="font-medium">Sci-Fi Scene</div>
-                    <div className="text-xs text-muted-foreground">Futuristic and technology themes</div>
-                  </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("A peaceful beach with gentle waves and palm trees swaying")}
-                >
-                  <div>
-                    <div className="font-medium">Relaxing Scene</div>
-                    <div className="text-xs text-muted-foreground">Calm and peaceful environments</div>
-                  </div>
-                </Button>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <div className="border-wrapper">
-                <div className="relative rounded-3xl   focus-within:ring-1 focus-within:ring-ring overflow-hidden  ">
-                  <ActiveOptionsDisplay
-                    uploadedFiles={uploadedFiles}
-                    removeFile={removeFile}
-                    uploadProgress={uploadProgress}
-                  />
-                  <Textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={(e) => {
-                      setInput(e.target.value);
-                    }}
-                    onKeyPress={handleKeyPress}
-                    placeholder={
-                      isImageGenerationActive
-                        ? "Describe the image you want to generate..."
-                        : isVideoGenerationActive
-                          ? "Describe the video you want to create..."
-                          : isWebSearchActive
-                            ? "Enter your search query..."
-                            : "Type your message here..."
-                    }
-                    className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
-                    style={{
-                      minHeight: "60px",
-                      maxHeight: "350px",
-                      overflowY: "auto",
-                      border: "none",           // Inline style border remove
-                      outline: "none",          // Inline style outline remove
-                      boxShadow: "none",        // Remove focus shadow if any
-                    }}
-                    rows={1}
-                    disabled={
-                      isLoading ||
-                      isGeneratingImage ||
-                      isGeneratingVideo ||
-                      isUploading ||
-                      isWebSearching
-                    }
-                  />
-                  <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2  bg-background/95 p-2 backdrop-blur-sm">
-                    <ActionsDropdown
-                      chatType={chatType}
-                      setChatType={setChatType}
-                      currentPlan={currentPlan}
-                      isWebSearchActive={isWebSearchActive}
-                      setIsWebSearchActive={setIsWebSearchActive}
-                      isImageGenerationActive={isImageGenerationActive}
-                      setIsImageGenerationActive={setIsImageGenerationActive}
-                      isVideoGenerationActive={isVideoGenerationActive}
-                      setIsVideoGenerationActive={setIsVideoGenerationActive}
-                      isPPTGenerationActive={isPPTGenerationActive}
-                      setIsPPTGenerationActive={setIsPPTGenerationActive}
-                      setShowAudioPanel={setShowAudioPanel}
-                      setAudioTab={setAudioTab}
-                      handleAndUploadFiles={handleAndUploadFiles}
-                      isUploading={isUploading}
-                      isWebSearching={isWebSearching}
-                      isLoading={isLoading}
-                      isGeneratingImage={isGeneratingImage}
-                      isGeneratingVideo={isGeneratingVideo}
-                      isGeneratingPPT={isGeneratingPPT}
-                    />
-                    <ActiveToolsDisplay
-                      isWebSearchActive={isWebSearchActive}
-                      setIsWebSearchActive={setIsWebSearchActive}
-                      isImageGenerationActive={isImageGenerationActive}
-                      setIsImageGenerationActive={setIsImageGenerationActive}
-                      isVideoGenerationActive={isVideoGenerationActive}
-                      setIsVideoGenerationActive={setIsVideoGenerationActive}
-                      isPPTGenerationActive={isPPTGenerationActive}
-                      setIsPPTGenerationActive={setIsPPTGenerationActive}
-                      setChatType={setChatType}
-                    />
-                    <div className="flex-grow" />
-                    {!(isLoading && isStreaming) && (
-                      <>
-                        <VoiceControls
-                          onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                          className="flex items-center gap-1"
-                        />
-                        <Button
-                          onClick={handleSend}
-                          disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
-                          size="sm"
-                          className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
-                        >
-                          {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <ArrowUp className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </>
-                    )}
-
-                    {/* Stop Button when streaming */}
-                    {/* {isLoading && isStreaming && (
+                {/* Video generation prompts */}
+                {chatType === 'video' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
                     <Button
-                      onClick={stopStreaming}
-                      size="icon"
-                      // variant="ghost" 
-                      className="h-8 w-8  rounded-full text-muted-foreground "
-                      title="Stop Generating"
+                      variant="outline"
+                      className="p-4 h-auto text-left justify-start"
+                      onClick={() => setInput("A majestic eagle soaring through mountain peaks at sunset")}
                     >
-                      <Square className="h-4 w-4" />
+                      <div>
+                        <div className="font-medium">Nature Scene</div>
+                        <div className="text-xs text-muted-foreground">Beautiful wildlife and landscapes</div>
+                      </div>
                     </Button>
-                  )} */}
-
-                    {isLoading && isStreaming && (
-                      <Button
-                        onClick={stopStreaming}
-                        size="icon"
-                        // className={cn(
-                        //   "h-8 w-8 rounded-full",
-                        //   "text-gray-800 hover:text-black",            // Always dark icon
-                        //   "hover:bg-gray-200 dark:hover:bg-gray-300", // Optional hover bg
-                        //   "transition-colors"
-                        // )}
-                        title="Stop Generating"
-                      >
-                        <Square className="h-4 w-4" />
-                      </Button>
-                    )}
-
+                    <Button
+                      variant="outline"
+                      className="p-4 h-auto text-left justify-start"
+                      onClick={() => setInput("A futuristic cityscape with flying cars and neon lights")}
+                    >
+                      <div>
+                        <div className="font-medium">Sci-Fi Scene</div>
+                        <div className="text-xs text-muted-foreground">Futuristic and technology themes</div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="p-4 h-auto text-left justify-start"
+                      onClick={() => setInput("A peaceful beach with gentle waves and palm trees swaying")}
+                    >
+                      <div>
+                        <div className="font-medium">Relaxing Scene</div>
+                        <div className="text-xs text-muted-foreground">Calm and peaceful environments</div>
+                      </div>
+                    </Button>
                   </div>
-                </div></div>
-
-              {/* <p className="text-center text-xs text-muted-foreground">
-                {isImageGenerationActive
-                  ? 'Press Enter to generate image, Shift+Enter for new line'
-                  : isVideoGenerationActive
-                    ? 'Press Enter to generate video, Shift+Enter for new line'
-                    : isWebSearchActive
-                      ? 'Press Enter to search the web, Shift+Enter for new line'
-                      : 'Press Enter to send, Shift+Enter for new line'
-                }
-              </p> */}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <>
-          {showAudioPanel ? (
-            // Voice Studio responsive view
-            <div className="flex flex-1 flex-col lg:flex-row">
-              {/* Navigation - Mobile: horizontal tabs, Desktop: vertical sidebar */}
-              <div className="lg:w-56 lg:border-r border-border/40 p-3 sm:p-4">
-                <div className="text-sm font-medium mb-2 hidden lg:block">Voice Studio</div>
-
-                {/* Mobile: Horizontal scrollable tabs */}
-                <div className="flex lg:hidden overflow-x-auto gap-2 pb-2">
-                  <Button
-                    variant={audioTab === 'tts' ? 'default' : 'outline'}
-                    size="sm"
-                    className="flex-shrink-0"
-                    onClick={() => setAudioTab('tts')}
-                  >
-                    <Square className="h-4 w-4 mr-1" />
-                    <span className="text-xs">TTS</span>
-                  </Button>
-                  <Button
-                    variant={audioTab === 'stt' ? 'default' : 'outline'}
-                    size="sm"
-                    className="flex-shrink-0"
-                    onClick={() => setAudioTab('stt')}
-                  >
-                    <Mic className="h-4 w-4 mr-1" />
-                    <span className="text-xs">STT</span>
-                  </Button>
-                  <Button
-                    variant={audioTab === 'music' ? 'default' : 'outline'}
-                    size="sm"
-                    className="flex-shrink-0"
-                    onClick={() => setAudioTab('music')}
-                  >
-                    <Music className="h-4 w-4 mr-1" />
-                    <span className="text-xs">Music</span>
-                  </Button>
-
-                </div>
-
-                {/* Desktop: Vertical buttons */}
-                <div className="hidden lg:block space-y-2">
-                  <Button
-                    variant={audioTab === 'tts' ? 'default' : 'outline'}
-                    className="w-full justify-start"
-                    onClick={() => setAudioTab('tts')}
-                  >
-                    <Square className="h-4 w-4 mr-2" />
-                    Text-to-Speech
-                  </Button>
-                  <Button
-                    variant={audioTab === 'stt' ? 'default' : 'outline'}
-                    className="w-full justify-start"
-                    onClick={() => setAudioTab('stt')}
-                  >
-                    <Mic className="h-4 w-4 mr-2" />
-                    Speech-to-Text
-                  </Button>
-                  <Button
-                    variant={audioTab === 'music' ? 'default' : 'outline'}
-                    className="w-full justify-start"
-                    onClick={() => setAudioTab('music')}
-                  >
-                    <Music className="h-4 w-4 mr-2" />
-                    Music
-                  </Button>
-
-                </div>
-              </div>
-
-              {/* Content area */}
-              <div className="flex-1 p-3 sm:p-4">
-                {audioTab === 'tts' && (
-                  <TextToSpeechComponent />
                 )}
-                {audioTab === 'stt' && (
-                  <SpeechToTextComponent />
-                )}
-                {audioTab === 'music' && (
-                  <MusicGenerationComponent />
-                )}
-                {audioTab === 'video' && (
-                  <VideoGenerationComponent />
-                )}
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Messages */}
-              <ScrollArea className="flex-1 p-2 md:p-4 mb-6" ref={scrollAreaRef}>
-                <div className="space-y-4 max-w-4xl mx-auto w-full">
-                  {(() => {
-                    const messages = currentChat?.messages || [];
-                    const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
-                    const streamingMessage = isStreaming ? messages[messages.length - 1] : null;
 
-                    return (
-                      <>
-                        {stableMessages.map((message) => (
-                          <MessageComponent
-                            key={message.id}
-                            message={message}
-                            user={user}
-                            onRegenerate={regenerateLastMessage}
-                            updateMessageInChat={editAndRegenerate}
-                            isStreaming={false}
-                          />
-                        ))}
-                        {streamingMessage && (
-                          <MessageComponent
-                            key={streamingMessage.id}
-                            message={streamingMessage}
-                            user={user}
-                            onRegenerate={regenerateLastMessage}
-                            updateMessageInChat={editAndRegenerate}
-                            isStreaming={true}
-                          />
-                        )}
-                      </>
-                    );
-                  })()}
-                </div>
-              </ScrollArea>
-
-              {/* Input & Actions */}
-
-              <div className="px-2 md:px-4">
-                <div className="max-w-4xl mx-auto space-y-3">
-                  {/* Input Area */}
-
-                  {/* <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"> */}
+                <div className="space-y-3">
                   <div className="border-wrapper">
-                    <div className="relative  rounded-3xl .card border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden ">
+                    <div className="relative rounded-3xl   focus-within:ring-1 focus-within:ring-ring overflow-hidden  ">
                       <ActiveOptionsDisplay
                         uploadedFiles={uploadedFiles}
                         removeFile={removeFile}
@@ -1937,15 +1527,13 @@ function ChatInterfaceContent() {
                         }}
                         onKeyPress={handleKeyPress}
                         placeholder={
-                          isImageGenerationActive
-                            ? "Describe the image you want to generate..."
-                            : isVideoGenerationActive
-                              ? "Describe the video you want to create..."
-                              : isWebSearchActive
-                                ? "Enter your search query..."
-                                : "Type your message here..."
+                          isVideoGenerationActive
+                            ? "Describe the video you want to create..."
+                            : isWebSearchActive
+                              ? "Enter your search query..."
+                              : "Type your message here..."
                         }
-                        className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
+                        className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
                         style={{
                           minHeight: "60px",
                           maxHeight: "350px",
@@ -1956,25 +1544,22 @@ function ChatInterfaceContent() {
                         }}
                         rows={1}
                         disabled={
-                          // isLoading ||
+                          isLoading ||
+                          isGeneratingImage ||
                           isGeneratingVideo ||
                           isUploading ||
                           isWebSearching
                         }
                       />
-                      <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 rounded-b-xl bg-background/95 p-2 backdrop-blur-sm">
+                      <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2  bg-background/95 p-2 backdrop-blur-sm">
                         <ActionsDropdown
                           chatType={chatType}
                           setChatType={setChatType}
                           currentPlan={currentPlan}
                           isWebSearchActive={isWebSearchActive}
                           setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          isPPTGenerationActive={isPPTGenerationActive}
-                          setIsPPTGenerationActive={setIsPPTGenerationActive}
                           setShowAudioPanel={setShowAudioPanel}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
@@ -1988,12 +1573,8 @@ function ChatInterfaceContent() {
                         <ActiveToolsDisplay
                           isWebSearchActive={isWebSearchActive}
                           setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          isPPTGenerationActive={isPPTGenerationActive}
-                          setIsPPTGenerationActive={setIsPPTGenerationActive}
                           setChatType={setChatType}
                         />
                         <div className="flex-grow" />
@@ -2019,38 +1600,305 @@ function ChatInterfaceContent() {
                         )}
 
                         {/* Stop Button when streaming */}
+                        {/* {isLoading && isStreaming && (
+                    <Button
+                      onClick={stopStreaming}
+                      size="icon"
+                      // variant="ghost" 
+                      className="h-8 w-8  rounded-full text-muted-foreground "
+                      title="Stop Generating"
+                    >
+                      <Square className="h-4 w-4" />
+                    </Button>
+                  )} */}
+
                         {isLoading && isStreaming && (
                           <Button
                             onClick={stopStreaming}
                             size="icon"
-                            // variant="ghost" 
-                            className="h-8 w-8  rounded-full text-muted-foreground hover:text-foreground"
+                            // className={cn(
+                            //   "h-8 w-8 rounded-full",
+                            //   "text-gray-800 hover:text-black",            // Always dark icon
+                            //   "hover:bg-gray-200 dark:hover:bg-gray-300", // Optional hover bg
+                            //   "transition-colors"
+                            // )}
                             title="Stop Generating"
                           >
                             <Square className="h-4 w-4" />
                           </Button>
                         )}
+
                       </div>
+                    </div></div>
+
+                  {/* <p className="text-center text-xs text-muted-foreground">
+                {isWebSearchActive
+                      ? 'Press Enter to search the web, Shift+Enter for new line'
+                      : 'Press Enter to send, Shift+Enter for new line'
+                }
+              </p> */}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {showAudioPanel ? (
+                // Voice Studio responsive view
+                <div className="flex flex-1 flex-col lg:flex-row">
+                  {/* Navigation - Mobile: horizontal tabs, Desktop: vertical sidebar */}
+                  <div className="lg:w-56 lg:border-r border-border/40 p-3 sm:p-4">
+                    <div className="text-sm font-medium mb-2 hidden lg:block">Voice Studio</div>
+
+                    {/* Mobile: Horizontal scrollable tabs */}
+                    <div className="flex lg:hidden overflow-x-auto gap-2 pb-2">
+                      <Button
+                        variant={audioTab === 'tts' ? 'default' : 'outline'}
+                        size="sm"
+                        className="flex-shrink-0"
+                        onClick={() => setAudioTab('tts')}
+                      >
+                        <Square className="h-4 w-4 mr-1" />
+                        <span className="text-xs">TTS</span>
+                      </Button>
+                      <Button
+                        variant={audioTab === 'stt' ? 'default' : 'outline'}
+                        size="sm"
+                        className="flex-shrink-0"
+                        onClick={() => setAudioTab('stt')}
+                      >
+                        <Mic className="h-4 w-4 mr-1" />
+                        <span className="text-xs">STT</span>
+                      </Button>
+                      <Button
+                        variant={audioTab === 'music' ? 'default' : 'outline'}
+                        size="sm"
+                        className="flex-shrink-0"
+                        onClick={() => setAudioTab('music')}
+                      >
+                        <Music className="h-4 w-4 mr-1" />
+                        <span className="text-xs">Music</span>
+                      </Button>
+
+                    </div>
+
+                    {/* Desktop: Vertical buttons */}
+                    <div className="hidden lg:block space-y-2">
+                      <Button
+                        variant={audioTab === 'tts' ? 'default' : 'outline'}
+                        className="w-full justify-start"
+                        onClick={() => setAudioTab('tts')}
+                      >
+                        <Square className="h-4 w-4 mr-2" />
+                        Text-to-Speech
+                      </Button>
+                      <Button
+                        variant={audioTab === 'stt' ? 'default' : 'outline'}
+                        className="w-full justify-start"
+                        onClick={() => setAudioTab('stt')}
+                      >
+                        <Mic className="h-4 w-4 mr-2" />
+                        Speech-to-Text
+                      </Button>
+                      <Button
+                        variant={audioTab === 'music' ? 'default' : 'outline'}
+                        className="w-full justify-start"
+                        onClick={() => setAudioTab('music')}
+                      >
+                        <Music className="h-4 w-4 mr-2" />
+                        Music
+                      </Button>
+
                     </div>
                   </div>
 
-                  <p className="text-center text-xs text-muted-foreground">
-                    {isImageGenerationActive
-                      ? 'Press Enter to generate image, Shift+Enter for new line'
-                      : isVideoGenerationActive
-                        ? 'Press Enter to generate video, Shift+Enter for new line'
-                        : isWebSearchActive
-                          ? 'Press Enter to search the web, Shift+Enter for new line'
-                          : 'Press Enter to send, Shift+Enter for new line'
-                    }
-                  </p>
+                  {/* Content area */}
+                  <div className="flex-1 p-3 sm:p-4">
+                    {audioTab === 'tts' && (
+                      <TextToSpeechComponent />
+                    )}
+                    {audioTab === 'stt' && (
+                      <SpeechToTextComponent />
+                    )}
+                    {audioTab === 'music' && (
+                      <MusicGenerationComponent />
+                    )}
+                    {audioTab === 'video' && (
+                      <VideoGenerationComponent />
+                    )}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <>
+                  {/* Messages */}
+                  <ScrollArea className="flex-1 p-2 md:p-4 mb-6" ref={scrollAreaRef}>
+                    <div className="space-y-4 max-w-4xl mx-auto w-full">
+                      {(() => {
+                        const messages = currentChat?.messages || [];
+                        const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
+                        const streamingMessage = isStreaming ? messages[messages.length - 1] : null;
+
+                        return (
+                          <>
+                            {stableMessages.map((message) => (
+                              <MessageComponent
+                                key={message.id}
+                                message={message}
+                                user={user}
+                                onRegenerate={regenerateLastMessage}
+                                updateMessageInChat={editAndRegenerate}
+                                isStreaming={false}
+                              />
+                            ))}
+                            {streamingMessage && (
+                              <MessageComponent
+                                key={streamingMessage.id}
+                                message={streamingMessage}
+                                user={user}
+                                onRegenerate={regenerateLastMessage}
+                                updateMessageInChat={editAndRegenerate}
+                                isStreaming={true}
+                              />
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </ScrollArea>
+
+                  {/* Input & Actions */}
+
+                  <div className="px-2 md:px-4">
+                    <div className="max-w-4xl mx-auto space-y-3">
+                      {/* Input Area */}
+
+                      {/* <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"> */}
+                      <div className="border-wrapper">
+                        <div className="relative  rounded-3xl .card border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden ">
+                          <ActiveOptionsDisplay
+                            uploadedFiles={uploadedFiles}
+                            removeFile={removeFile}
+                            uploadProgress={uploadProgress}
+                          />
+                          <Textarea
+                            ref={textareaRef}
+                            value={input}
+                            onChange={(e) => {
+                              setInput(e.target.value);
+                            }}
+                            onKeyPress={handleKeyPress}
+                            placeholder={
+                              isVideoGenerationActive
+                                ? "Describe the video you want to create..."
+                                : isWebSearchActive
+                                  ? "Enter your search query..."
+                                  : "Type your message here..."
+                            }
+                            className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
+                            style={{
+                              minHeight: "60px",
+                              maxHeight: "350px",
+                              overflowY: "auto",
+                              border: "none",           // Inline style border remove
+                              outline: "none",          // Inline style outline remove
+                              boxShadow: "none",        // Remove focus shadow if any
+                            }}
+                            rows={1}
+                            disabled={
+                              // isLoading ||
+                              isGeneratingVideo ||
+                              isUploading ||
+                              isWebSearching
+                            }
+                          />
+                          <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 rounded-b-xl bg-background/95 p-2 backdrop-blur-sm">
+                            <ActionsDropdown
+                              chatType={chatType}
+                              setChatType={setChatType}
+                              currentPlan={currentPlan}
+                              isWebSearchActive={isWebSearchActive}
+                              setIsWebSearchActive={setIsWebSearchActive}
+                              isVideoGenerationActive={isVideoGenerationActive}
+                              setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              setShowAudioPanel={setShowAudioPanel}
+                              setAudioTab={setAudioTab}
+                              handleAndUploadFiles={handleAndUploadFiles}
+                              isUploading={isUploading}
+                              isWebSearching={isWebSearching}
+                              isLoading={isLoading}
+                              isGeneratingImage={isGeneratingImage}
+                              isGeneratingVideo={isGeneratingVideo}
+                              isGeneratingPPT={isGeneratingPPT}
+                            />
+                            <ActiveToolsDisplay
+                              isWebSearchActive={isWebSearchActive}
+                              setIsWebSearchActive={setIsWebSearchActive}
+                              isVideoGenerationActive={isVideoGenerationActive}
+                              setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              setChatType={setChatType}
+                            />
+                            <div className="flex-grow" />
+                            {!(isLoading && isStreaming) && (
+                              <>
+                                <VoiceControls
+                                  onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                                  className="flex items-center gap-1"
+                                />
+                                <Button
+                                  onClick={handleSend}
+                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
+                                  size="sm"
+                                  className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+                                >
+                                  {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <ArrowUp className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </>
+                            )}
+
+                            {/* Stop Button when streaming */}
+                            {isLoading && isStreaming && (
+                              <Button
+                                onClick={stopStreaming}
+                                size="icon"
+                                // variant="ghost" 
+                                className="h-8 w-8  rounded-full text-muted-foreground hover:text-foreground"
+                                title="Stop Generating"
+                              >
+                                <Square className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <p className="text-center text-xs text-muted-foreground">
+                        {isVideoGenerationActive
+                          ? 'Press Enter to generate video, Shift+Enter for new line'
+                          : isWebSearchActive
+                            ? 'Press Enter to search the web, Shift+Enter for new line'
+                            : 'Press Enter to send, Shift+Enter for new line'
+                        }
+                      </p>
+                    </div>
+                  </div>
+                </>
+              )}
             </>
-          )}
-        </>
-      )
-      }
+          )
+          }
+        </div>
+        {showPresentationPreview && selectedPresentation && (
+          <div className="w-1/2 border-l border-border/40">
+            <PresentationView
+              presentation={selectedPresentation}
+              onClose={() => setShowPresentationPreview(false)}
+            />
+          </div>
+        )}
+      </div>
     </div >
   )
 }

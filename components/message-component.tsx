@@ -111,7 +111,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const [isTableExpanded, setIsTableExpanded] = useState(false);
     const [tableData, setTableData] = useState<string[][]>([]);
     const [tableHeaders, setTableHeaders] = useState<string[]>([]);
-    const [showPresentation, setShowPresentation] = useState(false);
 
     const [tableTitle, setTableTitle] = useState<string>('');
     const getNodeText = (node: any): string => {
@@ -636,7 +635,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     📊 {slideCount} slides • PowerPoint Presentation
                 </div>
                 <div className="flex gap-2">
-                    <Button size="sm" variant="default" onClick={() => setShowPresentation(true)} className="bg-blue-600 hover:bg-blue-700">
+                    <Button size="sm" variant="default" onClick={() => {
+                        const event = new CustomEvent('preview-presentation', { detail: { presentation: presentationData } });
+                        window.dispatchEvent(event);
+                    }} className="bg-blue-600 hover:bg-blue-700">
                         <Eye className="h-4 w-4 mr-2" />
                         Preview
                     </Button>
@@ -645,12 +647,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         Download
                     </Button>
                 </div>
-                {showPresentation && (
-                    <PresentationView
-                        presentation={presentationData}
-                        onClose={() => setShowPresentation(false)}
-                    />
-                )}
             </div>
         );
     };

@@ -66,6 +66,7 @@ export function PresentationView({ presentation, onClose }: PresentationViewProp
     };
 
     const downloadAsHTML = () => {
+        const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
         const htmlContent = `
 <!DOCTYPE html>
 <html lang="en">
@@ -126,7 +127,7 @@ export function PresentationView({ presentation, onClose }: PresentationViewProp
             <ul>${(slide.content || []).map(point => `<li>${point}</li>`).join('')}</ul>
           </div>
           <div class="column">
-            ${slide.imageUrl ? `<img src="${slide.imageUrl}" style="max-width: 100%; max-height: 100%; object-fit: contain;">` : ''}
+            ${slide.imageUrl ? `<img src="${baseUrl}${slide.imageUrl}" style="max-width: 100%; max-height: 100%; object-fit: contain;">` : ''}
           </div>
         </div>
       </div>`;
@@ -227,7 +228,7 @@ export function PresentationView({ presentation, onClose }: PresentationViewProp
                                         </div>
                                         <div className="flex items-center justify-center bg-slate-100 rounded-lg">
                                             {slide.imageUrl ? (
-                                                <img src={slide.imageUrl} alt={slide.title} className="max-h-full max-w-full object-contain rounded-lg" />
+                                                <img src={`${process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000'}${slide.imageUrl}`} alt={slide.title} className="max-h-full max-w-full object-contain rounded-lg" />
                                             ) : (
                                                 <div className="text-slate-400">Image loading...</div>
                                             )}

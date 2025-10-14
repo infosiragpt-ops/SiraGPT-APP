@@ -321,21 +321,22 @@ Do not include any other text or explanations in your response. Just the JSON ob
       "type": "content",
       "title": "Slide Title",
       "content": [
-        "Bullet point 1",
-        "Bullet point 2",
-        "Bullet point 3"
+        "First detailed bullet point explaining a key concept.",
+        "Second bullet point elaborating on the previous one with examples.",
+        "Third bullet point providing further insights or data.",
+        "Fourth conclusive bullet point summarizing the slide's topic."
       ]
     },
     {
       "type": "two-column",
-      "title": "Slide Title",
-      "leftContent": ["Point 1", "Point 2"],
-      "rightContent": ["Point A", "Point B"]
+      "title": "Comparative Analysis",
+      "leftContent": ["Point 1 with details", "Point 2 with details"],
+      "rightContent": ["Counter-point A with details", "Counter-point B with details"]
     },
     {
       "type": "content-with-image",
-      "title": "Slide Title",
-      "content": ["Bullet point 1", "Bullet point 2"],
+      "title": "Visualizing the Concept",
+      "content": ["Bullet point explaining the visual.", "Another point on its importance."],
       "imagePrompt": "A photorealistic image of a modern office with people collaborating."
     }
   ]
@@ -344,7 +345,8 @@ Do not include any other text or explanations in your response. Just the JSON ob
 Available slide types: "title", "content", "two-column", "content-with-image".
 For "content-with-image" slides, provide a concise, descriptive \`imagePrompt\` for DALL-E to generate a relevant image.
 The first slide must always be of type "title" and must include a subtitle.
-Generate 5-10 slides based on the topic. Make content clear, concise, and professional.
+Generate 5-10 slides based on the topic. For each content slide, generate at least 4-6 meaningful and detailed bullet points.
+The content should be clear, concise, professional, and easy to understand.
 Only respond with the JSON object, no additional text.`
             };
 
@@ -395,8 +397,10 @@ Only respond with the JSON object, no additional text.`
                 text: '1A202C'
             };
 
+            const timestamp = Date.now();
+
             // Process each slide
-            for (const slideData of pptStructure.slides) {
+            for (const [index, slideData] of pptStructure.slides.entries()) {
                 const slide = ppt.addSlide();
 
                 // Add a slide master for consistent branding
@@ -511,13 +515,29 @@ Only respond with the JSON object, no additional text.`
                         console.log(`🖼️ Generating image for slide: "${slideData.title}"`);
                         const imageB64 = await this.generateImage(slideData.imagePrompt);
                         if (imageB64) {
+                            // Add image to PPTX from base64
                             slide.addImage({
                                 data: `data:image/png;base64,${imageB64}`,
                                 x: 5.5, y: 1.5, w: 4.0, h: 4.0,
                             });
-                            console.log(`✅ Image added successfully to slide.`);
+
+                            // Save the image to a file for frontend access
+                            try {
+                                const imageBuffer = Buffer.from(imageB64, 'base64');
+                                const imagesDir = path.join(__dirname, '../../uploads/images');
+                                await fs.promises.mkdir(imagesDir, { recursive: true });
+                                const imageFilename = `ppt-image-${timestamp}-${index}.png`;
+                                const imageFilepath = path.join(imagesDir, imageFilename);
+                                await fs.promises.writeFile(imageFilepath, imageBuffer);
+
+                                // Update the slide data with the public URL
+                                slideData.imageUrl = `/uploads/images/${imageFilename}`;
+                                console.log(`✅ Image saved and URL set for frontend: ${slideData.imageUrl}`);
+                            } catch (saveError) {
+                                console.error('Error saving presentation image:', saveError);
+                            }
                         } else {
-                             console.log(`⚠️ Image generation failed, skipping image for this slide.`);
+                            console.log(`⚠️ Image generation failed, skipping image for this slide.`);
                         }
                     }
                 }
@@ -527,7 +547,6 @@ Only respond with the JSON object, no additional text.`
             const uploadsDir = path.join(__dirname, '../../uploads/presentations');
             await fs.promises.mkdir(uploadsDir, { recursive: true });
 
-            const timestamp = Date.now();
             const filename = `presentation-${timestamp}.pptx`;
             const filepath = path.join(uploadsDir, filename);
 

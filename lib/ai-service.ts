@@ -490,6 +490,59 @@ export class AIService {
   hasApiKey(provider: string): boolean {
     return this.apiKeys.has(provider)
   }
+
+  async classifyIntent(prompt: string): Promise<string> {
+    const apiKey = process.env.OPENAI_API_KEY
+    if (!apiKey) {
+      console.error("OpenAI API key not found for intent classification.");
+      // Fallback to basic keyword matching if API key is not available
+      const lowerCasePrompt = prompt.toLowerCase();
+      if (/\b(image|picture|photo|doodle|drawing)\b/i.test(prompt)) return 'image';
+      if (/\b(video|clip|animation|movie)\b/i.test(prompt)) return 'video';
+      if (/\b(ppt|presentation|slides|powerpoint)\b/i.test(prompt)) return 'ppt';
+      return 'text';
+    }
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-3.5-turbo",
+          messages: [
+            {
+              role: "system",
+              content: `You are an expert at classifying user intent. Based on the user's prompt, determine if they want to generate an 'image', a 'video', a 'ppt' (presentation), 'chart' (graph) or just have a 'text' conversation. Respond with only one of these four words.`,
+            },
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+          max_tokens: 7,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const intent = data.choices[0].message.content.toLowerCase().trim();
+
+      // Validate the response from the model
+      if (['image', 'video', 'ppt', 'text', 'chart'].includes(intent)) {
+        return intent;
+      }
+      return 'text'; // Default to text if the response is not one of the expected values
+    } catch (error) {
+      console.error("Intent classification failed:", error);
+      return 'text'; // Default to text on error
+    }
+  }
 }
 
 export const aiService = new AIService()
