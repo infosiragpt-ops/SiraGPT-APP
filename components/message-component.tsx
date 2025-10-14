@@ -447,14 +447,20 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     }, [message.files])
 
-    // Markdown ke andar code blocks ko render karne ke liye custom component
-    const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
+    // Optimized CodeBlock component with performance improvements
+    const CodeBlock = React.memo(({ node, inline, className, children, ...props }: any) => {
         const [isCodeCopied, setIsCodeCopied] = useState(false);
         const match = /language-(\w+)/.exec(className || '');
         const language = match ? match[1] : 'text';
 
+        // Memoize code string to prevent unnecessary recalculations
+        const codeString = useMemo(() => String(children).replace(/\n$/, ''), [children]);
+
+        // Performance optimization: limit code block size for syntax highlighting
+        const isLargeCode = codeString.length > 5000;
+        const shouldUseSyntaxHighlighting = !isLargeCode;
+
         const handleCodeCopy = () => {
-            const codeString = String(children).replace(/\n$/, '');
             navigator.clipboard.writeText(codeString).then(() => {
                 setIsCodeCopied(true);
                 setTimeout(() => setIsCodeCopied(false), 2000);
@@ -464,7 +470,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         return !inline && match ? (
             <div className="rounded-md bg-gray-900/80 border border-gray-700 relative">
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-800/50 rounded-t-md border-b border-gray-700">
-                    <span className="text-xs font-sans text-gray-400">{language}</span>
+                    <span className="text-xs font-sans text-gray-400">
+                        {language} {isLargeCode && '(large file)'}
+                    </span>
                     <div className="flex items-center gap-2">
                         {canPreviewMessage && (
                             <button
@@ -473,7 +481,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 title="Open preview in a new tab"
                             >
                                 <ExternalLink size={14} className="opacity-80" />
-      Preview
+                                Preview
                             </button>
                         )}
                         <button onClick={handleCodeCopy} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
@@ -482,26 +490,35 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         </button>
                     </div>
                 </div>
-                <SyntaxHighlighter
-                    style={oneDark}
-                    language={language}
-                    PreTag="div"
-                    {...props}
-                    customStyle={{ margin: 0, padding: '1rem', background: 'transparent', fontSize: "14px" }}
-                    wrapLongLines={true}
-                    codeTagProps={{ style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }}
-                >
-                    {String(children).replace(/\n$/, '')}
-                </SyntaxHighlighter>
+                
+                {shouldUseSyntaxHighlighting ? (
+                    <SyntaxHighlighter
+                        style={oneDark}
+                        language={language}
+                        PreTag="div"
+                        {...props}
+                        customStyle={{ margin: 0, padding: '1rem', background: 'transparent', fontSize: "14px" }}
+                        wrapLongLines={true}
+                        codeTagProps={{ style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }}
+                    >
+                        {codeString}
+                    </SyntaxHighlighter>
+                ) : (
+                    <pre className="m-0 p-4 overflow-auto text-sm font-mono text-white bg-transparent">
+                        <code style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                            {codeString}
+                        </code>
+                    </pre>
+                )}
             </div>
         ) : (
             <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {children}
             </code>
         );
-    };
+    });
 
-    // Message content ko render karne ke liye alag se component banaya taaki code saaf rahe
+    // Optimized message content rendering with performance safeguards
     const MessageContent = () => {
         // Don't render markdown for image-only messages to improve performance
         if (isImageOnlyMessage() || isVideoMessage) {
@@ -517,24 +534,19 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         //     );
         // }
 
-
-        return (
-            <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed"
-            >
-                <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
-                    components={{
-                        code: CodeBlock,
-                        p: ({ children }) => <p className="mb-3 text-base">{children}</p>,
-                        ul: ({ children }) => <ul className="mb-3 pl-6 text-base">{children}</ul>,
-                        ol: ({ children }) => <ol className="mb-3 pl-6 text-base">{children}</ol>,
-                        li: ({ children }) => <li className="mb-1 text-base">{children}</li>,
-                        h1: ({ children }) => <h1 className="mb-4 text-xl font-bold">{children}</h1>,
-                        h2: ({ children }) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
-                        h3: ({ children }) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
-                        blockquote: ({ children }) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-                        table: ({ node, children, ...props }: any) => {
+        
+        // Memoize ReactMarkdown components to prevent unnecessary re-renders
+        const markdownComponents = useMemo(() => ({
+            code: CodeBlock,
+            p: ({ children }: any) => <p className="mb-3 text-base">{children}</p>,
+            ul: ({ children }: any) => <ul className="mb-3 pl-6 text-base">{children}</ul>,
+            ol: ({ children }: any) => <ol className="mb-3 pl-6 text-base">{children}</ol>,
+            li: ({ children }: any) => <li className="mb-1 text-base">{children}</li>,
+            h1: ({ children }: any) => <h1 className="mb-4 text-xl font-bold">{children}</h1>,
+            h2: ({ children }: any) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
+            h3: ({ children }: any) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
+            blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
+            table: ({ node, children, ...props }: any) => {
                             const tHead = node.children.find((child: any) => child.tagName === 'thead');
                             const tBody = node.children.find((child: any) => child.tagName === 'tbody');
                             const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
@@ -595,11 +607,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             );
                         },
 
-                        th: ({ children }) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
-                        td: ({ children }) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
-                        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                        em: ({ children }) => <em className="italic">{children}</em>,
-                        a: ({ href, children, ...props }) => (
+                        th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
+                        td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
+                        strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+                        em: ({ children }: any) => <em className="italic">{children}</em>,
+                        a: ({ href, children, ...props }: any) => (
                             <a
                                 href={href}
                                 target="_blank"
@@ -610,8 +622,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 {children}
                             </a>
                         )
+        }), [CodeBlock]);
 
-                    }}
+        return (
+            <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
+                <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={markdownComponents}
                 >
                     {message.content}
                 </ReactMarkdown>
