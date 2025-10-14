@@ -243,6 +243,36 @@ Do not include any other text or explanations in your response. Just the JSON ob
         }
     }
 
+    /**
+     * Generate an image using DALL-E
+     * @param {string} prompt - Text prompt for image generation
+     * @param {string} provider - AI provider
+     * @param {string} model - AI model
+     * @returns {Promise<string|null>} - Base64 encoded image or null
+     */
+    async generateImage(prompt, provider = "OpenAI", model = "dall-e-3") {
+        try {
+            const client = this.getClient(provider);
+            console.log(`🎨 Generating image with DALL-E for prompt: "${prompt}"`);
+
+            const response = await client.images.generate({
+                model: model,
+                prompt: prompt,
+                n: 1,
+                size: "1024x1024",
+                quality: "standard",
+                response_format: "b64_json",
+            });
+
+            const image_b64 = response.data[0].b64_json;
+            return image_b64;
+
+        } catch (error) {
+            console.error('❌ Error generating image with DALL-E:', error.message);
+            return null; // Return null if image generation fails
+        }
+    }
+
     // Helper: Upload file to OpenAI
     async uploadFileToContainer(filepath, containerId) {
         const form = new FormData();
@@ -301,11 +331,18 @@ Do not include any other text or explanations in your response. Just the JSON ob
       "title": "Slide Title",
       "leftContent": ["Point 1", "Point 2"],
       "rightContent": ["Point A", "Point B"]
+    },
+    {
+      "type": "content-with-image",
+      "title": "Slide Title",
+      "content": ["Bullet point 1", "Bullet point 2"],
+      "imagePrompt": "A photorealistic image of a modern office with people collaborating."
     }
   ]
 }
 
-Available slide types: "title", "content", "two-column".
+Available slide types: "title", "content", "two-column", "content-with-image".
+For "content-with-image" slides, provide a concise, descriptive \`imagePrompt\` for DALL-E to generate a relevant image.
 The first slide must always be of type "title" and must include a subtitle.
 Generate 5-10 slides based on the topic. Make content clear, concise, and professional.
 Only respond with the JSON object, no additional text.`
@@ -323,8 +360,7 @@ Only respond with the JSON object, no additional text.`
 
             const response = await client.chat.completions.create({
                 model: model,
-                messages: messages,
-                temperature: 0.7,
+                messages: messages
             });
 
             const aiResponse = response.choices[0].message.content;
@@ -362,6 +398,13 @@ Only respond with the JSON object, no additional text.`
             // Process each slide
             for (const slideData of pptStructure.slides) {
                 const slide = ppt.addSlide();
+
+                // Add a slide master for consistent branding
+                slide.addText(`Slide ${slide.slideNumber}`, {
+                    x: 0.5, y: '95%', w: '90%', h: 0.25,
+                    align: 'center', fontSize: 10, color: colors.secondary
+                });
+
 
                 if (slideData.type === 'title') {
                     // Title slide
@@ -447,6 +490,36 @@ Only respond with the JSON object, no additional text.`
                         w: 4.25,
                         h: 4.0
                     });
+                } else if (slideData.type === 'content-with-image') {
+                    // Content slide with an image
+                    slide.addText(slideData.title, {
+                        x: 0.5, y: 0.5, w: 9.0, h: 0.8,
+                        fontSize: 32, bold: true, color: colors.primary
+                    });
+
+                    // Text content on the left
+                    const bulletPoints = (slideData.content || []).map(point => ({
+                        text: point,
+                        options: { bullet: true, fontSize: 16, color: colors.text }
+                    }));
+                    slide.addText(bulletPoints, {
+                        x: 0.5, y: 1.5, w: 4.5, h: 4.0
+                    });
+
+                    // Image on the right
+                    if (slideData.imagePrompt) {
+                        console.log(`🖼️ Generating image for slide: "${slideData.title}"`);
+                        const imageB64 = await this.generateImage(slideData.imagePrompt);
+                        if (imageB64) {
+                            slide.addImage({
+                                data: `data:image/png;base64,${imageB64}`,
+                                x: 5.5, y: 1.5, w: 4.0, h: 4.0,
+                            });
+                            console.log(`✅ Image added successfully to slide.`);
+                        } else {
+                             console.log(`⚠️ Image generation failed, skipping image for this slide.`);
+                        }
+                    }
                 }
             }
 
