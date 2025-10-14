@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Download, X, Loader2, FileText } from 'lucide-react';
 import { Button } from './ui/button';
 
@@ -29,16 +29,43 @@ interface PresentationViewProps {
     isLoading: boolean;
 }
 
+const loadingTitles = [
+    "Generating Slides...",
+    "Designing Layouts...",
+    "Adding Content...",
+    "Finalizing Presentation...",
+    "Almost Ready..."
+];
+
 export function PresentationView({ presentation, onClose, isLoading }: PresentationViewProps) {
     const [currentSlide, setCurrentSlide] = useState(0);
     const [isDownloading, setIsDownloading] = useState(false);
+    const [loadingTitle, setLoadingTitle] = useState(loadingTitles[0]);
+
+    useEffect(() => {
+        if (isLoading) {
+            const interval = setInterval(() => {
+                setLoadingTitle(prevTitle => {
+                    const currentIndex = loadingTitles.indexOf(prevTitle);
+                    const nextIndex = (currentIndex + 1) % loadingTitles.length;
+                    return loadingTitles[nextIndex];
+                });
+            }, 5000); // Change title every 3 seconds
+
+            return () => clearInterval(interval);
+        }
+    }, [isLoading]);
 
     if (isLoading) {
         return (
             <div className="w-full h-full bg-background flex flex-col items-center justify-center">
                 <Loader2 className="w-12 h-12 animate-spin text-primary mb-4" />
-                <h2 className="text-2xl font-semibold mb-2">Generating Presentation...</h2>
-                <p className="text-muted-foreground">Please wait while we create your slides.</p>
+                <h2 className="text-2xl font-semibold mb-2">{loadingTitle}</h2>
+                <p className="text-muted-foreground text-center">
+                    Please wait while we create your slides.
+                    <br />
+                    This may take 3 to 5 minutes to generate the presentation.
+                </p>
             </div>
         );
     }

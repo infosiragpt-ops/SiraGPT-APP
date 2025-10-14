@@ -383,6 +383,9 @@ export default function ModelsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [formData, setFormData] = useState(initialFormData);
+  const [editingModel, setEditingModel] = useState<AIModel | null>(null);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+
 
   useEffect(() => {
     loadInitialData()
@@ -450,6 +453,34 @@ export default function ModelsPage() {
       }
     } catch (error) {
       toast.error('Failed to create model');
+    }
+  }
+
+  const handleUpdateModel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingModel) return;
+
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/admin/models/${editingModel.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
+        },
+        body: JSON.stringify(editingModel)
+      });
+
+      if (response.ok) {
+        toast.success('Model updated successfully');
+        setIsEditDialogOpen(false);
+        setEditingModel(null);
+        loadInitialData();
+      } else {
+        const error = await response.json();
+        toast.error(error.error || 'Failed to update model');
+      }
+    } catch (error) {
+      toast.error('Failed to update model');
     }
   }
 
@@ -567,6 +598,58 @@ export default function ModelsPage() {
             </form>
           </DialogContent>
         </Dialog>
+
+        {/* Edit Model Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Edit {editingModel?.displayName}</DialogTitle></DialogHeader>
+            {editingModel && (
+              <form onSubmit={handleUpdateModel} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-name">Model Name</Label>
+                    <Input id="edit-name" value={editingModel.name} onChange={(e) => setEditingModel({ ...editingModel, name: e.target.value })} required />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-displayName">Display Name</Label>
+                    <Input id="edit-displayName" value={editingModel.displayName} onChange={(e) => setEditingModel({ ...editingModel, displayName: e.target.value })} required />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-provider">Provider</Label>
+                  <Select value={editingModel.provider} onValueChange={(value) => setEditingModel({ ...editingModel, provider: value })}>
+                    <SelectTrigger><SelectValue placeholder="Select a provider" /></SelectTrigger>
+                    <SelectContent>
+                      {providers.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Model Type</Label>
+                  <RadioGroup value={editingModel.type} onValueChange={(value) => setEditingModel({ ...editingModel, type: value as 'TEXT' | 'IMAGE' })}>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="TEXT" id="edit-r-text" />
+                      <Label htmlFor="edit-r-text" className="flex items-center gap-2"><Type className="h-4 w-4" /> Text Generation</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="IMAGE" id="edit-r-image" />
+                      <Label htmlFor="edit-r-image" className="flex items-center gap-2"><ImageIconLucide className="h-4 w-4" /> Image Generation</Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-icon">Icon Name</Label>
+                  <Input id="edit-icon" value={editingModel.icon || ''} onChange={(e) => setEditingModel({ ...editingModel, icon: e.target.value })} placeholder="e.g., Bot, Sparkles" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-description">Description</Label>
+                  <Textarea id="edit-description" value={editingModel.description || ''} onChange={(e) => setEditingModel({ ...editingModel, description: e.target.value })} />
+                </div>
+                <Button type="submit" className="w-full">Save Changes</Button>
+              </form>
+            )}
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Models Table */}
@@ -613,9 +696,9 @@ export default function ModelsPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent>
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => { setEditingModel(model); setIsEditDialogOpen(true); }}>
                           <Settings className="mr-2 h-4 w-4" />
-                          Configure
+                          Edit Model
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => toggleModelStatus(model.id, model.isActive)}>
                           {model.isActive ? "Deactivate" : "Activate"}

@@ -176,7 +176,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
             <div className="rounded-2xl p-8 bg-gradient-to-b from-white/10 to-white/5 border border-border/30 shadow-lg min-h-[400px] flex flex-col transition hover:shadow-xl hover:scale-[1.02] duration-200">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold">BASIC</h3>
+                  <h3 className="text-lg font-semibold">PRO</h3>
                   <div className="text-xs text-muted-foreground mt-1">GPT, Web, Image</div>
                 </div>
                 <div className="text-right">
@@ -208,7 +208,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
             <div className="rounded-2xl p-8 bg-gradient-to-b from-primary/10 to-primary/5 border border-border/30 shadow-lg min-h-[400px] flex flex-col transition hover:shadow-xl hover:scale-[1.02] duration-200">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold">STANDARD</h3>
+                  <h3 className="text-lg font-semibold">PRO MAX</h3>
                   <div className="text-xs text-muted-foreground mt-1 h-4">All features + ElevenLabs</div>
                 </div>
                 <div className="text-right">

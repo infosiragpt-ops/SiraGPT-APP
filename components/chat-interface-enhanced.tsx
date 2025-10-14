@@ -694,7 +694,7 @@ const NavbarModelSelector = ({
               <IconProvider name={model.icon} className="h-5 w-5 flex-shrink-0" />
               <div className="flex flex-col flex-1">
                 <span className="text-sm">{model.displayName}</span>
-                <span className="text-xs text-muted-foreground">{model.name}</span>
+                {/* <span className="text-xs text-muted-foreground">{model.name}</span> */}
               </div>
               {aiService.hasApiKey(model.name) ? (
                 <div className="w-2 h-2 bg-green-500 rounded-full" />
@@ -1014,11 +1014,10 @@ function ChatInterfaceContent() {
 
   React.useEffect(() => {
     setShowAudioPanel(false);
+    setShowPresentationPreview(false);
+    setSelectedPresentation(null);
   }, [currentChat?.id]);
-  React.useEffect(() => {
-    setShowAudioPanel(false);
-  }, [currentChat?.id]);
-
+  
   React.useEffect(() => {
     if (currentChat || chatCreationInitiated.current) {
       return;
@@ -1216,12 +1215,7 @@ function ChatInterfaceContent() {
         setUploadedFiles([]); // Clear UI immediately
 
         if (!currentChat) {
-          await createNewChat(chatType, msg, filesToSend);
-          
-        } else if (chatType === 'image') {
-          await handleImageGeneration(msg, filesToSend.map(f => f.id));
-        } else if (chatType === 'video') {
-          await handleVideoGeneration(msg);
+          await createNewChat('text', msg, filesToSend);
         } else {
           await addMessage(msg, filesToSend);
         }
