@@ -432,7 +432,7 @@ export class AIService {
   private loadApiKeys() {
     // Try to load from environment first
     if (typeof window !== 'undefined') {
-      const openaiKey = process.env.OPENAI_API_KEY
+      const openaiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY
       const anthropicKey = localStorage.getItem('anthropic_api_key') || process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY
 
       if (openaiKey) this.apiKeys.set("ChatGPT", openaiKey)
@@ -492,7 +492,7 @@ export class AIService {
   }
 
   async classifyIntent(prompt: string): Promise<string> {
-    const apiKey = process.env.OPENAI_API_KEY
+    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY 
     if (!apiKey) {
       console.error("OpenAI API key not found for intent classification.");
       // Fallback to basic keyword matching if API key is not available

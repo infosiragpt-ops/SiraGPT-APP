@@ -21,6 +21,7 @@ interface Message {
     prompt?: string
     error?: string
   }
+  presentation?: string // Add this line
 }
 
 // Update the Chat interface around line 24

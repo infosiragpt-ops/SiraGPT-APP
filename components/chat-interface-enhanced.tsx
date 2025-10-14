@@ -77,6 +77,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { PresentationView } from "./presentation-view"
+import { is } from "date-fns/locale"
 
 
 // Enhanced Actions Dropdown Component
@@ -86,6 +87,8 @@ const ActionsDropdown = ({
   currentPlan,
   isWebSearchActive,
   setIsWebSearchActive,
+  isImageGenerationActive,
+  setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   setShowAudioPanel,
@@ -116,13 +119,39 @@ const ActionsDropdown = ({
 
   // Function to handle single selection - deactivate others when one is selected
   const handleWebSearchToggle = () => {
+
+    setChatType('text');
+    if (!isWebSearchActive) {
+      // Deactivate other options
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+    }
     setIsWebSearchActive(!isWebSearchActive);
+
   };
+
+
+  const handleImageGenerationToggle = () => {
+    const newState = !isImageGenerationActive;
+
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsVideoGenerationActive(false);
+      setChatType('image');
+    } else {
+      setChatType('text');
+    }
+
+    setIsImageGenerationActive(newState);
+  };
+
+
   const handleVideoGenerationToggle = () => {
     const newState = !isVideoGenerationActive;
 
     if (newState) {
       setIsWebSearchActive(false);
+      setIsImageGenerationActive(false);
 
       setChatType('video');
     } else {
@@ -221,6 +250,40 @@ const ActionsDropdown = ({
             )}
           </div>
         </DropdownMenuItem>
+
+
+        {/* Image Generation */}
+        <DropdownMenuItem
+          onClick={handleImageGenerationToggle}
+          disabled={currentPlan === "FREE" || isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
+              ? 'bg-pink-100 dark:bg-pink-900/20'
+              : 'bg-pink-100 dark:bg-pink-900/20'
+              }`}>
+              <Palette className={`h-4 w-4 ${isImageGenerationActive
+                ? 'text-pink-600 dark:text-pink-400'
+                : 'text-pink-600 dark:text-pink-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isImageGenerationActive ? 'Image Generation Active' : 'Image Generation'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Generate images with DALL-E 3
+              </div>
+            </div>
+            {isImageGenerationActive && (
+              <div className="w-2 h-2 bg-pink-500 rounded-full" />
+            )}
+            {currentPlan === "FREE" && (
+              <Badge variant="secondary" className="text-xs">Pro</Badge>
+            )}
+          </div>
+        </DropdownMenuItem>
+
         {/* Video Generation */}
         <DropdownMenuItem
           onClick={handleVideoGenerationToggle}
@@ -430,17 +493,21 @@ const ActiveOptionsDisplay = ({
 const ActiveToolsDisplay = ({
   isWebSearchActive,
   setIsWebSearchActive,
+  isImageGenerationActive,
+  setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   setChatType,
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
+  isImageGenerationActive: boolean;
+  setIsImageGenerationActive: (value: boolean) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
   setChatType: (type: any) => void;
 }) => {
-  const hasActiveTools = isWebSearchActive;
+  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive ;
 
   if (!hasActiveTools) return null;
 
@@ -448,6 +515,13 @@ const ActiveToolsDisplay = ({
     setIsWebSearchActive(false);
     setChatType('text');
   };
+
+  const handleImageGenerationClose = () => {
+    setIsImageGenerationActive(false);
+    setChatType('text');
+  };
+
+
   const handleVideoGenerationClose = () => {
     setIsVideoGenerationActive(false);
     setChatType('text');
@@ -471,6 +545,21 @@ const ActiveToolsDisplay = ({
 
         </>
       )}
+            {isImageGenerationActive && (
+        <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
+          <Palette className="h-3 w-3" />
+          <span className="font-medium">Image Generation</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-pink-200 dark:hover:bg-pink-800/30 rounded-full ml-1"
+            onClick={handleImageGenerationClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+
       {isVideoGenerationActive && (
         <div className="flex items-center gap-1.5 bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 px-2 py-1 rounded-full text-xs border border-orange-200 dark:border-orange-800">
           <Video className="h-3 w-3" />
@@ -679,6 +768,7 @@ function ChatInterfaceContent() {
 
   const [isWebSearching, setIsWebSearching] = React.useState(false)
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
+  const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
@@ -770,18 +860,53 @@ function ChatInterfaceContent() {
   };
 
   React.useEffect(() => {
-    const handlePreview = (event: any) => {
-      const { presentation } = event.detail;
-      setSelectedPresentation(presentation);
-      setShowPresentationPreview(true);
+    // This function handles showing the presentation and stopping the loader
+    const showPresentation = (presentation: any) => {
+      // Only update if it's a new presentation to prevent loops
+      if (selectedPresentation?.filename !== presentation.filename) {
+        setSelectedPresentation(presentation);
+        setShowPresentationPreview(true);
+        setIsGeneratingPPT(false);
+      }
     };
 
-    window.addEventListener('preview-presentation', handlePreview);
+    // Event listener for manual clicks on the "Preview" button in MessageComponent
+    const handleManualPreview = (event: any) => {
+      showPresentation(event.detail.presentation);
+    };
 
+    window.addEventListener('preview-presentation', handleManualPreview);
+
+    // Logic to automatically show the presentation when it's generated
+    if (isGeneratingPPT && currentChat?.messages && currentChat.messages.length > 0) {
+      const lastMessage = currentChat.messages[currentChat.messages.length - 1];
+
+      // Check if the last message is from the assistant and contains the presentation file
+      if (lastMessage.role === 'ASSISTANT' && lastMessage.files) {
+        try {
+          const parsedFiles = typeof lastMessage.files === 'string' ? JSON.parse(lastMessage.files) : lastMessage.files;
+          const pptEntry = parsedFiles.find((f: any) => f?.type === 'presentation' || f?.type === 'ppt');
+
+          if (pptEntry) {
+            const presentationData = {
+              title: pptEntry.title || 'AI Presentation',
+              slides: pptEntry.structure?.slides || [],
+              filename: pptEntry.filename || pptEntry.path,
+            };
+            // Directly call the function to show the presentation
+            showPresentation(presentationData);
+          }
+        } catch (e) {
+          console.error("Failed to parse files for auto-preview:", e);
+        }
+      }
+    }
+
+    // Cleanup the event listener
     return () => {
-      window.removeEventListener('preview-presentation', handlePreview);
+      window.removeEventListener('preview-presentation', handleManualPreview);
     };
-  }, []);
+  }, [currentChat?.messages, isGeneratingPPT, selectedPresentation, setIsGeneratingPPT]);
 
   React.useEffect(() => {
     function handleOpenUpgrade(e: any) {
@@ -882,6 +1007,7 @@ function ChatInterfaceContent() {
   React.useEffect(() => {
     // Reset generation modes when switching chats
     setIsWebSearchActive(false);
+    setIsImageGenerationActive(false);
     setIsVideoGenerationActive(false);
     setChatType('text'); // Always default to text when switching chats
   }, []); // Only trigger when chat ID changes
@@ -1066,7 +1192,7 @@ function ChatInterfaceContent() {
     try {
       const intent = await aiService.classifyIntent(msg);
 
-      if (intent === 'image' || chatType === 'video') {
+      if (intent === 'image' || chatType === 'image'|| chatType === 'video') {
         const hasNonImageFiles = uploadedFiles.some(
           (file) => !file.type?.startsWith('image/')
         );
@@ -1079,7 +1205,7 @@ function ChatInterfaceContent() {
 
       if (isWebSearchActive) {
         await handleWebSearch(); // Web search remains a manual toggle
-      } else if (intent === 'image') {
+      } else if (intent === 'image'|| chatType === 'image') {
         await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
       } else if (isVideoGenerationActive) {
         await handleVideoGeneration(msg);
@@ -1090,7 +1216,10 @@ function ChatInterfaceContent() {
         setUploadedFiles([]); // Clear UI immediately
 
         if (!currentChat) {
-          await createNewChat('text', msg, filesToSend);
+          await createNewChat(chatType, msg, filesToSend);
+          
+        } else if (chatType === 'image') {
+          await handleImageGeneration(msg, filesToSend.map(f => f.id));
         } else if (chatType === 'video') {
           await handleVideoGeneration(msg);
         } else {
@@ -1195,6 +1324,8 @@ function ChatInterfaceContent() {
 
   const handlePPTGeneration = async (prompt: string) => {
     setIsGeneratingPPT(true);
+    setShowPresentationPreview(true); // Show the view with the loader immediately
+    setSelectedPresentation(null); // Clear any previous presentation
     try {
       if (!currentChat) {
         await createNewChat('text', `📊 PPT: ${prompt}`);
@@ -1228,8 +1359,7 @@ function ChatInterfaceContent() {
     } catch (error: any) {
       console.error('PPT generation failed:', error);
       toast.error(error.message || 'PPT generation failed');
-    } finally {
-      setIsGeneratingPPT(false);
+      setIsGeneratingPPT(false); // Stop loading on error
     }
   };
 
@@ -1386,7 +1516,7 @@ function ChatInterfaceContent() {
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className={`flex flex-col h-full ${showPresentationPreview ? 'w-1/2' : 'w-full'}`}>
+        <div className={`flex flex-col h-full ${showPresentationPreview || isGeneratingPPT ? 'w-1/2' : 'w-full'}`}>
           {/* Header */}
           <div className=" border-border/40 p-4">
             <div className="flex items-center justify-between">
@@ -1527,7 +1657,9 @@ function ChatInterfaceContent() {
                         }}
                         onKeyPress={handleKeyPress}
                         placeholder={
-                          isVideoGenerationActive
+                          isImageGenerationActive
+                            ? "Describe the image you want to create..."
+                          : isVideoGenerationActive
                             ? "Describe the video you want to create..."
                             : isWebSearchActive
                               ? "Enter your search query..."
@@ -1558,6 +1690,8 @@ function ChatInterfaceContent() {
                           currentPlan={currentPlan}
                           isWebSearchActive={isWebSearchActive}
                           setIsWebSearchActive={setIsWebSearchActive}
+                          isImageGenerationActive={isImageGenerationActive}
+                          setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           setShowAudioPanel={setShowAudioPanel}
@@ -1573,6 +1707,8 @@ function ChatInterfaceContent() {
                         <ActiveToolsDisplay
                           isWebSearchActive={isWebSearchActive}
                           setIsWebSearchActive={setIsWebSearchActive}
+                          isImageGenerationActive={isImageGenerationActive}
+                          setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           setChatType={setChatType}
@@ -1787,6 +1923,9 @@ function ChatInterfaceContent() {
                             }}
                             onKeyPress={handleKeyPress}
                             placeholder={
+                              isImageGenerationActive
+                                ? "Describe the image you want to create..."
+                                :
                               isVideoGenerationActive
                                 ? "Describe the video you want to create..."
                                 : isWebSearchActive
@@ -1817,6 +1956,8 @@ function ChatInterfaceContent() {
                               currentPlan={currentPlan}
                               isWebSearchActive={isWebSearchActive}
                               setIsWebSearchActive={setIsWebSearchActive}
+                              isImageGenerationActive={isImageGenerationActive}
+                              setIsImageGenerationActive={setIsImageGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               setShowAudioPanel={setShowAudioPanel}
@@ -1832,6 +1973,8 @@ function ChatInterfaceContent() {
                             <ActiveToolsDisplay
                               isWebSearchActive={isWebSearchActive}
                               setIsWebSearchActive={setIsWebSearchActive}
+                              isImageGenerationActive={isImageGenerationActive}
+                              setIsImageGenerationActive={setIsImageGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               setChatType={setChatType}
@@ -1875,7 +2018,10 @@ function ChatInterfaceContent() {
                       </div>
 
                       <p className="text-center text-xs text-muted-foreground">
-                        {isVideoGenerationActive
+                        {isImageGenerationActive
+                          ? 'Press Enter to generate image, Shift+Enter for new line'
+                          :
+                        isVideoGenerationActive
                           ? 'Press Enter to generate video, Shift+Enter for new line'
                           : isWebSearchActive
                             ? 'Press Enter to search the web, Shift+Enter for new line'
@@ -1890,11 +2036,15 @@ function ChatInterfaceContent() {
           )
           }
         </div>
-        {showPresentationPreview && selectedPresentation && (
+        {(showPresentationPreview || isGeneratingPPT) && (
           <div className="w-1/2 border-l border-border/40">
             <PresentationView
+              isLoading={isGeneratingPPT}
               presentation={selectedPresentation}
-              onClose={() => setShowPresentationPreview(false)}
+              onClose={() => {
+                setShowPresentationPreview(false);
+                setSelectedPresentation(null);
+              }}
             />
           </div>
         )}

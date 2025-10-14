@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, X, Loader2, FileText } from 'lucide-react';
 import { Button } from './ui/button';
 
 // Define the structure of a slide and presentation
@@ -24,13 +24,35 @@ interface Presentation {
 }
 
 interface PresentationViewProps {
-    presentation: Presentation;
+    presentation?: Presentation | null;
     onClose: () => void;
+    isLoading: boolean;
 }
 
-export function PresentationView({ presentation, onClose }: PresentationViewProps) {
+export function PresentationView({ presentation, onClose, isLoading }: PresentationViewProps) {
     const [currentSlide, setCurrentSlide] = useState(0);
     const [isDownloading, setIsDownloading] = useState(false);
+
+    if (isLoading) {
+        return (
+            <div className="w-full h-full bg-background flex flex-col items-center justify-center">
+                <Loader2 className="w-12 h-12 animate-spin text-primary mb-4" />
+                <h2 className="text-2xl font-semibold mb-2">Generating Presentation...</h2>
+                <p className="text-muted-foreground">Please wait while we create your slides.</p>
+            </div>
+        );
+    }
+
+    if (!presentation) {
+        return (
+            <div className="w-full h-full bg-background flex flex-col items-center justify-center">
+                <FileText className="w-12 h-12 text-muted-foreground mb-4" />
+                <h2 className="text-2xl font-semibold mb-2">No Presentation Loaded</h2>
+                <p className="text-muted-foreground">The presentation data is not available.</p>
+                <Button onClick={onClose} className="mt-4">Close</Button>
+            </div>
+        );
+    }
 
     const totalSlides = presentation.slides.length;
 
@@ -90,19 +112,19 @@ export function PresentationView({ presentation, onClose }: PresentationViewProp
       justify-content: center;
     }
     .title-slide { text-align: center; }
-    h1 { font-size: 44px; color: #1e3a8a; margin-bottom: 16px; }
-    h2 { font-size: 32px; color: #1e3a8a; margin-bottom: 24px; padding-bottom: 10px; border-bottom: 2px solid #dbeafe; }
+    h1 { font-size: 38px; color: #1e3a8a; margin-bottom: 12px; }
+    h2 { font-size: 24px; color: #1e3a8a; margin-bottom: 18px; padding-bottom: 6px; border-bottom: 2px solid #dbeafe; }
     ul { list-style: none; padding-left: 0; }
-    li { font-size: 20px; color: #334155; margin-bottom: 12px; padding-left: 28px; position: relative; line-height: 1.5; }
-    li:before { content: "▪"; position: absolute; left: 0; font-size: 24px; color: #3b82f6; }
-    .two-column .columns { display: flex; justify-content: space-between; gap: 40px; }
+    li { font-size: 14px; color: #334155; margin-bottom: 8px; padding-left: 22px; position: relative; line-height: 1.2; }
+    li:before { content: "▪"; position: absolute; left: 0; font-size: 20px; color: #3b82f6; }
+    .two-column .columns { display: flex; justify-content: space-between; gap: 20px; }
     .two-column .column { flex: 1; }
   </style>
 </head>
 <body>
   <div class="slide title-slide">
     <h1>${presentation.title}</h1>
-    <p style="font-size: 20px; color: #64748b;">AI Generated Professional Presentation</p>
+    <p style="font-size: 18px; color: #64748b;">AI Generated Professional Presentation</p>
   </div>
   ${presentation.slides.map(slide => {
             if (slide.type === 'two-column') {
@@ -181,52 +203,52 @@ export function PresentationView({ presentation, onClose }: PresentationViewProp
             <div className="flex-1 flex items-center justify-center p-4">
                 <div className="w-full max-w-5xl aspect-video bg-white rounded-lg shadow-2xl overflow-hidden flex flex-col">
                     {currentSlide === 0 && titleSlide ? (
-                        <div className="h-full flex flex-col justify-center items-center text-center p-12">
-                            <h1 className="text-5xl font-bold text-blue-900 mb-4">{titleSlide.title}</h1>
+                        <div className="h-full flex flex-col justify-center items-center text-center p-8">
+                            <h1 className="text-4xl font-bold text-blue-900 mb-3">{titleSlide.title}</h1>
                             {titleSlide.subtitle && (
-                                <p className="text-2xl text-slate-600">{titleSlide.subtitle}</p>
+                                <p className="text-xl text-slate-500">{titleSlide.subtitle}</p>
                             )}
                         </div>
                     ) : (
-                        <div className="h-full flex flex-col p-12 text-slate-800">
-                            <h2 className="text-4xl font-bold mb-6 text-blue-900 pb-2 border-b-2 border-blue-100 flex-shrink-0">{slide.title}</h2>
-                            <div className="flex-1 overflow-y-auto">
+                        <div className="h-full flex flex-col p-6 text-slate-800">
+                            <h2 className="text-2xl font-bold mb-3 text-blue-900 pb-2 border-b-2 border-blue-100 flex-shrink-0">{slide.title}</h2>
+                            <div className="flex-1 overflow-hidden">
                                 {slide.type === 'two-column' ? (
-                                    <div className="grid grid-cols-2 gap-8 h-full">
+                                    <div className="grid grid-cols-2 gap-4 h-full">
                                         <div>
-                                            <ul className="space-y-3">
+                                            <ul className="space-y-1">
                                                 {slide.leftContent?.map((point, idx) => (
-                                                    <li key={`left-${idx}`} className="flex items-start gap-3">
-                                                        <span className="text-blue-500 font-bold text-xl mt-1">▪</span>
-                                                        <span className="text-lg text-slate-700 leading-relaxed">{point}</span>
+                                                    <li key={`left-${idx}`} className="flex items-start gap-2">
+                                                        <span className="text-blue-500 font-bold text-base mt-1">▪</span>
+                                                        <span className="text-sm text-slate-700 leading-normal">{point}</span>
                                                     </li>
                                                 ))}
                                             </ul>
                                         </div>
                                         <div>
-                                            <ul className="space-y-3">
+                                            <ul className="space-y-1">
                                                 {slide.rightContent?.map((point, idx) => (
-                                                    <li key={`right-${idx}`} className="flex items-start gap-3">
-                                                        <span className="text-blue-500 font-bold text-xl mt-1">▪</span>
-                                                        <span className="text-lg text-slate-700 leading-relaxed">{point}</span>
+                                                    <li key={`right-${idx}`} className="flex items-start gap-2">
+                                                        <span className="text-blue-500 font-bold text-base mt-1">▪</span>
+                                                        <span className="text-sm text-slate-700 leading-normal">{point}</span>
                                                     </li>
                                                 ))}
                                             </ul>
                                         </div>
                                     </div>
                                 ) : slide.type === 'content-with-image' ? (
-                                    <div className="grid grid-cols-2 gap-8 h-full">
+                                    <div className="grid grid-cols-2 gap-4 h-full">
                                         <div>
-                                            <ul className="space-y-3">
+                                            <ul className="space-y-1">
                                                 {slide.content?.map((point, idx) => (
-                                                    <li key={`content-${idx}`} className="flex items-start gap-3">
-                                                        <span className="text-blue-500 font-bold text-xl mt-1">▪</span>
-                                                        <span className="text-lg text-slate-700 leading-relaxed">{point}</span>
+                                                    <li key={`content-${idx}`} className="flex items-start gap-2">
+                                                        <span className="text-blue-500 font-bold text-base mt-1">▪</span>
+                                                        <span className="text-sm text-slate-700 leading-normal">{point}</span>
                                                     </li>
                                                 ))}
                                             </ul>
                                         </div>
-                                        <div className="flex items-center justify-center bg-slate-100 rounded-lg">
+                                        <div className="flex items-start justify-center bg-slate-100 rounded-lg pt-4">
                                             {slide.imageUrl ? (
                                                 <img src={`${process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000'}${slide.imageUrl}`} alt={slide.title} className="max-h-full max-w-full object-contain rounded-lg" />
                                             ) : (
@@ -235,11 +257,11 @@ export function PresentationView({ presentation, onClose }: PresentationViewProp
                                         </div>
                                     </div>
                                 ) : (
-                                    <ul className="space-y-4">
+                                    <ul className="space-y-2">
                                         {slide.content?.map((point, idx) => (
-                                            <li key={idx} className="flex items-start gap-4">
-                                                <span className="text-blue-500 font-bold text-2xl mt-1">▪</span>
-                                                <span className="text-xl text-slate-700 leading-relaxed">{point}</span>
+                                            <li key={idx} className="flex items-start gap-2">
+                                                <span className="text-blue-500 font-bold text-base mt-1">▪</span>
+                                                <span className="text-sm text-slate-700 leading-normal">{point}</span>
                                             </li>
                                         ))}
                                     </ul>
