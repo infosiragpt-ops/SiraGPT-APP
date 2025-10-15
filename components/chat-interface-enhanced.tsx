@@ -1321,14 +1321,19 @@ function ChatInterfaceContent() {
     setShowPresentationPreview(true); // Show the view with the loader immediately
     setSelectedPresentation(null); // Clear any previous presentation
     try {
+      let newChat = currentChat;
       if (!currentChat) {
-        await createNewChat('text', `📊 PPT: ${prompt}`);
-        await new Promise(resolve => setTimeout(resolve, 500));
+        const response = await apiClient.createChat({
+             title: prompt ? prompt.substring(0, 30) : "New Chat",  
+             model: selectedModel,
+           });
+             newChat = response.chat;
+         await selectChat(newChat?.id ?? "");
       }
 
       const userMessage = {
         id: `msg-user-${Date.now()}`,
-        chatId: currentChat?.id || '',
+        chatId: newChat?.id || '',
         role: 'USER' as const,
         content: prompt,
         timestamp: new Date().toISOString(),
@@ -1342,13 +1347,13 @@ function ChatInterfaceContent() {
 
       const payload = {
         prompt,
-        chatId: currentChat?.id || '',
+        chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
       };
 
       const response = await apiClient.generatePPT(payload);
-      await selectChat(currentChat?.id ?? "");
+      await selectChat(newChat?.id ?? "");
       toast.success(`Presentation created with ${response.slideCount} slides!`);
     } catch (error: any) {
       console.error('PPT generation failed:', error);

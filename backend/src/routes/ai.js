@@ -1794,6 +1794,11 @@ router.post(
         }
       }
 
+      const chats = await prisma.chat.findUnique({ where: { id: chatId } });
+      if (!chats || chats.userId !== userId) {
+        return res.status(404).json({ error: 'Chat not found or access denied.' });
+      }
+
       // Save user message
       await prisma.message.create({
         data: {
