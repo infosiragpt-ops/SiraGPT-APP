@@ -323,16 +323,25 @@ class ApiClient {
 
       const decoder = new TextDecoder('utf-8');
 
-      // Musalsal data padhne ke liye loop
+      // Optimized streaming without content limits
+      let batchBuffer = '';
+      let processedChunks = 0;
+      const batchProcessingDelay = 20; // Slightly slower for stability
+      let lastProcessTime = Date.now();
+
       while (true) {
         const { done, value } = await reader.read();
 
         if (done) {
-          onClose(); // Stream khatam ho gayi
+          // Process any remaining batched content
+          if (batchBuffer.trim()) {
+            onData(batchBuffer);
+          }
+          onClose();
           break;
         }
 
-        const chunk = decoder.decode(value);
+        const chunk = decoder.decode(value, { stream: true });
         const lines = chunk.split('\n\n');
 
         for (const line of lines) {
@@ -340,12 +349,27 @@ class ApiClient {
             try {
               const jsonData = JSON.parse(line.substring(6));
               if (jsonData.content) {
-                onData(jsonData.content); // Data ko component mein bhejein
+                batchBuffer += jsonData.content;
+                processedChunks++;
+
+                // Simple batch processing for performance
+                const timeSinceLastProcess = Date.now() - lastProcessTime;
+                const shouldProcess = 
+                  batchBuffer.length >= 150 || // Process every ~150 characters
+                  timeSinceLastProcess >= batchProcessingDelay || // Or every 20ms
+                  jsonData.content.includes('\n'); // Process on newlines
+
+                if (shouldProcess && batchBuffer.trim()) {
+                  onData(batchBuffer);
+                  batchBuffer = '';
+                  lastProcessTime = Date.now();
+                }
               } else if (jsonData.error) {
                 onError(new Error(jsonData.error));
               }
             } catch (e) {
               // JSON parse error ko ignore karein
+              console.warn('Failed to parse streaming data:', e);
             }
           }
         }

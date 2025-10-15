@@ -12,6 +12,92 @@ const PptxGenJS = require('pptxgenjs');
 
 class AIService {
     /**
+     * Dynamically detect whether the recent user text asks for a front-end website (HTML/CSS/JS UI)
+     * Strategy: quick heuristics first; if inconclusive, fall back to a tiny classification call.
+     */
+    async  detectWebIntent(client, model, recentText) {
+  try {
+    // --- 1️⃣ Quick heuristic checks (fast path) ---
+    // Detects direct code snippets or HTML content
+    if (/```(html|css|javascript|js|jsx|tsx)/i.test(recentText)) return true;
+    if (/<(html|body|div|section|nav|form|button|input|footer|header)/i.test(recentText)) return true;
+
+    // --- 2️⃣ Enhanced multilingual patterns for web UI requests ---
+    const webPatterns = [
+      // English patterns
+      /(web\s*app|website|web\s*page|web\s*site|landing\s*page|home\s*page)/i,
+      /(create.*page|build.*site|make.*website|design.*page)/i,
+      /(dashboard|admin\s*panel|user\s*interface|UI|frontend)/i,
+      /(login\s*page|signup\s*form|contact\s*form|registration)/i,
+      /(portfolio|gallery|blog|e-?commerce|shopping)/i,
+      
+      // Urdu/Hindi patterns  
+      /(ویب\s*سائٹ|ویب\s*پیج|صفحہ|ڈیش\s*بورڈ)/i,
+      /(بنائیں|بنانا|ڈیزائن)/i,
+      
+      // Arabic patterns
+      /(موقع\s*ويب|صفحة\s*ويب|تصميم|إنشاء)/i,
+      
+      // Spanish/Portuguese patterns
+      /(pagina\s*web|sitio\s*web|página|criar|diseñar)/i,
+      
+      // Other common patterns
+      /(サイト|网站|сайт|웹사이트)/i
+    ];
+    
+    if (webPatterns.some(pattern => pattern.test(recentText))) return true;
+
+    // --- 3️⃣ AI-based classification (slow but powerful) ---
+    if (recentText && recentText.trim().length > 3) {
+      const cls = await client.chat.completions.create({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: `
+You are an intent classifier.
+Output ONLY one token: WEB_UI or OTHER.
+
+Classify as WEB_UI if the message indicates the user wants to create or see 
+a visual user interface in a web browser using HTML, CSS, or JS — 
+such as a page, form, dashboard, UI component, or interactive element.
+
+Classify as OTHER for requests about backend logic, APIs, data, or general explanations.
+
+You must understand all languages (English, Urdu, Arabic, Spanish, Japanese, etc.).
+Examples of WEB_UI:
+- "Make a login page"
+- "Create signup form"
+- "Design dashboard UI"
+- "Página de inicio de sesión"
+- "صفحة تسجيل الدخول"
+- "Formulario de registro"
+
+Examples of OTHER:
+- "Explain HTML tags"
+- "Build Node.js API"
+- "Database schema"
+- "CLI app"
+`
+          },
+          { role: "user", content: recentText }
+        ],
+        temperature: 0,
+        max_tokens: 3
+      });
+
+      const intent = cls?.choices?.[0]?.message?.content?.trim()?.toUpperCase() || "";
+      if (intent.includes("WEB_UI")) return true;
+    }
+  } catch (err) {
+    console.warn("Web intent detection failed:", err.message || err);
+  }
+
+  // --- 4️⃣ Default fallback ---
+  return false;
+}
+
+    /**
      * Provider ke naam ke hisab se sahi configured AI client return karta hai.
      * @param {string} provider - Provider ka naam (e.g., "OpenAI", "Gemini", "OpenRouter")
      * @returns {OpenAI} - OpenAI client ka instance
@@ -95,6 +181,8 @@ class AIService {
             const isChartRequest = chartKeywords.some(keyword =>
                 lastMessageText.toLowerCase().includes(keyword)
             );
+   // Dynamic intent detection (heuristics + tiny classifier fallback)
+            const isWebDevRequest = await this.detectWebIntent(client, model, lastMessageText);
 
             if (isChartRequest) {
                 // Modify the system prompt to request JSON for charts
@@ -150,6 +238,80 @@ Do not include any other text or explanations in your response. Just the JSON ob
                     lastMessage.content = contentArray;
                 }
             }
+            if (isWebDevRequest) {
+                // PREMIUM Web Development System Message
+                const webDevSystemMessage = {
+                    role: 'system',
+                    content: `You are an elite UI/UX designer and front-end architect, specializing in creating award-winning, visually stunning websites. Your work rivals the best designs on Dribbble, Behance, and Awwwards. Create websites that are both beautiful and highly functional.
+
+**� CRITICAL SUCCESS REQUIREMENTS:**
+
+**1. SINGLE FILE OUTPUT (MANDATORY):**
+- ALWAYS output ONE complete HTML file with ALL code inline
+- Never split into separate HTML, CSS, or JS files
+- All styles go in <style> tags in the <head>
+- All JavaScript goes in <script> tags before </body>
+- Zero external dependencies or imports
+- Must work perfectly when saved as .html and opened in browser
+
+**2. VISUAL EXCELLENCE (PREMIUM QUALITY):**
+- Modern, luxury design aesthetics (Apple, Tesla, Stripe quality)
+- Perfect color harmony with professional palettes
+- Advanced CSS: gradients, shadows, backdrop-filter, transforms
+- Smooth micro-interactions and hover effects
+- Premium typography with perfect hierarchy
+- Glassmorphism/neumorphism where appropriate
+- Subtle animations that enhance UX
+
+**3. CODE ARCHITECTURE:**
+- Clean, semantic HTML5 structure
+- Modern CSS Grid and Flexbox layouts
+- CSS Custom Properties for consistent theming
+- Mobile-first responsive design
+- Vanilla JavaScript (ES6+) for interactivity
+- Optimized for performance and accessibility
+
+**4. DESIGN PATTERNS:**
+- Hero sections with compelling visuals
+- Perfect spacing and alignment (8px grid system)
+- Professional forms with beautiful styling
+- Interactive buttons with hover states
+- Card-based layouts with subtle shadows
+- Consistent visual rhythm and flow
+
+**5. INTERACTIVITY:**
+- Smooth scroll behaviors
+- Form validation with beautiful feedback
+- Interactive navigation elements
+- Dynamic content updates
+- Responsive mobile menu
+- Loading states and transitions
+
+**6. TECHNICAL EXCELLENCE:**
+- Fast loading and optimized rendering
+- Cross-browser compatibility
+- Accessibility (ARIA labels, keyboard navigation)
+- SEO-optimized structure
+- Progressive enhancement
+
+**🎨 VISUAL INSPIRATION:**
+Target the quality of: Apple product pages, Stripe dashboard, Linear design, Vercel landing pages, Figma marketing sites, Notion interfaces.
+
+**📋 OUTPUT RULES:**
+1. Start immediately with \`\`\`html
+2. Include complete DOCTYPE and HTML structure
+3. Embed ALL styles in <style> tags
+4. Embed ALL scripts in <script> tags
+5. End with \`\`\`
+6. NO explanatory text before or after code
+7. Ensure immediate functionality when opened in browser
+
+**💎 QUALITY STANDARD:**
+Every element should feel intentionally designed, polished, and premium. The user should be amazed by both visual appeal and smooth functionality. Make it feel like a $50,000 custom website.`
+                };
+                messages.unshift(webDevSystemMessage);
+            }
+
 
             const payload = {
                 model: model,
@@ -162,14 +324,48 @@ Do not include any other text or explanations in your response. Just the JSON ob
 
             const stream = await client.chat.completions.create(payload, { signal });
 
-            // Stream se data parhein aur client ko bhejein
+            // Optimized streaming - no content limits, better performance
+            let chunkCount = 0;
+            let batchBuffer = '';
+            let lastFlush = Date.now();
+            
+            // Optimized settings for better performance
+            const batchSize = 150; // Larger batches reduce UI updates
+            const flushInterval = 100; // Balanced flush timing
+            
             for await (const chunk of stream) {
                 const contentChunk = chunk.choices[0]?.delta?.content || '';
                 if (contentChunk) {
                     fullResponseContent += contentChunk;
-                    // Client ko data chunk bhejein
-                    res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+                    batchBuffer += contentChunk;
+                    chunkCount++;
+                    
+                    const timeSinceLastFlush = Date.now() - lastFlush;
+                    const hasNewlines = contentChunk.includes('\n');
+                    
+                    // Simple, efficient batching - no complex detection
+                    const shouldFlush = 
+                        batchBuffer.length >= batchSize || 
+                        timeSinceLastFlush >= flushInterval ||
+                        (hasNewlines && batchBuffer.length > 50);
+                    
+                    if (shouldFlush && batchBuffer.trim()) {
+                        res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
+                        batchBuffer = '';
+                        lastFlush = Date.now();
+                    }
                 }
+                
+                // Quick abort check
+                if (signal && signal.aborted) {
+                    console.log('Stream aborted by client');
+                    break;
+                }
+            }
+            
+            // Flush any remaining content
+            if (batchBuffer.trim()) {
+                res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
             }
 
             console.log(`✅ Response generated successfully (${fullResponseContent.length} characters)`);
