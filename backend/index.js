@@ -23,6 +23,7 @@ const searchRoutes = require('./src/routes/search');
 const videoRoutes = require('./src/routes/video');
 const gptsRoutes = require('./src/routes/gpts');
 const libraryRoutes = require('./src/routes/library');
+const apiProxyRoutes = require('./src/routes/api');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -118,6 +119,7 @@ app.use('/api/video', videoRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/gpts', gptsRoutes); // Add GPTs API routes
 app.use('/api/library', libraryRoutes);
+app.use('/api/proxy', apiProxyRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

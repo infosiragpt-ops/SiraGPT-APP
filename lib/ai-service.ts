@@ -296,11 +296,10 @@ class OpenAIProvider implements AIProvider {
 
       messages.push(userMessage)
 
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await fetch("/api/proxy/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
           model: model === "gpt-4-vision-preview" ? "gpt-4-vision-preview" : model,
@@ -332,11 +331,10 @@ class OpenAIProvider implements AIProvider {
     try {
       console.log("generateImage ai.ts", apiKey);
 
-      const response = await fetch("https://api.openai.com/v1/images/generations", {
+      const response = await fetch("/api/proxy/images/generations", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
 
@@ -492,7 +490,7 @@ export class AIService {
   }
 
   async classifyIntent(prompt: string): Promise<string> {
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY 
+    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY
     if (!apiKey) {
       console.error("OpenAI API key not found for intent classification.");
       // Fallback to basic keyword matching if API key is not available
@@ -504,11 +502,11 @@ export class AIService {
     }
 
     try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/proxy/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
           model: "gpt-3.5-turbo",
