@@ -495,9 +495,18 @@ export class AIService {
       console.error("OpenAI API key not found for intent classification.");
       // Fallback to basic keyword matching if API key is not available
       const lowerCasePrompt = prompt.toLowerCase();
-      if (/\b(image|picture|photo|doodle|drawing)\b/i.test(prompt)) return 'image';
-      if (/\b(video|clip|animation|movie)\b/i.test(prompt)) return 'video';
-      if (/\b(ppt|presentation|slides|powerpoint)\b/i.test(prompt)) return 'ppt';
+      
+      // Check for web development/coding keywords first (should be 'text')
+      if (/\b(website|webpage|web app|html|css|javascript|react|vue|angular|code|programming|developer|portfolio|frontend|backend|component|api|database)\b/i.test(prompt)) {
+        return 'text';
+      }
+      
+      // Then check for visual content
+      if (/\b(generate.*image|create.*image|draw|illustration|artwork|logo|graphic|picture|photo)\b/i.test(prompt)) return 'image';
+      if (/\b(generate.*video|create.*video|video.*clip|animation|movie)\b/i.test(prompt)) return 'video';
+      if (/\b(ppt|presentation|slides|powerpoint|slideshow)\b/i.test(prompt)) return 'ppt';
+      if (/\b(chart|graph|diagram|visualization)\b/i.test(prompt)) return 'chart';
+      
       return 'text';
     }
 
@@ -513,14 +522,32 @@ export class AIService {
           messages: [
             {
               role: "system",
-              content: `You are an expert at classifying user intent. Based on the user's prompt, determine if they want to generate an 'image', a 'video', a 'ppt' (presentation), 'chart' (graph) or just have a 'text' conversation. Respond with only one of these four words.`,
+              content: `You are an expert at classifying user intent. Analyze the user's prompt and classify it into one of these categories:
+
+- 'image': If they want to generate, create, draw, or produce a visual image, artwork, photo, illustration, or graphic design
+- 'video': If they want to create, generate, or produce a video, animation, movie clip, or moving visual content  
+- 'ppt': If they want to create a presentation, slides, PowerPoint, or slideshow
+- 'chart': If they want to create graphs, charts, diagrams, or data visualizations
+- 'text': For everything else including: web development, coding, programming, building websites/apps, creating HTML/CSS/JavaScript, software development, technical discussions, questions, conversations, text generation, code reviews, debugging, tutorials, explanations, etc.
+
+IMPORTANT: Web development, coding, and programming requests should ALWAYS be classified as 'text', not 'image' - even if they mention "design", "create", "build", or "portfolio".
+
+Examples:
+- "Design a dark mode developer portfolio" → 'text' (web development)
+- "Create a React component" → 'text' (coding) 
+- "Build a landing page" → 'text' (web development)
+- "Generate an image of a cat" → 'image' (visual content)
+- "Create a logo design" → 'image' (visual design)
+- "Make a video of sunset" → 'video' (video content)
+
+Respond with only one word: image, video, ppt, chart, or text.`,
             },
             {
               role: "user",
               content: prompt,
             },
           ],
-          max_tokens: 7,
+          max_tokens: 10,
         }),
       });
 
