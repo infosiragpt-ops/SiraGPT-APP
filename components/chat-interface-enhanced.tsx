@@ -1173,7 +1173,7 @@ function ChatInterfaceContent() {
     setInput("")
 
     // Optimistically update the UI with the user's message immediately
-    if (currentChat) { 
+    if (currentChat && !isWebSearchActive) { 
       const userMessage = {
         id: `msg-user-${Date.now()}`,
         chatId: currentChat.id,
@@ -1330,9 +1330,7 @@ function ChatInterfaceContent() {
         });
         newChat = response.chat;
         await selectChat(newChat?.id ?? "");
-      }
-
-      const userMessage = {
+        const userMessage = {
         id: `msg-user-${Date.now()}`,
         chatId: newChat?.id || '',
         role: 'USER' as const,
@@ -1345,6 +1343,9 @@ function ChatInterfaceContent() {
         const updatedMessages = [...(prevChat.messages || []), userMessage];
         return { ...prevChat, messages: updatedMessages };
       });
+      }
+
+      
 
       const payload = {
         prompt,
