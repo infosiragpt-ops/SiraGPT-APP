@@ -1173,7 +1173,7 @@ function ChatInterfaceContent() {
     setInput("")
 
     // Optimistically update the UI with the user's message immediately
-    if (currentChat) {
+    if (currentChat) { 
       const userMessage = {
         id: `msg-user-${Date.now()}`,
         chatId: currentChat.id,
@@ -1182,7 +1182,6 @@ function ChatInterfaceContent() {
         timestamp: new Date().toISOString(),
         files: uploadedFiles,
       };
-
       setCurrentChat(prevChat => {
         if (!prevChat) return prevChat;
         const updatedMessages = [...(prevChat.messages || []), userMessage];
@@ -1260,20 +1259,20 @@ function ChatInterfaceContent() {
 
       } else {
         // If a chat is active, add the user's message optimistically
-        const userMessage = {
-          id: `msg-user-${Date.now()}`,
-          chatId: currentChat.id,
-          role: 'USER' as const,
-          content: prompt,
-          timestamp: new Date().toISOString(),
-          files: uploadedFiles,
-        };
+        // const userMessage = {
+        //   id: `msg-user-${Date.now()}`,
+        //   chatId: currentChat.id,
+        //   role: 'USER' as const,
+        //   content: prompt,
+        //   timestamp: new Date().toISOString(),
+        //   files: uploadedFiles,
+        // };
 
-        setCurrentChat(prevChat => {
-          if (!prevChat) return prevChat;
-          const updatedMessages = [...(prevChat.messages || []), userMessage];
-          return { ...prevChat, messages: updatedMessages };
-        });
+        // setCurrentChat(prevChat => {
+        //   if (!prevChat) return prevChat;
+        //   const updatedMessages = [...(prevChat.messages || []), userMessage];
+        //   return { ...prevChat, messages: updatedMessages };
+        // });
 
         // Then, generate the image
         const payload = {

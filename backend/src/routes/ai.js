@@ -1051,24 +1051,39 @@ router.post(
           where: { id: fileId, userId: userId }
         });
         if (inputFileRecord) {
-          // ✅ Construct URL from available data
-          const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-          const fileUrl = `${baseUrl}/uploads/${userId}/${inputFileRecord.filename}`;
+          // ✅ Check if this is a generated image - more precise detection to avoid false positives
+          const isGeneratedImage = (
+            // Check if filename starts with 'generated-' (our specific pattern)
+            inputFileRecord.filename?.startsWith('generated-') ||
+            // Check if path contains our specific generated images directory
+            (inputFileRecord.path?.includes('/uploads/images/') && inputFileRecord.filename?.startsWith('generated-')) ||
+            // Additional check: if file was created via our save function, it will have specific timestamp pattern
+            (inputFileRecord.filename?.match(/^generated-\d{13}-[a-z0-9]{9}\.png$/))
+          );
+          
+          if (isGeneratedImage) {
+            console.log('🚫 Detected generated image as fileId - treating as image editing, not user upload');
+            imagePath = inputFileRecord.path; // Use for editing but don't attach to user message
+          } else {
+            // ✅ Construct URL from available data for real user uploads
+            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+            const fileUrl = `${baseUrl}/uploads/${userId}/${inputFileRecord.filename}`;
 
-          userMessageFiles = JSON.stringify([{
-            id: inputFileRecord.id,
-            name: inputFileRecord.originalName,
-            filename: inputFileRecord.filename,
-            type: inputFileRecord.mimeType,
-            url: fileUrl, // ✅ Construct URL from available data
-            path: inputFileRecord.path
-          }]);
-          console.log('📎 Input image file prepared for user message display');
+            userMessageFiles = JSON.stringify([{
+              id: inputFileRecord.id,
+              name: inputFileRecord.originalName,
+              filename: inputFileRecord.filename,
+              type: inputFileRecord.mimeType,
+              url: fileUrl, // ✅ Construct URL from available data
+              path: inputFileRecord.path
+            }]);
+            console.log('📎 Real user upload file prepared for user message display');
+            imagePath = inputFileRecord.path; // Use for editing AND attach to user message
+          }
         }
         if (!inputFileRecord) {
           return res.status(404).json({ error: 'Input image file not found.' });
         }
-        imagePath = inputFileRecord.path;
       }
 
       let response;
@@ -1120,6 +1135,7 @@ router.post(
             chatId,
             role: 'USER',
             content: prompt,
+            // Only attach files if they are real user uploads (not generated images)
             files: userMessageFiles
           }
         });
