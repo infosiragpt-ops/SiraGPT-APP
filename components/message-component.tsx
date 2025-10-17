@@ -90,12 +90,13 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
 
 
 // Enhanced Message Component with Video Support
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming }: {
+const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView }: {
     message: any;
     user: any;
     onRegenerate: () => void;
     updateMessageInChat: (messageId: string, newContent: string) => void;
     isStreaming?: boolean;
+    onToggleSplitView?: (content: any) => void;
 }) => {
     // Performance monitoring disabled to prevent overhead
     // const renderStartTime = performance.now()
@@ -120,9 +121,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const [tableHeaders, setTableHeaders] = useState<string[]>([]);
 
     const [tableTitle, setTableTitle] = useState<string>('');
-    
+
     // Code preview states (now memoized for performance)
-    
+
     const getNodeText = (node: any): string => {
         if (node.type === 'text') {
             return node.value;
@@ -177,7 +178,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
         return null;
     }, [message.content, message.role]);
-    
+
     const canPreviewMessage = useMemo(() => {
         if (!parsedCode) return false;
         if (!parsedCode.hasWebCode) return false;
@@ -185,16 +186,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         return !!(parsedCode.combinedCode || parsedCode.html);
     }, [parsedCode]);
 
-    const openPreviewInNewTab = () => {
-        if (!parsedCode) return;
-        let htmlDoc = parsedCode.combinedCode;
-        if (!htmlDoc) {
-            htmlDoc = combineWebCode(parsedCode.html || '', parsedCode.css || '', parsedCode.js || '', 'Live Preview');
-        }
-        const blob = new Blob([htmlDoc], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
-        // Let the browser reclaim URL when tab is closed naturally; no revoke here to avoid revoking early.
+    const handlePreview = () => {
+        if (!parsedCode || !onToggleSplitView) return;
+
+        const content = {
+            htmlCode: parsedCode.html || '',
+            cssCode: parsedCode.css || '',
+            jsCode: parsedCode.js || '',
+            combinedCode: parsedCode.combinedCode || '',
+            title: 'Code Preview'
+        };
+
+        onToggleSplitView(content);
     };
 
     // Cleanup audio when component unmounts
@@ -477,9 +480,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     <div className="flex items-center gap-2">
                         {canPreviewMessage && (
                             <button
-                                onClick={openPreviewInNewTab}
+                                onClick={handlePreview}
                                 className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
-                                title="Open preview in a new tab"
+                                title="Open preview in split view"
                             >
                                 <ExternalLink size={14} className="opacity-80" />
                                 Preview
@@ -491,7 +494,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         </button>
                     </div>
                 </div>
-                
+
                 {shouldUseSyntaxHighlighting ? (
                     <SyntaxHighlighter
                         style={oneDark}
@@ -535,7 +538,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         //     );
         // }
 
-        
+
         // Memoize ReactMarkdown components to prevent unnecessary re-renders
         const markdownComponents = useMemo(() => ({
             code: CodeBlock,
@@ -548,81 +551,81 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             h3: ({ children }: any) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
             blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
             table: ({ node, children, ...props }: any) => {
-                            const tHead = node.children.find((child: any) => child.tagName === 'thead');
-                            const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                            const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
+                const tHead = node.children.find((child: any) => child.tagName === 'thead');
+                const tBody = node.children.find((child: any) => child.tagName === 'tbody');
+                const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
 
-                            const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
-                            const handleExpand = () => {
-                                setTableHeaders(headers);
-                                setTableData(data);
-                                setTableTitle(title);
-                                setIsTableExpanded(true);
-                            };
-                            // Find the preceding h1, h2, or h3 to use as a title
-                            let title = '';
-                            const parent = node.parent;
-                            if (parent) {
-                                const tableIndex = parent.children.indexOf(node);
-                                for (let i = tableIndex - 1; i >= 0; i--) {
-                                    const sibling = parent.children[i];
-                                    if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
-                                        title = getNodeText(sibling);
-                                        break;
-                                    }
-                                    // Stop if we hit another element that's not a heading
-                                    if (sibling.type !== 'text' || sibling.value.trim() !== '') {
-                                        break;
-                                    }
-                                }
-                            }
-                            return (
-                                <div className="relative mt-3">
-                                    <TableControls
-                                        content={message.content}
-                                        messageId={message.id}
-                                        onExpand={handleExpand}
-                                        title={title}
-                                    />
-                                    {/* Responsive table wrapper */}
-                                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600"
-                                        style={{
-                                            WebkitOverflowScrolling: 'touch',
-                                            maxWidth: '100vw',
-                                        }}
-                                    >
-                                        <table
-                                            className="border-collapse border border-muted mb-3 w-full"
-                                            style={{
-                                                minWidth: "520px",
-                                            }}
-                                        >
-                                            {children}
-                                        </table>
-                                    </div>
-                                    {/* Mobile fallback: Scroll hint */}
-                                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">
-                                        Swipe left/right to view the table
-                                    </div>
-                                </div>
-                            );
-                        },
-
-                        th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
-                        td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
-                        strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
-                        em: ({ children }: any) => <em className="italic">{children}</em>,
-                        a: ({ href, children, ...props }: any) => (
-                            <a
-                                href={href}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
-                                {...props}
+                const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
+                const handleExpand = () => {
+                    setTableHeaders(headers);
+                    setTableData(data);
+                    setTableTitle(title);
+                    setIsTableExpanded(true);
+                };
+                // Find the preceding h1, h2, or h3 to use as a title
+                let title = '';
+                const parent = node.parent;
+                if (parent) {
+                    const tableIndex = parent.children.indexOf(node);
+                    for (let i = tableIndex - 1; i >= 0; i--) {
+                        const sibling = parent.children[i];
+                        if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
+                            title = getNodeText(sibling);
+                            break;
+                        }
+                        // Stop if we hit another element that's not a heading
+                        if (sibling.type !== 'text' || sibling.value.trim() !== '') {
+                            break;
+                        }
+                    }
+                }
+                return (
+                    <div className="relative mt-3">
+                        <TableControls
+                            content={message.content}
+                            messageId={message.id}
+                            onExpand={handleExpand}
+                            title={title}
+                        />
+                        {/* Responsive table wrapper */}
+                        <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600"
+                            style={{
+                                WebkitOverflowScrolling: 'touch',
+                                maxWidth: '100vw',
+                            }}
+                        >
+                            <table
+                                className="border-collapse border border-muted mb-3 w-full"
+                                style={{
+                                    minWidth: "520px",
+                                }}
                             >
                                 {children}
-                            </a>
-                        )
+                            </table>
+                        </div>
+                        {/* Mobile fallback: Scroll hint */}
+                        <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">
+                            Swipe left/right to view the table
+                        </div>
+                    </div>
+                );
+            },
+
+            th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
+            td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
+            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+            em: ({ children }: any) => <em className="italic">{children}</em>,
+            a: ({ href, children, ...props }: any) => (
+                <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
+                    {...props}
+                >
+                    {children}
+                </a>
+            )
         }), [CodeBlock]);
 
         return (
@@ -943,7 +946,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <FileDisplay />
                                 <div className="mt-2" />
                                 <MessageContent />
-                                
+
                                 {/* Preview is now an on-demand button within each code block header */}
 
                             </>

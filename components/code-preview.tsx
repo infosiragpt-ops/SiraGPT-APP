@@ -6,18 +6,20 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { 
-  Eye, 
-  EyeOff, 
-  Copy, 
-  Check, 
-  Download, 
-  Maximize2, 
+import {
+  Eye,
+  EyeOff,
+  Copy,
+  Check,
+  Download,
+  Maximize2,
   Minimize2,
   RefreshCw,
   ExternalLink,
   FileCode,
-  Package
+  Package,
+  PanelRight,
+  X
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -29,6 +31,7 @@ interface CodePreviewProps {
   title?: string
   language?: string
   className?: string
+  onClose?: () => void
 }
 
 export const CodePreview: React.FC<CodePreviewProps> = ({
@@ -38,10 +41,12 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
   combinedCode = "",
   title = "Code Preview",
   language = "html",
-  className = ""
+  className = "",
+  onClose
 }) => {
   const [isPreviewVisible, setIsPreviewVisible] = useState(true)
   const [isFullscreen, setIsFullscreen] = useState(false)
+
   const [isCopied, setIsCopied] = useState(false)
   const [previewKey, setPreviewKey] = useState(0)
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -330,14 +335,6 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
     setPreviewKey(prev => prev + 1)
   }
 
-  // Open in new tab
-  const handleOpenInNewTab = () => {
-    const completeCode = generateCompleteHTML()
-    const blob = new Blob([completeCode], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    window.open(url, '_blank')
-  }
-
   // Toggle fullscreen
   const toggleFullscreen = () => {
     setIsFullscreen(!isFullscreen)
@@ -348,18 +345,14 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
   }
 
   return (
-    <div className={`${className} ${isFullscreen ? 'fixed inset-0 z-50 bg-background' : 'mt-4'}`}>
-      <Card className={`${isFullscreen ? 'h-full' : ''} border border-border shadow-sm bg-card`}>
+    <div className={`${className} ${isFullscreen ? 'fixed inset-0 z-50 bg-background' : 'h-full'}`}>
+      <Card className={`${isFullscreen ? 'h-full flex flex-col' : 'h-full flex flex-col'} border border-border shadow-sm bg-card`}>
         <CardHeader className="pb-3 bg-muted/50 border-b border-border">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <FileCode className="h-4 w-4 text-primary" />
               <CardTitle className="text-sm font-medium text-card-foreground">{title}</CardTitle>
-              {/* <Badge variant="secondary" className="text-xs bg-primary/10 text-primary border-primary/20">
-                {language.toUpperCase()}
-              </Badge> */}
             </div>
-            
             <div className="flex items-center gap-1">
               <Button
                 variant="ghost"
@@ -369,7 +362,6 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
               >
                 {isPreviewVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
-              
               <Button
                 variant="ghost"
                 size="sm"
@@ -378,7 +370,6 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
               >
                 <RefreshCw className="h-4 w-4" />
               </Button>
-              
               <Button
                 variant="ghost"
                 size="sm"
@@ -387,7 +378,6 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
               >
                 {isCopied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
               </Button>
-              
               <Button
                 variant="ghost"
                 size="sm"
@@ -397,7 +387,6 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
               >
                 <Download className="h-4 w-4" />
               </Button>
-              
               <Button
                 variant="ghost"
                 size="sm"
@@ -407,17 +396,6 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
               >
                 <Package className="h-4 w-4" />
               </Button>
-              
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleOpenInNewTab}
-                className="h-8 w-8 p-0"
-                title="Open in new tab"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </Button>
-              
               <Button
                 variant="ghost"
                 size="sm"
@@ -426,13 +404,24 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
               >
                 {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
               </Button>
+              {onClose && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onClose}
+                  className="h-8 w-8 p-0"
+                  title="Close preview"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           </div>
         </CardHeader>
 
         {isPreviewVisible && (
-          <CardContent className="p-0">
-            <div className={`border-t border-border ${isFullscreen ? 'h-[calc(100vh-80px)]' : 'h-[400px] sm:h-[500px] md:h-[600px]'}`}>
+          <CardContent className="p-0 flex-grow">
+            <div className="h-full border-t border-border">
               <iframe
                 ref={iframeRef}
                 key={previewKey}

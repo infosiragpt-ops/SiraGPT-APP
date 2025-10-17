@@ -55,6 +55,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { PresentationView } from "./presentation-view"
+import { CodePreview } from "./code-preview"
 import { is } from "date-fns/locale"
 
 
@@ -485,7 +486,7 @@ const ActiveToolsDisplay = ({
   setIsVideoGenerationActive: (value: boolean) => void;
   setChatType: (type: any) => void;
 }) => {
-  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive ;
+  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive;
 
   if (!hasActiveTools) return null;
 
@@ -523,7 +524,7 @@ const ActiveToolsDisplay = ({
 
         </>
       )}
-            {isImageGenerationActive && (
+      {isImageGenerationActive && (
         <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
           <Palette className="h-3 w-3" />
           <span className="font-medium">Image Generation</span>
@@ -753,6 +754,7 @@ function ChatInterfaceContent() {
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
   const [showPresentationPreview, setShowPresentationPreview] = React.useState(false);
   const [selectedPresentation, setSelectedPresentation] = React.useState<any>(null);
+  const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
 
 
   // Search sources state - all enabled by default
@@ -900,6 +902,10 @@ function ChatInterfaceContent() {
     };
   }, [setSubscribeOpen]);
 
+  const handleToggleSplitView = (content: any) => {
+    setSplitViewContent(content)
+  }
+
   React.useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -995,7 +1001,7 @@ function ChatInterfaceContent() {
     setShowPresentationPreview(false);
     setSelectedPresentation(null);
   }, [currentChat?.id]);
-  
+
   React.useEffect(() => {
     if (currentChat || chatCreationInitiated.current) {
       return;
@@ -1166,10 +1172,28 @@ function ChatInterfaceContent() {
     const msg = input.trim()
     setInput("")
 
+    // Optimistically update the UI with the user's message immediately
+    if (currentChat) {
+      const userMessage = {
+        id: `msg-user-${Date.now()}`,
+        chatId: currentChat.id,
+        role: 'USER' as const,
+        content: msg,
+        timestamp: new Date().toISOString(),
+        files: uploadedFiles,
+      };
+
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), userMessage];
+        return { ...prevChat, messages: updatedMessages };
+      });
+    }
+
     try {
       const intent = await aiService.classifyIntent(msg);
 
-      if (intent === 'image' || chatType === 'image'|| chatType === 'video') {
+      if (intent === 'image' || chatType === 'image' || chatType === 'video') {
         const hasNonImageFiles = uploadedFiles.some(
           (file) => !file.type?.startsWith('image/')
         );
@@ -1182,7 +1206,7 @@ function ChatInterfaceContent() {
 
       if (isWebSearchActive) {
         await handleWebSearch(); // Web search remains a manual toggle
-      } else if (intent === 'image'|| chatType === 'image') {
+      } else if (intent === 'image' || chatType === 'image') {
         await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
       } else if (isVideoGenerationActive) {
         await handleVideoGeneration(msg);
@@ -1302,11 +1326,11 @@ function ChatInterfaceContent() {
       let newChat = currentChat;
       if (!currentChat) {
         const response = await apiClient.createChat({
-             title: prompt ? prompt.substring(0, 30) : "New Chat",  
-             model: selectedModel,
-           });
-             newChat = response.chat;
-         await selectChat(newChat?.id ?? "");
+          title: prompt ? prompt.substring(0, 30) : "New Chat",
+          model: selectedModel,
+        });
+        newChat = response.chat;
+        await selectChat(newChat?.id ?? "");
       }
 
       const userMessage = {
@@ -1538,6 +1562,9 @@ function ChatInterfaceContent() {
             </div>
           </div>
 
+
+
+
           {isInitial ? (
             <div className="flex flex-1 items-center justify-center p-4">
               <div className="w-full max-w-4xl space-y-6">
@@ -1636,11 +1663,11 @@ function ChatInterfaceContent() {
                         placeholder={
                           isImageGenerationActive
                             ? "Describe the image you want to create..."
-                          : isVideoGenerationActive
-                            ? "Describe the video you want to create..."
-                            : isWebSearchActive
-                              ? "Enter your search query..."
-                              : "Type your message here..."
+                            : isVideoGenerationActive
+                              ? "Describe the video you want to create..."
+                              : isWebSearchActive
+                                ? "Enter your search query..."
+                                : "Type your message here..."
                         }
                         className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
                         style={{
@@ -1860,6 +1887,7 @@ function ChatInterfaceContent() {
                                 onRegenerate={regenerateLastMessage}
                                 updateMessageInChat={editAndRegenerate}
                                 isStreaming={false}
+                                onToggleSplitView={handleToggleSplitView}
                               />
                             ))}
                             {streamingMessage && (
@@ -1870,6 +1898,7 @@ function ChatInterfaceContent() {
                                 onRegenerate={regenerateLastMessage}
                                 updateMessageInChat={editAndRegenerate}
                                 isStreaming={true}
+                                onToggleSplitView={handleToggleSplitView}
                               />
                             )}
                           </>
@@ -1903,11 +1932,11 @@ function ChatInterfaceContent() {
                               isImageGenerationActive
                                 ? "Describe the image you want to create..."
                                 :
-                              isVideoGenerationActive
-                                ? "Describe the video you want to create..."
-                                : isWebSearchActive
-                                  ? "Enter your search query..."
-                                  : "Type your message here..."
+                                isVideoGenerationActive
+                                  ? "Describe the video you want to create..."
+                                  : isWebSearchActive
+                                    ? "Enter your search query..."
+                                    : "Type your message here..."
                             }
                             className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
                             style={{
@@ -1998,11 +2027,11 @@ function ChatInterfaceContent() {
                         {isImageGenerationActive
                           ? 'Press Enter to generate image, Shift+Enter for new line'
                           :
-                        isVideoGenerationActive
-                          ? 'Press Enter to generate video, Shift+Enter for new line'
-                          : isWebSearchActive
-                            ? 'Press Enter to search the web, Shift+Enter for new line'
-                            : 'Press Enter to send, Shift+Enter for new line'
+                          isVideoGenerationActive
+                            ? 'Press Enter to generate video, Shift+Enter for new line'
+                            : isWebSearchActive
+                              ? 'Press Enter to search the web, Shift+Enter for new line'
+                              : 'Press Enter to send, Shift+Enter for new line'
                         }
                       </p>
                     </div>
@@ -2013,6 +2042,11 @@ function ChatInterfaceContent() {
           )
           }
         </div>
+        {splitViewContent && (
+          <div className="w-full border-l border-border/40">
+            <CodePreview {...splitViewContent} onClose={() => setSplitViewContent(null)} />
+          </div>
+        )}
         {(showPresentationPreview || isGeneratingPPT) && (
           <div className="w-1/2 border-l border-border/40">
             <PresentationView
