@@ -22,6 +22,7 @@ interface Message {
     error?: string
   }
   presentation?: string // Add this line
+  error?: any
 }
 
 // Update the Chat interface around line 24
@@ -383,27 +384,49 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             async () => {
               // onClose: Jab stream khatam ho jaye
               setIsLoading(false);
-              setIsStreaming(false); // ✅ Streaming khatam ho gayi
+              setIsStreaming(false);
               setCurrentStreamId(null);
               await selectChat(activeChat.id); // Refetch chat to get permanent IDs
             },
-            async (error) => {
+            (error) => {
               console.error("Streaming failed:", error);
               setIsLoading(false);
-              setIsStreaming(false); // ✅ Streaming error ke saath khatam
+              setIsStreaming(false);
               setCurrentStreamId(null);
-              abortControllerRef.current = null; // AbortController ko reset karein
-              await selectChat(activeChat.id); // Refetch chat to get permanent IDs
+              abortControllerRef.current = null;
+
+              if (error.name !== 'AbortError') {
+                setCurrentChat((prevChat) => {
+                  if (!prevChat) return prevChat;
+                  const newMessages = prevChat.messages.map((msg) => {
+                    if (msg.id === aiMessagePlaceholder.id) {
+                      return { ...msg, content: "", error: error.message || "An error occurred." };
+                    }
+                    return msg;
+                  });
+                  return { ...prevChat, messages: newMessages };
+                });
+              }
             },
 
           );
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error("Failed to start AI stream:", error);
         setIsLoading(false);
-        setIsStreaming(false); // ✅ Streaming error ke saath khatam
+        setIsStreaming(false);
         setCurrentStreamId(null);
-        // abortControllerRef.current = null; // AbortController ko reset karein
+
+        setCurrentChat((prevChat) => {
+          if (!prevChat) return prevChat;
+          const newMessages = prevChat.messages.map((msg) => {
+            if (msg.id === aiMessagePlaceholder.id) {
+              return { ...msg, content: "", error: error.message || "An error occurred." };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: newMessages };
+        });
       } finally {
         setIsLoading(false);
         setIsStreaming(false);
@@ -659,7 +682,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setIsLoading(false);
           await selectChat(currentChat.id);
         },
-        async (error) => {
+        (error) => {
           // onError: Handle error
           console.error("Streaming failed during regeneration:", error);
           setIsLoading(false);
@@ -667,13 +690,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             if (!prevChat) return prevChat;
             const errorMessages = prevChat.messages.map((msg) => {
               if (msg.id === aiMessagePlaceholder.id) {
-                return { ...msg, content: "Sorry, an error occurred during regeneration." };
+                return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
               }
               return msg;
             });
             return { ...prevChat, messages: errorMessages };
           });
-          await selectChat(currentChat.id);
         }
       );
 
@@ -784,7 +806,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false);
         await selectChat(currentChat.id);
       },
-      async (error) => {
+      (error) => {
         // onError: Handle error
         console.error("Streaming failed during regeneration:", error);
         setIsLoading(false);
@@ -792,13 +814,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           if (!prevChat) return prevChat;
           const errorMessages = prevChat.messages.map((msg) => {
             if (msg.id === aiMessagePlaceholder.id) {
-              return { ...msg, content: "Sorry, an error occurred during regeneration." };
+              return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
             }
             return msg;
           });
           return { ...prevChat, messages: errorMessages };
         });
-        await selectChat(currentChat.id);
       }
     );
     apiClient.clearMessageById(messageId);

@@ -1088,7 +1088,7 @@ router.post(
 
       let response;
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Image generation timeout')), 80000);
+        setTimeout(() => reject(new Error('Image generation timeout')), 200000);
       });
 
       if (imagePath) { // If there's an image to edit

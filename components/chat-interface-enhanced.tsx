@@ -1302,9 +1302,27 @@ function ChatInterfaceContent() {
         await selectChat(currentChat?.id ?? "") // Re-select the chat to update messages
         toast.success('Image generated successfully!')
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Image generation failed:', error)
-      toast.error('Image generation failed. Please try again.')
+      const errorMessage = error.message || 'Image generation failed. Please try again.';
+      toast.error(errorMessage);
+
+
+      const updateChatWithError = (prevChat: any) => {
+        if (!prevChat) return prevChat;
+        // Find the placeholder and update it with the error
+        const newMessages = prevChat.messages.map((msg: any) => {
+          if (msg.content === '[GENERATING_IMAGE]') {
+            return { ...msg, content: "", error: errorMessage };
+          }
+          return msg;
+        });
+        return { ...prevChat, messages: newMessages };
+      };
+
+      if (currentChat) {
+        setCurrentChat(updateChatWithError);
+      }
     } finally {
       setIsGeneratingImage(false)
     }
