@@ -15,87 +15,62 @@ class AIService {
      * Dynamically detect whether the recent user text asks for a front-end website (HTML/CSS/JS UI)
      * Strategy: quick heuristics first; if inconclusive, fall back to a tiny classification call.
      */
-    async  detectWebIntent(client, model, recentText) {
-  try {
-    // --- 1️⃣ Quick heuristic checks (fast path) ---
-    // Detects direct code snippets or HTML content
-    if (/```(html|css|javascript|js|jsx|tsx)/i.test(recentText)) return true;
-    if (/<(html|body|div|section|nav|form|button|input|footer|header)/i.test(recentText)) return true;
+    async detectWebIntent(client, model, recentText) {
+        try {
 
-    // --- 2️⃣ Enhanced multilingual patterns for web UI requests ---
-    const webPatterns = [
-      // English patterns
-      /(web\s*app|website|web\s*page|web\s*site|landing\s*page|home\s*page)/i,
-      /(create.*page|build.*site|make.*website|design.*page)/i,
-      /(dashboard|admin\s*panel|user\s*interface|UI|frontend)/i,
-      /(login\s*page|signup\s*form|contact\s*form|registration)/i,
-      /(portfolio|gallery|blog|e-?commerce|shopping)/i,
-      
-      // Urdu/Hindi patterns  
-      /(ویب\s*سائٹ|ویب\s*پیج|صفحہ|ڈیش\s*بورڈ)/i,
-      /(بنائیں|بنانا|ڈیزائن)/i,
-      
-      // Arabic patterns
-      /(موقع\s*ويب|صفحة\s*ويب|تصميم|إنشاء)/i,
-      
-      // Spanish/Portuguese patterns
-      /(pagina\s*web|sitio\s*web|página|criar|diseñar)/i,
-      
-      // Other common patterns
-      /(サイト|网站|сайт|웹사이트)/i
-    ];
-    
-    if (webPatterns.some(pattern => pattern.test(recentText))) return true;
 
-    // --- 3️⃣ AI-based classification (slow but powerful) ---
-    if (recentText && recentText.trim().length > 3) {
-      const cls = await client.chat.completions.create({
-        model,
-        messages: [
-          {
-            role: "system",
-            content: `
-You are an intent classifier.
-Output ONLY one token: WEB_UI or OTHER.
+            // --- 3️⃣ AI-based classification (slow but powerful) ---
 
-Classify as WEB_UI if the message indicates the user wants to create or see 
-a visual user interface in a web browser using HTML, CSS, or JS — 
-such as a page, form, dashboard, UI component, or interactive element.
+            const cls = await client.chat.completions.create({
+                model,
+                messages: [
+                    {
+                        role: "system",
+                        content: `
+Tum aik intelligent intent classifier ho.
+Sirf aik word output karo: WEB_UI ya OTHER.
 
-Classify as OTHER for requests about backend logic, APIs, data, or general explanations.
+WEB_UI tab bolo jab user clearly chahta ho ke uske liye **web page, website, web UI, ya frontend design** banaya jaye.
 
-You must understand all languages (English, Urdu, Arabic, Spanish, Japanese, etc.).
+Lekin agar user sirf:
+- web se related kisi file (jaise pdf, api, backend) ka zikr kar raha ho
+- ya web code ko sirf samajhna, explain karwana, ya convert karwana chahta ho
+to usay OTHER classify karo.
+
+Samjho ke user "website banwaana chahta hai" ya nahi.
+
 Examples of WEB_UI:
-- "Make a login page"
-- "Create signup form"
-- "Design dashboard UI"
-- "Página de inicio de sesión"
-- "صفحة تسجيل الدخول"
-- "Formulario de registro"
+- "Mujhe ek login page bana do"
+- "Make me a dashboard UI"
+- "Portfolio website create karo"
+- "Next.js main ek homepage banao"
+- "Landing page design kar do"
 
 Examples of OTHER:
-- "Explain HTML tags"
-- "Build Node.js API"
-- "Database schema"
-- "CLI app"
+- "HTML code samjhao"
+- "PDF generate karo from HTML"
+- "API se data la kar PDF banao"
+- "Website ka data extract karna hai"
+- "Explain frontend architecture"
+- "HTML to PDF convert karna hai"
 `
-          },
-          { role: "user", content: recentText }
-        ],
-        temperature: 0,
-        max_tokens: 3
-      });
+                    },
+                    { role: "user", content: recentText }
+                ],
+                temperature: 0,
+                max_tokens: 3
+            });
 
-      const intent = cls?.choices?.[0]?.message?.content?.trim()?.toUpperCase() || "";
-      if (intent.includes("WEB_UI")) return true;
+            const intent = cls?.choices?.[0]?.message?.content?.trim()?.toUpperCase() || "";
+            if (intent.includes("WEB_UI")) return true;
+
+        } catch (err) {
+            console.warn("Web intent detection failed:", err.message || err);
+        }
+
+        // --- 4️⃣ Default fallback ---
+        return false;
     }
-  } catch (err) {
-    console.warn("Web intent detection failed:", err.message || err);
-  }
-
-  // --- 4️⃣ Default fallback ---
-  return false;
-}
 
     /**
      * Provider ke naam ke hisab se sahi configured AI client return karta hai.
@@ -181,7 +156,7 @@ Examples of OTHER:
             const isChartRequest = chartKeywords.some(keyword =>
                 lastMessageText.toLowerCase().includes(keyword)
             );
-   // Dynamic intent detection (heuristics + tiny classifier fallback)
+            // Dynamic intent detection (heuristics + tiny classifier fallback)
             const isWebDevRequest = await this.detectWebIntent(client, model, lastMessageText);
 
             if (isChartRequest) {
@@ -278,6 +253,7 @@ Do not include any other text or explanations in your response. Just the JSON ob
 - Interactive buttons with hover states
 - Card-based layouts with subtle shadows
 - Consistent visual rhythm and flow
+- use best images for display products
 
 **5. INTERACTIVITY:**
 - Smooth scroll behaviors
@@ -328,41 +304,41 @@ Every element should feel intentionally designed, polished, and premium. The use
             let chunkCount = 0;
             let batchBuffer = '';
             let lastFlush = Date.now();
-            
+
             // Optimized settings for better performance
             const batchSize = 150; // Larger batches reduce UI updates
             const flushInterval = 100; // Balanced flush timing
-            
+
             for await (const chunk of stream) {
                 const contentChunk = chunk.choices[0]?.delta?.content || '';
                 if (contentChunk) {
                     fullResponseContent += contentChunk;
                     batchBuffer += contentChunk;
                     chunkCount++;
-                    
+
                     const timeSinceLastFlush = Date.now() - lastFlush;
                     const hasNewlines = contentChunk.includes('\n');
-                    
+
                     // Simple, efficient batching - no complex detection
-                    const shouldFlush = 
-                        batchBuffer.length >= batchSize || 
+                    const shouldFlush =
+                        batchBuffer.length >= batchSize ||
                         timeSinceLastFlush >= flushInterval ||
                         (hasNewlines && batchBuffer.length > 50);
-                    
+
                     if (shouldFlush && batchBuffer.trim()) {
                         res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
                         batchBuffer = '';
                         lastFlush = Date.now();
                     }
                 }
-                
+
                 // Quick abort check
                 if (signal && signal.aborted) {
                     console.log('Stream aborted by client');
                     break;
                 }
             }
-            
+
             // Flush any remaining content
             if (batchBuffer.trim()) {
                 res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);

@@ -922,7 +922,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 {message.role === 'USER' && (
                     <Card className="group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white">
                         {isEditing ? (
-                            <div className="space-y-2 w-full">
+                            <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
                                 <Textarea
                                     value={editedContent}
                                     onChange={(e) => setEditedContent(e.target.value)}

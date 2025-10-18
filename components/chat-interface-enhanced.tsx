@@ -1173,21 +1173,21 @@ function ChatInterfaceContent() {
     setInput("")
 
     // Optimistically update the UI with the user's message immediately
-    if (currentChat && !isWebSearchActive) { 
-      const userMessage = {
-        id: `msg-user-${Date.now()}`,
-        chatId: currentChat.id,
-        role: 'USER' as const,
-        content: msg,
-        timestamp: new Date().toISOString(),
-        files: uploadedFiles,
-      };
-      setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), userMessage];
-        return { ...prevChat, messages: updatedMessages };
-      });
-    }
+    // if (currentChat && !isWebSearchActive) { 
+    //   const userMessage = {
+    //     id: `msg-user-${Date.now()}`,
+    //     chatId: currentChat.id,
+    //     role: 'USER' as const,
+    //     content: msg,
+    //     timestamp: new Date().toISOString(),
+    //     files: uploadedFiles,
+    //   };
+    //   setCurrentChat(prevChat => {
+    //     if (!prevChat) return prevChat;
+    //     const updatedMessages = [...(prevChat.messages || []), userMessage];
+    //     return { ...prevChat, messages: updatedMessages };
+    //   });
+    // }
 
     try {
       const intent = await aiService.classifyIntent(msg);
@@ -1259,20 +1259,20 @@ function ChatInterfaceContent() {
 
       } else {
         // If a chat is active, add the user's message optimistically
-        // const userMessage = {
-        //   id: `msg-user-${Date.now()}`,
-        //   chatId: currentChat.id,
-        //   role: 'USER' as const,
-        //   content: prompt,
-        //   timestamp: new Date().toISOString(),
-        //   files: uploadedFiles,
-        // };
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'USER' as const,
+          content: prompt,
+          timestamp: new Date().toISOString(),
+          files: uploadedFiles,
+        };
 
-        // setCurrentChat(prevChat => {
-        //   if (!prevChat) return prevChat;
-        //   const updatedMessages = [...(prevChat.messages || []), userMessage];
-        //   return { ...prevChat, messages: updatedMessages };
-        // });
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
 
         // Then, generate the image
         const payload = {
@@ -1320,7 +1320,7 @@ function ChatInterfaceContent() {
   const handlePPTGeneration = async (prompt: string) => {
     setIsGeneratingPPT(true);
     setShowPresentationPreview(true); // Show the view with the loader immediately
-    setSelectedPresentation(null); // Clear any previous presentation
+    setSelectedPresentation(null);
     try {
       let newChat = currentChat;
       if (!currentChat) {
@@ -1330,7 +1330,10 @@ function ChatInterfaceContent() {
         });
         newChat = response.chat;
         await selectChat(newChat?.id ?? "");
-        const userMessage = {
+
+      }
+
+      const userMessage = {
         id: `msg-user-${Date.now()}`,
         chatId: newChat?.id || '',
         role: 'USER' as const,
@@ -1343,9 +1346,7 @@ function ChatInterfaceContent() {
         const updatedMessages = [...(prevChat.messages || []), userMessage];
         return { ...prevChat, messages: updatedMessages };
       });
-      }
 
-      
 
       const payload = {
         prompt,
