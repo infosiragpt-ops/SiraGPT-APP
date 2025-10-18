@@ -354,7 +354,7 @@ class ApiClient {
 
                 // Simple batch processing for performance
                 const timeSinceLastProcess = Date.now() - lastProcessTime;
-                const shouldProcess = 
+                const shouldProcess =
                   batchBuffer.length >= 150 || // Process every ~150 characters
                   timeSinceLastProcess >= batchProcessingDelay || // Or every 20ms
                   jsonData.content.includes('\n'); // Process on newlines
@@ -853,7 +853,7 @@ class ApiClient {
   async webSearchStream(
     data: { query: string; chatId?: string; model?: string; provider?: string },
     onData: (chunk: any) => void,
-    onComplete: () => void,
+    onComplete: (data: any) => void,
     onError: (error: Error) => void
   ) {
     const url = `${this.baseURL}/search/web`;
@@ -884,7 +884,7 @@ class ApiClient {
         const { done, value } = await reader.read();
 
         if (done) {
-          onComplete();
+          // The onComplete call is now handled by the 'done' message type
           break;
         }
 

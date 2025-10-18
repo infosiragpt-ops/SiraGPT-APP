@@ -1453,9 +1453,24 @@ function ChatInterfaceContent() {
             return { ...prev, messages: newMessages };
           });
         },
-        () => {
+        (data: any) => {
           // Final update to ensure UI reflects completion
-          selectChat(activeChatId || ''); // Re-fetch to ensure all state is consistent
+          if (data.dbMessage) {
+            setCurrentChat(prev => {
+              if (!prev) return prev;
+              // Replace the temporary message with the final one from the database
+              const newMessages = prev.messages.map(msg =>
+                msg.id === aiMessage.id ? data.dbMessage : msg
+              );
+              return { ...prev, messages: newMessages };
+            });
+          } else if (!data.results || data.results.length === 0) {
+            // If there are no results, the content is already updated to "No Results Found"
+            // We just need to stop the loading state.
+          } else {
+            // Fallback to re-fetch if dbMessage is not available but results are
+            selectChat(activeChatId || '');
+          }
           setIsWebSearching(false);
           toast.success('Web search completed');
         },

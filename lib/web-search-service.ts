@@ -105,7 +105,7 @@ class WebSearchServiceImpl {
     model: string | undefined,
     provider: string | undefined,
     onData: (content: string) => void,
-    onComplete: () => void,
+    onComplete: (data: any) => void,
     onError: (error: Error) => void,
     sources?: { scopus: boolean; pubmed: boolean; gpt4oMini: boolean }
   ) {
@@ -116,7 +116,7 @@ class WebSearchServiceImpl {
           if (chunk.type === 'content' || chunk.type === 'start') {
             onData(chunk.content);
           } else if (chunk.type === 'done') {
-            onComplete();
+            onComplete(chunk);
           } else if (chunk.type === 'error') {
             onError(new Error(chunk.error));
           }

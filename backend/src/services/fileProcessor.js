@@ -1,10 +1,15 @@
 const mammoth = require('mammoth');
 const XLSX = require('xlsx');
 const pdf = require('pdf-parse');
+
 const { createWorker } = require('tesseract.js');
 const sharp = require('sharp');
 const fs = require('fs').promises;
 const path = require('path');
+const pdfToImage = async (filePath) => {
+  const { pdf } = await import('pdf-to-img');
+  return pdf(filePath);
+};
 
 class FileProcessor {
   async processFile(file) {
@@ -18,29 +23,29 @@ class FileProcessor {
         case 'application/pdf':
           extractedText = await this.processPDF(filePath);
           break;
-        
+
         case 'application/msword':
         case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
           extractedText = await this.processWord(filePath);
           break;
-        
+
         case 'application/vnd.ms-excel':
         case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
           extractedText = await this.processExcel(filePath);
           break;
-        
+
         case 'text/plain':
         case 'text/csv':
           extractedText = await this.processText(filePath);
           break;
-        
+
         case 'image/jpeg':
         case 'image/png':
         case 'image/gif':
         case 'image/webp':
           extractedText = await this.processImage(filePath);
           break;
-        
+
         default:
           console.log(`Unsupported file type: ${mimetype}`);
           extractedText = `File "${originalname}" uploaded successfully. Content type: ${mimetype}`;
@@ -70,8 +75,32 @@ class FileProcessor {
   async processPDF(filePath) {
     try {
       const dataBuffer = await fs.readFile(filePath);
-      const data = await pdf(dataBuffer);
+      let data = await pdf(dataBuffer);
       console.log(`PDF file processed: ${filePath}, length: ${data.text.length}`);
+
+      // If text is minimal, assume it's a scanned PDF and try OCR
+      if (data.text.trim().length < 100) {
+        console.log(`Minimal text extracted from ${filePath}. Attempting OCR...`);
+        let ocrText = '';
+        const document = await pdfToImage(dataBuffer, { scale: 2 });
+
+        for await (const page of document) {
+          const optimizedImage = await sharp(page)
+            .greyscale()
+            .normalize()
+            .png()
+            .toBuffer();
+
+          const worker = await createWorker('eng');
+          const { data: { text } } = await worker.recognize(optimizedImage);
+          await worker.terminate();
+          ocrText += text + '\n';
+        }
+
+        console.log(`OCR complete for ${filePath}. Extracted ${ocrText.length} characters.`);
+        return ocrText;
+      }
+
       return data.text;
     } catch (error) {
       console.error(`PDF processing error for ${filePath}:`, error);
@@ -98,7 +127,7 @@ class FileProcessor {
       workbook.SheetNames.forEach(sheetName => {
         const worksheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-        
+
         text += `Sheet: ${sheetName}\n`;
         jsonData.forEach(row => {
           if (row.length > 0) {
@@ -165,7 +194,7 @@ class FileProcessor {
         .resize(200, 200, { fit: 'cover' })
         .jpeg({ quality: 80 })
         .toFile(thumbnailPath);
-      
+
       return thumbnailPath;
     } catch (error) {
       console.error('Thumbnail generation failed:', error);

@@ -620,13 +620,13 @@ say hello so give the answer hello how can i help you`
         }
 
         finalPrompt = `${prompt}\n\nAttached files:\n${truncatedFileContext}`;
-
       }
 
 
       messages.push({
         role: 'user',
-        content: finalPrompt
+        content: finalPrompt,
+        attachments: openaiFiles.map(fileId => ({ file_id: fileId, tools: [{ type: "file_search" }] }))
       });
 
       res.setHeader('Content-Type', 'text/event-stream');
@@ -1060,7 +1060,7 @@ router.post(
             // Additional check: if file was created via our save function, it will have specific timestamp pattern
             (inputFileRecord.filename?.match(/^generated-\d{13}-[a-z0-9]{9}\.png$/))
           );
-          
+
           if (isGeneratedImage) {
             console.log('🚫 Detected generated image as fileId - treating as image editing, not user upload');
             imagePath = inputFileRecord.path; // Use for editing but don't attach to user message

@@ -250,17 +250,35 @@ async function searchOpenAIWeb(query, intent, resultCount) {
       console.log(content);
 
       const cleanedContent = content
-        .replace(/^```json\s*/i, '')
-        .replace(/^```\s*/i, '')
-        .replace(/```$/g, '')
-        .trim();
+      // .replace(/^```json\s*/i, '')
+      // .replace(/^```\s*/i, '')
+      // .replace(/```$/g, '')
+      // .trim();
 
-      results = JSON.parse(cleanedContent);
+      results = cleanedContent
       console.log(`✅ Found ${results.length} results from OpenAI`);
     } catch (e) {
       console.error("⚠️ Failed to parse JSON:", e.message);
       console.log("Raw content:", content.substring(0, 500));
       return { results: [], error: "Failed to parse search results" };
+    }
+
+    // Validate that results is an array before proceeding
+    if (!Array.isArray(results)) {
+      console.error("⚠️ OpenAI response was not a JSON array as expected. Treating as a summary.");
+      // The model generated a text summary instead of a JSON list.
+      // We'll format this summary as a single, high-quality search result.
+      const summaryResult = {
+        title: `AI Summary for "${query}"`,
+        url: `https://www.google.com/search?q=${encodeURIComponent(query)}`,
+        snippet: content, // Use the original, unparsed content
+        source: "AI Assistant",
+        date: new Date().toISOString().split('T')[0],
+        type: "Summary",
+        relevance: "High",
+        credibility: "N/A"
+      };
+      results = [summaryResult]; // Put the single summary into an array
     }
 
     // Validate and enrich results
@@ -358,6 +376,7 @@ router.post(
 
       // Perform intelligent web search
       const { results, error } = await searchOpenAIWeb(cleanedQuery, intent, resultCount);
+      let dbMessage = null;
 
       if (error || results.length === 0) {
         res.write(`data: ${JSON.stringify({
@@ -414,21 +433,41 @@ router.post(
 
         res.write(`data: ${JSON.stringify({ type: 'content', content: footer })}\n\n`);
 
-        // Save complete response to database
+        // Construct the full content exactly as it was streamed
+        let fullContent = `🔍 **Analyzing your search...**\n\n📊 **Query Type:** ${intent.charAt(0).toUpperCase() + intent.slice(1)}\n📈 **Fetching:**  high-quality results\n\n⏳ Searching the web...\n\n`;
+        fullContent += `✅ **Found ${results.length} Relevant Results**\n\n---\n\n`;
+
+        for (let i = 0; i < orderedResults.length; i++) {
+          const result = orderedResults[i];
+          let resultText = `### ${i + 1}. [${result.title}](${result.url})\n\n`;
+          const badges = [];
+          if (result.type) badges.push(`📄 ${result.type}`);
+          if (result.source) badges.push(`🔗 ${result.source}`);
+          if (result.date && result.date !== 'null') badges.push(`📅 ${result.date}`);
+          if (result.relevance) badges.push(`🎯 ${result.relevance} Relevance`);
+          if (badges.length > 0) {
+            resultText += `${badges.join(' • ')}\n\n`;
+          }
+          resultText += `${result.snippet}\n\n`;
+          if (result.credibility && result.credibility === 'High') {
+            resultText += `✅ *Highly credible source*\n\n`;
+          }
+          resultText += `---\n\n`;
+          fullContent += resultText;
+        }
+
+        fullContent += footer;
+
+        // Save the complete, streamed response to the database
         if (chatId) {
           const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
           if (chat) {
-            const fullContent = `✅ **Found ${results.length} Relevant Results for: "${query}"**\n\n` +
-              orderedResults.map((r, i) =>
-                `### ${i + 1}. [${r.title}](${r.url})\n${r.snippet}\n`
-              ).join('\n') + footer;
-
-            await prisma.message.create({
+            dbMessage = await prisma.message.create({
               data: {
                 chatId,
                 role: 'ASSISTANT',
                 content: fullContent,
-                tokens: 100,
+                tokens: 100, // Note: This should be calculated properly
                 timestamp: new Date(),
               }
             });
@@ -436,7 +475,7 @@ router.post(
         }
       }
 
-      res.write(`data: ${JSON.stringify({ type: 'done', results })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'done', results, dbMessage })}\n\n`);
       res.end();
 
     } catch (error) {
