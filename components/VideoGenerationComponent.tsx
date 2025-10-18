@@ -9,15 +9,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Input } from "@/components/ui/input"
-import { 
-  Loader2, 
-  Video, 
-  Play, 
-  Pause, 
-  Download, 
-  Volume2, 
-  Clock, 
-  Sparkles, 
+import {
+  Loader2,
+  Video,
+  Play,
+  Pause,
+  Download,
+  Volume2,
+  Clock,
+  Sparkles,
   Monitor,
   Smartphone,
   Square,
@@ -131,7 +131,7 @@ export default function VideoGenerationComponent() {
         if (response.status === 'completed') {
           clearInterval(pollIntervalRef.current!)
           pollIntervalRef.current = null
-          
+
           if (response.result) {
             setGeneratedVideo({
               video_url: response.result.video_url,
@@ -152,7 +152,7 @@ export default function VideoGenerationComponent() {
           clearInterval(pollIntervalRef.current!)
           pollIntervalRef.current = null
           setIsGenerating(false)
-          
+
           if (response.status === 'failed') {
             toast.error(`Video generation failed: ${response.error || 'Unknown error'}`)
           } else {
@@ -174,7 +174,7 @@ export default function VideoGenerationComponent() {
     setIsGenerating(true)
     setCurrentOperation(null)
     setGeneratedVideo(null)
-    
+
     try {
       const response = await apiClient.generateVideo({
         prompt: prompt,
@@ -193,7 +193,7 @@ export default function VideoGenerationComponent() {
           estimatedTime: response.estimatedTime,
           createdAt: new Date().toISOString()
         })
-        
+
         toast.success('Video generation started! This may take 2-5 minutes.')
         startPolling(response.operationId)
       } else {
@@ -203,7 +203,7 @@ export default function VideoGenerationComponent() {
     } catch (error: any) {
       console.error('Video generation error:', error)
       setIsGenerating(false)
-      
+
       if (error.message?.includes('quota') || error.message?.includes('429')) {
         toast.error('API quota exceeded. Please try again later.')
       } else if (error.message?.includes('401') || error.message?.includes('403')) {
@@ -247,40 +247,40 @@ export default function VideoGenerationComponent() {
 
   // Download video function
 
-const downloadVideo = async () => {
-  if (!generatedVideo) return
+  const downloadVideo = async () => {
+    if (!generatedVideo) return
 
-  try {
-    // Use the download endpoint that forces file download
-    const downloadUrl = generatedVideo.download_url 
-      ? `${apiClient.apiBaseURL}${generatedVideo.download_url}`
-      : `${apiClient.apiBaseURL}/video/download/${generatedVideo.filename}`
-    
-    console.log('📥 Starting download from:', downloadUrl)
-    
-    // Try to fetch the file first to check if it exists
-    const response = await fetch(downloadUrl, { method: 'HEAD' })
-    
-    if (!response.ok) {
-      toast.error('Video file not found or not ready for download')
-      return
+    try {
+      // Use the download endpoint that forces file download
+      const downloadUrl = generatedVideo.download_url
+        ? `${apiClient.apiBaseURL}${generatedVideo.download_url}`
+        : `${apiClient.apiBaseURL}/video/download/${generatedVideo.filename}`
+
+      console.log('📥 Starting download from:', downloadUrl)
+
+      // Try to fetch the file first to check if it exists
+      const response = await fetch(downloadUrl, { method: 'HEAD' })
+
+      if (!response.ok) {
+        toast.error('Video file not found or not ready for download')
+        return
+      }
+
+      // Create a temporary link and click it to trigger download
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = generatedVideo.filename
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+
+      toast.success('Video download started')
+    } catch (error) {
+      console.error('Download error:', error)
+      toast.error('Failed to download video. Please try again.')
     }
-    
-    // Create a temporary link and click it to trigger download
-    const link = document.createElement('a')
-    link.href = downloadUrl
-    link.download = generatedVideo.filename
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    
-    toast.success('Video download started')
-  } catch (error) {
-    console.error('Download error:', error)
-    toast.error('Failed to download video. Please try again.')
   }
-}
 
   const formatTime = (seconds: number) => {
     const minutes = Math.floor(seconds / 60)
@@ -307,16 +307,16 @@ const downloadVideo = async () => {
     }
   }
 
-const suggestedPrompts = [
-  "A cinematic drone shot of an eagle soaring gracefully above snow-capped mountains at sunrise, golden light reflecting on its wings",
-  "Ultra slow-motion footage of vibrant paints splashing and blending together on a black background, creating a mesmerizing abstract pattern",
-  "A warm, cozy coffee shop interior with sunlight streaming through the window, steam rising gently from a freshly brewed cup on a wooden table",
-  "The northern lights shimmering across a starry arctic sky, reflecting beautifully on a frozen lake surrounded by pine trees",
-  "A futuristic cyberpunk city street at night, filled with glowing neon signs and rain-soaked pavement reflecting vivid colors",
-  "Massive ocean waves crashing against dramatic rocky cliffs, filmed in cinematic slow motion with water spray captured in detail",
-  "A delicate rose blooming in stunning time-lapse, petals unfolding slowly with drops of morning dew sparkling in the sunlight",
-  "Abstract 3D geometric shapes floating in space, smoothly morphing and shifting colors in rhythm with invisible music beats"
-];
+  const suggestedPrompts = [
+    "A cinematic drone shot of an eagle soaring gracefully above snow-capped mountains at sunrise, golden light reflecting on its wings",
+    "Ultra slow-motion footage of vibrant paints splashing and blending together on a black background, creating a mesmerizing abstract pattern",
+    "A warm, cozy coffee shop interior with sunlight streaming through the window, steam rising gently from a freshly brewed cup on a wooden table",
+    "The northern lights shimmering across a starry arctic sky, reflecting beautifully on a frozen lake surrounded by pine trees",
+    "A futuristic cyberpunk city street at night, filled with glowing neon signs and rain-soaked pavement reflecting vivid colors",
+    "Massive ocean waves crashing against dramatic rocky cliffs, filmed in cinematic slow motion with water spray captured in detail",
+    "A delicate rose blooming in stunning time-lapse, petals unfolding slowly with drops of morning dew sparkling in the sunlight",
+    "Abstract 3D geometric shapes floating in space, smoothly morphing and shifting colors in rhythm with invisible music beats"
+  ];
 
 
   return (
@@ -397,7 +397,7 @@ const suggestedPrompts = [
               <Monitor className="h-4 w-4" />
               Aspect Ratio
             </Label>
-            <Select value={aspectRatio} onValueChange={(value: '16:9' | '9:16' | '1:1') => setAspectRatio(value)}>
+            <Select value={aspectRatio} onValueChange={(value) => setAspectRatio(value as '16:9' | '9:16' | '1:1')}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -439,8 +439,8 @@ const suggestedPrompts = [
           </div>
 
           {/* Generate Button */}
-          <Button 
-            onClick={generateVideo} 
+          <Button
+            onClick={generateVideo}
             disabled={isGenerating || !prompt.trim()}
             className="w-full"
             size="lg"
@@ -472,8 +472,8 @@ const suggestedPrompts = [
               </Badge>
             </CardTitle>
             <CardDescription>
-              {currentOperation.prompt.length > 100 
-                ? `${currentOperation.prompt.substring(0, 100)}...` 
+              {currentOperation.prompt.length > 100
+                ? `${currentOperation.prompt.substring(0, 100)}...`
                 : currentOperation.prompt}
             </CardDescription>
           </CardHeader>
@@ -524,67 +524,67 @@ const suggestedPrompts = [
               <Badge variant="default">Completed</Badge>
             </CardTitle>
             <CardDescription>
-              {generatedVideo.prompt.length > 100 
-                ? `${generatedVideo.prompt.substring(0, 100)}...` 
+              {generatedVideo.prompt.length > 100
+                ? `${generatedVideo.prompt.substring(0, 100)}...`
                 : generatedVideo.prompt}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
 
 
-{/* Video Player */}
-<div className="relative bg-black rounded-lg overflow-hidden flex items-center justify-center">
-  <video
-    ref={videoRef}
-    src={`${apiClient.apiBaseURL}${generatedVideo.video_url}`}
-    className="w-full h-auto max-h-[70vh] object-contain"
-    poster=""
-    preload="metadata"
-    style={{
-      aspectRatio: generatedVideo.aspect_ratio === '16:9' ? '16/9' : 
-                  generatedVideo.aspect_ratio === '9:16' ? '9/16' : '1/1'
-    }}
-  />
-  {/* Video Controls Overlay */}
-  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
-    <div className="flex items-center gap-4">
-      <Button
-        onClick={togglePlayPause}
-        variant="ghost"
-        size="sm"
-        className="text-white hover:bg-white/20"
-      >
-        {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-      </Button>
-      
-      <div className="flex-1 flex items-center gap-2">
-        <span className="text-xs text-white">
-          {formatTime(currentTime)}
-        </span>
-        <div className="flex-1 bg-white/20 rounded-full h-1">
-          <div 
-            className="bg-white h-1 rounded-full transition-all"
-            style={{ 
-              width: totalDuration ? `${(currentTime / totalDuration) * 100}%` : '0%' 
-            }}
-          />
-        </div>
-        <span className="text-xs text-white">
-          {formatTime(totalDuration)}
-        </span>
-      </div>
+            {/* Video Player */}
+            <div className="relative bg-black rounded-lg overflow-hidden flex items-center justify-center">
+              <video
+                ref={videoRef}
+                src={`${apiClient.apiBaseURL}${generatedVideo.video_url}`}
+                className="w-full h-auto max-h-[70vh] object-contain"
+                poster=""
+                preload="metadata"
+                style={{
+                  aspectRatio: generatedVideo.aspect_ratio === '16:9' ? '16/9' :
+                    generatedVideo.aspect_ratio === '9:16' ? '9/16' : '1/1'
+                }}
+              />
+              {/* Video Controls Overlay */}
+              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
+                <div className="flex items-center gap-4">
+                  <Button
+                    onClick={togglePlayPause}
+                    variant="ghost"
+                    size="sm"
+                    className="text-white hover:bg-white/20"
+                  >
+                    {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                  </Button>
 
-      <Button
-        onClick={toggleFullscreen}
-        variant="ghost"
-        size="sm"
-        className="text-white hover:bg-white/20"
-      >
-        <Maximize2 className="h-4 w-4" />
-      </Button>
-    </div>
-  </div>
-</div>
+                  <div className="flex-1 flex items-center gap-2">
+                    <span className="text-xs text-white">
+                      {formatTime(currentTime)}
+                    </span>
+                    <div className="flex-1 bg-white/20 rounded-full h-1">
+                      <div
+                        className="bg-white h-1 rounded-full transition-all"
+                        style={{
+                          width: totalDuration ? `${(currentTime / totalDuration) * 100}%` : '0%'
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs text-white">
+                      {formatTime(totalDuration)}
+                    </span>
+                  </div>
+
+                  <Button
+                    onClick={toggleFullscreen}
+                    variant="ghost"
+                    size="sm"
+                    className="text-white hover:bg-white/20"
+                  >
+                    <Maximize2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
 
             {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row gap-3">
@@ -592,12 +592,12 @@ const suggestedPrompts = [
                 <Download className="h-4 w-4 mr-2" />
                 Download Video
               </Button>
-              <Button 
+              <Button
                 onClick={() => {
                   setGeneratedVideo(null)
                   setCurrentOperation(null)
-                }} 
-                variant="outline" 
+                }}
+                variant="outline"
                 className="flex-1"
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
@@ -640,7 +640,7 @@ const suggestedPrompts = [
               <div className="p-3 bg-muted rounded-lg">
                 <p className="text-muted-foreground">Resolution</p>
                 <p className="font-medium">
-                  {generatedVideo.width && generatedVideo.height 
+                  {generatedVideo.width && generatedVideo.height
                     ? `${generatedVideo.width}×${generatedVideo.height}`
                     : '720p HD'
                   }
@@ -649,7 +649,7 @@ const suggestedPrompts = [
               <div className="p-3 bg-muted rounded-lg">
                 <p className="text-muted-foreground">File Size</p>
                 <p className="font-medium">
-                  {generatedVideo.file_size 
+                  {generatedVideo.file_size
                     ? `${(generatedVideo.file_size / 1024 / 1024).toFixed(1)} MB`
                     : 'N/A'
                   }

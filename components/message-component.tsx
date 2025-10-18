@@ -31,10 +31,12 @@ import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
+import rehypeRaw from 'rehype-raw'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
+import ImageGenerationEffect from './ImageGenerationEffect';
 // import CodePreview from './code-preview';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 import ChartComponent from './chart-component';
@@ -90,13 +92,14 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
 
 
 // Enhanced Message Component with Video Support
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView }: {
+const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage }: {
     message: any;
     user: any;
     onRegenerate: () => void;
     updateMessageInChat: (messageId: string, newContent: string) => void;
     isStreaming?: boolean;
     onToggleSplitView?: (content: any) => void;
+    isGeneratingImage?: boolean;
 }) => {
     // Performance monitoring disabled to prevent overhead
     // const renderStartTime = performance.now()
@@ -524,6 +527,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
     // Optimized message content rendering with performance safeguards
     const MessageContent = () => {
+        if (message.role === 'ASSISTANT' && message.content === '[GENERATING_IMAGE]') {
+            return null;
+        }
         // Don't render markdown for image-only messages to improve performance
         if (isImageOnlyMessage() || isVideoMessage) {
             return null;
@@ -633,6 +639,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
+
+                    // rehypePlugins={[rehypeKatex, rehypeRaw]} //for advacne show website in our app
                     components={markdownComponents}
                 >
                     {message.content}
@@ -781,133 +789,139 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     }
 
     // File display logic - optimized for images
-    const FileDisplay = () => (
-        <>
-            {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
-                (message.role === "ASSISTANT" && message.content.startsWith('http') &&
-                    (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
-                    <div className="space-y-2 mt-4">
-                        {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
-                            <div key={index} className="relative">
+    const FileDisplay = () => {
+        if (message.role === 'ASSISTANT' && message.content === '[GENERATING_IMAGE]') {
+            return <ImageGenerationEffect />;
+        }
 
-                                {imageLoading[`file-${index}`] && (
-                                    <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                                    </div>
-                                )}
-                                {imageError[`file-${index}`] ? (
-                                    <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 text-center">
-                                        <p className="text-sm text-gray-500">Failed to load image</p>
-                                    </div>
-                                ) : (
+        return (
+            <>
+                {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
+                    (message.role === "ASSISTANT" && message.content.startsWith('http') &&
+                        (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
+                        <div className="space-y-2 mt-4">
+                            {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
+                                <div key={index} className="relative">
 
-                                    <img
-                                        src={
-                                            file.url.startsWith('data:image') || file.url.startsWith('http')
-                                                ? file.url
-                                                : `data:image/jpeg;base64,${file.url}`
-                                        }
-                                        alt="Generated image"
-                                        className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain"
-                                        loading="lazy"
-                                        onLoad={() => {
-                                            setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
-                                        }}
-                                        onError={() => {
-                                            setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
-                                            setImageError(prev => ({ ...prev, [`file-${index}`]: true }));
-                                        }}
-                                    />
-                                )}
-                            </div>
-                        ))}
-                        {/* Handle direct image URLs in content - don't show base64 or long URLs */}
-                        {message.role === "ASSISTANT" && message.content.startsWith('http') &&
-                            (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')) && (
-                                <div className="relative">
-                                    {imageLoading['content-image'] && (
+                                    {imageLoading[`file-${index}`] && (
                                         <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
                                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                                         </div>
                                     )}
-                                    {imageError['content-image'] ? (
+                                    {imageError[`file-${index}`] ? (
                                         <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 text-center">
                                             <p className="text-sm text-gray-500">Failed to load image</p>
                                         </div>
                                     ) : (
-                                        <></>
+
+                                        <img
+                                            src={
+                                                file.url.startsWith('data:image') || file.url.startsWith('http')
+                                                    ? file.url
+                                                    : `data:image/jpeg;base64,${file.url}`
+                                            }
+                                            alt="Generated image"
+                                            className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain"
+                                            loading="lazy"
+                                            onLoad={() => {
+                                                setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
+                                            }}
+                                            onError={() => {
+                                                setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
+                                                setImageError(prev => ({ ...prev, [`file-${index}`]: true }));
+                                            }}
+                                        />
                                     )}
                                 </div>
-                            )}
-                    </div>
-                )}
-            {parsedFiles && parsedFiles.length > 0 && message.role === "USER" && (
-                <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
-                    {parsedFiles.some((file: any) => file.type?.startsWith('image/') || file.mimeType?.startsWith('image/')) ? (
-                        // Only images, aligned right
-                        <div className="flex flex-wrap gap-1 ml-auto">
-                            {parsedFiles
-                                .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
-                                .map((file: any, index: number) => {
-                                    let imageUrl = file.url || file.base64;
-                                    {
-                                        console.log(!imageUrl && file.path);
-                                    }
-
-
-                                    if (!imageUrl && file.path) {
-                                        console.log("file.path.", file.path);
-
-                                        // Extract the part of the path after 'uploads/'
-                                        const normalizedPath = file.path.replace(/\\/g, '/');
-                                        console.log("normalizedPath:", normalizedPath);
-
-                                        // Extract the part after 'uploads/'
-                                        const relativePath = normalizedPath.split('uploads/')[1];
-                                        console.log("relativePath:", relativePath);
-
-                                        if (relativePath) {
-                                            const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
-                                            imageUrl = `${baseUrl}/uploads/${relativePath}`;
-                                            console.log("imageUrl", imageUrl);
-
-                                        }
-                                    }
-
-                                    if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
-                                        imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:5000", "")}`;
-
-                                    }
-
-                                    return (
-                                        <img
-                                            key={index}
-                                            src={imageUrl}
-                                            alt={file.name || file.originalName || "Image"}
-                                            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover"
-                                        />
-                                    );
-                                })}
-                        </div>
-
-                    ) : (
-                        // Only non-image files, aligned left
-                        <div className="flex flex-wrap gap-1">
-                            {parsedFiles
-                                .filter((file: any) => !file.type?.startsWith('image/') && !file.mimeType?.startsWith('image/'))
-                                .map((file: any, index: number) => (
-                                    <button key={index} onClick={() => handleViewFile(file)} className="flex items-center gap-1 px-2 py-1 border rounded hover:bg-muted transition-colors">
-                                        <FileText className="h-4 w-4" />
-                                        <span className="text-xs">{file.originalName || file.name || 'File'}</span>
-                                    </button>
-                                ))}
+                            ))}
+                            {/* Handle direct image URLs in content - don't show base64 or long URLs */}
+                            {message.role === "ASSISTANT" && message.content.startsWith('http') &&
+                                (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')) && (
+                                    <div className="relative">
+                                        {imageLoading['content-image'] && (
+                                            <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+                                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                                            </div>
+                                        )}
+                                        {imageError['content-image'] ? (
+                                            <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 text-center">
+                                                <p className="text-sm text-gray-500">Failed to load image</p>
+                                            </div>
+                                        ) : (
+                                            <></>
+                                        )}
+                                    </div>
+                                )}
                         </div>
                     )}
-                </div>
-            )}
+                {parsedFiles && parsedFiles.length > 0 && message.role === "USER" && (
+                    <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
+                        {parsedFiles.some((file: any) => file.type?.startsWith('image/') || file.mimeType?.startsWith('image/')) ? (
+                            // Only images, aligned right
+                            <div className="flex flex-wrap gap-1 ml-auto">
+                                {parsedFiles
+                                    .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
+                                    .map((file: any, index: number) => {
+                                        let imageUrl = file.url || file.base64;
+                                        {
+                                            console.log(!imageUrl && file.path);
+                                        }
 
-        </>
-    );
+
+                                        if (!imageUrl && file.path) {
+                                            console.log("file.path.", file.path);
+
+                                            // Extract the part of the path after 'uploads/'
+                                            const normalizedPath = file.path.replace(/\\/g, '/');
+                                            console.log("normalizedPath:", normalizedPath);
+
+                                            // Extract the part after 'uploads/'
+                                            const relativePath = normalizedPath.split('uploads/')[1];
+                                            console.log("relativePath:", relativePath);
+
+                                            if (relativePath) {
+                                                const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
+                                                imageUrl = `${baseUrl}/uploads/${relativePath}`;
+                                                console.log("imageUrl", imageUrl);
+
+                                            }
+                                        }
+
+                                        if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
+                                            imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:5000", "")}`;
+
+                                        }
+
+                                        return (
+                                            <img
+                                                key={index}
+                                                src={imageUrl}
+                                                alt={file.name || file.originalName || "Image"}
+                                                className="max-w-full h-auto rounded-lg max-h-[350px] object-cover"
+                                            />
+                                        );
+                                    })}
+                            </div>
+
+                        ) : (
+                            // Only non-image files, aligned left
+                            <div className="flex flex-wrap gap-1">
+                                {parsedFiles
+                                    .filter((file: any) => !file.type?.startsWith('image/') && !file.mimeType?.startsWith('image/'))
+                                    .map((file: any, index: number) => (
+                                        <button key={index} onClick={() => handleViewFile(file)} className="flex items-center gap-1 px-2 py-1 border rounded hover:bg-muted transition-colors">
+                                            <FileText className="h-4 w-4" />
+                                            <span className="text-xs">{file.originalName || file.name || 'File'}</span>
+                                        </button>
+                                    ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+            </>
+        )
+    };
 
 
     return (

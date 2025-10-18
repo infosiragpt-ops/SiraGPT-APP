@@ -732,6 +732,7 @@ function ChatInterfaceContent() {
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
+  const prevChatIdRef = React.useRef<string | undefined>();
 
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -989,12 +990,15 @@ function ChatInterfaceContent() {
   // }, [currentChat]);
   // Replace the commented useEffect and add a new one for chat switching
   React.useEffect(() => {
-    // Reset generation modes when switching chats
-    setIsWebSearchActive(false);
-    setIsImageGenerationActive(false);
-    setIsVideoGenerationActive(false);
-    setChatType('text'); // Always default to text when switching chats
-  }, []); // Only trigger when chat ID changes
+    if (prevChatIdRef.current && prevChatIdRef.current !== currentChat?.id) {
+      // Reset generation modes when switching chats
+      setIsWebSearchActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+      setChatType('text'); // Always default to text when switching chats
+    }
+    prevChatIdRef.current = currentChat?.id;
+  }, [currentChat?.id]); // Only trigger when chat ID changes
 
   React.useEffect(() => {
     setShowAudioPanel(false);
@@ -1268,9 +1272,17 @@ function ChatInterfaceContent() {
           files: uploadedFiles,
         };
 
+        const assistantPlaceholder = {
+          id: `msg-assistant-generating-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'ASSISTANT' as const,
+          content: '[GENERATING_IMAGE]',
+          timestamp: new Date().toISOString(),
+        };
+
         setCurrentChat(prevChat => {
           if (!prevChat) return prevChat;
-          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
           return { ...prevChat, messages: updatedMessages };
         });
 

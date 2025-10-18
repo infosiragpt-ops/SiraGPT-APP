@@ -380,31 +380,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 return { ...prevChat, messages: newMessages };
               });
             },
-            () => {
+            async () => {
               // onClose: Jab stream khatam ho jaye
               setIsLoading(false);
               setIsStreaming(false); // ✅ Streaming khatam ho gayi
-              // abortControllerRef.current = null; // AbortController ko reset karein
               setCurrentStreamId(null);
+              await selectChat(activeChat.id); // Refetch chat to get permanent IDs
             },
-            (error) => {
+            async (error) => {
               console.error("Streaming failed:", error);
               setIsLoading(false);
               setIsStreaming(false); // ✅ Streaming error ke saath khatam
               setCurrentStreamId(null);
               abortControllerRef.current = null; // AbortController ko reset karein
-              // if (error.name !== 'AbortError') { // Agar AbortError nahi hai, toh hi toast dikhayein
-              //   setCurrentChat((prevChat) => {
-              //     if (!prevChat) return prevChat;
-              //     const newMessages = prevChat.messages.map((msg) => {
-              //       if (msg.id === aiMessagePlaceholder.id) {
-              //         return { ...msg, content: "Sorry, an error occurred. Please try again." };
-              //       }
-              //       return msg;
-              //     });
-              //     return { ...prevChat, messages: newMessages };
-              //   });
-              // }
+              await selectChat(activeChat.id); // Refetch chat to get permanent IDs
             },
 
           );
@@ -458,11 +447,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               files: uploadedFiles,
             };
 
-
+            const assistantPlaceholder = {
+              id: `msg-assistant-generating-${Date.now()}`,
+              chatId: newChat.id,
+              role: 'ASSISTANT' as const,
+              content: '[GENERATING_IMAGE]',
+              timestamp: new Date().toISOString(),
+            };
 
             setCurrentChat(prevChat => {
               if (!prevChat) return prevChat;
-              const updatedMessages = [...(prevChat.messages || []), userMessage];
+              const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
               return { ...prevChat, messages: updatedMessages };
             });
 
@@ -659,11 +654,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             return { ...prevChat, messages: updatedMessages };
           });
         },
-        () => {
+        async () => {
           // onClose: Stop loading
           setIsLoading(false);
+          await selectChat(currentChat.id);
         },
-        (error) => {
+        async (error) => {
           // onError: Handle error
           console.error("Streaming failed during regeneration:", error);
           setIsLoading(false);
@@ -677,6 +673,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             });
             return { ...prevChat, messages: errorMessages };
           });
+          await selectChat(currentChat.id);
         }
       );
 
@@ -782,11 +779,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           return { ...prevChat, messages: updatedMessages };
         });
       },
-      () => {
+      async () => {
         // onClose: Stop loading
         setIsLoading(false);
+        await selectChat(currentChat.id);
       },
-      (error) => {
+      async (error) => {
         // onError: Handle error
         console.error("Streaming failed during regeneration:", error);
         setIsLoading(false);
@@ -800,6 +798,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           });
           return { ...prevChat, messages: errorMessages };
         });
+        await selectChat(currentChat.id);
       }
     );
     apiClient.clearMessageById(messageId);
