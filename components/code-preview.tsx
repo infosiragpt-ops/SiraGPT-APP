@@ -354,14 +354,14 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
               <CardTitle className="text-sm font-medium text-card-foreground">{title}</CardTitle>
             </div>
             <div className="flex items-center gap-1">
-              <Button
+              {/* <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setIsPreviewVisible(!isPreviewVisible)}
                 className="h-8 w-8 p-0"
               >
                 {isPreviewVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
+              </Button> */}
               <Button
                 variant="ghost"
                 size="sm"
