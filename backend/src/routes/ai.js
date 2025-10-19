@@ -1882,6 +1882,301 @@ router.post(
   }
 );
 
+// ✅ Generate Web Development Code (HTML/CSS/JS) - Now with Streaming
+router.post(
+  '/generate-webdev',
+  [
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('chatId').isString().withMessage('chatId is required'),
+    body('provider').optional().isString(),
+    body('model').optional().isString(),
+    body('files').optional().isArray(),
+    body('streamId').optional().isString(),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const { streamId } = req.body;
+
+    if (streamId) {
+      streamControllers.set(streamId, controller);
+      console.log(`Web Dev Stream registered with ID: ${streamId}`);
+    }
+
+    // Handle client disconnection
+    req.on('close', () => {
+      console.log(`Client connection closed for web dev chat: ${req.body.chatId}. Aborting generation.`);
+      controller.abort();
+    });
+    req.on('aborted', () => {
+      console.log(`Client request aborted for web dev chat: ${req.body.chatId}. Aborting generation.`);
+      controller.abort();
+    });
+
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        controller.abort();
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
+      const userId = req.user.id;
+
+      console.log('🌐 Web development streaming request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
+
+      // Check monthly limit
+      if (req.user.plan === 'FREE') {
+        const result = await prisma.user.updateMany({
+          where: {
+            id: userId,
+            monthlyCallLimit: { gt: 0 }
+          },
+          data: {
+            monthlyCallLimit: { decrement: 1 }
+          }
+        });
+
+        if (!result || result.count === 0) {
+          return res.status(429).json({
+            error: 'Free monthly queries exhausted. Please upgrade to continue.',
+            remaining: 0
+          });
+        }
+      } else {
+        if (req.user.apiUsage >= req.user.monthlyLimit) {
+          return res.status(429).json({
+            error: 'Monthly API limit exceeded',
+            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
+          });
+        }
+      }
+
+      // Verify chat exists and belongs to user
+      const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+      if (!chat || chat.userId !== userId) {
+        return res.status(404).json({ error: 'Chat not found or access denied.' });
+      }
+
+      // Process attached files
+      let processedFiles = [];
+      if (files && files.length > 0) {
+        processedFiles = await Promise.all(
+          files.map(async (fileId) => {
+            const file = await prisma.file.findFirst({
+              where: { id: fileId, userId }
+            });
+            return file ? {
+              id: file.id,
+              name: file.originalName,
+              extractedText: file.extractedText,
+              mimeType: file.mimeType,
+              path: file.path
+            } : null;
+          })
+        ).then(results => results.filter(Boolean));
+      }
+
+      // Prepare web development system message
+      const getWebDevSystemMessage = (provider) => {
+        const baseContent = `You are an elite UI/UX designer and front-end architect, specializing in creating award-winning, visually stunning websites. Your work rivals the best designs on Dribbble, Behance, and Awwwards. Create websites that are both beautiful and highly functional.
+
+**🚨 CRITICAL SUCCESS REQUIREMENTS:**
+
+**1. SINGLE FILE OUTPUT (MANDATORY):**
+- ALWAYS output ONE complete HTML file with ALL code inline
+- Never split into separate HTML, CSS, or JS files
+- All styles go in <style> tags in the <head>
+- All JavaScript goes in <script> tags before </body>
+- Zero external dependencies or imports
+- Must work perfectly when saved as .html and opened in browser
+
+**2. VISUAL EXCELLENCE (PREMIUM QUALITY):**
+- Modern, luxury design aesthetics (Apple, Tesla, Stripe quality)
+- Perfect color harmony with professional palettes
+- Advanced CSS: gradients, shadows, backdrop-filter, transforms
+- Smooth micro-interactions and hover effects
+- Premium typography with perfect hierarchy
+- Glassmorphism/neumorphism where appropriate
+- Subtle animations that enhance UX
+
+**3. CODE ARCHITECTURE:**
+- Clean, semantic HTML5 structure
+- Modern CSS Grid and Flexbox layouts
+- CSS Custom Properties for consistent theming
+- Mobile-first responsive design
+- Vanilla JavaScript (ES6+) for interactivity
+- Optimized for performance and accessibility
+
+**4. DESIGN PATTERNS:**
+- Hero sections with compelling visuals
+- Perfect spacing and alignment (8px grid system)
+- Professional forms with beautiful styling
+- Interactive buttons with hover states
+- Card-based layouts with subtle shadows
+- Consistent visual rhythm and flow
+- Use best images for display products
+
+**5. INTERACTIVITY:**
+- Smooth scroll behaviors
+- Form validation with beautiful feedback
+- Interactive navigation elements
+- Dynamic content updates
+- Responsive mobile menu
+- Loading states and transitions
+
+**6. TECHNICAL EXCELLENCE:**
+- Fast loading and optimized rendering
+- Cross-browser compatibility
+- Accessibility (ARIA labels, keyboard navigation)
+- SEO-optimized structure
+- Progressive enhancement
+
+**🎨 VISUAL INSPIRATION:**
+Target the quality of: Apple product pages, Stripe dashboard, Linear design, Vercel landing pages, Figma marketing sites, Notion interfaces.
+
+**💎 QUALITY STANDARD:**
+Every element should feel intentionally designed, polished, and premium. The user should be amazed by both visual appeal and smooth functionality. Make it feel like a $50,000 custom website.`;
+
+        // Provider-specific instructions
+        if (provider === 'Gemini') {
+          return baseContent + `
+
+**📋 GEMINI-SPECIFIC OUTPUT RULES (EXTREMELY IMPORTANT):**
+1. You MUST start your response with exactly: \`\`\`html
+2. Include complete DOCTYPE and HTML structure immediately after
+3. Embed ALL styles in <style> tags within <head>
+4. Embed ALL scripts in <script> tags before </body>
+5. End your response with exactly: \`\`\`
+6. NO explanatory text before the HTML code block
+7. NO additional comments outside the code block
+8. NO markdown formatting except the required code block delimiters
+9. Your entire response should be: \`\`\`html[COMPLETE HTML CODE HERE]\`\`\`
+
+**REMEMBER FOR GEMINI: Start with \`\`\`html and end with \`\`\`. Nothing else!**`;
+        } else {
+          return baseContent + `
+
+**📋 OUTPUT RULES (EXTREMELY IMPORTANT):**
+1. Start response immediately with \`\`\`html
+2. Include complete DOCTYPE and HTML structure
+3. Embed ALL styles in <style> tags within <head>
+4. Embed ALL scripts in <script> tags before </body>
+5. End response with \`\`\`
+6. NO explanatory text before or after the HTML code block
+7. NO additional comments outside the code block
+8. Ensure immediate functionality when saved as .html file
+
+**REMEMBER: Only respond with the HTML code block, nothing else!**`;
+        }
+      };
+
+      const webDevSystemMessage = {
+        role: 'system',
+        content: getWebDevSystemMessage(provider)
+      };
+
+      // Prepare messages array
+      const messages = [webDevSystemMessage];
+
+      // Handle images if provided
+      if (processedFiles && processedFiles.length > 0) {
+        const imageFiles = processedFiles.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
+        
+        if (imageFiles.length > 0) {
+          console.log(`📸 Processing ${imageFiles.length} image(s) for web dev`);
+          
+          // Build content array with text and images
+          const contentArray = [
+            { type: 'text', text: prompt }
+          ];
+
+          // Add all images to the content
+          for (const imageFile of imageFiles) {
+            const imageContent = await aiService.prepareImageForVision(imageFile.path, imageFile.mimeType);
+            if (imageContent) {
+              contentArray.push(imageContent);
+              console.log(`✅ Added image to web dev request: ${imageFile.name}`);
+            }
+          }
+
+          messages.push({
+            role: 'user',
+            content: contentArray
+          });
+        } else {
+          messages.push({
+            role: 'user',
+            content: prompt
+          });
+        }
+      } else {
+        messages.push({
+          role: 'user',
+          content: prompt
+        });
+      }
+
+      // Set up streaming headers
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+
+      let fullResponseContent = '';
+      try {
+        fullResponseContent = await aiService.generateStream({
+          provider: provider,
+          model: model,
+          messages,
+          res,
+          signal,
+          files: processedFiles
+        });
+      } catch (apiError) {
+        if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
+          console.warn('Web Dev AI Service stream aborted by client in route.');
+          return;
+        }
+        console.error('Web Dev AI Service stream failed in route:', apiError.message);
+        throw apiError;
+      }
+
+      const tokens = fullResponseContent.length + prompt.length;
+
+      // Save chat and track usage in background
+      if (fullResponseContent.trim()) {
+        saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
+      }
+
+    } catch (error) {
+      console.error('❌ Web development generation error:', error);
+
+      // Check if headers were already sent (streaming started)
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message || 'Web development generation failed' });
+      } else {
+        try {
+          res.write(`data: ${JSON.stringify({ error: error.message || 'Web development generation failed' })}\n\n`);
+        } catch (writeError) {
+          console.error('Failed to write error to stream:', writeError);
+        }
+      }
+    } finally {
+      if (streamId) {
+        streamControllers.delete(streamId);
+        console.log(`Web Dev Stream unregistered for ID: ${streamId}`);
+      }
+
+      if (!res.writableEnded) {
+        res.end();
+      }
+    }
+  }
+);
+
 router.post(
   '/generate-chart',
   [

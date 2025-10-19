@@ -730,6 +730,7 @@ function ChatInterfaceContent() {
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
+  const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
@@ -1171,7 +1172,7 @@ function ChatInterfaceContent() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isStreaming) return
+    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming) return
 
     const msg = input.trim()
     setInput("")
@@ -1215,6 +1216,8 @@ function ChatInterfaceContent() {
         await handleVideoGeneration(msg);
       } else if (intent === 'ppt') {
         await handlePPTGeneration(msg);
+      } else if (intent === 'webdev') {
+        await handleWebDevGeneration(msg);
       } else {
         const filesToSend = [...uploadedFiles];
         setUploadedFiles([]); // Clear UI immediately
@@ -1347,6 +1350,90 @@ function ChatInterfaceContent() {
     }
   }
 
+  const handleWebDevGeneration = async (prompt: string) => {
+    // Use dedicated webdev streaming API endpoint
+    const filesToSend = [...uploadedFiles];
+    setUploadedFiles([]); // Clear UI immediately
+    
+    try {
+      let newChat = currentChat;
+      if (!currentChat) {
+        const response = await apiClient.createChat({
+          title: prompt ? prompt.substring(0, 30) : "New Web Dev Chat",
+          model: selectedModel,
+        });
+        newChat = response.chat;
+        await selectChat(newChat?.id ?? "");
+      }
+
+      // Add user message to UI immediately
+      const userMessage = {
+        id: `msg-user-${Date.now()}`,
+        chatId: newChat?.id || '',
+        role: 'USER' as const,
+        content: prompt,
+        timestamp: new Date().toISOString(),
+        files: filesToSend?.length ? filesToSend.map(f => f.id) : undefined,
+      };
+
+      // Add placeholder for AI response
+      const aiMessagePlaceholder = {
+        id: `msg-ai-${Date.now()}`,
+        chatId: newChat?.id || '',
+        role: 'ASSISTANT' as const,
+        content: '',
+        timestamp: new Date().toISOString(),
+      };
+
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), userMessage, aiMessagePlaceholder];
+        return { ...prevChat, messages: updatedMessages };
+      });
+
+      // Call dedicated webdev streaming endpoint
+      const streamId = crypto.randomUUID();
+      const payload = {
+        prompt,
+        chatId: newChat?.id || '',
+        provider: selectProvider,
+        model: selectedModel,
+        files: filesToSend?.map(f => f.id) || [],
+        streamId: streamId
+      };
+
+      // Use streaming webdev API
+      await apiClient.generateWebDevStream(
+        payload,
+        (chunk) => {
+          // Update AI message content with streaming chunks
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                return { ...msg, content: msg.content + chunk };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          });
+        },
+        () => {
+          // Stream completed
+          console.log('Web development generation completed');
+        },
+        (error) => {
+          console.error('Web development generation error:', error);
+          toast.error(error.message || 'Web development generation failed');
+        }
+      );
+
+    } catch (error: any) {
+      console.error('Web development generation error:', error);
+      toast.error(error.message || 'Web development generation failed');
+    }
+  };
+
   const handlePPTGeneration = async (prompt: string) => {
     setIsGeneratingPPT(true);
     setShowPresentationPreview(true); // Show the view with the loader immediately
@@ -1414,19 +1501,20 @@ function ChatInterfaceContent() {
       return;
     }
 
-    let activeChatId = currentChat?.id;
+    let activeChat = currentChat;
 
-    if (!activeChatId) {
+    if (!activeChat) {
       try {
-        const newChat = createNewChat('text', `🔍 Web Search: ${input.trim()}`) as any;
-        activeChatId = newChat?.id;
-        if (!activeChatId) {
+        const response = await apiClient.createChat({
+          title: `🔍 Web Search: ${input.trim().substring(0, 30)}`,
+          model: selectedModel,
+        });
+        activeChat = response.chat;
+        await selectChat(activeChat?.id ?? "");
+        if (!activeChat?.id) {
           toast.error('Failed to create chat for web search');
           return;
         }
-        // Delay to ensure chat is fully initialized and selected
-        await new Promise(resolve => setTimeout(resolve, 500));
-        selectChat(activeChatId); // Ensure the newly created chat is selected
       } catch (error) {
         toast.error('Failed to create chat for web search');
         console.error("Error creating chat for web search:", error);
@@ -1442,7 +1530,7 @@ function ChatInterfaceContent() {
       // Add a placeholder user message for the web search
       const userMessage = {
         id: `msg-user-${Date.now()}`,
-        chatId: activeChatId,
+        chatId: activeChat.id,
         role: 'USER' as const,
         content: `🔍 Web Search: ${searchQuery}`,
         timestamp: new Date().toISOString(),
@@ -1451,7 +1539,7 @@ function ChatInterfaceContent() {
       // Add a placeholder AI message for the search results
       const aiMessage = {
         id: `msg-ai-${Date.now() + 1}`, // Ensure unique ID
-        chatId: activeChatId,
+        chatId: activeChat.id,
         role: 'ASSISTANT' as const,
         content: 'Searching the web...', // Initial loading state
         timestamp: new Date().toISOString(),
@@ -1459,7 +1547,7 @@ function ChatInterfaceContent() {
 
       // Update the chat with the new messages
       setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat; // Should not happen if activeChatId is set
+        if (!prevChat) return prevChat; // Should not happen if activeChat.id is set
         const updatedMessages = [...(prevChat.messages || []), userMessage, aiMessage];
         return { ...prevChat, messages: updatedMessages };
       });
@@ -1468,7 +1556,7 @@ function ChatInterfaceContent() {
 
       await webSearchService.searchStream(
         searchQuery,
-        activeChatId,
+        activeChat.id,
         selectedModel,
         selectProvider,
         (content: string) => {
@@ -1499,7 +1587,7 @@ function ChatInterfaceContent() {
             // We just need to stop the loading state.
           } else {
             // Fallback to re-fetch if dbMessage is not available but results are
-            selectChat(activeChatId || '');
+            selectChat(activeChat.id || '');
           }
           setIsWebSearching(false);
           toast.success('Web search completed');

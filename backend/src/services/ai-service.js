@@ -11,67 +11,7 @@ const FormData = require('form-data');
 const PptxGenJS = require('pptxgenjs');
 
 class AIService {
-    /**
-     * Dynamically detect whether the recent user text asks for a front-end website (HTML/CSS/JS UI)
-     * Strategy: quick heuristics first; if inconclusive, fall back to a tiny classification call.
-     */
-    async detectWebIntent(client, model, recentText) {
-        try {
-
-
-            // --- 3️⃣ AI-based classification (slow but powerful) ---
-
-            const cls = await client.chat.completions.create({
-                model,
-                messages: [
-                    {
-                        role: "system",
-                        content: `
-Tum aik intelligent intent classifier ho.
-Sirf aik word output karo: WEB_UI ya OTHER.
-
-WEB_UI tab bolo jab user clearly chahta ho ke uske liye **web page, website, web UI, ya frontend design** banaya jaye.
-
-Lekin agar user sirf:
-- web se related kisi file (jaise pdf, api, backend) ka zikr kar raha ho
-- ya web code ko sirf samajhna, explain karwana, ya convert karwana chahta ho
-to usay OTHER classify karo.
-
-Samjho ke user "website banwaana chahta hai" ya nahi.
-
-Examples of WEB_UI:
-- "Mujhe ek login page bana do"
-- "Make me a dashboard UI"
-- "Portfolio website create karo"
-- "Next.js main ek homepage banao"
-- "Landing page design kar do"
-
-Examples of OTHER:
-- "HTML code samjhao"
-- "PDF generate karo from HTML"
-- "API se data la kar PDF banao"
-- "Website ka data extract karna hai"
-- "Explain frontend architecture"
-- "HTML to PDF convert karna hai"
-`
-                    },
-                    { role: "user", content: recentText }
-                ],
-                temperature: 0,
-                max_tokens: 3
-            });
-
-            const intent = cls?.choices?.[0]?.message?.content?.trim()?.toUpperCase() || "";
-            if (intent.includes("WEB_UI")) return true;
-
-        } catch (err) {
-            console.warn("Web intent detection failed:", err.message || err);
-        }
-
-        // --- 4️⃣ Default fallback ---
-        return false;
-    }
-
+   
     /**
      * Provider ke naam ke hisab se sahi configured AI client return karta hai.
      * @param {string} provider - Provider ka naam (e.g., "OpenAI", "Gemini", "OpenRouter")
@@ -146,15 +86,6 @@ Examples of OTHER:
         try {
             const client = this.getClient(provider);
 
-            // Check if the user is asking for a chart
-            const lastUserMessage = messages[messages.length - 1].content;
-            const lastMessageText = typeof lastUserMessage === 'string'
-                ? lastUserMessage
-                : lastUserMessage.find(item => item.type === 'text')?.text || '';
-
-                        // Dynamic intent detection (heuristics + tiny classifier fallback)
-            const isWebDevRequest = await this.detectWebIntent(client, model, lastMessageText);
-
             // ✅ IMPROVED: Handle images properly for vision API
             if (files && files.length > 0) {
                 const imageFiles = files.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
@@ -183,80 +114,6 @@ Examples of OTHER:
 
                     lastMessage.content = contentArray;
                 }
-            }
-            if (isWebDevRequest) {
-                // PREMIUM Web Development System Message
-                const webDevSystemMessage = {
-                    role: 'system',
-                    content: `You are an elite UI/UX designer and front-end architect, specializing in creating award-winning, visually stunning websites. Your work rivals the best designs on Dribbble, Behance, and Awwwards. Create websites that are both beautiful and highly functional.
-
-**� CRITICAL SUCCESS REQUIREMENTS:**
-
-**1. SINGLE FILE OUTPUT (MANDATORY):**
-- ALWAYS output ONE complete HTML file with ALL code inline
-- Never split into separate HTML, CSS, or JS files
-- All styles go in <style> tags in the <head>
-- All JavaScript goes in <script> tags before </body>
-- Zero external dependencies or imports
-- Must work perfectly when saved as .html and opened in browser
-
-**2. VISUAL EXCELLENCE (PREMIUM QUALITY):**
-- Modern, luxury design aesthetics (Apple, Tesla, Stripe quality)
-- Perfect color harmony with professional palettes
-- Advanced CSS: gradients, shadows, backdrop-filter, transforms
-- Smooth micro-interactions and hover effects
-- Premium typography with perfect hierarchy
-- Glassmorphism/neumorphism where appropriate
-- Subtle animations that enhance UX
-
-**3. CODE ARCHITECTURE:**
-- Clean, semantic HTML5 structure
-- Modern CSS Grid and Flexbox layouts
-- CSS Custom Properties for consistent theming
-- Mobile-first responsive design
-- Vanilla JavaScript (ES6+) for interactivity
-- Optimized for performance and accessibility
-
-**4. DESIGN PATTERNS:**
-- Hero sections with compelling visuals
-- Perfect spacing and alignment (8px grid system)
-- Professional forms with beautiful styling
-- Interactive buttons with hover states
-- Card-based layouts with subtle shadows
-- Consistent visual rhythm and flow
-- use best images for display products
-
-**5. INTERACTIVITY:**
-- Smooth scroll behaviors
-- Form validation with beautiful feedback
-- Interactive navigation elements
-- Dynamic content updates
-- Responsive mobile menu
-- Loading states and transitions
-
-**6. TECHNICAL EXCELLENCE:**
-- Fast loading and optimized rendering
-- Cross-browser compatibility
-- Accessibility (ARIA labels, keyboard navigation)
-- SEO-optimized structure
-- Progressive enhancement
-
-**🎨 VISUAL INSPIRATION:**
-Target the quality of: Apple product pages, Stripe dashboard, Linear design, Vercel landing pages, Figma marketing sites, Notion interfaces.
-
-**📋 OUTPUT RULES:**
-1. Start immediately with \`\`\`html
-2. Include complete DOCTYPE and HTML structure
-3. Embed ALL styles in <style> tags
-4. Embed ALL scripts in <script> tags
-5. End with \`\`\`
-6. NO explanatory text before or after code
-7. Ensure immediate functionality when opened in browser
-
-**💎 QUALITY STANDARD:**
-Every element should feel intentionally designed, polished, and premium. The user should be amazed by both visual appeal and smooth functionality. Make it feel like a $50,000 custom website.`
-                };
-                messages.unshift(webDevSystemMessage);
             }
 
 

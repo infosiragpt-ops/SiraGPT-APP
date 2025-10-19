@@ -63,7 +63,7 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
-  createNewChat: (type?: 'text' | 'image' | 'video', initialContent?: string, initialFiles?: string[]) => void
+  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev', initialContent?: string, initialFiles?: string[]) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[]) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
@@ -75,9 +75,9 @@ interface ChatContextType {
   setSelectedProivder: (model: string) => void
   isLoading: boolean
   availableModels: any[]
-  chatType: 'text' | 'image' | 'video'
+  chatType: 'text' | 'image' | 'video' | 'webdev'
   uploadedFiles: any[]
-  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video'>>
+  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev'>>
   setUploadedFiles: (files: any[]) => void
   regenerateLastMessage: () => void
   editAndRegenerate: (messageId: string, newContent: string) => void
@@ -105,7 +105,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [hasInitialized, setHasInitialized] = useState(false)
-  const [chatType, setChatType] = useState<'text' | 'image' | 'video'>('text')
+  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev'>('text')
   const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
   const [pagination, setPagination] = useState<PaginationInfo | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
@@ -435,7 +435,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     },
     [currentChat, user, token, selectedModel, uploadedFiles]
   );
-  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' = 'text', initialContent?: string, initialFiles?: string[]) => {
+  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' = 'text', initialContent?: string, initialFiles?: string[]) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {

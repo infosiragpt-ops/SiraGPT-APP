@@ -496,12 +496,12 @@ export class AIService {
       // Fallback to basic keyword matching if API key is not available
       const lowerCasePrompt = prompt.toLowerCase();
       
-      // Check for web development/coding keywords first (should be 'text')
-      if (/\b(website|webpage|web app|html|css|javascript|react|vue|angular|code|programming|developer|portfolio|frontend|backend|component|api|database)\b/i.test(prompt)) {
-        return 'text';
+      // Check for web development keywords first
+      if (/\b(website|webpage|web app|html|css|javascript|react|vue|angular|code|programming|developer|portfolio|frontend|backend|component|build.*website|create.*website|design.*website|landing page)\b/i.test(prompt)) {
+        return 'webdev';
       }
       
-      // Then check for visual content
+      // Then check for other content types
       if (/\b(generate.*image|create.*image|draw|illustration|artwork|logo|graphic|picture|photo)\b/i.test(prompt)) return 'image';
       if (/\b(generate.*video|create.*video|video.*clip|animation|movie)\b/i.test(prompt)) return 'video';
       if (/\b(ppt|presentation|slides|powerpoint|slideshow)\b/i.test(prompt)) return 'ppt';
@@ -528,26 +528,31 @@ export class AIService {
 - 'video': If they want to create, generate, or produce a video, animation, movie clip, or moving visual content  
 - 'ppt': If they want to create a presentation, slides, PowerPoint, or slideshow
 - 'chart': If they want to create graphs, charts, diagrams, or data visualizations
-- 'text': For everything else including: web development, coding, programming, building websites/apps, creating HTML/CSS/JavaScript, software development, technical discussions, questions, conversations, text generation, code reviews, debugging, tutorials, explanations, etc.
+- 'webdev': If they want to create, build, or design websites, web pages, web applications, HTML/CSS/JavaScript code, frontend components, or web interfaces
+- 'text': For everything else including: general questions, conversations, text generation, code reviews, debugging, tutorials, explanations, non-web programming, etc.
 
-IMPORTANT: Web development, coding, and programming requests should ALWAYS be classified as 'text', not 'image' - even if they mention "design", "create", "build", or "portfolio".
+IMPORTANT: Web development requests should be classified as 'webdev', not 'text' or 'image'.
 
 Examples:
-- "Design a dark mode developer portfolio" → 'text' (web development)
-- "Create a React component" → 'text' (coding) 
-- "Build a landing page" → 'text' (web development)
+- "Design a dark mode developer portfolio" → 'webdev' (web development)
+- "Create a React component" → 'webdev' (web development) 
+- "Build a landing page" → 'webdev' (web development)
+- "Make me a website for my business" → 'webdev' (web development)
+- "Create HTML/CSS for a login form" → 'webdev' (web development)
 - "Generate an image of a cat" → 'image' (visual content)
 - "Create a logo design" → 'image' (visual design)
 - "Make a video of sunset" → 'video' (video content)
+- "Explain how React works" → 'text' (explanation)
+- "What is JavaScript?" → 'text' (question)
 
-Respond with only one word: image, video, ppt, chart, or text.`,
+Respond with only one word: image, video, ppt, chart, webdev, or text.`,
             },
             {
               role: "user",
               content: prompt,
             },
           ],
-          max_tokens: 10,
+          max_completion_tokens: 10, // Fixed for newer models
         }),
       });
 
@@ -559,7 +564,7 @@ Respond with only one word: image, video, ppt, chart, or text.`,
       const intent = data.choices[0].message.content.toLowerCase().trim();
 
       // Validate the response from the model
-      if (['image', 'video', 'ppt', 'text', 'chart'].includes(intent)) {
+      if (['image', 'video', 'ppt', 'text', 'chart', 'webdev'].includes(intent)) {
         return intent;
       }
       return 'text'; // Default to text if the response is not one of the expected values

@@ -982,6 +982,86 @@ class ApiClient {
     });
   }
 
+  // Web Development Streaming endpoint
+  async generateWebDevStream(
+    data: { 
+      prompt: string; 
+      chatId: string; 
+      provider?: string; 
+      model?: string; 
+      files?: string[];
+      streamId: string;
+    },
+    onData: (chunk: string) => void,
+    onClose: () => void,
+    onError: (error: Error) => void,
+  ) {
+    const url = `${this.baseURL}/ai/generate-webdev`;
+    const config: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+      body: JSON.stringify(data),
+    };
+
+    try {
+      const response = await fetch(url, config);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      if (!response.body) {
+        throw new Error('Response body is null');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line.length > 6) {
+              try {
+                const jsonStr = line.slice(6);
+                if (jsonStr.trim() === '[DONE]') {
+                  onClose();
+                  return;
+                }
+                const data = JSON.parse(jsonStr);
+                if (data.content) {
+                  onData(data.content);
+                }
+                if (data.error) {
+                  onError(new Error(data.error));
+                  return;
+                }
+              } catch (parseError) {
+                console.warn('Failed to parse SSE data:', parseError);
+              }
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      onClose();
+    } catch (error) {
+      console.error('WebDev streaming error:', error);
+      onError(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
   // PPT Generation endpoint
   async generatePPT(data: {
     prompt: string;
