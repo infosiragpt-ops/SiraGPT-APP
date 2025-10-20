@@ -528,10 +528,10 @@ export class AIService {
 - 'video': If they want to create, generate, or produce a video, animation, movie clip, or moving visual content  
 - 'ppt': If they want to create a presentation, slides, PowerPoint, or slideshow
 - 'chart': If they want to create graphs, charts, diagrams, or data visualizations
-- 'webdev': If they want to create, build, or design websites, web pages, web applications, HTML/CSS/JavaScript code, frontend components, or web interfaces
+- 'webdev': If they want to create, build, or design websites, web pages, web applications, This includes requests for HTML, CSS, and JavaScript for a UI.
 - 'text': For everything else including: general questions, conversations, text generation, code reviews, debugging, tutorials, explanations, non-web programming, etc.
 
-IMPORTANT: Web development requests should be classified as 'webdev', not 'text' or 'image'.
+IMPORTANT:  Requests to explain, review, or debug code should be 'text', not 'webdev'. Only classify as 'webdev' if the user wants to *create* a UI.
 
 Examples:
 - "Design a dark mode developer portfolio" → 'webdev' (web development)
@@ -552,7 +552,7 @@ Respond with only one word: image, video, ppt, chart, webdev, or text.`,
               content: prompt,
             },
           ],
-          max_completion_tokens: 10, // Fixed for newer models
+          max_completion_tokens: 40, // Fixed for newer models
         }),
       });
 
