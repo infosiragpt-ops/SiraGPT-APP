@@ -1,6 +1,7 @@
 const mammoth = require('mammoth');
 const XLSX = require('xlsx');
 const pdf = require('pdf-parse');
+const officeParser = require('officeparser');
 
 const { createWorker } = require('tesseract.js');
 const sharp = require('sharp');
@@ -44,6 +45,11 @@ class FileProcessor {
         case 'image/gif':
         case 'image/webp':
           extractedText = await this.processImage(filePath);
+          break;
+
+        case 'application/vnd.ms-powerpoint':
+        case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+          extractedText = await this.processPowerPoint(filePath);
           break;
 
         default:
@@ -180,6 +186,17 @@ class FileProcessor {
       return text || 'No text found in image';
     } catch (error) {
       throw new Error(`Image OCR processing failed: ${error.message}`);
+    }
+  }
+
+  async processPowerPoint(filePath) {
+    try {
+      const text = await officeParser.parseOfficeAsync(filePath);
+      console.log(`PowerPoint file processed: ${filePath}, length: ${text.length}`);
+      return text;
+    } catch (error) {
+      console.error(`PowerPoint file processing error for ${filePath}:`, error);
+      throw new Error(`PowerPoint presentation processing failed: ${error.message}`);
     }
   }
 

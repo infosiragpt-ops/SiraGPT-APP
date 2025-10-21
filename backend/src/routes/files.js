@@ -35,7 +35,9 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
         let openaiFileId = null;
         if (file.mimetype === 'application/pdf' ||
           file.mimetype.startsWith('text/') ||
-          file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+          file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+          file.mimetype === 'application/vnd.ms-powerpoint' ||
+          file.mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
           try {
             const fileStream = await fs.readFile(file.path);
             const openaiFile = await openai.files.create({
