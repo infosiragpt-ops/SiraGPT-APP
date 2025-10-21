@@ -65,7 +65,7 @@ interface ChatContextType {
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
   createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev', initialContent?: string, initialFiles?: string[]) => Promise<any>
   selectChat: (chatId: string) => void
-  addMessage: (content: string, files?: string[]) => Promise<void>
+  addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => void
@@ -286,43 +286,47 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentStreamId]);
   const addMessage = useCallback(
-    async (content: string, fileIds?: string[], chat?: any) => { // Added optional 'chat' parameter
+    async (content: string, fileIds?: string[], chat?: any, skipUserMessage?: boolean) => { // Added skipUserMessage parameter
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !token) return;
 
-      // if (abortControllerRef.current) {
-      //   abortControllerRef.current.abort();
-      //   // Optional: previous stream ke message ko update karein agar zaroori ho
-      // }
-      // const controller = new AbortController();
-      // abortControllerRef.current = controller;
+      // STEP 1: User ka message UI mein dikhayein (agar already nahi dikhaya gaya)
+      if (!skipUserMessage) {
+        const userMessage: Message = {
+          id: `msg-user-${Date.now()}`,
+          chatId: activeChat.id,
+          role: 'USER',
+          content,
+          timestamp: new Date().toISOString(),
+          files: fileIds?.length ? fileIds : undefined,
+        };
 
-      // STEP 1: User ka message foran UI mein dikhayein
-      const userMessage: Message = {
-        id: `msg-user-${Date.now()}`,
-        chatId: activeChat.id,
-        role: 'USER',
-        content,
-        timestamp: new Date().toISOString(), // Use ISOString for consistency
-        files: fileIds?.length ? fileIds : undefined,
-      };
+        // Update chat with user message
+        const updatedMessages = [...activeChat.messages, userMessage];
+        const updatedChat = { ...activeChat, messages: updatedMessages };
 
-      // STEP 2: AI ke jawab ke liye ek khaali placeholder banayein
-      // Isse UI mein "AI is typing..." jaisa effect aayega
+        setCurrentChat(updatedChat);
+        setChats((prev) => prev.map((c) => (c.id === activeChat.id ? updatedChat : c)));
+      }
+
+      // STEP 2: AI ke jawab ke liye placeholder
       const aiMessagePlaceholder: Message = {
         id: `msg-ai-${Date.now()}`,
         chatId: activeChat.id,
         role: 'ASSISTANT',
-        content: '', // Shuru mein content khaali hoga
+        content: '',
         timestamp: new Date().toISOString(),
       };
 
-      // Foran UI ko user ke message aur AI ke placeholder ke saath update karein
-      const updatedMessages = [...activeChat.messages, userMessage, aiMessagePlaceholder];
-      const updatedChat = { ...activeChat, messages: updatedMessages };
+      // Add AI placeholder to chat
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        return {
+          ...prevChat,
+          messages: [...prevChat.messages, aiMessagePlaceholder]
+        };
+      });
 
-      setCurrentChat(updatedChat);
-      setChats((prev) => prev.map((c) => (c.id === activeChat.id ? updatedChat : c)));
       setUploadedFiles([]); // Uploaded files clear kar dein
       setIsLoading(true); // Loading state start karein
       setIsStreaming(true);

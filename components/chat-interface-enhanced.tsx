@@ -1175,30 +1175,37 @@ function ChatInterfaceContent() {
     if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming) return
 
     const msg = input.trim()
+    // Deep copy files to avoid reference issues
+    const filesToSend = [...uploadedFiles];
+
+
     setInput("")
 
-    // Optimistically update the UI with the user's message immediately
-    // if (currentChat && !isWebSearchActive) { 
-    //   const userMessage = {
-    //     id: `msg-user-${Date.now()}`,
-    //     chatId: currentChat.id,
-    //     role: 'USER' as const,
-    //     content: msg,
-    //     timestamp: new Date().toISOString(),
-    //     files: uploadedFiles,
-    //   };
-    //   setCurrentChat(prevChat => {
-    //     if (!prevChat) return prevChat;
-    //     const updatedMessages = [...(prevChat.messages || []), userMessage];
-    //     return { ...prevChat, messages: updatedMessages };
-    //   });
-    // }
-
     try {
+      // ✅ STEP 1: Show user message IMMEDIATELY (before any processing)
+      if (currentChat) {
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'USER' as const,
+          content: msg,
+          timestamp: new Date().toISOString(),
+          files: uploadedFiles,
+        };
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
+      }
+
+      // Clear files AFTER displaying user message
+      setUploadedFiles([]);
+      // ✅ STEP 2: Classify intent in background (doesn't block UI)
       const intent = await aiService.classifyIntent(msg);
 
       if (intent === 'image' || chatType === 'image' || chatType === 'video') {
-        const hasNonImageFiles = uploadedFiles.some(
+        const hasNonImageFiles = filesToSend.some(
           (file) => !file.type?.startsWith('image/')
         );
 
@@ -1208,10 +1215,11 @@ function ChatInterfaceContent() {
         }
       }
 
+      // ✅ STEP 3: Handle based on intent (each handler adds AI response)
       if (isWebSearchActive) {
-        await handleWebSearch(); // Web search remains a manual toggle
+        await handleWebSearch();
       } else if (intent === 'image' || chatType === 'image') {
-        await handleImageGeneration(msg, uploadedFiles.map(f => f.id))
+        await handleImageGeneration(msg, filesToSend.map(f => f.id))
       } else if (isVideoGenerationActive) {
         await handleVideoGeneration(msg);
       } else if (intent === 'ppt') {
@@ -1219,13 +1227,12 @@ function ChatInterfaceContent() {
       } else if (intent === 'webdev') {
         await handleWebDevGeneration(msg);
       } else {
-        const filesToSend = [...uploadedFiles];
-        setUploadedFiles([]); // Clear UI immediately
-
+        // For text messages, use addMessage but tell it user message already added
         if (!currentChat) {
           await createNewChat('text', msg, filesToSend);
         } else {
-          await addMessage(msg, filesToSend);
+          // Call addMessage with skipUserMessage flag
+          await addMessage(msg, filesToSend, currentChat, true);
         }
       }
     } catch (err: any) {
@@ -1239,12 +1246,12 @@ function ChatInterfaceContent() {
       }
       toast.error(err?.message || 'Send failed');
 
-      // Add a message with an error state to the chat
+      // Add error message to chat
       const errorMessage = {
         id: `msg-error-${Date.now()}`,
         chatId: currentChat?.id || 'unknown',
         role: 'ASSISTANT' as const,
-        content: '', // No content, just the error
+        content: '',
         timestamp: new Date().toISOString(),
         error: err.message || 'An unknown error occurred',
       };
@@ -1265,16 +1272,7 @@ function ChatInterfaceContent() {
         const newChat = await createNewChat('image', prompt, files);
 
       } else {
-        // If a chat is active, add the user's message optimistically
-        const userMessage = {
-          id: `msg-user-${Date.now()}`,
-          chatId: currentChat.id,
-          role: 'USER' as const,
-          content: prompt,
-          timestamp: new Date().toISOString(),
-          files: uploadedFiles,
-        };
-
+        // User message already shown in handleSend, just add AI placeholder
         const assistantPlaceholder = {
           id: `msg-assistant-generating-${Date.now()}`,
           chatId: currentChat.id,
@@ -1285,7 +1283,7 @@ function ChatInterfaceContent() {
 
         setCurrentChat(prevChat => {
           if (!prevChat) return prevChat;
-          const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
+          const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
           return { ...prevChat, messages: updatedMessages };
         });
 
@@ -1354,9 +1352,10 @@ function ChatInterfaceContent() {
     // Use dedicated webdev streaming API endpoint
     const filesToSend = [...uploadedFiles];
     setUploadedFiles([]); // Clear UI immediately
-    
+
     try {
       let newChat = currentChat;
+      let aiMessagePlaceholder: any;
       if (!currentChat) {
         const response = await apiClient.createChat({
           title: prompt ? prompt.substring(0, 30) : "New Web Dev Chat",
@@ -1364,32 +1363,50 @@ function ChatInterfaceContent() {
         });
         newChat = response.chat;
         await selectChat(newChat?.id ?? "");
+
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: newChat?.id || '',
+          role: 'USER' as const,
+          content: prompt,
+          timestamp: new Date().toISOString(),
+          files: filesToSend?.length ? filesToSend.map(f => f.id) : undefined,
+        };
+        // Add placeholder for AI response
+        aiMessagePlaceholder = {
+          id: `msg-ai-${Date.now()}`,
+          chatId: newChat?.id || '',
+          role: 'ASSISTANT' as const,
+          content: '',
+          timestamp: new Date().toISOString(),
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage, aiMessagePlaceholder];
+          return { ...prevChat, messages: updatedMessages };
+        });
       }
 
-      // Add user message to UI immediately
-      const userMessage = {
-        id: `msg-user-${Date.now()}`,
-        chatId: newChat?.id || '',
-        role: 'USER' as const,
-        content: prompt,
-        timestamp: new Date().toISOString(),
-        files: filesToSend?.length ? filesToSend.map(f => f.id) : undefined,
-      };
+      else {
+        // Add user message to UI immediately
 
-      // Add placeholder for AI response
-      const aiMessagePlaceholder = {
-        id: `msg-ai-${Date.now()}`,
-        chatId: newChat?.id || '',
-        role: 'ASSISTANT' as const,
-        content: '',
-        timestamp: new Date().toISOString(),
-      };
 
-      setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), userMessage, aiMessagePlaceholder];
-        return { ...prevChat, messages: updatedMessages };
-      });
+        // Add placeholder for AI response
+        aiMessagePlaceholder = {
+          id: `msg-ai-${Date.now()}`,
+          chatId: newChat?.id || '',
+          role: 'ASSISTANT' as const,
+          content: '',
+          timestamp: new Date().toISOString(),
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), aiMessagePlaceholder];
+          return { ...prevChat, messages: updatedMessages };
+        });
+      }
 
       // Call dedicated webdev streaming endpoint
       const streamId = crypto.randomUUID();
@@ -1448,22 +1465,22 @@ function ChatInterfaceContent() {
         newChat = response.chat;
         await selectChat(newChat?.id ?? "");
 
+        // Only add user message for new chat (existing chat already has it from handleSend)
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: newChat?.id || '',
+          role: 'USER' as const,
+          content: prompt,
+          timestamp: new Date().toISOString(),
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
       }
-
-      const userMessage = {
-        id: `msg-user-${Date.now()}`,
-        chatId: newChat?.id || '',
-        role: 'USER' as const,
-        content: prompt,
-        timestamp: new Date().toISOString(),
-      };
-
-      setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), userMessage];
-        return { ...prevChat, messages: updatedMessages };
-      });
-
+      // If currentChat exists, user message already added in handleSend
 
       const payload = {
         prompt,
@@ -1502,6 +1519,7 @@ function ChatInterfaceContent() {
     }
 
     let activeChat = currentChat;
+    const isNewChat = !activeChat;
 
     if (!activeChat) {
       try {
@@ -1527,14 +1545,22 @@ function ChatInterfaceContent() {
     setInput(''); // Clear input immediately after starting search
 
     try {
-      // Add a placeholder user message for the web search
-      const userMessage = {
-        id: `msg-user-${Date.now()}`,
-        chatId: activeChat.id,
-        role: 'USER' as const,
-        content: `🔍 Web Search: ${searchQuery}`,
-        timestamp: new Date().toISOString(),
-      };
+      // Only add user message for new chat (existing chat already has it from handleSend)
+      if (isNewChat) {
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: activeChat.id,
+          role: 'USER' as const,
+          content: `🔍 Web Search: ${searchQuery}`,
+          timestamp: new Date().toISOString(),
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
+      }
 
       // Add a placeholder AI message for the search results
       const aiMessage = {
@@ -1545,10 +1571,10 @@ function ChatInterfaceContent() {
         timestamp: new Date().toISOString(),
       };
 
-      // Update the chat with the new messages
+      // Add AI message to chat
       setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat; // Should not happen if activeChat.id is set
-        const updatedMessages = [...(prevChat.messages || []), userMessage, aiMessage];
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), aiMessage];
         return { ...prevChat, messages: updatedMessages };
       });
 

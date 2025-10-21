@@ -11,7 +11,7 @@ const FormData = require('form-data');
 const PptxGenJS = require('pptxgenjs');
 
 class AIService {
-   
+
     /**
      * Provider ke naam ke hisab se sahi configured AI client return karta hai.
      * @param {string} provider - Provider ka naam (e.g., "OpenAI", "Gemini", "OpenRouter")
@@ -116,7 +116,6 @@ class AIService {
                 }
             }
 
-
             const payload = {
                 model: model,
                 messages: messages,
@@ -128,52 +127,83 @@ class AIService {
 
             const stream = await client.chat.completions.create(payload, { signal });
 
-            // Optimized streaming - no content limits, better performance
-            let chunkCount = 0;
-            let batchBuffer = '';
-            let lastFlush = Date.now();
-
-            // Optimized settings for better performance
-            const batchSize = 150; // Larger batches reduce UI updates
-            const flushInterval = 100; // Balanced flush timing
-
+            // Stream se data parhein aur client ko bhejein
             for await (const chunk of stream) {
                 const contentChunk = chunk.choices[0]?.delta?.content || '';
                 if (contentChunk) {
                     fullResponseContent += contentChunk;
-                    batchBuffer += contentChunk;
-                    chunkCount++;
-
-                    const timeSinceLastFlush = Date.now() - lastFlush;
-                    const hasNewlines = contentChunk.includes('\n');
-
-                    // Simple, efficient batching - no complex detection
-                    const shouldFlush =
-                        batchBuffer.length >= batchSize ||
-                        timeSinceLastFlush >= flushInterval ||
-                        (hasNewlines && batchBuffer.length > 50);
-
-                    if (shouldFlush && batchBuffer.trim()) {
-                        res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
-                        batchBuffer = '';
-                        lastFlush = Date.now();
-                    }
+                    // Client ko data chunk bhejein
+                    res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
                 }
-
-                // Quick abort check
-                if (signal && signal.aborted) {
-                    console.log('Stream aborted by client');
-                    break;
-                }
-            }
-
-            // Flush any remaining content
-            if (batchBuffer.trim()) {
-                res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
             }
 
             console.log(`✅ Response generated successfully (${fullResponseContent.length} characters)`);
             return fullResponseContent;
+            // const payload = {
+            //     model: model,
+            //     messages: messages,
+            //     stream: true,
+            // };
+
+            // console.log(`🤖 Generating response with ${provider} - ${model}`);
+            // console.log(`📝 Messages count: ${messages.length}`);
+
+            // const stream = await client.chat.completions.create(payload, { signal });
+
+            // // ✅ Model-specific streaming configuration
+            // const isGPT5 = model.includes('o3') || model.includes('gpt-5') || model.includes('o1');
+            // const isSlowerModel = isGPT5 || model.includes('claude-3-opus');
+
+            // let isFirstChunk = true;
+            // let batchBuffer = '';
+            // let lastFlush = Date.now();
+
+            // // ✅ Adjust batching for slower models
+            // const batchSize = isSlowerModel ? 1 : 80; // Immediate flush for GPT-5
+            // const flushInterval = isSlowerModel ? 1 : 50; // Minimal delay for GPT-5
+
+            // for await (const chunk of stream) {
+            //     const contentChunk = chunk.choices[0]?.delta?.content || '';
+
+            //     if (contentChunk) {
+            //         fullResponseContent += contentChunk;
+
+            //         if (isFirstChunk) {
+            //             // Immediately send the first chunk for instant feedback
+            //             res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+            //             isFirstChunk = false;
+            //             lastFlush = Date.now();
+            //         } else {
+            //             // For subsequent chunks, use batching (or immediate for slower models)
+            //             batchBuffer += contentChunk;
+            //             const timeSinceLastFlush = Date.now() - lastFlush;
+            //             const hasNewlines = contentChunk.includes('\n');
+
+            //             const shouldFlush = isSlowerModel || // ✅ Always flush for GPT-5
+            //                 batchBuffer.length >= batchSize ||
+            //                 timeSinceLastFlush >= flushInterval ||
+            //                 (hasNewlines && batchBuffer.length > 40);
+
+            //             if (shouldFlush && batchBuffer.trim()) {
+            //                 res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
+            //                 batchBuffer = '';
+            //                 lastFlush = Date.now();
+            //             }
+            //         }
+            //     }
+
+            //     if (signal && signal.aborted) {
+            //         console.log('Stream aborted by client');
+            //         break;
+            //     }
+            // }
+
+            // // Flush any remaining content in the buffer
+            // if (batchBuffer.trim()) {
+            //     res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
+            // }
+            // console.log(`✅ Response generated successfully (${fullResponseContent.length} characters)`);
+            // return fullResponseContent;
         } catch (apiError) {
             if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
                 console.warn(`AI stream aborted by client for provider: ${provider}.`);
