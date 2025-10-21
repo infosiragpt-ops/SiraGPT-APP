@@ -247,20 +247,15 @@ async function searchOpenAIWeb(query, intent, resultCount) {
     // Parse JSON safely
     let results;
     try {
-      console.log(content);
-
       const cleanedContent = content
-      // .replace(/^```json\s*/i, '')
-      // .replace(/^```\s*/i, '')
-      // .replace(/```$/g, '')
-      // .trim();
-
-      results = cleanedContent
-      console.log(`✅ Found ${results.length} results from OpenAI`);
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```$/g, '')
+        .trim();
+      results = JSON.parse(cleanedContent);
     } catch (e) {
-      console.error("⚠️ Failed to parse JSON:", e.message);
-      console.log("Raw content:", content.substring(0, 500));
-      return { results: [], error: "Failed to parse search results" };
+      console.warn("⚠️ Could not parse OpenAI response as JSON. Treating as a summary.", e.message);
+      results = content; // Fallback to treating the content as a string summary
     }
 
     // Validate that results is an array before proceeding

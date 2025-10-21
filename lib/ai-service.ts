@@ -495,18 +495,18 @@ export class AIService {
       console.error("OpenAI API key not found for intent classification.");
       // Fallback to basic keyword matching if API key is not available
       const lowerCasePrompt = prompt.toLowerCase();
-      
+
       // Check for web development keywords first
       if (/\b(website|webpage|web app|html|css|javascript|react|vue|angular|code|programming|developer|portfolio|frontend|backend|component|build.*website|create.*website|design.*website|landing page)\b/i.test(prompt)) {
         return 'webdev';
       }
-      
+
       // Then check for other content types
       if (/\b(generate.*image|create.*image|draw|illustration|artwork|logo|graphic|picture|photo)\b/i.test(prompt)) return 'image';
       if (/\b(generate.*video|create.*video|video.*clip|animation|movie)\b/i.test(prompt)) return 'video';
       if (/\b(ppt|presentation|slides|powerpoint|slideshow)\b/i.test(prompt)) return 'ppt';
       if (/\b(chart|graph|diagram|visualization)\b/i.test(prompt)) return 'chart';
-      
+
       return 'text';
     }
 
@@ -531,8 +531,11 @@ export class AIService {
 - 'webdev': If they want to create, build, or design websites, web pages, web applications, This includes requests for HTML, CSS, and JavaScript for a UI.
 - 'text': For everything else including: general questions, conversations, text generation, code reviews, debugging, tutorials, explanations, non-web programming, etc.
 
-IMPORTANT:  Requests to explain, review, or debug code should be 'text', not 'webdev'. Only classify as 'webdev' if the user wants to *create* a UI.
-
+ IMPORTANT: 
+    - Only classify as 'webdev' if the user is **creating** or **building** a UI or web page. If the request involves **debugging**, **explaining**, or **reviewing code**, classify it as 'text'.
+    - If the user asks for **specific languages** (e.g., "HTML", "React", "CSS"), check if the request is related to **building** a UI. If yes, classify as 'webdev'.
+    - If the user is asking for a general explanation of something (e.g., "What is React?"), classify as 'text'.
+    
 Examples:
 - "Design a dark mode developer portfolio" → 'webdev' (web development)
 - "Create a React component" → 'webdev' (web development) 

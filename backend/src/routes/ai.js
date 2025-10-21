@@ -659,7 +659,7 @@ say hello so give the answer hello how can i help you`
       const tokens = fullResponseContent.length + prompt.length;
 
       if (isAuth) {
-        saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, fullResponseContent, tokens, actualModel, processedFiles);
+        await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, fullResponseContent, tokens, actualModel, processedFiles);
       }
 
     } catch (error) {
@@ -2083,10 +2083,10 @@ Every element should feel intentionally designed, polished, and premium. The use
       // Handle images if provided
       if (processedFiles && processedFiles.length > 0) {
         const imageFiles = processedFiles.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
-        
+
         if (imageFiles.length > 0) {
           console.log(`📸 Processing ${imageFiles.length} image(s) for web dev`);
-          
+
           // Build content array with text and images
           const contentArray = [
             { type: 'text', text: prompt }
@@ -2148,7 +2148,7 @@ Every element should feel intentionally designed, polished, and premium. The use
 
       // Save chat and track usage in background
       if (fullResponseContent.trim()) {
-        saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
+        await saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
       }
 
     } catch (error) {

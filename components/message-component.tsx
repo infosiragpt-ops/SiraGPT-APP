@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -41,6 +42,7 @@ import ImageGenerationEffect from './ImageGenerationEffect';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 import ChartComponent from './chart-component';
 import { PresentationView } from './presentation-view';
+import { CustomCodeBlock } from "./ui/custom-code-block"
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
@@ -455,75 +457,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     }, [message.files])
 
     // Optimized CodeBlock component with performance improvements
-    const CodeBlock = React.memo(({ node, inline, className, children, ...props }: any) => {
-        const [isCodeCopied, setIsCodeCopied] = useState(false);
+    const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
         const match = /language-(\w+)/.exec(className || '');
-        const language = match ? match[1] : 'text';
-
-        // Memoize code string to prevent unnecessary recalculations
-        const codeString = useMemo(() => String(children).replace(/\n$/, ''), [children]);
-
-        // Performance optimization: limit code block size for syntax highlighting
-        const isLargeCode = codeString.length > 5000;
-        const shouldUseSyntaxHighlighting = !isLargeCode;
-
-        const handleCodeCopy = () => {
-            navigator.clipboard.writeText(codeString).then(() => {
-                setIsCodeCopied(true);
-                setTimeout(() => setIsCodeCopied(false), 2000);
-            });
-        };
-
         return !inline && match ? (
-            <div className="rounded-md bg-gray-900/80 border border-gray-700 relative">
-                <div className="flex items-center justify-between px-4 py-2 bg-gray-800/50 rounded-t-md border-b border-gray-700">
-                    <span className="text-xs font-sans text-gray-400">
-                        {language} {isLargeCode && '(large file)'}
-                    </span>
-                    <div className="flex items-center gap-2">
-                        {canPreviewMessage && (
-                            <button
-                                onClick={handlePreview}
-                                className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
-                                title="Open preview in split view"
-                            >
-                                <ExternalLink size={14} className="opacity-80" />
-                                Preview
-                            </button>
-                        )}
-                        <button onClick={handleCodeCopy} className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1">
-                            {isCodeCopied ? <Check size={14} /> : <Clipboard size={14} />}
-                            {isCodeCopied ? 'Copied!' : 'Copy code'}
-                        </button>
-                    </div>
-                </div>
-
-                {shouldUseSyntaxHighlighting ? (
-                    <SyntaxHighlighter
-                        style={oneDark}
-                        language={language}
-                        PreTag="div"
-                        {...props}
-                        customStyle={{ margin: 0, padding: '1rem', background: 'transparent', fontSize: "14px" }}
-                        wrapLongLines={true}
-                        codeTagProps={{ style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }}
-                    >
-                        {codeString}
-                    </SyntaxHighlighter>
-                ) : (
-                    <pre className="m-0 p-4 overflow-auto text-sm font-mono text-white bg-transparent">
-                        <code style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                            {codeString}
-                        </code>
-                    </pre>
-                )}
-            </div>
+            <CustomCodeBlock className={className} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
+                {children}
+            </CustomCodeBlock>
         ) : (
             <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {children}
             </code>
         );
-    });
+    };
 
     // Optimized message content rendering with performance safeguards
     const MessageContent = () => {
@@ -546,102 +491,88 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
 
         // Memoize ReactMarkdown components to prevent unnecessary re-renders
-        const markdownComponents = useMemo(() => ({
-            code: CodeBlock,
-            p: ({ children }: any) => <p className="mb-3 text-base">{children}</p>,
-            ul: ({ children }: any) => <ul className="mb-3 pl-6 text-base">{children}</ul>,
-            ol: ({ children }: any) => <ol className="mb-3 pl-6 text-base">{children}</ol>,
-            li: ({ children }: any) => <li className="mb-1 text-base">{children}</li>,
-            h1: ({ children }: any) => <h1 className="mb-4 text-xl font-bold">{children}</h1>,
-            h2: ({ children }: any) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
-            h3: ({ children }: any) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
-            blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-            table: ({ node, children, ...props }: any) => {
-                const tHead = node.children.find((child: any) => child.tagName === 'thead');
-                const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
-
-                const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
-                const handleExpand = () => {
-                    setTableHeaders(headers);
-                    setTableData(data);
-                    setTableTitle(title);
-                    setIsTableExpanded(true);
-                };
-                // Find the preceding h1, h2, or h3 to use as a title
-                let title = '';
-                const parent = node.parent;
-                if (parent) {
-                    const tableIndex = parent.children.indexOf(node);
-                    for (let i = tableIndex - 1; i >= 0; i--) {
-                        const sibling = parent.children[i];
-                        if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
-                            title = getNodeText(sibling);
-                            break;
-                        }
-                        // Stop if we hit another element that's not a heading
-                        if (sibling.type !== 'text' || sibling.value.trim() !== '') {
-                            break;
+        const components = useMemo(() => {
+            const commonProps = {
+                p: ({ children }: any) => <p className="mb-3 text-base">{children}</p>,
+                ul: ({ children }: any) => <ul className="mb-3 pl-6 text-base">{children}</ul>,
+                ol: ({ children }: any) => <ol className="mb-3 pl-6 text-base">{children}</ol>,
+                li: ({ children }: any) => <li className="mb-1 text-base">{children}</li>,
+                h1: ({ children }: any) => <h1 className="mb-4 text-xl font-bold">{children}</h1>,
+                h2: ({ children }: any) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
+                h3: ({ children }: any) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
+                blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
+                table: ({ node, children, ...props }: any) => {
+                    const tHead = node.children.find((child: any) => child.tagName === 'thead');
+                    const tBody = node.children.find((child: any) => child.tagName === 'tbody');
+                    const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
+                    const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
+                    const handleExpand = () => {
+                        setTableHeaders(headers);
+                        setTableData(data);
+                        setTableTitle(title);
+                        setIsTableExpanded(true);
+                    };
+                    let title = '';
+                    const parent = node.parent;
+                    if (parent) {
+                        const tableIndex = parent.children.indexOf(node);
+                        for (let i = tableIndex - 1; i >= 0; i--) {
+                            const sibling = parent.children[i];
+                            if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
+                                title = getNodeText(sibling);
+                                break;
+                            }
+                            if (sibling.type !== 'text' || sibling.value.trim() !== '') {
+                                break;
+                            }
                         }
                     }
-                }
-                return (
-                    <div className="relative mt-3">
-                        <TableControls
-                            content={message.content}
-                            messageId={message.id}
-                            onExpand={handleExpand}
-                            title={title}
-                        />
-                        {/* Responsive table wrapper */}
-                        <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600"
-                            style={{
-                                WebkitOverflowScrolling: 'touch',
-                                maxWidth: '100vw',
-                            }}
-                        >
-                            <table
-                                className="border-collapse border border-muted mb-3 w-full"
-                                style={{
-                                    minWidth: "520px",
-                                }}
-                            >
-                                {children}
-                            </table>
+                    return (
+                        <div className="relative mt-3">
+                            <TableControls content={message.content} messageId={message.id} onExpand={handleExpand} title={title} />
+                            <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
+                                <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                            </div>
+                            <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Swipe left/right to view the table</div>
                         </div>
-                        {/* Mobile fallback: Scroll hint */}
-                        <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">
-                            Swipe left/right to view the table
-                        </div>
-                    </div>
-                );
-            },
+                    );
+                },
+                th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
+                td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
+                strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+                em: ({ children }: any) => <em className="italic">{children}</em>,
+                a: ({ href, children, ...props }: any) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600" {...props}>{children}</a>
+            };
 
-            th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
-            td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
-            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
-            em: ({ children }: any) => <em className="italic">{children}</em>,
-            a: ({ href, children, ...props }: any) => (
-                <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
-                    {...props}
-                >
-                    {children}
-                </a>
-            )
-        }), [CodeBlock]);
+            if (isStreaming) {
+                return {
+                    ...commonProps,
+                    code: ({ node, inline, className, children, ...props }: any) => {
+                        const match = /language-(\w+)/.exec(className || '');
+                        return !inline && match ? (
+                            <pre className="text-sm whitespace-pre-wrap p-4 my-4 bg-gray-900/80 rounded-md font-mono text-white"><code>{String(children)}</code></pre>
+                        ) : (
+                            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>{children}</code>
+                        );
+                    },
+                };
+            }
+
+            return {
+                ...commonProps,
+                code: CodeBlock,
+            };
+        }, [isStreaming, CodeBlock]);
+
 
         return (
             <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
+                    rehypePlugins={[rehypeKatex, rehypeRaw]}
 
                     // rehypePlugins={[rehypeKatex, rehypeRaw]} //for advacne show website in our app
-                    components={markdownComponents}
+                    components={components}
                 >
                     {message.content}
                 </ReactMarkdown>
