@@ -396,6 +396,15 @@ class ApiClient {
     return response
   }
 
+  async generateGmailResponse(data: { prompt: string; chatId?: string; model: string; type: string }) {
+    const response = await this.request('/ai/generate-gmail', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+
+    return response;
+  }
+
   /*async generateAI(data: { model: string; messages: any[]; chatId?: string; files?: string[] }) {
     return this.request('/ai/generate', {
       method: 'POST',
@@ -1089,6 +1098,65 @@ class ApiClient {
     }
 
     return response.blob();
+  }
+
+  // Gmail endpoints
+  async getGmailStatus() {
+    return this.request('/gmail/status');
+  }
+
+  async connectGmail() {
+    return this.request('/gmail/connect');
+  }
+
+  async sendGmailEmail(data: {
+    to: string;
+    subject: string;
+    message: string;
+    cc?: string;
+    bcc?: string;
+  }) {
+    return this.request('/gmail/send', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getGmailEmails(params?: {
+    maxResults?: number;
+    query?: string;
+    labelIds?: string[];
+  }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/gmail/emails${query ? `?${query}` : ''}`);
+  }
+
+  async deleteGmailEmail(emailId: string) {
+    return this.request(`/gmail/emails/${emailId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async replyToGmailEmail(emailId: string, data: { message: string }) {
+    return this.request(`/gmail/emails/${emailId}/reply`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async searchGmailEmails(query: string) {
+    return this.request('/gmail/search', {
+      method: 'POST',
+      body: JSON.stringify({ query }),
+    });
+  }
+
+  // Gmail chat command endpoint
+  async processGmailCommand(data: { command: string; chatId: string }) {
+    return this.request('/gmail/chat-command', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 }
 

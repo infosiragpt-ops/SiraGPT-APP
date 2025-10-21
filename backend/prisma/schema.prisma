@@ -23,6 +23,9 @@ model User {
   monthlyCallLimit Int  @default(3)        // NEW: counts number of generate calls / month
   monthlyLimit Int      @default(1000) 
   
+  // Gmail Integration
+  gmailTokens  String?  // Store encrypted Gmail OAuth tokens as JSON
+  
   // Stripe Integration Fields
   stripeCustomerId     String?  @unique
   stripeSubscriptionId String?  @unique
@@ -105,6 +108,7 @@ model Message {
   tokens    Int?
   timestamp DateTime    @default(now())
   files     Json?       // Store file references
+  metadata  Json?       // Store message metadata (like Gmail connection requirements)
   feedback  String? 
 
   // Relations

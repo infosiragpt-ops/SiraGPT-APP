@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
+import GmailConnectionCard from "./GmailConnectionCard"
 import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
@@ -41,6 +42,7 @@ import ImageGenerationEffect from './ImageGenerationEffect';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 import ChartComponent from './chart-component';
 import { PresentationView } from './presentation-view';
+import ProcessingGmailCard from "./ProcessingGmailCard"
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
@@ -447,7 +449,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const parsedFiles: any[] = useMemo(() => {
         if (!message.files) return []
         try {
-            return typeof message.files === 'string' ? JSON.parse(message.files) : message.files
+            const parsed = typeof message.files === 'string' ? JSON.parse(message.files) : message.files
+            // Ensure we always return an array
+            return Array.isArray(parsed) ? parsed : []
         } catch (e) {
             console.error("Failed to parse files:", e)
             return []
@@ -527,7 +531,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
     // Optimized message content rendering with performance safeguards
     const MessageContent = () => {
-        if (message.role === 'ASSISTANT' && message.content === '[GENERATING_IMAGE]') {
+        if (message.role === 'ASSISTANT' && (message.content === '[GENERATING_IMAGE]' || message.content === '[PROCESSING_GMAIL]')) {
             return null;
         }
         // Don't render markdown for image-only messages to improve performance
@@ -650,21 +654,51 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     };
 
     const videoEntry = useMemo(
-        () => parsedFiles.find((f: any) => f?.type === 'video'),
+        () => Array.isArray(parsedFiles) ? parsedFiles.find((f: any) => f?.type === 'video') : null,
         [parsedFiles]
     )
     const isVideoMessage = !!videoEntry
 
     const pptEntry = useMemo(
-        () => parsedFiles.find((f: any) => f?.type === 'presentation' || f?.type === 'ppt'),
+        () => Array.isArray(parsedFiles) ? parsedFiles.find((f: any) => f?.type === 'presentation' || f?.type === 'ppt') : null,
         [parsedFiles]
     )
     const isPPTMessage = !!pptEntry
 
+    // Check for Gmail connection requirement
+    const isGmailConnectionRequired = useMemo(() => {
+        try {
+            if (message.metadata) {
+                const metadata = typeof message.metadata === 'string' 
+                    ? JSON.parse(message.metadata) 
+                    : message.metadata;
+                return metadata?.type === 'gmail_connection_required' && metadata?.showConnectionCard;
+            }
+            return false;
+        } catch {
+            return false;
+        }
+    }, [message.metadata]);
+
+    // Gmail Connection Component
+    const GmailConnectionDisplay = () => {
+        if (!isGmailConnectionRequired) return null;
+        
+        return (
+            <div className="mt-4">
+                <GmailConnectionCard 
+                    onConnect={() => {
+                        // Optional: Add any additional handling after connection
+                        console.log('Gmail connection initiated');
+                    }}
+                />
+            </div>
+        );
+    };
 
     // Check if this is an image-only message
     const isImageOnlyMessage = () => {
-        const hasImageFiles = parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image');
+        const hasImageFiles = Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image');
         const hasImageUrl = message.role === "ASSISTANT" && message.content.startsWith('http') &&
             (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/'));
         return hasImageFiles || hasImageUrl;
@@ -787,20 +821,24 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             </div>
         )
     }
-
     // File display logic - optimized for images
     const FileDisplay = () => {
         if (message.role === 'ASSISTANT' && message.content === '[GENERATING_IMAGE]') {
             return <ImageGenerationEffect />;
         }
 
+   if (message.role === "ASSISTANT" && message.content === "[PROCESSING_GMAIL]") {
+  return <ProcessingGmailCard />;
+}
+
+
         return (
             <>
-                {((parsedFiles && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
+                {((Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
                     (message.role === "ASSISTANT" && message.content.startsWith('http') &&
                         (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
                         <div className="space-y-2 mt-4">
-                            {parsedFiles && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
+                            {Array.isArray(parsedFiles) && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
                                 <div key={index} className="relative">
 
                                     {imageLoading[`file-${index}`] && (
@@ -854,9 +892,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 )}
                         </div>
                     )}
-                {parsedFiles && parsedFiles.length > 0 && message.role === "USER" && (
+                {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "USER" && (
                     <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
-                        {parsedFiles.some((file: any) => file.type?.startsWith('image/') || file.mimeType?.startsWith('image/')) ? (
+                        {Array.isArray(parsedFiles) && parsedFiles.some((file: any) => file.type?.startsWith('image/') || file.mimeType?.startsWith('image/')) ? (
                             // Only images, aligned right
                             <div className="flex flex-wrap gap-1 ml-auto">
                                 {parsedFiles
@@ -980,7 +1018,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <PPTDisplay />
                                 <VideoDisplay />
                                 <FileDisplay />
-                                <ChartDisplay files={parsedFiles} fullResponse={message.fullResponse} />
+                                <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} />
+                                <GmailConnectionDisplay />
                             </>
                         )}
 
