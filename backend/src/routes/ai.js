@@ -1995,21 +1995,10 @@ Available actions:
 
 Respond naturally and helpfully. If you need to perform Gmail actions, I will handle the technical implementation.`;
 
-      // Initialize OpenAI client for direct completion (not streaming)
+      // Initialize OpenAI client for intent classification and parsing only
       const openai = new OpenAI({
         apiKey: process.env.OPENAI_API_KEY
       });
-
-      // Generate AI response about Gmail
-      const aiResponse = await openai.chat.completions.create({
-        model: model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: prompt }
-        ]
-      });
-
-      const aiContent = aiResponse.choices[0].message.content;
 
       // Actually perform Gmail actions based on user request with improved AI analysis
       let gmailResult = null;
@@ -2087,6 +2076,11 @@ Respond in JSON format:
         }
 
         console.log('Gmail Action Analysis:', actionAnalysis);
+
+        // Temporarily disable delete functionality for safety
+        if (actionAnalysis && actionAnalysis.action === 'DELETE') {
+          actionAnalysis.action = 'DELETE_DISABLED';
+        }
 
         // Perform actions based on AI classification
         if (actionAnalysis.action === 'READ') {
@@ -2233,56 +2227,11 @@ Rules:
               };
             }
           }
-        } else if (actionAnalysis.action === 'DELETE') {
-          // Handle delete requests using AI-extracted keywords
-          const keywords = actionAnalysis.keywords.length > 0 ? actionAnalysis.keywords : [''];
-          const emailAddresses = actionAnalysis.email_addresses || [];
-          
-          let searchQuery = '';
-          if (emailAddresses.length > 0) {
-            searchQuery = `from:${emailAddresses[0]}`;
-          } else if (keywords.length > 0) {
-            searchQuery = keywords.join(' OR ');
-          }
-          
-          if (searchQuery) {
-            const emails = await gmailService.searchEmails({ 
-              query: searchQuery, 
-              maxResults: 10 
-            });
-            
-            if (emails.length > 0) {
-              const deleteResults = [];
-              for (const email of emails.slice(0, 5)) { // Limit to 5 for safety
-                try {
-                  await gmailService.deleteEmail({ messageId: email.id });
-                  deleteResults.push(email.id);
-                } catch (deleteError) {
-                  console.error('Delete error:', deleteError);
-                }
-              }
-              
-              gmailResult = {
-                action: 'delete',
-                searchQuery: searchQuery,
-                deletedCount: deleteResults.length,
-                totalFound: emails.length,
-                deletedIds: deleteResults
-              };
-            } else {
-              gmailResult = {
-                action: 'delete',
-                searchQuery: searchQuery,
-                deletedCount: 0,
-                message: 'No emails found matching your criteria'
-              };
-            }
-          } else {
-            gmailResult = {
-              action: 'error',
-              error: 'Please specify what emails to delete (e.g., "delete emails from john@example.com" or "delete newsletters")'
-            };
-          }
+        } else if (actionAnalysis.action === 'DELETE_DISABLED') {
+          gmailResult = {
+            action: 'delete_disabled',
+            message: 'Delete functionality is currently disabled. You can search emails or mark them as read instead.'
+          };
         } else if (actionAnalysis.action === 'SEARCH') {
           // Handle search requests using AI-extracted keywords
           const keywords = actionAnalysis.keywords.length > 0 ? actionAnalysis.keywords : [];
@@ -2324,129 +2273,11 @@ Rules:
             count: emails.length
           };
         } else if (lowerPrompt.includes('delete')) {
-          // Handle delete requests - search for matching emails first
-          let searchQuery = '';
-          let searchType = 'general';
-          
-          // Extract search terms for what to delete
-          if (lowerPrompt.includes('from glassdoor') || lowerPrompt.includes('glassdoor')) {
-            searchQuery = 'from:glassdoor.com';
-            searchType = 'sender';
-          } else if (lowerPrompt.includes('job') || lowerPrompt.includes('jobs')) {
-            searchQuery = 'job OR jobs OR career OR hiring';
-            searchType = 'content';
-          } else if (lowerPrompt.includes('newsletter') || lowerPrompt.includes('newsletters')) {
-            searchQuery = 'newsletter OR unsubscribe OR promotional';
-            searchType = 'content';
-          } else {
-            // Smart extraction using AI to parse the delete request
-            const extractPrompt = `Extract search terms from this email deletion request: "${prompt}"
-            
-            Look for:
-            - Email addresses (from:email@domain.com)
-            - Subject keywords 
-            - Sender names
-            - Content keywords
-            
-            Return only the most relevant search term, nothing else. Examples:
-            - "from:example@gmail.com" for sender-based deletion
-            - "subject:thank you" for subject-based deletion  
-            - "keyword1 OR keyword2" for content-based deletion`;
-            
-            try {
-              const extractResponse = await openai.chat.completions.create({
-                model: 'gpt-4o-mini',
-                messages: [
-                  { role: 'system', content: 'You extract Gmail search queries. Return only the search term, no explanation.' },
-                  { role: 'user', content: extractPrompt }
-                ],
-                temperature: 0.1
-              });
-              
-              searchQuery = extractResponse.choices[0].message.content.trim();
-              
-              // Determine search type
-              if (searchQuery.includes('from:')) {
-                searchType = 'sender';
-              } else if (searchQuery.includes('subject:')) {
-                searchType = 'subject';
-              } else {
-                searchType = 'content';
-              }
-            } catch (aiError) {
-              // Fallback: extract email addresses or keywords manually
-              const emailMatch = prompt.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-              if (emailMatch) {
-                searchQuery = `from:${emailMatch[1]}`;
-                searchType = 'sender';
-              } else {
-                // Extract quoted text or clean keywords
-                const quotedMatch = prompt.match(/"([^"]+)"|'([^']+)'/);
-                if (quotedMatch) {
-                  searchQuery = `"${quotedMatch[1] || quotedMatch[2]}"`;
-                  searchType = 'subject';
-                } else {
-                  // Clean extraction of keywords
-                  const keywords = prompt
-                    .replace(/delete|this|that|email|emails|from|my|gmail|the/gi, '')
-                    .replace(/[^\w\s@.-]/g, ' ')
-                    .trim()
-                    .split(/\s+/)
-                    .filter(word => word.length > 2)
-                    .slice(0, 3)
-                    .join(' OR ');
-                  
-                  if (keywords) {
-                    searchQuery = keywords;
-                    searchType = 'content';
-                  }
-                }
-              }
-            }
-          }
-
-          if (searchQuery) {
-            // Search for emails to delete
-            const emailsToDelete = await gmailService.searchEmails({ 
-              query: searchQuery, 
-              maxResults: 10 
-            });
-
-            if (emailsToDelete.length > 0) {
-              // Delete the emails
-              let deletedCount = 0;
-              const deletionResults = [];
-
-              for (const email of emailsToDelete) {
-                try {
-                  await gmailService.deleteEmail({ messageId: email.id });
-                  deletedCount++;
-                  deletionResults.push({ success: true, email: email });
-                } catch (deleteError) {
-                  deletionResults.push({ success: false, email: email, error: deleteError.message });
-                }
-              }
-
-              gmailResult = {
-                action: 'delete',
-                deletedCount,
-                totalFound: emailsToDelete.length,
-                deletionResults,
-                searchQuery
-              };
-            } else {
-              gmailResult = {
-                action: 'delete_not_found',
-                message: `No emails found matching "${searchQuery}". Please be more specific about which emails to delete.`,
-                searchQuery
-              };
-            }
-          } else {
-            gmailResult = {
-              action: 'delete_request',
-              message: 'Please specify which emails to delete. For example: "delete emails from glassdoor" or "delete job notification emails".'
-            };
-          }
+          // Deletion is disabled
+          gmailResult = {
+            action: 'delete_disabled',
+            message: 'Delete functionality is currently disabled. Try: "mark my last 10 emails as read" or "search newsletters".'
+          };
         }
       } catch (gmailError) {
         console.error('Gmail action error:', gmailError);
@@ -2471,33 +2302,29 @@ Rules:
       if (gmailResult) {
         switch (gmailResult.action) {
           case 'read':
-            const emailType = gmailResult.unreadOnly ? 'Unread' : 'Latest';
-            finalResponse = `📧 **Your ${emailType} ${gmailResult.count} Emails:**\n\n`;
-            
+            const emailType = gmailResult.unreadOnly ? 'Unread' : (gmailResult.readOnly ? 'Read' : 'Latest');
+            finalResponse = `📧 **${emailType} Emails (${gmailResult.count})**\n\n`;
+
             gmailResult.emails.forEach((email, i) => {
-              // Clean, professional email display
-              finalResponse += `\n---\n\n`;
-              finalResponse += `**📧 ${i + 1}. ${email.subject}**\n\n`;
-              finalResponse += `**From:** ${email.from}\n`;
-              finalResponse += `**Date:** ${new Date(email.date).toLocaleDateString()} at ${new Date(email.date).toLocaleTimeString()}\n\n`;
-              
-              // Clean and display content
+              const subject = email.subject || '(No subject)';
+              const from = email.from || 'Unknown sender';
+              const dt = email.date ? new Date(email.date) : null;
+              const dateStr = dt ? `${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}` : '';
+              const threadLink = email.threadId ? `https://mail.google.com/mail/u/0/#inbox/${email.threadId}` : '';
+
+              // Clean preview
               let content = '';
               if (email.body && email.body.trim()) {
-                content = email.body.length > 200 
-                  ? email.body.substring(0, 200) + '...' 
-                  : email.body;
+                content = email.body.length > 220 ? email.body.substring(0, 220) + '...' : email.body;
               } else if (email.snippet) {
                 content = email.snippet;
               }
-              
-              if (content && content.trim()) {
-                finalResponse += `**Content:** ${content.replace(/\n/g, ' ')}\n\n`;
-              }
-              
-              if (email.attachments && email.attachments.length > 0) {
-                finalResponse += `**Attachments:** ${email.attachments.map(a => a.filename).join(', ')}\n\n`;
-              }
+
+              finalResponse += `\n---\n\n`;
+              finalResponse += `**${i + 1}. ${subject}**\n`;
+              finalResponse += `${from} • ${dateStr}\n`;
+              if (content) finalResponse += `${content.replace(/\n/g, ' ')}\n`;
+              if (threadLink) finalResponse += `[Open in Gmail](${threadLink})\n`;
             });
             break;
             
@@ -2565,38 +2392,8 @@ Rules:
             }
             break;
             
-          case 'delete':
-            finalResponse = `🗑️ **Emails Deleted Successfully**\n\n`;
-            finalResponse += `✅ **Deleted:** ${gmailResult.deletedCount} out of ${gmailResult.totalFound} emails\n`;
-            finalResponse += `🔍 **Search Query:** "${gmailResult.searchQuery}"\n\n`;
-            
-            if (gmailResult.deletedCount > 0) {
-              finalResponse += `\n**🗑️ Deleted Emails:**\n\n`;
-              gmailResult.deletionResults
-                .filter(result => result.success)
-                .slice(0, 5) // Show first 5
-                .forEach((result, i) => {
-                  finalResponse += `${i + 1}. **${result.email.subject}**\n`;
-                  finalResponse += `   From: ${result.email.from}\n\n`;
-                });
-              
-              if (gmailResult.deletedCount > 5) {
-                finalResponse += `*...and ${gmailResult.deletedCount - 5} more emails deleted*\n\n`;
-              }
-            }
-            
-            if (gmailResult.totalFound > gmailResult.deletedCount) {
-              const failedCount = gmailResult.totalFound - gmailResult.deletedCount;
-              finalResponse += `\n⚠️ **${failedCount} emails could not be deleted** (may require manual deletion)`;
-            }
-            break;
-            
-          case 'delete_not_found':
-            finalResponse = `🔍 **No Emails Found to Delete**\n\n${gmailResult.message}`;
-            break;
-            
-          case 'delete_request':
-            finalResponse = `⚠️ **Delete Request Received**\n\n${gmailResult.message}`;
+          case 'delete_disabled':
+            finalResponse = `🛑 **Delete Disabled**\n\n${gmailResult.message}`;
             break;
             
           case 'error':
@@ -2620,14 +2417,12 @@ Rules:
         if (lowerPrompt.includes('gmail') || lowerPrompt.includes('email')) {
           finalResponse = `📧 **Gmail Assistant Ready**\n\n`;
           finalResponse += `I can help you with Gmail tasks like:\n\n`;
-          finalResponse += `• **📥 Read emails** - "read my last 5 emails" or "show unread emails"\n`;
-          finalResponse += `• **📤 Send emails** - "send email to john@example.com about meeting"\n`;
-          finalResponse += `• **🔍 Search emails** - "find emails from my boss" or "search for project updates"\n`;
-          finalResponse += `• **🗑️ Delete emails** - "delete old newsletters"\n\n`;
+          finalResponse += `• **📥 Read emails** - \"read my last 5 emails\" or \"show unread emails\"\n`;
+          finalResponse += `• **📤 Send emails** - \"send email to john@example.com about meeting\"\n`;
+          finalResponse += `• **🔍 Search emails** - \"find emails from my boss\" or \"search for project updates\"\n\n`;
           finalResponse += `What would you like to do with your Gmail?`;
         } else {
-          // Use AI response for non-Gmail requests
-          finalResponse = aiContent;
+          finalResponse = 'How can I help with Gmail?';
         }
       }
 
@@ -2646,17 +2441,35 @@ Rules:
           }
         });
 
+        // Build UI-friendly files payload for frontend rendering
+        let assistantFiles = null;
+        if (gmailResult && gmailResult.action === 'read') {
+          assistantFiles = JSON.stringify([
+            {
+              type: 'gmail_emails',
+              emails: gmailResult.emails,
+              filters: { unreadOnly: gmailResult.unreadOnly, readOnly: gmailResult.readOnly },
+              count: gmailResult.count
+            }
+          ]);
+        } else if (gmailResult && gmailResult.action === 'search') {
+          assistantFiles = JSON.stringify([
+            {
+              type: 'gmail_search_results',
+              query: gmailResult.query,
+              emails: gmailResult.emails,
+              count: gmailResult.count
+            }
+          ]);
+        }
+
         await prisma.message.create({
           data: {
             chatId,
             role: 'ASSISTANT',
             content: finalResponse,
             tokens: finalResponse.length,
-            files: gmailResult ? JSON.stringify({
-              type: 'gmail_response',
-              action: gmailResult.action,
-              data: gmailResult
-            }) : null
+            files: assistantFiles
           }
         });
 

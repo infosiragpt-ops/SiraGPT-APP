@@ -13,7 +13,7 @@ import {
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
     Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
     Sparkles, Eye,
-    ExternalLink
+    ExternalLink, Mail
 } from "lucide-react"
 import {
     Dialog,
@@ -458,6 +458,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     }, [message.files])
 
+    // Detect if this assistant message includes a structured Gmail payload to avoid duplicate markdown
+    const hasGmailEntry = useMemo(() => {
+        return Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
+    }, [parsedFiles])
+
     // Optimized CodeBlock component with performance improvements
     const CodeBlock = React.memo(({ node, inline, className, children, ...props }: any) => {
         const [isCodeCopied, setIsCodeCopied] = useState(false);
@@ -821,6 +826,165 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             </div>
         )
     }
+
+    // Gmail emails/search display with inline actions
+    const GmailEmailsDisplay = () => {
+        // Find gmail emails or search results payload
+        const gmailEntry = Array.isArray(parsedFiles)
+            ? parsedFiles.find((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
+            : null;
+        if (!gmailEntry) return null;
+
+        const initialEmails: any[] = gmailEntry.emails || [];
+        const [emails, setEmails] = useState<any[]>(initialEmails);
+        const [replyForId, setReplyForId] = useState<string | null>(null);
+        const [replyBody, setReplyBody] = useState<string>("");
+        const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
+
+        // Sync local state when payload changes
+        useEffect(() => {
+            setEmails(initialEmails);
+        }, [gmailEntry, gmailEntry?.emails?.length]);
+
+        const title = gmailEntry.type === 'gmail_search_results' && gmailEntry.query
+            ? `Search: ${gmailEntry.query}`
+            : (gmailEntry.filters?.unreadOnly ? 'Unread emails' : (gmailEntry.filters?.readOnly ? 'Read emails' : 'Latest emails'));
+
+        const toggleRead = async (em: any) => {
+            const id = em.id || em.messageId;
+            if (!id) return;
+            try {
+                setBusyMap((m) => ({ ...m, [id]: true }));
+                // markGmailEmail(messageId, read: boolean)
+                await apiClient.markGmailEmail(id, em.isUnread ? true : false);
+                setEmails((prev) => prev.map((e) => e.id === id ? { ...e, isUnread: !em.isUnread } : e));
+                toast.success(em.isUnread ? 'Marked as read' : 'Marked as unread');
+            } catch (e) {
+                console.error(e);
+                toast.error('Failed to update read state');
+            } finally {
+                setBusyMap((m) => ({ ...m, [id]: false }));
+            }
+        };
+
+        const openReply = (em: any) => {
+            setReplyForId(em.id || em.messageId);
+            setReplyBody("");
+        };
+
+        const sendReply = async () => {
+            const id = replyForId;
+            if (!id) return;
+            const em = emails.find((e) => (e.id || e.messageId) === id);
+            if (!em) return;
+            try {
+                setBusyMap((m) => ({ ...m, [id]: true }));
+                await apiClient.replyGmail({ threadId: em.threadId, messageId: id, body: replyBody });
+                toast.success('Reply sent');
+                setReplyForId(null);
+                setReplyBody("");
+            } catch (e) {
+                console.error(e);
+                toast.error('Failed to send reply');
+            } finally {
+                setBusyMap((m) => ({ ...m, [id]: false }));
+            }
+        };
+
+        return (
+            <div className="mt-3 p-4 rounded-lg border border-border/40 bg-muted/10">
+                <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                        <Mail className="h-4 w-4" />
+                        <span>Gmail • {title} ({emails.length})</span>
+                    </div>
+                </div>
+                <div className="space-y-3">
+                    {emails.map((em, idx) => {
+                        const dt = em.date ? new Date(em.date) : null;
+                        const dateStr = dt ? `${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}` : '';
+                        const threadLink = em.threadId ? `https://mail.google.com/mail/u/0/#inbox/${em.threadId}` : '';
+                        const preview = em.body?.trim()?.slice(0, 220) || em.snippet || '';
+                        const id = em.id || em.messageId;
+                        const busy = !!busyMap[id];
+                        const senderInitial = (em.from || '?').trim().charAt(0).toUpperCase();
+                        return (
+                            <div key={`${id}-${idx}`} className="p-3 rounded-md border border-border/30 bg-background/40">
+                                <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-2">
+                                            <Avatar className="h-6 w-6">
+                                                <AvatarFallback className="text-[10px]">{senderInitial || 'S'}</AvatarFallback>
+                                            </Avatar>
+                                            <div className="font-semibold text-sm line-clamp-1">{em.subject || '(No subject)'}</div>
+                                            {em.isUnread && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Unread</span>}
+                                        </div>
+                                        <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{em.from || 'Unknown sender'} • {dateStr}</div>
+                                        {preview && <div className="text-sm mt-1 text-foreground/80 line-clamp-2">{preview}</div>}
+                                        <div className="mt-2 flex items-center gap-3 flex-wrap">
+                                            {threadLink && (
+                                                <a
+                                                    className="text-xs underline text-primary hover:opacity-80"
+                                                    href={threadLink}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+                                                        if (isMobile) {
+                                                            window.location.href = `mailto:?body=${encodeURIComponent(threadLink)}`;
+                                                        } else {
+                                                            window.open(threadLink, '_blank');
+                                                        }
+                                                    }}
+                                                >
+                                                    Open in Gmail
+                                                </a>
+                                            )}
+                                            <button
+                                                disabled={busy}
+                                                onClick={() => toggleRead(em)}
+                                                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                            >
+                                                {em.isUnread ? 'Mark as read' : 'Mark as unread'}
+                                            </button>
+                                            {/* <button
+                                                disabled={busy}
+                                                onClick={() => openReply(em)}
+                                                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                            >
+                                                Reply
+                                            </button> */}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                <Dialog open={!!replyForId} onOpenChange={(isOpen) => { if (!isOpen) setReplyForId(null) }}>
+                    <DialogContent className="max-w-lg">
+                        <DialogHeader>
+                            <DialogTitle>Reply to email</DialogTitle>
+                        </DialogHeader>
+                        <Textarea
+                            value={replyBody}
+                            onChange={(e) => setReplyBody(e.target.value)}
+                            placeholder="Write your reply..."
+                            className="min-h-[120px]"
+                        />
+                        <DialogFooter>
+                            <DialogClose asChild>
+                                <Button variant="outline">Cancel</Button>
+                            </DialogClose>
+                            <Button onClick={sendReply} disabled={!replyBody.trim()}>Send reply</Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+            </div>
+        );
+    }
     // File display logic - optimized for images
     const FileDisplay = () => {
         if (message.role === 'ASSISTANT' && message.content === '[GENERATING_IMAGE]') {
@@ -1014,7 +1178,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             <ShimmerContent />
                         ) : (
                             <>
-                                <MessageContent />
+                                {!hasGmailEntry && <MessageContent />}
+                                <GmailEmailsDisplay />
                                 <PPTDisplay />
                                 <VideoDisplay />
                                 <FileDisplay />

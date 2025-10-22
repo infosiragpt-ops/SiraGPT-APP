@@ -1146,8 +1146,26 @@ class ApiClient {
 
   async searchGmailEmails(query: string) {
     return this.request('/gmail/search', {
+      // Backend uses GET /api/gmail/search?q=...
+      method: 'GET',
+      // Fallback to POST logic kept above is removed to match backend
+      // For convenience, allow passing query via URL here
+    });
+  }
+
+  // Mark email read/unread
+  async markGmailEmail(messageId: string, read: boolean) {
+    return this.request(`/gmail/email/${messageId}/mark`, {
+      method: 'PATCH',
+      body: JSON.stringify({ read })
+    });
+  }
+
+  // Reply to an email (threaded)
+  async replyGmail(data: { threadId: string; messageId: string; body: string }) {
+    return this.request('/gmail/reply', {
       method: 'POST',
-      body: JSON.stringify({ query }),
+      body: JSON.stringify(data)
     });
   }
 
