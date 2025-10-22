@@ -65,9 +65,10 @@ router.get('/gmail',
       const authUrl = gmailOauth2Client.generateAuthUrl({
         access_type: 'offline',
         scope: scopes,
+        prompt: 'consent', // ✅ Force consent screen to ensure refresh token is always sent
         state: req.user.id // Pass user ID for linking
       });
-console.log('Generated Gmail auth URL:', authUrl);
+      console.log('Generated Gmail auth URL:', authUrl);
       res.json({ authUrl });
     } catch (error) {
       console.error('Gmail OAuth error:', error);
@@ -172,7 +173,7 @@ router.post('/register', [
         isAdmin: false,
         apiUsage: 0,
         monthlyCallLimit: 3,   // <-- new: 3 queries/month for Free
-        monthlyLimit: 10000 
+        monthlyLimit: 10000
       }
     });
 

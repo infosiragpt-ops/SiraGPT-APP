@@ -2006,51 +2006,43 @@ Respond naturally and helpfully. If you need to perform Gmail actions, I will ha
 
       try {
         // AI-powered action classification for better intent detection
-        const actionClassificationPrompt = `Analyze this user request and determine the Gmail action they want to perform:
+        const actionClassificationPrompt = `Your task is to analyze the user's request, which can be in ANY language, and classify their intent into a specific Gmail action. Rely on your multilingual understanding to determine the user's goal.
 
 User Request: "${prompt}"
 
-Classify into one of these categories:
-1. READ - Reading emails (keywords: read, show, get, fetch, latest, first, last, check, inbox, from someone)
-2. SEND - Sending emails (keywords: send, email to, compose, write)  
-3. DRAFT - Creating drafts (keywords: draft, save draft, prepare email)
-4. DELETE - Deleting emails (keywords: delete, remove, trash)
-5. SEARCH - Searching emails (keywords: find, search, look for, emails about)
-6. NONE - Not a Gmail action
+Classify the user's primary goal into one of these categories based on their intent:
+1.  **READ**: The user wants to view, check, or get information from their emails.
+    (e.g., "show me my last 5 emails", "what's the latest from marketing?", "mujay naye emails dikhao")
+2.  **SEND**: The user's core intent is to transmit a message to an email address. This is the most critical action. Identify this intent from verbs like "send", "write", "compose", "mail", "contact", and their equivalents in ANY language (e.g., "bhejo", "baijo", "likho", "envoyer", "enviar"). If an email address is present and the user wants to communicate with them, it is a SEND action.
+    (e.g., "send an email to bob@example.com", "write a message to Jane", "hamza ko email bhejo", "mujay hamzabhinder5@gmail.com ko message likhna hai")
+3.  **DRAFT**: The user wants to create an email but not send it immediately.
+    (e.g., "draft an email to my boss", "prepare a message")
+4.  **DELETE**: The user wants to remove emails.
+    (e.g., "delete old newsletters", "remove emails from spam")
+5.  **SEARCH**: The user wants to find specific emails based on criteria.
+    (e.g., "find emails about the project", "search for messages from last week")
+6.  **NONE**: The request is not related to any of the above Gmail actions.
 
-Also extract:
-- Number if mentioned (first 5, latest 10, etc.)
-- Email addresses if mentioned
-- Keywords for search/delete operations
-- Email folder preference (VERY IMPORTANT):
-  * If user explicitly says "sent emails", "emails I sent", "my sent", "outbox" → folder: "SENT"
-  * If user says "inbox", "received emails", "incoming" → folder: "INBOX"
-  * If user says "latest", "last", "recent", "check my emails" WITHOUT mentioning sent → folder: "INBOX" (default)
-  * If unclear → folder: "INBOX" (always default to inbox for generic requests)
-- Email state preference (read vs unread):
-  * If user says "read emails" or "read messages" → they want ONLY read emails (unread_only: false, read_only: true)
-  * If user says "unread emails" or "unread messages" → they want ONLY unread emails (unread_only: true, read_only: false)  
-  * If user doesn't specify → they want all emails (unread_only: false, read_only: false)
+Also extract the following details from the request:
+-   **number**: How many emails? (e.g., for "last 5 emails", extract 5).
+-   **email_addresses**: Any email addresses mentioned.
+-   **keywords**: Any specific search terms.
+-   **folder**: Determine the target folder.
+    *   If the user mentions "sent", "outbox", or "emails I sent" -> "SENT".
+    *   For generic requests like "latest emails", "last mail", "check my mail" -> **ALWAYS default to "INBOX"**.
+    *   If in doubt, ALWAYS choose "INBOX".
+-   **unread_only**: Set to \`true\` if the user ONLY wants unread emails.
+-   **read_only**: Set to \`true\` if the user ONLY wants emails they have already read.
 
-CRITICAL RULES FOR FOLDER DETECTION:
-- "last mail", "latest email", "recent emails" = INBOX (NOT sent)
-- "sent emails", "emails I sent", "my sent messages" = SENT
-- When in doubt, ALWAYS choose INBOX
-
-IMPORTANT: Pay attention to "read" vs "unread" keywords:
-- "first 5 read emails" = user wants 5 emails that have been read already
-- "first 5 unread emails" = user wants 5 emails that haven't been read yet
-- "first 5 emails" = user wants any 5 emails (both read and unread)
-
-Respond in JSON format:
+Respond ONLY with a valid JSON object in the following format:
 {
   "action": "READ|SEND|DRAFT|DELETE|SEARCH|NONE",
   "folder": "INBOX|SENT",
-  "number": number_extracted_or_null,
-  "email_addresses": ["email1", "email2"],
-  "keywords": ["keyword1", "keyword2"],
-  "unread_only": true/false,
-  "read_only": true/false,
+  "number": null | <number>,
+  "email_addresses": [],
+  "keywords": [],
+  "unread_only": false,
+  "read_only": false,
   "confidence": 0.0-1.0
 }`;
 
@@ -2067,23 +2059,10 @@ Respond in JSON format:
         try {
           actionAnalysis = JSON.parse(classificationResponse.choices[0].message.content);
         } catch (parseError) {
-          // Fallback to basic keyword detection with improved read/unread detection
-          const hasReadKeyword = lowerPrompt.includes('read emails') || lowerPrompt.includes('read messages');
-          const hasUnreadKeyword = lowerPrompt.includes('unread emails') || lowerPrompt.includes('unread messages') || lowerPrompt.includes('unread');
-
-          actionAnalysis = {
-            action: lowerPrompt.includes('read') || lowerPrompt.includes('latest') || lowerPrompt.includes('first') || lowerPrompt.includes('get') || lowerPrompt.includes('show') || lowerPrompt.includes('check') ? 'READ' :
-              lowerPrompt.includes('send') && (lowerPrompt.includes('@') || lowerPrompt.includes('email')) ? 'SEND' :
-                lowerPrompt.includes('draft') ? 'DRAFT' :
-                  lowerPrompt.includes('delete') || lowerPrompt.includes('remove') ? 'DELETE' :
-                    lowerPrompt.includes('find') || lowerPrompt.includes('search') ? 'SEARCH' : 'NONE',
-            number: null,
-            email_addresses: [],
-            keywords: [],
-            unread_only: hasUnreadKeyword && !hasReadKeyword,
-            read_only: hasReadKeyword && !hasUnreadKeyword,
-            confidence: 0.5
-          };
+          console.error('Failed to parse AI action classification:', parseError);
+          console.error('AI Response was:', classificationResponse.choices[0].message.content);
+          // If AI fails to return valid JSON, fallback to a safe default to show the help message.
+          actionAnalysis = { action: 'NONE', confidence: 0.0 };
         }
 
         console.log('Gmail Action Analysis:', actionAnalysis);
@@ -2131,7 +2110,7 @@ Respond in JSON format:
             unreadOnly,
             readOnly
           };
-        } else if ((lowerPrompt.includes('send') || lowerPrompt.includes('draft') || lowerPrompt.includes('compose')) && (lowerPrompt.includes('@') || lowerPrompt.includes('email'))) {
+        } else if (actionAnalysis.action === 'SEND' || actionAnalysis.action === 'DRAFT') {
           // Extract email components using AI to parse natural language
           const sendPrompt = `You are an email parser. Extract email components from this request and return ONLY a valid JSON object, nothing else.
 
@@ -2198,8 +2177,8 @@ Rules:
               emailData.body = emailData.body.replace(/\[Your Name\]/g, userName);
             }
 
-            // Check if this should be saved as draft or sent
-            const isDraft = lowerPrompt.includes('draft') || lowerPrompt.includes('save') && !lowerPrompt.includes('send');
+            // ✅ FIX: Rely on AI classification for draft vs. send
+            const isDraft = actionAnalysis.action === 'DRAFT';
 
             if (isDraft) {
               // Actually save as draft to Gmail
@@ -2306,18 +2285,40 @@ Rules:
       } catch (gmailError) {
         console.error('Gmail action error:', gmailError);
 
-        // Extract more specific error information
-        let errorMessage = gmailError.message;
-        if (gmailError.response?.data?.error?.message) {
-          errorMessage = gmailError.response.data.error.message;
-        }
+        // ✅ IMPROVED: Handle auth errors gracefully and prompt for re-authentication
+        const isAuthError = gmailError.message.includes('No refresh token') ||
+          gmailError.message.includes('invalid_grant') ||
+          gmailError.message.includes('Token has been expired or revoked');
 
-        gmailResult = {
-          action: 'error',
-          error: errorMessage,
-          errorCode: gmailError.code || gmailError.status,
-          errorType: gmailError.code === 403 ? 'permission' : 'unknown'
-        };
+        if (isAuthError) {
+          console.log('Authentication error detected. Clearing user tokens and prompting for reconnect.');
+
+          // Clear the invalid tokens from the database
+          await prisma.user.update({
+            where: { id: userId },
+            data: { gmailTokens: null }
+          });
+
+          // Prepare a user-friendly response that triggers the re-connection UI
+          gmailResult = {
+            action: 'reconnect_required',
+            error: 'Your Gmail connection has expired. Please reconnect your account to continue.',
+            requiresConnection: true
+          };
+        } else {
+          // Handle other types of Gmail errors
+          let errorMessage = gmailError.message;
+          if (gmailError.response?.data?.error?.message) {
+            errorMessage = gmailError.response.data.error.message;
+          }
+
+          gmailResult = {
+            action: 'error',
+            error: errorMessage,
+            errorCode: gmailError.code || gmailError.status,
+            errorType: gmailError.code === 403 ? 'permission' : 'unknown'
+          };
+        }
       }
 
       // Generate response based on actual Gmail results (skip generic AI response unless no action)
@@ -2420,6 +2421,10 @@ Rules:
             finalResponse = `🛑 **Delete Disabled**\n\n${gmailResult.message}`;
             break;
 
+          case 'reconnect_required':
+            finalResponse = `🔌 **Gmail Re-connection Required**\n\n${gmailResult.error}`;
+            break;
+
           case 'error':
             // Check if this is a Gmail API not enabled error
             if (gmailResult.error.includes('Gmail API has not been used') || gmailResult.error.includes('is disabled')) {
@@ -2467,24 +2472,31 @@ Rules:
 
         // Build UI-friendly files payload for frontend rendering
         let assistantFiles = null;
-        if (gmailResult && gmailResult.action === 'read') {
-          assistantFiles = JSON.stringify([
-            {
+        let assistantMetadata = null; // ✅ Initialize metadata
+
+        if (gmailResult) {
+          // Handle different gmail result actions
+          if (gmailResult.action === 'read') {
+            assistantFiles = JSON.stringify([{
               type: 'gmail_emails',
               emails: gmailResult.emails,
               filters: { unreadOnly: gmailResult.unreadOnly, readOnly: gmailResult.readOnly },
               count: gmailResult.count
-            }
-          ]);
-        } else if (gmailResult && gmailResult.action === 'search') {
-          assistantFiles = JSON.stringify([
-            {
+            }]);
+          } else if (gmailResult.action === 'search') {
+            assistantFiles = JSON.stringify([{
               type: 'gmail_search_results',
               query: gmailResult.query,
               emails: gmailResult.emails,
               count: gmailResult.count
-            }
-          ]);
+            }]);
+          } else if (gmailResult.action === 'reconnect_required') {
+            // ✅ Add metadata to show the connection card on the frontend
+            assistantMetadata = JSON.stringify({
+              type: 'gmail_connection_required',
+              showConnectionCard: true
+            });
+          }
         }
 
         await prisma.message.create({
@@ -2493,7 +2505,8 @@ Rules:
             role: 'ASSISTANT',
             content: finalResponse,
             tokens: finalResponse.length,
-            files: assistantFiles
+            files: assistantFiles,
+            metadata: assistantMetadata // ✅ Save metadata to the message
           }
         });
 
