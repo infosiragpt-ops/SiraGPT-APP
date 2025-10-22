@@ -63,7 +63,7 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
-  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev', initialContent?: string, initialFiles?: string[]) => Promise<any>
+  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail', initialContent?: string, initialFiles?: string[]) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
@@ -75,9 +75,9 @@ interface ChatContextType {
   setSelectedProivder: (model: string) => void
   isLoading: boolean
   availableModels: any[]
-  chatType: 'text' | 'image' | 'video' | 'webdev'
+  chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail'
   uploadedFiles: any[]
-  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev'>>
+  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail'>>
   setUploadedFiles: (files: any[]) => void
   regenerateLastMessage: () => void
   editAndRegenerate: (messageId: string, newContent: string) => void
@@ -105,7 +105,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [hasInitialized, setHasInitialized] = useState(false)
-  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev'>('text')
+  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev' | 'gmail'>('text')
   const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
   const [pagination, setPagination] = useState<PaginationInfo | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
@@ -439,7 +439,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     },
     [currentChat, user, token, selectedModel, uploadedFiles]
   );
-  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' = 'text', initialContent?: string, initialFiles?: string[]) => {
+  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' = 'text', initialContent?: string, initialFiles?: string[]) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
@@ -507,6 +507,44 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         } else if (type === 'video') {
           // For video generation, call addVideoMessage
           await addVideoMessage(initialContent, [], newChat);
+        } else if (type === 'gmail') {
+          // For Gmail, call the Gmail AI endpoint
+          try {
+            const userMessage = {
+              id: `msg-user-${Date.now()}`,
+              chatId: newChat.id,
+              role: 'USER' as const,
+              content: initialContent,
+              timestamp: new Date().toISOString(),
+            };
+
+            const assistantPlaceholder = {
+              id: `msg-assistant-processing-${Date.now()}`,
+              chatId: newChat.id,
+              role: 'ASSISTANT' as const,
+              content: '[PROCESSING_GMAIL]',
+              timestamp: new Date().toISOString(),
+            };
+
+            setCurrentChat(prevChat => {
+              if (!prevChat) return prevChat;
+              const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
+              return { ...prevChat, messages: updatedMessages };
+            });
+
+            const gmailPayload = {
+              prompt: initialContent,
+              chatId: newChat.id,
+              model: selectedModel,
+              type: 'gmail',
+            };
+
+            await apiClient.generateGmailResponse(gmailPayload);
+            await selectChat(newChat.id);
+          } catch (error) {
+            console.error('Gmail processing failed during chat creation:', error);
+            throw error;
+          }
         } else {
           // For text, use regular addMessage
           await addMessage(initialContent, initialFiles, newChat); // Pass newChat as the third parameter

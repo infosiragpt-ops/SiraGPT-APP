@@ -524,3 +524,27 @@
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
+@keyframes bounce-smooth {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+.animate-bounce-smooth {
+  animation: bounce-smooth 1.6s infinite ease-in-out;
+}
+
+@keyframes wave {
+  0% { transform: translateX(-100%); opacity: 0.3; }
+  50% { opacity: 0.6; }
+  100% { transform: translateX(100%); opacity: 0.3; }
+}
+.animate-wave {
+  animation: wave 3s infinite linear;
+}
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 25px rgba(16, 185, 129, 0.6); }
+  50% { box-shadow: 0 0 35px rgba(16, 185, 129, 0.8); }
+}
+.animate-glow {
+  animation: glow 2s infinite ease-in-out;
+}

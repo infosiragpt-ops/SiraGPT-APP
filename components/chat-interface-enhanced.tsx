@@ -20,7 +20,8 @@ import {
   Music,
   FileSpreadsheet,
   File,
-  ArrowUp
+  ArrowUp,
+  Mail
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -56,7 +57,6 @@ import {
 } from "@/components/ui/sidebar"
 import { PresentationView } from "./presentation-view"
 import { CodePreview } from "./code-preview"
-import { is } from "date-fns/locale"
 
 
 // Enhanced Actions Dropdown Component
@@ -70,6 +70,8 @@ const ActionsDropdown = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  isGmailActive,
+  setIsGmailActive,
   setShowAudioPanel,
   setAudioTab,
   handleAndUploadFiles,
@@ -78,7 +80,8 @@ const ActionsDropdown = ({
   isLoading,
   isGeneratingImage,
   isGeneratingVideo,
-  isGeneratingPPT
+  isGeneratingPPT,
+  isProcessingGmail
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
@@ -104,9 +107,21 @@ const ActionsDropdown = ({
       // Deactivate other options
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsGmailActive(false);
     }
     setIsWebSearchActive(!isWebSearchActive);
 
+  };
+
+  const handleGmailToggle = async () => {
+    setChatType('text');
+    if (!isGmailActive) {
+      // Deactivate other options
+      setIsWebSearchActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+    }
+    setIsGmailActive(!isGmailActive);
   };
 
 
@@ -116,6 +131,7 @@ const ActionsDropdown = ({
     if (newState) {
       setIsWebSearchActive(false);
       setIsVideoGenerationActive(false);
+      setIsGmailActive(false);
       setChatType('image');
     } else {
       setChatType('text');
@@ -131,6 +147,7 @@ const ActionsDropdown = ({
     if (newState) {
       setIsWebSearchActive(false);
       setIsImageGenerationActive(false);
+      setIsGmailActive(false);
 
       setChatType('video');
     } else {
@@ -139,7 +156,7 @@ const ActionsDropdown = ({
 
     setIsVideoGenerationActive(newState);
   };
-  const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching;
+  const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail;
 
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
@@ -203,6 +220,35 @@ const ActionsDropdown = ({
             </div>
             {isWebSearchActive && (
               <div className="w-2 h-2 bg-green-500 rounded-full" />
+            )}
+          </div>
+        </DropdownMenuItem>
+
+        {/* Gmail */}
+        <DropdownMenuItem
+          onClick={handleGmailToggle}
+          disabled={isProcessingGmail}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
+              ? 'bg-red-100 dark:bg-red-900/20'
+              : 'bg-red-100 dark:bg-red-900/20'
+              }`}>
+              <Mail className={`h-4 w-4 ${isGmailActive
+                ? 'text-red-600 dark:text-red-400'
+                : 'text-red-600 dark:text-red-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isGmailActive ? 'Gmail Active' : 'Gmail'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {isProcessingGmail ? 'Processing...' : 'Send, read, and manage emails'}
+              </div>
+            </div>
+            {isGmailActive && (
+              <div className="w-2 h-2 bg-red-500 rounded-full" />
             )}
           </div>
         </DropdownMenuItem>
@@ -476,6 +522,8 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  isGmailActive,
+  setIsGmailActive,
   setChatType,
 }: {
   isWebSearchActive: boolean;
@@ -484,14 +532,21 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive: (value: boolean) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
+  isGmailActive: boolean;
+  setIsGmailActive: (value: boolean) => void;
   setChatType: (type: any) => void;
 }) => {
-  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive;
+  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || isGmailActive;
 
   if (!hasActiveTools) return null;
 
   const handleWebSearchClose = () => {
     setIsWebSearchActive(false);
+    setChatType('text');
+  };
+
+  const handleGmailClose = () => {
+    setIsGmailActive(false);
     setChatType('text');
   };
 
@@ -523,6 +578,20 @@ const ActiveToolsDisplay = ({
           </div>
 
         </>
+      )}
+      {isGmailActive && (
+        <div className="flex items-center gap-1.5 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-300 px-2 py-1 rounded-full text-xs border border-red-200 dark:border-red-800">
+          <Mail className="h-3 w-3" />
+          <span className="font-medium">Gmail</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-red-200 dark:hover:bg-red-800/30 rounded-full ml-1"
+            onClick={handleGmailClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
       )}
       {isImageGenerationActive && (
         <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
@@ -749,6 +818,8 @@ function ChatInterfaceContent() {
 
   const [isWebSearching, setIsWebSearching] = React.useState(false)
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
+  const [isGmailActive, setIsGmailActive] = React.useState(false);
+  const [isProcessingGmail, setIsProcessingGmail] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
@@ -994,6 +1065,7 @@ function ChatInterfaceContent() {
     if (prevChatIdRef.current && prevChatIdRef.current !== currentChat?.id) {
       // Reset generation modes when switching chats
       setIsWebSearchActive(false);
+      setIsGmailActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
       setChatType('text'); // Always default to text when switching chats
@@ -1172,7 +1244,7 @@ function ChatInterfaceContent() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming) return
+    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail) return
 
     const msg = input.trim()
     // Deep copy files to avoid reference issues
@@ -1218,6 +1290,8 @@ function ChatInterfaceContent() {
       // ✅ STEP 3: Handle based on intent (each handler adds AI response)
       if (isWebSearchActive) {
         await handleWebSearch();
+      } else if (isGmailActive) {
+        await handleGmailCommand(msg); // Handle Gmail commands only when Gmail is manually selected
       } else if (intent === 'image' || chatType === 'image') {
         await handleImageGeneration(msg, filesToSend.map(f => f.id))
       } else if (isVideoGenerationActive) {
@@ -1261,6 +1335,108 @@ function ChatInterfaceContent() {
         const updatedMessages = [...(prevChat.messages || []), errorMessage];
         return { ...prevChat, messages: updatedMessages };
       });
+    }
+  }
+ const handleGmailCommand = async (prompt: string) => {
+    setIsProcessingGmail(true);
+    
+    try {
+      if (!currentChat) {
+        // Create a new Gmail chat like other modes
+        await createNewChat('gmail', prompt);
+      } else {
+        // Add user message immediately
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'USER' as const,
+          content: prompt,
+          timestamp: new Date().toISOString(),
+        };
+
+        // Add processing placeholder
+        const assistantPlaceholder = {
+          id: `msg-assistant-processing-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'ASSISTANT' as const,
+          content: '[PROCESSING_GMAIL]',
+          timestamp: new Date().toISOString(),
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
+          return { ...prevChat, messages: updatedMessages };
+        });
+
+        // Process with AI like regular chat
+        const payload = {
+          prompt,
+          chatId: currentChat?.id,
+          model: selectedModel,
+          type: 'gmail',
+        };
+
+        const response = await apiClient.generateGmailResponse(payload);
+        
+        if (response.requiresConnection) {
+          // Handle Gmail connection required
+          const updateChatWithConnection = (prevChat: any) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg: any) => {
+              if (msg.content === '[PROCESSING_GMAIL]') {
+                return { 
+                  ...msg, 
+                  content: `📧 **Gmail Connection Required**
+
+I can help you with Gmail tasks like:
+- Reading your emails
+- Sending emails  
+- Searching for specific emails
+- Managing your inbox
+
+But first, you need to connect your Gmail account securely using the button below.`,
+                  metadata: JSON.stringify({
+                    type: 'gmail_connection_required',
+                    showConnectionCard: true
+                  })
+                };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          };
+
+          setCurrentChat(updateChatWithConnection);
+          toast.error('Gmail connection required');
+        } else {
+          // Refresh chat to show AI response
+          await selectChat(currentChat?.id ?? "");
+          toast.success('Gmail response generated!');
+        }
+      }
+    } catch (error: any) {
+      console.error('Gmail error:', error);
+      const errorMessage = error.message || 'Gmail request failed. Please try again.';
+      toast.error(errorMessage);
+
+      // Update placeholder with error
+      const updateChatWithError = (prevChat: any) => {
+        if (!prevChat) return prevChat;
+        const newMessages = prevChat.messages.map((msg: any) => {
+          if (msg.content === '[PROCESSING_GMAIL]') {
+            return { ...msg, content: "", error: errorMessage };
+          }
+          return msg;
+        });
+        return { ...prevChat, messages: newMessages };
+      };
+
+      if (currentChat) {
+        setCurrentChat(updateChatWithError);
+      }
+    } finally {
+      setIsProcessingGmail(false);
     }
   }
 
@@ -1827,7 +2003,9 @@ function ChatInterfaceContent() {
                               ? "Describe the video you want to create..."
                               : isWebSearchActive
                                 ? "Enter your search query..."
-                                : "Type your message here..."
+                                : isGmailActive
+                                  ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
+                                  : "Type your message here..."
                         }
                         className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
                         style={{
@@ -1858,6 +2036,8 @@ function ChatInterfaceContent() {
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isGmailActive={isGmailActive}
+                          setIsGmailActive={setIsGmailActive}
                           setShowAudioPanel={setShowAudioPanel}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
@@ -1867,6 +2047,7 @@ function ChatInterfaceContent() {
                           isGeneratingImage={isGeneratingImage}
                           isGeneratingVideo={isGeneratingVideo}
                           isGeneratingPPT={isGeneratingPPT}
+                          isProcessingGmail={isProcessingGmail}
                         />
                         <ActiveToolsDisplay
                           isWebSearchActive={isWebSearchActive}
@@ -1875,6 +2056,8 @@ function ChatInterfaceContent() {
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isGmailActive={isGmailActive}
+                          setIsGmailActive={setIsGmailActive}
                           setChatType={setChatType}
                         />
                         <div className="flex-grow" />
@@ -1886,11 +2069,11 @@ function ChatInterfaceContent() {
                             />
                             <Button
                               onClick={handleSend}
-                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
+                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail}
                               size="sm"
                               className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                             >
-                              {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
+                              {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
                                 <ArrowUp className="h-4 w-4" />
@@ -2096,7 +2279,9 @@ function ChatInterfaceContent() {
                                   ? "Describe the video you want to create..."
                                   : isWebSearchActive
                                     ? "Enter your search query..."
-                                    : "Type your message here..."
+                                    : isGmailActive
+                                      ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
+                                      : "Type your message here..."
                             }
                             className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
                             style={{
@@ -2126,6 +2311,8 @@ function ChatInterfaceContent() {
                               setIsImageGenerationActive={setIsImageGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              isGmailActive={isGmailActive}
+                              setIsGmailActive={setIsGmailActive}
                               setShowAudioPanel={setShowAudioPanel}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
@@ -2135,6 +2322,7 @@ function ChatInterfaceContent() {
                               isGeneratingImage={isGeneratingImage}
                               isGeneratingVideo={isGeneratingVideo}
                               isGeneratingPPT={isGeneratingPPT}
+                              isProcessingGmail={isProcessingGmail}
                             />
                             <ActiveToolsDisplay
                               isWebSearchActive={isWebSearchActive}
@@ -2143,6 +2331,8 @@ function ChatInterfaceContent() {
                               setIsImageGenerationActive={setIsImageGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              isGmailActive={isGmailActive}
+                              setIsGmailActive={setIsGmailActive}
                               setChatType={setChatType}
                             />
                             <div className="flex-grow" />
@@ -2154,11 +2344,11 @@ function ChatInterfaceContent() {
                                 />
                                 <Button
                                   onClick={handleSend}
-                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching}
+                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail}
                                   size="sm"
                                   className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                                 >
-                                  {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching ? (
+                                  {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                   ) : (
                                     <ArrowUp className="h-4 w-4" />

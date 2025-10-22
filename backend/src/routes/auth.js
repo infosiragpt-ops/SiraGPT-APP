@@ -5,8 +5,16 @@ const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const passport = require('../config/passport');
+const { OAuth2Client } = require('google-auth-library');
 
 const router = express.Router();
+
+// Gmail OAuth configuration
+const gmailOauth2Client = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
 
 // Google OAuth routes
 router.get('/google',
@@ -42,6 +50,91 @@ router.get('/google/callback',
     }
   }
 );
+
+// Gmail OAuth routes - separate from regular Google auth
+router.get('/gmail',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const scopes = [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/gmail.modify'
+      ];
+
+      const authUrl = gmailOauth2Client.generateAuthUrl({
+        access_type: 'offline',
+        scope: scopes,
+        state: req.user.id // Pass user ID for linking
+      });
+console.log('Generated Gmail auth URL:', authUrl);
+      res.json({ authUrl });
+    } catch (error) {
+      console.error('Gmail OAuth error:', error);
+      res.status(500).json({ error: 'Failed to generate Gmail auth URL' });
+    }
+  }
+);
+
+router.get('/gmail/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    const userId = state;
+
+    if (!code || !userId) {
+      return res.redirect(`${process.env.FRONTEND_URL}/settings?error=gmail_auth_failed`);
+    }
+
+    // Exchange code for tokens
+    const { tokens } = await gmailOauth2Client.getToken(code);
+
+    // Store Gmail tokens for the user
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        gmailTokens: JSON.stringify(tokens)
+      }
+    });
+
+    res.redirect(`${process.env.FRONTEND_URL}/settings?gmail_connected=true`);
+  } catch (error) {
+    console.error('Gmail OAuth callback error:', error);
+    res.redirect(`${process.env.FRONTEND_URL}/settings?error=gmail_auth_failed`);
+  }
+});
+
+// Disconnect Gmail
+router.post('/gmail/disconnect', authenticateToken, async (req, res) => {
+  try {
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        gmailTokens: null
+      }
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Gmail disconnect error:', error);
+    res.status(500).json({ error: 'Failed to disconnect Gmail' });
+  }
+});
+
+// Check Gmail connection status
+router.get('/gmail/status', authenticateToken, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { gmailTokens: true }
+    });
+
+    const isConnected = !!user?.gmailTokens;
+    res.json({ isConnected });
+  } catch (error) {
+    console.error('Gmail status error:', error);
+    res.status(500).json({ error: 'Failed to check Gmail status' });
+  }
+});
 
 // Register
 router.post('/register', [
