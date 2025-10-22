@@ -2017,8 +2017,8 @@ Classify the user's primary goal into one of these categories based on their int
     (e.g., "send an email to bob@example.com", "write a message to Jane", "hamza ko email bhejo", "mujay hamzabhinder5@gmail.com ko message likhna hai")
 3.  **DRAFT**: The user wants to create an email but not send it immediately.
     (e.g., "draft an email to my boss", "prepare a message")
-4.  **DELETE**: The user wants to remove emails.
-    (e.g., "delete old newsletters", "remove emails from spam")
+4.  **ANALYZE**: The user wants a report, summary, or analysis of their emails. This is different from just reading.
+    (e.g., "give me a report of my email history", "summarize my emails from this week", "reportes de mis histórico de correos")
 5.  **SEARCH**: The user wants to find specific emails based on criteria.
     (e.g., "find emails about the project", "search for messages from last week")
 6.  **NONE**: The request is not related to any of the above Gmail actions.
@@ -2036,7 +2036,7 @@ Also extract the following details from the request:
 
 Respond ONLY with a valid JSON object in the following format:
 {
-  "action": "READ|SEND|DRAFT|DELETE|SEARCH|NONE",
+  "action": "READ|SEND|DRAFT|ANALYZE|SEARCH|NONE",
   "folder": "INBOX|SENT",
   "number": null | <number>,
   "email_addresses": [],
@@ -2261,6 +2261,55 @@ Rules:
             emails: emails,
             count: emails.length
           };
+        } else if (actionAnalysis.action === 'ANALYZE') {
+          // Handle analysis/reporting requests
+          console.log('🔬 Handling ANALYZE action');
+
+          // 1. Fetch a decent number of recent emails for analysis
+          const emailsForAnalysis = await gmailService.getEmails({
+            maxResults: 50, // Fetch up to 50 recent emails for a good overview
+            query: 'in:inbox' // Analyze inbox by default
+          });
+
+          if (emailsForAnalysis.length === 0) {
+            gmailResult = {
+              action: 'analyze',
+              summary: 'Could not find any emails in your inbox to analyze.',
+              emails: []
+            };
+          } else {
+            // 2. Prepare the content for the analysis prompt
+            const emailContentForAI = emailsForAnalysis.map(email => {
+              return `From: ${email.from}\nSubject: ${email.subject}\nDate: ${email.date}\nSnippet: ${email.snippet}\n---\n`;
+            }).join('\n');
+
+            // 3. Create a new prompt for the AI to generate the report
+            const analysisSystemPrompt = `You are an expert data analyst specializing in email history. Your task is to generate a concise report based on the provided email data and the user's request. The user's request might be in any language, so use your multilingual capabilities to understand it.
+
+User's Request: "${prompt}"
+
+Based on this request and the following email data, create a summary or report. The report should be well-structured, easy to read, and directly address the user's query. Use markdown for formatting (e.g., headings, lists, bold text).`;
+
+            const analysisUserPrompt = `Here is the recent email data:\n\n${emailContentForAI}\n\nPlease generate the report based on my request: "${prompt}"`;
+
+            // 4. Call the AI service to get the summary
+            const analysisResponse = await openai.chat.completions.create({
+              model: 'gpt-4o-mini', // or a more powerful model if needed
+              messages: [
+                { role: 'system', content: analysisSystemPrompt },
+                { role: 'user', content: analysisUserPrompt }
+              ],
+              temperature: 0.5,
+            });
+
+            const reportContent = analysisResponse.choices[0].message.content;
+
+            gmailResult = {
+              action: 'analyze',
+              summary: reportContent,
+              emails: emailsForAnalysis
+            };
+          }
         } else if (lowerPrompt.includes('search') || lowerPrompt.includes('find')) {
           // Extract search query
           const searchQuery = prompt.replace(/search|find|emails?|for|in|gmail/gi, '').trim();
@@ -2417,6 +2466,11 @@ Rules:
             }
             break;
 
+          case 'analyze':
+            finalResponse = `📊 **Email History Report**\n\n`;
+            finalResponse += `${gmailResult.summary}`;
+            break;
+
           case 'delete_disabled':
             finalResponse = `🛑 **Delete Disabled**\n\n${gmailResult.message}`;
             break;
@@ -2489,6 +2543,12 @@ Rules:
               query: gmailResult.query,
               emails: gmailResult.emails,
               count: gmailResult.count
+            }]);
+          } else if (gmailResult.action === 'analyze') {
+            assistantFiles = JSON.stringify([{
+              type: 'gmail_analysis',
+              summary: gmailResult.summary,
+              sourceEmailCount: gmailResult.emails.length
             }]);
           } else if (gmailResult.action === 'reconnect_required') {
             // ✅ Add metadata to show the connection card on the frontend
