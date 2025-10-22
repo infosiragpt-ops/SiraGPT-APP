@@ -24,11 +24,11 @@ class GmailService {
   async sendEmail({ to, subject, body, from = 'me' }) {
     try {
       const gmail = this.getGmailClient();
-      
+
       // Convert line breaks to HTML for proper display in Gmail
       const htmlBody = body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
       const formattedBody = `<p>${htmlBody}</p>`;
-      
+
       // Create email content
       const email = [
         'Content-Type: text/html; charset="UTF-8"',
@@ -64,7 +64,7 @@ class GmailService {
   async getEmails({ query = '', maxResults = 10, userId = 'me', unreadOnly = false, readOnly = false }) {
     try {
       const gmail = this.getGmailClient();
-      
+
       // Build query string
       let searchQuery = query;
       if (unreadOnly) {
@@ -72,7 +72,7 @@ class GmailService {
       } else if (readOnly) {
         searchQuery = searchQuery ? `${searchQuery} is:read` : 'is:read';
       }
-      
+
       // List messages
       const listResponse = await gmail.users.messages.list({
         userId,
@@ -99,7 +99,7 @@ class GmailService {
           // Extract body text
           let body = '';
           let isHtml = false;
-          
+
           if (messageResponse.data.payload.body?.data) {
             body = Buffer.from(messageResponse.data.payload.body.data, 'base64').toString();
             isHtml = messageResponse.data.payload.mimeType === 'text/html';
@@ -110,12 +110,12 @@ class GmailService {
               textPart = messageResponse.data.payload.parts.find(part => part.mimeType === 'text/html');
               isHtml = true;
             }
-            
+
             if (textPart?.body?.data) {
               body = Buffer.from(textPart.body.data, 'base64').toString();
             }
           }
-          
+
           // Clean up HTML if necessary
           if (isHtml && body) {
             // Simple HTML to text conversion
@@ -163,7 +163,7 @@ class GmailService {
   async deleteEmail({ messageId, userId = 'me' }) {
     try {
       const gmail = this.getGmailClient();
-      
+
       await gmail.users.messages.delete({
         userId,
         id: messageId
@@ -183,7 +183,7 @@ class GmailService {
   async replyToEmail({ threadId, messageId, body, userId = 'me' }) {
     try {
       const gmail = this.getGmailClient();
-      
+
       // Get original message for context
       const originalMessage = await gmail.users.messages.get({
         userId,
@@ -193,7 +193,7 @@ class GmailService {
 
       const headers = originalMessage.data.payload.headers;
       const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
-      
+
       const originalFrom = getHeader('From');
       const originalSubject = getHeader('Subject');
       const replySubject = originalSubject.startsWith('Re: ') ? originalSubject : `Re: ${originalSubject}`;
@@ -236,7 +236,7 @@ class GmailService {
   async markEmail({ messageId, read = true, userId = 'me' }) {
     try {
       const gmail = this.getGmailClient();
-      
+
       const labelsToAdd = read ? [] : ['UNREAD'];
       const labelsToRemove = read ? ['UNREAD'] : [];
 
@@ -274,11 +274,11 @@ class GmailService {
   async createDraft({ to, subject, body, from = 'me' }) {
     try {
       const gmail = this.getGmailClient();
-      
+
       // Convert line breaks to HTML for proper display in Gmail
       const htmlBody = body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
       const formattedBody = `<p>${htmlBody}</p>`;
-      
+
       // Create email content
       const email = [
         'Content-Type: text/html; charset="UTF-8"',
@@ -316,7 +316,7 @@ class GmailService {
   async getThread({ threadId, userId = 'me' }) {
     try {
       const gmail = this.getGmailClient();
-      
+
       const threadResponse = await gmail.users.threads.get({
         userId,
         id: threadId,

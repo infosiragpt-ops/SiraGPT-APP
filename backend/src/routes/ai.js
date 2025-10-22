@@ -2033,10 +2033,20 @@ Also extract:
 - Number if mentioned (first 5, latest 10, etc.)
 - Email addresses if mentioned
 - Keywords for search/delete operations
+- Email folder preference (VERY IMPORTANT):
+  * If user explicitly says "sent emails", "emails I sent", "my sent", "outbox" → folder: "SENT"
+  * If user says "inbox", "received emails", "incoming" → folder: "INBOX"
+  * If user says "latest", "last", "recent", "check my emails" WITHOUT mentioning sent → folder: "INBOX" (default)
+  * If unclear → folder: "INBOX" (always default to inbox for generic requests)
 - Email state preference (read vs unread):
   * If user says "read emails" or "read messages" → they want ONLY read emails (unread_only: false, read_only: true)
   * If user says "unread emails" or "unread messages" → they want ONLY unread emails (unread_only: true, read_only: false)  
   * If user doesn't specify → they want all emails (unread_only: false, read_only: false)
+
+CRITICAL RULES FOR FOLDER DETECTION:
+- "last mail", "latest email", "recent emails" = INBOX (NOT sent)
+- "sent emails", "emails I sent", "my sent messages" = SENT
+- When in doubt, ALWAYS choose INBOX
 
 IMPORTANT: Pay attention to "read" vs "unread" keywords:
 - "first 5 read emails" = user wants 5 emails that have been read already
@@ -2046,6 +2056,7 @@ IMPORTANT: Pay attention to "read" vs "unread" keywords:
 Respond in JSON format:
 {
   "action": "READ|SEND|DRAFT|DELETE|SEARCH|NONE",
+  "folder": "INBOX|SENT",
   "number": number_extracted_or_null,
   "email_addresses": ["email1", "email2"],
   "keywords": ["keyword1", "keyword2"],
@@ -2070,13 +2081,13 @@ Respond in JSON format:
           // Fallback to basic keyword detection with improved read/unread detection
           const hasReadKeyword = lowerPrompt.includes('read emails') || lowerPrompt.includes('read messages');
           const hasUnreadKeyword = lowerPrompt.includes('unread emails') || lowerPrompt.includes('unread messages') || lowerPrompt.includes('unread');
-          
+
           actionAnalysis = {
             action: lowerPrompt.includes('read') || lowerPrompt.includes('latest') || lowerPrompt.includes('first') || lowerPrompt.includes('get') || lowerPrompt.includes('show') || lowerPrompt.includes('check') ? 'READ' :
-                   lowerPrompt.includes('send') && (lowerPrompt.includes('@') || lowerPrompt.includes('email')) ? 'SEND' :
-                   lowerPrompt.includes('draft') ? 'DRAFT' :
-                   lowerPrompt.includes('delete') || lowerPrompt.includes('remove') ? 'DELETE' :
-                   lowerPrompt.includes('find') || lowerPrompt.includes('search') ? 'SEARCH' : 'NONE',
+              lowerPrompt.includes('send') && (lowerPrompt.includes('@') || lowerPrompt.includes('email')) ? 'SEND' :
+                lowerPrompt.includes('draft') ? 'DRAFT' :
+                  lowerPrompt.includes('delete') || lowerPrompt.includes('remove') ? 'DELETE' :
+                    lowerPrompt.includes('find') || lowerPrompt.includes('search') ? 'SEARCH' : 'NONE',
             number: null,
             email_addresses: [],
             keywords: [],
@@ -2092,24 +2103,37 @@ Respond in JSON format:
         if (actionAnalysis.action === 'READ') {
           // Extract number of emails to fetch from AI analysis
           const maxResults = actionAnalysis.number || 5;
-          
+
           // Use AI analysis for read/unread preference
           const unreadOnly = actionAnalysis.unread_only || false;
           const readOnly = actionAnalysis.read_only || false;
-          
-          console.log('Email Filter from AI:', { unreadOnly, readOnly, maxResults, prompt });
-          
-          // Fetch emails with proper filtering
-          const emails = await gmailService.getEmails({ 
+
+          // ✅ Use AI-detected folder (INBOX or SENT)
+          const folder = actionAnalysis.folder || 'INBOX'; // Default to INBOX
+
+          // Build query based on folder
+          let folderQuery = '';
+          if (folder === 'SENT') {
+            folderQuery = 'in:sent';
+          } else {
+            folderQuery = 'in:inbox';
+          }
+
+          console.log('Email Filter from AI:', { folder, folderQuery, unreadOnly, readOnly, maxResults, prompt });
+
+          // Fetch emails with proper filtering including folder
+          const emails = await gmailService.getEmails({
+            query: folderQuery, // ✅ Pass folder query
             maxResults: Math.min(maxResults, 25), // Limit to 25 for performance
             unreadOnly,
-            readOnly 
+            readOnly
           });
-          
+
           gmailResult = {
             action: 'read',
             emails: emails,
             count: emails.length,
+            folder, // Include folder in result
             unreadOnly,
             readOnly
           };
@@ -2134,25 +2158,25 @@ Rules:
 - Structure the email professionally with greeting, main content, and closing
 - Keep [Your Name] as placeholder for signature - do not replace it
 - Return ONLY the JSON object, no other text`;
-          
+
           const parseResponse = await openai.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: [
-              { 
-                role: 'system', 
-                content: 'You are a JSON email parser. Return only valid JSON, no other text or explanation.' 
+              {
+                role: 'system',
+                content: 'You are a JSON email parser. Return only valid JSON, no other text or explanation.'
               },
-              { 
-                role: 'user', 
-                content: sendPrompt 
+              {
+                role: 'user',
+                content: sendPrompt
               }
             ],
-            temperature: 0.1 // Lower temperature for more consistent JSON output
+
           });
-          
+
           try {
             let responseContent = parseResponse.choices[0].message.content.trim();
-            
+
             // Clean up the response to ensure it's valid JSON
             if (responseContent.startsWith('```json')) {
               responseContent = responseContent.replace(/```json\n?/, '').replace(/```$/, '');
@@ -2160,29 +2184,29 @@ Rules:
             if (responseContent.startsWith('```')) {
               responseContent = responseContent.replace(/```\n?/, '').replace(/```$/, '');
             }
-            
+
             const emailData = JSON.parse(responseContent);
-            
+
             // Validate that we have required fields
             if (!emailData.to || !emailData.subject || !emailData.body) {
               throw new Error('Missing required email fields');
             }
-            
+
             // Get user information for proper name replacement
             const currentUser = await prisma.user.findUnique({
               where: { id: userId },
               select: { name: true, email: true }
             });
-            
+
             // Replace [Your Name] placeholder with actual user name
             if (emailData.body.includes('[Your Name]')) {
               const userName = currentUser?.name || 'User';
               emailData.body = emailData.body.replace(/\[Your Name\]/g, userName);
             }
-            
+
             // Check if this should be saved as draft or sent
             const isDraft = lowerPrompt.includes('draft') || lowerPrompt.includes('save') && !lowerPrompt.includes('send');
-            
+
             if (isDraft) {
               // Actually save as draft to Gmail
               const draftResult = await gmailService.createDraft(emailData);
@@ -2203,7 +2227,7 @@ Rules:
           } catch (parseError) {
             console.error('Failed to parse email data:', parseError);
             console.error('AI Response was:', parseResponse.choices[0].message.content);
-            
+
             // Fallback: Extract email manually from the prompt
             const emailMatch = prompt.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
             if (emailMatch) {
@@ -2212,7 +2236,7 @@ Rules:
                 subject: 'Thank you message',
                 body: `Thank you for your recent communication. I appreciate your message and wanted to follow up accordingly.\n\nBest regards`
               };
-              
+
               try {
                 const sendResult = await gmailService.sendEmail(fallbackEmailData);
                 gmailResult = {
@@ -2237,20 +2261,20 @@ Rules:
           // Handle delete requests using AI-extracted keywords
           const keywords = actionAnalysis.keywords.length > 0 ? actionAnalysis.keywords : [''];
           const emailAddresses = actionAnalysis.email_addresses || [];
-          
+
           let searchQuery = '';
           if (emailAddresses.length > 0) {
             searchQuery = `from:${emailAddresses[0]}`;
           } else if (keywords.length > 0) {
             searchQuery = keywords.join(' OR ');
           }
-          
+
           if (searchQuery) {
-            const emails = await gmailService.searchEmails({ 
-              query: searchQuery, 
-              maxResults: 10 
+            const emails = await gmailService.searchEmails({
+              query: searchQuery,
+              maxResults: 10
             });
-            
+
             if (emails.length > 0) {
               const deleteResults = [];
               for (const email of emails.slice(0, 5)) { // Limit to 5 for safety
@@ -2261,7 +2285,7 @@ Rules:
                   console.error('Delete error:', deleteError);
                 }
               }
-              
+
               gmailResult = {
                 action: 'delete',
                 searchQuery: searchQuery,
@@ -2287,7 +2311,7 @@ Rules:
           // Handle search requests using AI-extracted keywords
           const keywords = actionAnalysis.keywords.length > 0 ? actionAnalysis.keywords : [];
           const emailAddresses = actionAnalysis.email_addresses || [];
-          
+
           let searchQuery = '';
           if (emailAddresses.length > 0) {
             searchQuery = `from:${emailAddresses[0]}`;
@@ -2296,13 +2320,13 @@ Rules:
           } else {
             searchQuery = prompt.replace(/search|find|emails?|for|in|gmail/gi, '').trim();
           }
-          
+
           const maxResults = actionAnalysis.number || 10;
-          const emails = await gmailService.searchEmails({ 
-            query: searchQuery, 
-            maxResults: Math.min(maxResults, 25) 
+          const emails = await gmailService.searchEmails({
+            query: searchQuery,
+            maxResults: Math.min(maxResults, 25)
           });
-          
+
           gmailResult = {
             action: 'search',
             query: searchQuery,
@@ -2312,11 +2336,11 @@ Rules:
         } else if (lowerPrompt.includes('search') || lowerPrompt.includes('find')) {
           // Extract search query
           const searchQuery = prompt.replace(/search|find|emails?|for|in|gmail/gi, '').trim();
-          const emails = await gmailService.searchEmails({ 
-            query: searchQuery, 
-            maxResults: 10 
+          const emails = await gmailService.searchEmails({
+            query: searchQuery,
+            maxResults: 10
           });
-          
+
           gmailResult = {
             action: 'search',
             query: searchQuery,
@@ -2327,7 +2351,7 @@ Rules:
           // Handle delete requests - search for matching emails first
           let searchQuery = '';
           let searchType = 'general';
-          
+
           // Extract search terms for what to delete
           if (lowerPrompt.includes('from glassdoor') || lowerPrompt.includes('glassdoor')) {
             searchQuery = 'from:glassdoor.com';
@@ -2352,7 +2376,7 @@ Rules:
             - "from:example@gmail.com" for sender-based deletion
             - "subject:thank you" for subject-based deletion  
             - "keyword1 OR keyword2" for content-based deletion`;
-            
+
             try {
               const extractResponse = await openai.chat.completions.create({
                 model: 'gpt-4o-mini',
@@ -2362,9 +2386,9 @@ Rules:
                 ],
                 temperature: 0.1
               });
-              
+
               searchQuery = extractResponse.choices[0].message.content.trim();
-              
+
               // Determine search type
               if (searchQuery.includes('from:')) {
                 searchType = 'sender';
@@ -2395,7 +2419,7 @@ Rules:
                     .filter(word => word.length > 2)
                     .slice(0, 3)
                     .join(' OR ');
-                  
+
                   if (keywords) {
                     searchQuery = keywords;
                     searchType = 'content';
@@ -2407,9 +2431,9 @@ Rules:
 
           if (searchQuery) {
             // Search for emails to delete
-            const emailsToDelete = await gmailService.searchEmails({ 
-              query: searchQuery, 
-              maxResults: 10 
+            const emailsToDelete = await gmailService.searchEmails({
+              query: searchQuery,
+              maxResults: 10
             });
 
             if (emailsToDelete.length > 0) {
@@ -2450,13 +2474,13 @@ Rules:
         }
       } catch (gmailError) {
         console.error('Gmail action error:', gmailError);
-        
+
         // Extract more specific error information
         let errorMessage = gmailError.message;
         if (gmailError.response?.data?.error?.message) {
           errorMessage = gmailError.response.data.error.message;
         }
-        
+
         gmailResult = {
           action: 'error',
           error: errorMessage,
@@ -2467,40 +2491,40 @@ Rules:
 
       // Generate response based on actual Gmail results (skip generic AI response unless no action)
       let finalResponse = '';
-      
+
       if (gmailResult) {
         switch (gmailResult.action) {
           case 'read':
             const emailType = gmailResult.unreadOnly ? 'Unread' : 'Latest';
             finalResponse = `📧 **Your ${emailType} ${gmailResult.count} Emails:**\n\n`;
-            
+
             gmailResult.emails.forEach((email, i) => {
               // Clean, professional email display
               finalResponse += `\n---\n\n`;
               finalResponse += `**📧 ${i + 1}. ${email.subject}**\n\n`;
               finalResponse += `**From:** ${email.from}\n`;
               finalResponse += `**Date:** ${new Date(email.date).toLocaleDateString()} at ${new Date(email.date).toLocaleTimeString()}\n\n`;
-              
+
               // Clean and display content
               let content = '';
               if (email.body && email.body.trim()) {
-                content = email.body.length > 200 
-                  ? email.body.substring(0, 200) + '...' 
+                content = email.body.length > 200
+                  ? email.body.substring(0, 200) + '...'
                   : email.body;
               } else if (email.snippet) {
                 content = email.snippet;
               }
-              
+
               if (content && content.trim()) {
                 finalResponse += `**Content:** ${content.replace(/\n/g, ' ')}\n\n`;
               }
-              
+
               if (email.attachments && email.attachments.length > 0) {
                 finalResponse += `**Attachments:** ${email.attachments.map(a => a.filename).join(', ')}\n\n`;
               }
             });
             break;
-            
+
           case 'send':
             if (gmailResult.result && gmailResult.result.success) {
               finalResponse = `✅ **Email Sent Successfully!**\n\n`;
@@ -2518,7 +2542,7 @@ Rules:
               }
             }
             break;
-            
+
           case 'draft':
             if (gmailResult.result && gmailResult.result.success) {
               finalResponse = `📝 **Draft Saved to Gmail Successfully!**\n\n`;
@@ -2535,7 +2559,7 @@ Rules:
               finalResponse += `There was an error saving your email as a draft. Please try again.`;
             }
             break;
-            
+
           case 'search':
             finalResponse = `🔍 **Search Results for "${gmailResult.query}":**\n\n`;
             if (gmailResult.count > 0) {
@@ -2545,17 +2569,17 @@ Rules:
                 finalResponse += `**🔍 ${i + 1}. ${email.subject}**\n\n`;
                 finalResponse += `**From:** ${email.from}\n`;
                 finalResponse += `**Date:** ${new Date(email.date).toLocaleDateString()}\n`;
-                
+
                 // Show clean preview
                 let preview = '';
                 if (email.body && email.body.trim()) {
-                  preview = email.body.length > 150 
-                    ? email.body.substring(0, 150) + '...' 
+                  preview = email.body.length > 150
+                    ? email.body.substring(0, 150) + '...'
                     : email.body;
                 } else if (email.snippet) {
                   preview = email.snippet;
                 }
-                
+
                 if (preview && preview.trim()) {
                   finalResponse += `**Content:** ${preview.replace(/\n/g, ' ')}\n\n`;
                 }
@@ -2564,12 +2588,12 @@ Rules:
               finalResponse += 'No emails found matching your search criteria.';
             }
             break;
-            
+
           case 'delete':
             finalResponse = `🗑️ **Emails Deleted Successfully**\n\n`;
             finalResponse += `✅ **Deleted:** ${gmailResult.deletedCount} out of ${gmailResult.totalFound} emails\n`;
             finalResponse += `🔍 **Search Query:** "${gmailResult.searchQuery}"\n\n`;
-            
+
             if (gmailResult.deletedCount > 0) {
               finalResponse += `\n**🗑️ Deleted Emails:**\n\n`;
               gmailResult.deletionResults
@@ -2579,26 +2603,26 @@ Rules:
                   finalResponse += `${i + 1}. **${result.email.subject}**\n`;
                   finalResponse += `   From: ${result.email.from}\n\n`;
                 });
-              
+
               if (gmailResult.deletedCount > 5) {
                 finalResponse += `*...and ${gmailResult.deletedCount - 5} more emails deleted*\n\n`;
               }
             }
-            
+
             if (gmailResult.totalFound > gmailResult.deletedCount) {
               const failedCount = gmailResult.totalFound - gmailResult.deletedCount;
               finalResponse += `\n⚠️ **${failedCount} emails could not be deleted** (may require manual deletion)`;
             }
             break;
-            
+
           case 'delete_not_found':
             finalResponse = `🔍 **No Emails Found to Delete**\n\n${gmailResult.message}`;
             break;
-            
+
           case 'delete_request':
             finalResponse = `⚠️ **Delete Request Received**\n\n${gmailResult.message}`;
             break;
-            
+
           case 'error':
             // Check if this is a Gmail API not enabled error
             if (gmailResult.error.includes('Gmail API has not been used') || gmailResult.error.includes('is disabled')) {
@@ -2891,10 +2915,10 @@ Every element should feel intentionally designed, polished, and premium. The use
       // Handle images if provided
       if (processedFiles && processedFiles.length > 0) {
         const imageFiles = processedFiles.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
-        
+
         if (imageFiles.length > 0) {
           console.log(`📸 Processing ${imageFiles.length} image(s) for web dev`);
-          
+
           // Build content array with text and images
           const contentArray = [
             { type: 'text', text: prompt }
