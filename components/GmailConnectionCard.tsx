@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Mail, Shield, ArrowRight, CheckCircle } from 'lucide-react';
@@ -10,9 +10,9 @@ interface GmailConnectionCardProps {
   className?: string;
 }
 
-export const GmailConnectionCard: React.FC<GmailConnectionCardProps> = ({ 
-  onConnect, 
-  className = "" 
+export const GmailConnectionCard: React.FC<GmailConnectionCardProps> = ({
+  onConnect,
+  className = ""
 }) => {
   const [isConnecting, setIsConnecting] = useState(false);
 
@@ -63,8 +63,8 @@ export const GmailConnectionCard: React.FC<GmailConnectionCardProps> = ({
             <span>Secure OAuth authentication</span>
           </div>
         </div>
-        
-        <Button 
+
+        <Button
           onClick={handleConnect}
           disabled={isConnecting}
           className="w-full bg-orange-600 hover:bg-orange-700 text-white"
@@ -82,7 +82,7 @@ export const GmailConnectionCard: React.FC<GmailConnectionCardProps> = ({
             </div>
           )}
         </Button>
-        
+
         <p className="text-xs text-orange-600 text-center">
           Your emails remain private and secure. We only access what you explicitly request.
         </p>

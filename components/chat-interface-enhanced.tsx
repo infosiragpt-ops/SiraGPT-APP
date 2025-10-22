@@ -1337,22 +1337,22 @@ function ChatInterfaceContent() {
       });
     }
   }
- const handleGmailCommand = async (prompt: string) => {
+  const handleGmailCommand = async (prompt: string) => {
     setIsProcessingGmail(true);
-    
+
     try {
       if (!currentChat) {
         // Create a new Gmail chat like other modes
         await createNewChat('gmail', prompt);
       } else {
-        // Add user message immediately
-        const userMessage = {
-          id: `msg-user-${Date.now()}`,
-          chatId: currentChat.id,
-          role: 'USER' as const,
-          content: prompt,
-          timestamp: new Date().toISOString(),
-        };
+        // // Add user message immediately
+        // const userMessage = {
+        //   id: `msg-user-${Date.now()}`,
+        //   chatId: currentChat.id,
+        //   role: 'USER' as const,
+        //   content: prompt,
+        //   timestamp: new Date().toISOString(),
+        // };
 
         // Add processing placeholder
         const assistantPlaceholder = {
@@ -1365,7 +1365,7 @@ function ChatInterfaceContent() {
 
         setCurrentChat(prevChat => {
           if (!prevChat) return prevChat;
-          const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
+          const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
           return { ...prevChat, messages: updatedMessages };
         });
 
@@ -1378,15 +1378,15 @@ function ChatInterfaceContent() {
         };
 
         const response = await apiClient.generateGmailResponse(payload);
-        
+
         if (response.requiresConnection) {
           // Handle Gmail connection required
           const updateChatWithConnection = (prevChat: any) => {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg: any) => {
               if (msg.content === '[PROCESSING_GMAIL]') {
-                return { 
-                  ...msg, 
+                return {
+                  ...msg,
                   content: `📧 **Gmail Connection Required**
 
 I can help you with Gmail tasks like:

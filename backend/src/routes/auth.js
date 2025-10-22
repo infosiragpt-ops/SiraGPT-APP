@@ -83,7 +83,13 @@ router.get('/gmail/callback', async (req, res) => {
     const userId = state;
 
     if (!code || !userId) {
-      return res.redirect(`${process.env.FRONTEND_URL}/settings?error=gmail_auth_failed`);
+      // Handle error case where params are missing
+      return res.send(`
+        <script>
+          window.opener.postMessage({ status: 'error', service: 'gmail', error: 'auth_failed' }, '*');
+          window.close();
+        </script>
+      `);
     }
 
     // Exchange code for tokens
@@ -97,10 +103,38 @@ router.get('/gmail/callback', async (req, res) => {
       }
     });
 
-    res.redirect(`${process.env.FRONTEND_URL}/settings?gmail_connected=true`);
+    // ✅ Send a full HTML page with a script to ensure execution
+    res.set('Content-Type', 'text/html');
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Authentication Success</title></head>
+      <body>
+        <script>
+          window.opener.postMessage({ status: 'success', service: 'gmail' }, '*');
+          window.close();
+        </script>
+        <p>Authentication successful. This window will now close.</p>
+      </body>
+      </html>
+    `);
   } catch (error) {
     console.error('Gmail OAuth callback error:', error);
-    res.redirect(`${process.env.FRONTEND_URL}/settings?error=gmail_auth_failed`);
+    // ✅ Handle error case as well
+    res.set('Content-Type', 'text/html');
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Authentication Failed</title></head>
+      <body>
+        <script>
+          window.opener.postMessage({ status: 'error', service: 'gmail', error: 'auth_failed' }, '*');
+          window.close();
+        </script>
+        <p>Authentication failed. This window will now close.</p>
+      </body>
+      </html>
+    `);
   }
 });
 
