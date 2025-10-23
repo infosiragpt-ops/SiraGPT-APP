@@ -2006,9 +2006,26 @@ Respond naturally and helpfully. If you need to perform Gmail actions, I will ha
 
       try {
         // AI-powered action classification for better intent detection
-        const actionClassificationPrompt = `Your task is to analyze the user's request, which can be in ANY language, and classify their intent into a specific Gmail action. Rely on your multilingual understanding to determine the user's goal.
-
+        const actionClassificationPrompt = `Your task is to analyze  the user's real intent** (not just keywords) behind their request.,The input can be in **ANY language**. You must rely on your **multilingual, contextual, and semantic understanding** to identify what the user truly wants, even if they don’t use explicit Gmail-related words
 User Request: "${prompt}"
+
+
+### 🎯 GOAL:
+Classify the user's intent into one clear Gmail-related action.  
+Base your decision on **meaning**, **context**, and **implied behavior** — not only literal keywords.
+
+---
+
+### 🧠 EXAMPLES OF INTENT UNDERSTANDING
+- “show my last mail” → likely means **the last email I sent**, so folder = **SENT**, action = **READ**.  
+- “who did I message yesterday” → implies **SENT** folder (user wants sent messages).  
+- “what new emails came today” → **INBOX** + **unread_only = true**.  
+- “mujhe kal bheje gaye emails dikhao” → means “show emails sent yesterday” → folder = SENT.  
+- “enviar correo a Maria” → **SEND** action.  
+- “summarize my last 10 messages” → **ANALYZE** action.  
+- “search all messages about invoice” → **SEARCH** action.
+
+---
 
 Classify the user's primary goal into one of these categories based on their intent:
 1.  **READ**: The user wants to view, check, or get information from their emails.
@@ -2024,15 +2041,23 @@ Classify the user's primary goal into one of these categories based on their int
 6.  **NONE**: The request is not related to any of the above Gmail actions.
 
 Also extract the following details from the request:
--   **number**: How many emails? (e.g., for "last 5 emails", extract 5).
+-   **number**: How many emails? IMPORTANT rules:
+    *   If the user asks for "last email", "latest email", "my last email", "last mail" (singular) -> extract 1
+    *   If the user asks for "last 5 emails", "latest 10 emails" (with number) -> extract that number
+    *   If the user asks for "emails" (plural) without a number -> extract 10 as default
+    *   Keywords indicating singular: "last", "latest", "recent" + singular noun
 -   **email_addresses**: Any email addresses mentioned.
 -   **keywords**: Any specific search terms.
--   **folder**: Determine the target folder.
-    *   If the user mentions "sent", "outbox", or "emails I sent" -> "SENT".
-    *   For generic requests like "latest emails", "last mail", "check my mail" -> **ALWAYS default to "INBOX"**.
-    *   If in doubt, ALWAYS choose "INBOX".
+-   **folder**: Determine the target folder with these rules:
+    *   If asking about emails THEY SENT (verbs: "sent", "send kia", "bheje", "enviado", "I sent", "maine bheje", "manay send kia") -> "SENT"
+    *   If asking about emails THEY RECEIVED (verbs: "received", "got", "mile", "recibido") -> "INBOX"
+    *   For generic requests like "latest emails", "last mail", "check my mail", "new emails", "mujhe emails dikhao" -> **ALWAYS default to "INBOX"**
+    *   If in doubt, ALWAYS choose "INBOX"
 -   **unread_only**: Set to \`true\` if the user ONLY wants unread emails.
 -   **read_only**: Set to \`true\` if the user ONLY wants emails they have already read.
+-   **start_date**: If the user specifies a start date, a specific day, or a range (e.g., "today", "yesterday", "on the 15th", "last 20 days"), extract the start date in YYYY-MM-DD format. Current date is ${new Date().toISOString().split('T')[0]}.
+-   **end_date**: If the user specifies an end date or a range, extract the end date in YYYY-MM-DD format. For a single day request, end_date can be null.
+-   **table_summary**: Set to \`true\` if the user explicitly asks for a table.
 
 Respond ONLY with a valid JSON object in the following format:
 {
@@ -2043,6 +2068,9 @@ Respond ONLY with a valid JSON object in the following format:
   "keywords": [],
   "unread_only": false,
   "read_only": false,
+  "start_date": null | "YYYY-MM-DD",
+  "end_date": null | "YYYY-MM-DD",
+  "table_summary": false,
   "confidence": 0.0-1.0
 }`;
 
@@ -2073,40 +2101,50 @@ Respond ONLY with a valid JSON object in the following format:
         }
 
         // Perform actions based on AI classification
-        if (actionAnalysis.action === 'READ') {
-          // Extract number of emails to fetch from AI analysis
-          const maxResults = actionAnalysis.number || 5;
-
-          // Use AI analysis for read/unread preference
+        if (actionAnalysis.action === 'READ' || actionAnalysis.action === 'SEARCH') {
+          const maxResults = actionAnalysis.number || 10;
           const unreadOnly = actionAnalysis.unread_only || false;
           const readOnly = actionAnalysis.read_only || false;
+          const folder = actionAnalysis.folder || 'INBOX';
 
-          // ✅ Use AI-detected folder (INBOX or SENT)
-          const folder = actionAnalysis.folder || 'INBOX'; // Default to INBOX
-
-          // Build query based on folder
-          let folderQuery = '';
-          if (folder === 'SENT') {
-            folderQuery = 'in:sent';
-          } else {
-            folderQuery = 'in:inbox';
+          // Build a more sophisticated search query
+          let queryParts = [`in:${folder.toLowerCase()}`];
+          if (actionAnalysis.keywords && actionAnalysis.keywords.length > 0) {
+            queryParts.push(actionAnalysis.keywords.join(' '));
+          }
+          if (actionAnalysis.email_addresses && actionAnalysis.email_addresses.length > 0) {
+            queryParts.push(`from:(${actionAnalysis.email_addresses.join(' OR ')})`);
+          }
+          if (actionAnalysis.start_date) {
+            queryParts.push(`after:${actionAnalysis.start_date}`);
+          }
+          if (actionAnalysis.end_date) {
+            queryParts.push(`before:${actionAnalysis.end_date}`);
+          } else if (actionAnalysis.start_date) {
+            // If only a start date is provided, limit the search to that day
+            const startDate = new Date(actionAnalysis.start_date);
+            startDate.setDate(startDate.getDate() + 1);
+            const beforeDate = startDate.toISOString().split('T')[0];
+            queryParts.push(`before:${beforeDate}`);
           }
 
-          console.log('Email Filter from AI:', { folder, folderQuery, unreadOnly, readOnly, maxResults, prompt });
 
-          // Fetch emails with proper filtering including folder
-          const emails = await gmailService.getEmails({
-            query: folderQuery, // ✅ Pass folder query
-            maxResults: Math.min(maxResults, 25), // Limit to 25 for performance
+          const finalQuery = queryParts.join(' ');
+          console.log('Constructed Gmail Search Query:', finalQuery);
+
+          const emails = await gmailService.searchEmails({
+            query: finalQuery,
+            maxResults: Math.min(maxResults, 50), // Limit to 50 for performance
             unreadOnly,
             readOnly
           });
 
           gmailResult = {
-            action: 'read',
+            action: actionAnalysis.action,
+            query: finalQuery,
             emails: emails,
             count: emails.length,
-            folder, // Include folder in result
+            folder,
             unreadOnly,
             readOnly
           };
@@ -2236,51 +2274,50 @@ Rules:
             message: 'Delete functionality is currently disabled. You can search emails or mark them as read instead.'
           };
         } else if (actionAnalysis.action === 'SEARCH') {
-          // Handle search requests using AI-extracted keywords
-          const keywords = actionAnalysis.keywords.length > 0 ? actionAnalysis.keywords : [];
-          const emailAddresses = actionAnalysis.email_addresses || [];
-
-          let searchQuery = '';
-          if (emailAddresses.length > 0) {
-            searchQuery = `from:${emailAddresses[0]}`;
-          } else if (keywords.length > 0) {
-            searchQuery = keywords.join(' OR ');
-          } else {
-            searchQuery = prompt.replace(/search|find|emails?|for|in|gmail/gi, '').trim();
-          }
-
-          const maxResults = actionAnalysis.number || 10;
-          const emails = await gmailService.searchEmails({
-            query: searchQuery,
-            maxResults: Math.min(maxResults, 25)
-          });
-
-          gmailResult = {
-            action: 'search',
-            query: searchQuery,
-            emails: emails,
-            count: emails.length
-          };
         } else if (actionAnalysis.action === 'ANALYZE') {
-          // Handle analysis/reporting requests
           console.log('🔬 Handling ANALYZE action');
 
-          // 1. Fetch a decent number of recent emails for analysis
-          const emailsForAnalysis = await gmailService.getEmails({
-            maxResults: 50, // Fetch up to 50 recent emails for a good overview
-            query: 'in:inbox' // Analyze inbox by default
+          // 1. Perform a targeted search first to get relevant emails
+          const maxResults = actionAnalysis.number || 50; // Analyze up to 50 relevant emails
+          const folder = actionAnalysis.folder || 'INBOX';
+
+          let queryParts = [`in:${folder.toLowerCase()}`];
+          if (actionAnalysis.keywords && actionAnalysis.keywords.length > 0) {
+            queryParts.push(actionAnalysis.keywords.join(' '));
+          }
+          if (actionAnalysis.email_addresses && actionAnalysis.email_addresses.length > 0) {
+            queryParts.push(`from:(${actionAnalysis.email_addresses.join(' OR ')})`);
+          }
+          if (actionAnalysis.start_date) {
+            queryParts.push(`after:${actionAnalysis.start_date}`);
+          }
+          if (actionAnalysis.end_date) {
+            queryParts.push(`before:${actionAnalysis.end_date}`);
+          } else if (actionAnalysis.start_date) {
+            const startDate = new Date(actionAnalysis.start_date);
+            startDate.setDate(startDate.getDate() + 1);
+            const beforeDate = startDate.toISOString().split('T')[0];
+            queryParts.push(`before:${beforeDate}`);
+          }
+
+          const searchQuery = queryParts.join(' ');
+          console.log('Constructed Gmail Search Query for Analysis:', searchQuery);
+
+          const emailsForAnalysis = await gmailService.searchEmails({
+            query: searchQuery,
+            maxResults: Math.min(maxResults, 100) // Hard limit of 100 for analysis performance
           });
 
           if (emailsForAnalysis.length === 0) {
             gmailResult = {
               action: 'analyze',
-              summary: 'Could not find any emails in your inbox to analyze.',
+              summary: 'Could not find any emails matching your criteria to analyze.',
               emails: []
             };
           } else {
             // 2. Prepare the content for the analysis prompt
             const emailContentForAI = emailsForAnalysis.map(email => {
-              return `From: ${email.from}\nSubject: ${email.subject}\nDate: ${email.date}\nSnippet: ${email.snippet}\n---\n`;
+              return `From: ${email.from}\nSubject: ${email.subject}\nDate: ${email.date}\nContent: ${email.body || email.snippet}\n---\n`;
             }).join('\n');
 
             // 3. Create a new prompt for the AI to generate the report
@@ -2288,18 +2325,21 @@ Rules:
 
 User's Request: "${prompt}"
 
-Based on this request and the following email data, create a summary or report. The report should be well-structured, easy to read, and directly address the user's query. Use markdown for formatting (e.g., headings, lists, bold text).`;
+Based on this request and the following email data, create a summary or report. The report should be well-structured, easy to read, and directly address the user's query.
+- If the user asks for a table, you MUST format the output as a markdown table.
+- Use markdown for all formatting (e.g., headings, lists, bold text).
+- Be precise and extract specific data points if requested (e.g., bank expenses, dates, amounts).`;
 
-            const analysisUserPrompt = `Here is the recent email data:\n\n${emailContentForAI}\n\nPlease generate the report based on my request: "${prompt}"`;
+            const analysisUserPrompt = `Here is the email data matching the user's query:\n\n${emailContentForAI}\n\nPlease generate the report based on my original request: "${prompt}"`;
 
             // 4. Call the AI service to get the summary
             const analysisResponse = await openai.chat.completions.create({
-              model: 'gpt-4o-mini', // or a more powerful model if needed
+              model: 'gpt-4o', // Use a more powerful model for complex analysis
               messages: [
                 { role: 'system', content: analysisSystemPrompt },
                 { role: 'user', content: analysisUserPrompt }
               ],
-              temperature: 0.5,
+              temperature: 0.3,
             });
 
             const reportContent = analysisResponse.choices[0].message.content;
@@ -2374,8 +2414,9 @@ Based on this request and the following email data, create a summary or report. 
       let finalResponse = '';
 
       if (gmailResult) {
-        switch (gmailResult.action) {
+        switch (gmailResult.action.toLowerCase()) {
           case 'read':
+          case 'search':
             const emailType = gmailResult.unreadOnly ? 'Unread' : (gmailResult.readOnly ? 'Read' : 'Latest');
             finalResponse = `📧 **${emailType} Emails (${gmailResult.count})**\n\n`;
 
@@ -2437,34 +2478,6 @@ Based on this request and the following email data, create a summary or report. 
             }
             break;
 
-          case 'search':
-            finalResponse = `🔍 **Search Results for "${gmailResult.query}":**\n\n`;
-            if (gmailResult.count > 0) {
-              finalResponse += `Found ${gmailResult.count} matching emails:\n\n`;
-              gmailResult.emails.forEach((email, i) => {
-                finalResponse += `\n---\n\n`;
-                finalResponse += `**🔍 ${i + 1}. ${email.subject}**\n\n`;
-                finalResponse += `**From:** ${email.from}\n`;
-                finalResponse += `**Date:** ${new Date(email.date).toLocaleDateString()}\n`;
-
-                // Show clean preview
-                let preview = '';
-                if (email.body && email.body.trim()) {
-                  preview = email.body.length > 150
-                    ? email.body.substring(0, 150) + '...'
-                    : email.body;
-                } else if (email.snippet) {
-                  preview = email.snippet;
-                }
-
-                if (preview && preview.trim()) {
-                  finalResponse += `**Content:** ${preview.replace(/\n/g, ' ')}\n\n`;
-                }
-              });
-            } else {
-              finalResponse += 'No emails found matching your search criteria.';
-            }
-            break;
 
           case 'analyze':
             finalResponse = `📊 **Email History Report**\n\n`;
@@ -2529,22 +2542,18 @@ Based on this request and the following email data, create a summary or report. 
         let assistantMetadata = null; // ✅ Initialize metadata
 
         if (gmailResult) {
-          // Handle different gmail result actions
-          if (gmailResult.action === 'read') {
+          // Handle different gmail result actions (case-insensitive)
+          const action = gmailResult.action.toLowerCase();
+
+          if (action === 'read' || action === 'search') {
             assistantFiles = JSON.stringify([{
-              type: 'gmail_emails',
-              emails: gmailResult.emails,
-              filters: { unreadOnly: gmailResult.unreadOnly, readOnly: gmailResult.readOnly },
-              count: gmailResult.count
-            }]);
-          } else if (gmailResult.action === 'search') {
-            assistantFiles = JSON.stringify([{
-              type: 'gmail_search_results',
+              type: action === 'search' ? 'gmail_search_results' : 'gmail_emails',
               query: gmailResult.query,
               emails: gmailResult.emails,
-              count: gmailResult.count
+              count: gmailResult.count,
+              filters: gmailResult.filters || { unreadOnly: gmailResult.unreadOnly, readOnly: gmailResult.readOnly }
             }]);
-          } else if (gmailResult.action === 'analyze') {
+          } else if (action === 'analyze') {
             assistantFiles = JSON.stringify([{
               type: 'gmail_analysis',
               summary: gmailResult.summary,

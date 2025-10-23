@@ -605,8 +605,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const isGmailConnectionRequired = useMemo(() => {
         try {
             if (message.metadata) {
-                const metadata = typeof message.metadata === 'string' 
-                    ? JSON.parse(message.metadata) 
+                const metadata = typeof message.metadata === 'string'
+                    ? JSON.parse(message.metadata)
                     : message.metadata;
                 return metadata?.type === 'gmail_connection_required' && metadata?.showConnectionCard;
             }
@@ -619,10 +619,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     // Gmail Connection Component
     const GmailConnectionDisplay = () => {
         if (!isGmailConnectionRequired) return null;
-        
+
         return (
             <div className="mt-4">
-                <GmailConnectionCard 
+                <GmailConnectionCard
                     onConnect={() => {
                         // Optional: Add any additional handling after connection
                         console.log('Gmail connection initiated');
@@ -922,9 +922,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             return <ImageGenerationEffect />;
         }
 
-   if (message.role === "ASSISTANT" && message.content === "[PROCESSING_GMAIL]") {
-  return <ProcessingGmailCard />;
-}
+        if (message.role === "ASSISTANT" && message.content === "[PROCESSING_GMAIL]") {
+            return <ProcessingGmailCard />;
+        }
 
 
         return (
