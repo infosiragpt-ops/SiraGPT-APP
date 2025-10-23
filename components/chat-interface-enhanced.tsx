@@ -21,7 +21,9 @@ import {
   FileSpreadsheet,
   File,
   ArrowUp,
-  Mail
+  Mail,
+  Calendar,
+  FolderOpen
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -50,6 +52,7 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 import { AppSidebar } from "./app-sidebar"
+import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
 import {
   SidebarProvider,
   Sidebar,
@@ -72,6 +75,8 @@ const ActionsDropdown = ({
   setIsVideoGenerationActive,
   isGmailActive,
   setIsGmailActive,
+  isGoogleServicesActive,
+  setIsGoogleServicesActive,
   setShowAudioPanel,
   setAudioTab,
   handleAndUploadFiles,
@@ -81,7 +86,8 @@ const ActionsDropdown = ({
   isGeneratingImage,
   isGeneratingVideo,
   isGeneratingPPT,
-  isProcessingGmail
+  isProcessingGmail,
+  isProcessingGoogleServices
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
@@ -108,6 +114,7 @@ const ActionsDropdown = ({
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
       setIsGmailActive(false);
+      setIsGoogleServicesActive(false);
     }
     setIsWebSearchActive(!isWebSearchActive);
 
@@ -120,6 +127,7 @@ const ActionsDropdown = ({
       setIsWebSearchActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsGoogleServicesActive(false);
     }
     setIsGmailActive(!isGmailActive);
   };
@@ -132,6 +140,7 @@ const ActionsDropdown = ({
       setIsWebSearchActive(false);
       setIsVideoGenerationActive(false);
       setIsGmailActive(false);
+      setIsGoogleServicesActive(false);
       setChatType('image');
     } else {
       setChatType('text');
@@ -148,6 +157,7 @@ const ActionsDropdown = ({
       setIsWebSearchActive(false);
       setIsImageGenerationActive(false);
       setIsGmailActive(false);
+      setIsGoogleServicesActive(false);
 
       setChatType('video');
     } else {
@@ -156,7 +166,19 @@ const ActionsDropdown = ({
 
     setIsVideoGenerationActive(newState);
   };
-  const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail;
+  const handleGoogleServicesToggle = async () => {
+    setChatType('text');
+    if (!isGoogleServicesActive) {
+      // Deactivate other options
+      setIsWebSearchActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+      setIsGmailActive(false);
+    }
+    setIsGoogleServicesActive(!isGoogleServicesActive);
+  };
+
+  const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
 
   return (
     <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
@@ -249,6 +271,35 @@ const ActionsDropdown = ({
             </div>
             {isGmailActive && (
               <div className="w-2 h-2 bg-red-500 rounded-full" />
+            )}
+          </div>
+        </DropdownMenuItem>
+
+        {/* Google Services */}
+        <DropdownMenuItem
+          onClick={handleGoogleServicesToggle}
+          disabled={isProcessingGoogleServices}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleServicesActive
+              ? 'bg-blue-100 dark:bg-blue-900/20'
+              : 'bg-blue-100 dark:bg-blue-900/20'
+              }`}>
+              <div className="flex gap-1">
+                <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                <FolderOpen className="h-4 w-4 text-green-600 dark:text-green-400" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isGoogleServicesActive ? 'Google Services Active' : 'Google Services'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {isProcessingGoogleServices ? 'Processing...' : 'Calendar & Drive'}
+              </div>
+            </div>
+            {isGoogleServicesActive && (
+              <div className="w-2 h-2 bg-blue-500 rounded-full" />
             )}
           </div>
         </DropdownMenuItem>
@@ -524,6 +575,8 @@ const ActiveToolsDisplay = ({
   setIsVideoGenerationActive,
   isGmailActive,
   setIsGmailActive,
+  isGoogleServicesActive,
+  setIsGoogleServicesActive,
   setChatType,
 }: {
   isWebSearchActive: boolean;
@@ -534,9 +587,11 @@ const ActiveToolsDisplay = ({
   setIsVideoGenerationActive: (value: boolean) => void;
   isGmailActive: boolean;
   setIsGmailActive: (value: boolean) => void;
+  isGoogleServicesActive: boolean;
+  setIsGoogleServicesActive: (value: boolean) => void;
   setChatType: (type: any) => void;
 }) => {
-  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || isGmailActive;
+  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || isGmailActive || isGoogleServicesActive;
 
   if (!hasActiveTools) return null;
 
@@ -547,6 +602,11 @@ const ActiveToolsDisplay = ({
 
   const handleGmailClose = () => {
     setIsGmailActive(false);
+    setChatType('text');
+  };
+
+  const handleGoogleServicesClose = () => {
+    setIsGoogleServicesActive(false);
     setChatType('text');
   };
 
@@ -588,6 +648,23 @@ const ActiveToolsDisplay = ({
             size="sm"
             className="h-4 w-4 p-0 hover:bg-red-200 dark:hover:bg-red-800/30 rounded-full ml-1"
             onClick={handleGmailClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+      {isGoogleServicesActive && (
+        <div className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
+          <div className="flex gap-1">
+            <Calendar className="h-3 w-3" />
+            <FolderOpen className="h-3 w-3" />
+          </div>
+          <span className="font-medium">Google Services</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-800/30 rounded-full ml-1"
+            onClick={handleGoogleServicesClose}
           >
             <X className="h-3 w-3" />
           </Button>
@@ -820,6 +897,8 @@ function ChatInterfaceContent() {
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
   const [isGmailActive, setIsGmailActive] = React.useState(false);
   const [isProcessingGmail, setIsProcessingGmail] = React.useState(false);
+  const [isGoogleServicesActive, setIsGoogleServicesActive] = React.useState(false);
+  const [isProcessingGoogleServices, setIsProcessingGoogleServices] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
@@ -1066,6 +1145,7 @@ function ChatInterfaceContent() {
       // Reset generation modes when switching chats
       setIsWebSearchActive(false);
       setIsGmailActive(false);
+      setIsGoogleServicesActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
       setChatType('text'); // Always default to text when switching chats
@@ -1244,7 +1324,7 @@ function ChatInterfaceContent() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail) return
+    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices) return
 
     const msg = input.trim()
     // Deep copy files to avoid reference issues
@@ -1292,6 +1372,8 @@ function ChatInterfaceContent() {
         await handleWebSearch();
       } else if (isGmailActive) {
         await handleGmailCommand(msg); // Handle Gmail commands only when Gmail is manually selected
+      } else if (isGoogleServicesActive) {
+        await handleGoogleServicesCommand(msg);
       } else if (intent === 'image' || chatType === 'image') {
         await handleImageGeneration(msg, filesToSend.map(f => f.id))
       } else if (isVideoGenerationActive) {
@@ -1437,6 +1519,87 @@ But first, you need to connect your Gmail account securely using the button belo
       }
     } finally {
       setIsProcessingGmail(false);
+    }
+  }
+
+  const handleGoogleServicesCommand = async (prompt: string) => {
+    setIsProcessingGoogleServices(true);
+
+    try {
+      if (!currentChat) {
+        await createNewChat('google_services', prompt);
+      } else {
+        const assistantPlaceholder = {
+          id: `msg-assistant-processing-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'ASSISTANT' as const,
+          content: '[PROCESSING_GOOGLE_SERVICES]',
+          timestamp: new Date().toISOString(),
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
+          return { ...prevChat, messages: updatedMessages };
+        });
+
+        const payload = {
+          prompt,
+          chatId: currentChat?.id,
+          model: selectedModel,
+        };
+
+        const response = await apiClient.generateGoogleServicesResponse(payload);
+
+        if (response.requiresConnection) {
+          const updateChatWithConnection = (prevChat: any) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg: any) => {
+              if (msg.content === '[PROCESSING_GOOGLE_SERVICES]') {
+                return {
+                  ...msg,
+                  content: `**Google Services Connection Required**
+
+I can help you with Google Calendar and Drive tasks. But first, you need to connect your Google account securely.`,
+                  metadata: JSON.stringify({
+                    type: 'google_services_connection_required',
+                    showConnectionCard: true
+                  })
+                };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          };
+
+          setCurrentChat(updateChatWithConnection);
+          toast.error('Google Services connection required');
+        } else {
+          await selectChat(currentChat?.id ?? "");
+          toast.success('Google Services response generated!');
+        }
+      }
+    } catch (error: any) {
+      console.error('Google Services error:', error);
+      const errorMessage = error.message || 'Google Services request failed. Please try again.';
+      toast.error(errorMessage);
+
+      const updateChatWithError = (prevChat: any) => {
+        if (!prevChat) return prevChat;
+        const newMessages = prevChat.messages.map((msg: any) => {
+          if (msg.content === '[PROCESSING_GOOGLE_SERVICES]') {
+            return { ...msg, content: "", error: errorMessage };
+          }
+          return msg;
+        });
+        return { ...prevChat, messages: newMessages };
+      };
+
+      if (currentChat) {
+        setCurrentChat(updateChatWithError);
+      }
+    } finally {
+      setIsProcessingGoogleServices(false);
     }
   }
 
@@ -2005,7 +2168,9 @@ But first, you need to connect your Gmail account securely using the button belo
                                 ? "Enter your search query..."
                                 : isGmailActive
                                   ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
-                                  : "Type your message here..."
+                                  : isGoogleServicesActive
+                                    ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
+                                    : "Type your message here..."
                         }
                         className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
                         style={{
@@ -2038,6 +2203,8 @@ But first, you need to connect your Gmail account securely using the button belo
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isGmailActive={isGmailActive}
                           setIsGmailActive={setIsGmailActive}
+                          isGoogleServicesActive={isGoogleServicesActive}
+                          setIsGoogleServicesActive={setIsGoogleServicesActive}
                           setShowAudioPanel={setShowAudioPanel}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
@@ -2058,6 +2225,8 @@ But first, you need to connect your Gmail account securely using the button belo
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isGmailActive={isGmailActive}
                           setIsGmailActive={setIsGmailActive}
+                          isGoogleServicesActive={isGoogleServicesActive}
+                          setIsGoogleServicesActive={setIsGoogleServicesActive}
                           setChatType={setChatType}
                         />
                         <div className="flex-grow" />
@@ -2069,11 +2238,11 @@ But first, you need to connect your Gmail account securely using the button belo
                             />
                             <Button
                               onClick={handleSend}
-                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail}
+                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices}
                               size="sm"
                               className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                             >
-                              {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail ? (
+                              {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
                                 <ArrowUp className="h-4 w-4" />
@@ -2281,7 +2450,9 @@ But first, you need to connect your Gmail account securely using the button belo
                                     ? "Enter your search query..."
                                     : isGmailActive
                                       ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
-                                      : "Type your message here..."
+                                      : isGoogleServicesActive
+                                        ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
+                                        : "Type your message here..."
                             }
                             className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
                             style={{
@@ -2313,6 +2484,8 @@ But first, you need to connect your Gmail account securely using the button belo
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isGmailActive={isGmailActive}
                               setIsGmailActive={setIsGmailActive}
+                              isGoogleServicesActive={isGoogleServicesActive}
+                              setIsGoogleServicesActive={setIsGoogleServicesActive}
                               setShowAudioPanel={setShowAudioPanel}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
@@ -2333,6 +2506,8 @@ But first, you need to connect your Gmail account securely using the button belo
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isGmailActive={isGmailActive}
                               setIsGmailActive={setIsGmailActive}
+                              isGoogleServicesActive={isGoogleServicesActive}
+                              setIsGoogleServicesActive={setIsGoogleServicesActive}
                               setChatType={setChatType}
                             />
                             <div className="flex-grow" />
@@ -2344,11 +2519,11 @@ But first, you need to connect your Gmail account securely using the button belo
                                 />
                                 <Button
                                   onClick={handleSend}
-                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail}
+                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices}
                                   size="sm"
                                   className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                                 >
-                                  {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail ? (
+                                  {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                   ) : (
                                     <ArrowUp className="h-4 w-4" />

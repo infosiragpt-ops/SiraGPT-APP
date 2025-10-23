@@ -993,11 +993,11 @@ class ApiClient {
 
   // Web Development Streaming endpoint
   async generateWebDevStream(
-    data: { 
-      prompt: string; 
-      chatId: string; 
-      provider?: string; 
-      model?: string; 
+    data: {
+      prompt: string;
+      chatId: string;
+      provider?: string;
+      model?: string;
       files?: string[];
       streamId: string;
     },
@@ -1174,6 +1174,37 @@ class ApiClient {
     return this.request('/gmail/chat-command', {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  // Google Services (Calendar & Drive) endpoints
+  async getGoogleServicesStatus() {
+    return this.request('/auth/google-services/status');
+  }
+
+  async connectGoogleServices() {
+    return this.request('/auth/google-services');
+  }
+
+  async disconnectGoogleServices() {
+    return this.request('/auth/google-services/disconnect', {
+      method: 'POST',
+    });
+  }
+
+  async generateGoogleServicesResponse(data: { prompt: string; chatId?: string; model: string }) {
+    const userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+    const payload = {
+      ...data,
+      timeZone: userTimeZone // <-- Har request ke sath timezone bhejein
+    };
+
+    console.log(userTimeZone);
+
+    return this.request('/ai/generate-google-services', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 }

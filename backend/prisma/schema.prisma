@@ -26,6 +26,9 @@ model User {
   // Gmail Integration
   gmailTokens  String?  // Store encrypted Gmail OAuth tokens as JSON
   
+  // Google Services Integration (Calendar & Drive)
+  googleServicesTokens String?  // Store encrypted Google OAuth tokens for Calendar & Drive as JSON
+  
   // Stripe Integration Fields
   stripeCustomerId     String?  @unique
   stripeSubscriptionId String?  @unique
@@ -88,6 +91,8 @@ model Chat {
 
   isShared  Boolean  @default(false)
   shareId   String?  @unique 
+
+  googleCalendarContext Json?      // NEW: Store recent Google Calendar event IDs for context
 
 // GPT Integration
   customGptId String?

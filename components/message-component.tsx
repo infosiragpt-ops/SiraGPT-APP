@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import GmailConnectionCard from "./GmailConnectionCard"
+import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
 import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
@@ -616,6 +617,21 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     }, [message.metadata]);
 
+    // Check for Google Services connection requirement
+    const isGoogleServicesConnectionRequired = useMemo(() => {
+        try {
+            if (message.metadata) {
+                const metadata = typeof message.metadata === 'string'
+                    ? JSON.parse(message.metadata)
+                    : message.metadata;
+                return metadata?.type === 'google_services_connection_required' && metadata?.showConnectionCard;
+            }
+            return false;
+        } catch {
+            return false;
+        }
+    }, [message.metadata]);
+
     // Gmail Connection Component
     const GmailConnectionDisplay = () => {
         if (!isGmailConnectionRequired) return null;
@@ -626,6 +642,23 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     onConnect={() => {
                         // Optional: Add any additional handling after connection
                         console.log('Gmail connection initiated');
+                    }}
+                />
+            </div>
+        );
+    };
+
+    // Google Services Connection Component
+    const GoogleServicesConnectionDisplay = () => {
+        if (!isGoogleServicesConnectionRequired) return null;
+
+        return (
+            <div className="mt-4">
+                <GoogleServicesConnectionCard
+                    onConnectionChange={(isConnected) => {
+                        if (isConnected) {
+                            console.log('Google Services connected successfully');
+                        }
                     }}
                 />
             </div>
@@ -1116,6 +1149,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <FileDisplay />
                                 <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} />
                                 <GmailConnectionDisplay />
+                                <GoogleServicesConnectionDisplay />
                             </>
                         )}
 

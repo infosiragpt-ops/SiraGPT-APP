@@ -16,6 +16,13 @@ const gmailOauth2Client = new OAuth2Client(
   process.env.GOOGLE_REDIRECT_URI
 );
 
+// Google Calendar & Drive OAuth configuration
+const googleServicesOauth2Client = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_CALENDAR_DRIVE_URI
+);
+
 // Google OAuth routes
 router.get('/google',
   passport.authenticate('google', { scope: ['profile', 'email'] })
@@ -168,6 +175,127 @@ router.get('/gmail/status', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Gmail status error:', error);
     res.status(500).json({ error: 'Failed to check Gmail status' });
+  }
+});
+
+// Google Calendar & Drive OAuth routes
+router.get('/google-services',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const scopes = [
+        'https://www.googleapis.com/auth/calendar',
+        'https://www.googleapis.com/auth/calendar.events',
+        'https://www.googleapis.com/auth/drive',
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive.readonly',
+        'https://www.googleapis.com/auth/drive.metadata.readonly'
+      ];
+
+      const authUrl = googleServicesOauth2Client.generateAuthUrl({
+        access_type: 'offline',
+        scope: scopes,
+        prompt: 'consent',
+        state: req.user.id
+      });
+
+      console.log('Generated Google Services auth URL:', authUrl);
+      res.json({ authUrl });
+    } catch (error) {
+      console.error('Google Services OAuth error:', error);
+      res.status(500).json({ error: 'Failed to generate Google Services auth URL' });
+    }
+  }
+);
+
+router.get('/google-services/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    const userId = state;
+
+    if (!code || !userId) {
+      return res.send(`
+        <script>
+          window.opener.postMessage({ status: 'error', service: 'google_services', error: 'auth_failed' }, '*');
+          window.close();
+        </script>
+      `);
+    }
+
+    // Exchange code for tokens
+    const { tokens } = await googleServicesOauth2Client.getToken(code);
+
+    // Store Google Services tokens for the user
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        googleServicesTokens: JSON.stringify(tokens)
+      }
+    });
+
+    res.set('Content-Type', 'text/html');
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Authentication Success</title></head>
+      <body>
+        <script>
+          window.opener.postMessage({ status: 'success', service: 'google_services' }, '*');
+          window.close();
+        </script>
+        <p>Google Calendar & Drive connected successfully! This window will now close.</p>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Google Services OAuth callback error:', error);
+    res.set('Content-Type', 'text/html');
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Authentication Failed</title></head>
+      <body>
+        <script>
+          window.opener.postMessage({ status: 'error', service: 'google_services', error: 'auth_failed' }, '*');
+          window.close();
+        </script>
+        <p>Authentication failed. This window will now close.</p>
+      </body>
+      </html>
+    `);
+  }
+});
+
+// Disconnect Google Services
+router.post('/google-services/disconnect', authenticateToken, async (req, res) => {
+  try {
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        googleServicesTokens: null
+      }
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Google Services disconnect error:', error);
+    res.status(500).json({ error: 'Failed to disconnect Google Services' });
+  }
+});
+
+// Check Google Services connection status
+router.get('/google-services/status', authenticateToken, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { googleServicesTokens: true }
+    });
+
+    const isConnected = !!user?.googleServicesTokens;
+    res.json({ isConnected });
+  } catch (error) {
+    console.error('Google Services status error:', error);
+    res.status(500).json({ error: 'Failed to check Google Services status' });
   }
 });
 

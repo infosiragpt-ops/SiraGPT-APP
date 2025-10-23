@@ -7,6 +7,7 @@ const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
+const googleMCPService = require('../services/google-mcp');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -2900,6 +2901,213 @@ Every element should feel intentionally designed, polished, and premium. The use
       if (!res.writableEnded) {
         res.end();
       }
+    }
+  }
+);
+
+// ✅ Generate Google Calendar & Drive AI Response - Using OpenAI MCP
+router.post(
+  '/generate-google-services',
+  [
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('chatId').optional().isString(),
+    body('model').trim().notEmpty().withMessage('Model is required'),
+    body('service').optional().isIn(['calendar', 'drive', 'both']).withMessage('Service must be calendar, drive, or both'),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { prompt, chatId, model, timeZone } = req.body;
+      let { service } = req.body;
+      const userId = req.user.id;
+
+      console.log('📅🗂️ Google Services AI request:', { prompt, chatId, model, service, userId });
+
+      // Check monthly limit
+      if (req.user.plan === 'FREE') {
+        const result = await prisma.user.updateMany({
+          where: {
+            id: userId,
+            monthlyCallLimit: { gt: 0 }
+          },
+          data: {
+            monthlyCallLimit: { decrement: 1 }
+          }
+        });
+
+        if (!result || result.count === 0) {
+          return res.status(429).json({
+            error: 'Free monthly queries exhausted. Please upgrade to continue.',
+            remaining: 0
+          });
+        }
+      } else {
+        if (req.user.apiUsage >= req.user.monthlyLimit) {
+          return res.status(429).json({
+            error: 'Monthly API limit exceeded',
+            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
+          });
+        }
+      }
+
+      // Check if Google Services is connected
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { googleServicesTokens: true }
+      });
+
+      if (!user?.googleServicesTokens) {
+        // Save user message even if not connected
+        if (chatId) {
+          await prisma.message.create({
+            data: {
+              chatId,
+              role: 'USER',
+              content: prompt,
+            }
+          });
+
+          // Save connection required message
+          await prisma.message.create({
+            data: {
+              chatId,
+              role: 'ASSISTANT',
+              content: `📅🗂️ **Google Services Connection Required**
+
+I can help you with Google Calendar and Google Drive tasks like:
+
+**Google Calendar:**
+- View your upcoming events
+- Create new meetings and appointments
+- Search your calendar
+- Manage event details
+
+**Google Drive:**
+- List your files and folders
+- Search for documents
+- Get file details
+- Manage your documents
+
+But first, you need to connect your Google Calendar & Drive account securely using the button below.`,
+              metadata: JSON.stringify({
+                type: 'google_services_connection_required',
+                showConnectionCard: true
+              })
+            }
+          });
+        }
+
+        return res.json({
+          success: true,
+          requiresConnection: true,
+          message: 'Google Services connection required'
+        });
+      }
+
+
+      const chatHistory = await prisma.message.findMany({
+        where: { chatId: chatId, chat: { userId: userId } }, // Security check
+        orderBy: { timestamp: 'asc' },
+        select: { role: true, content: true }
+      });
+      chatHistory.push({ role: 'USER', content: prompt });
+      // Process request using OpenAI MCP
+      const mcpResult = await googleMCPService.processRequest(
+        chatHistory,
+        JSON.parse(user.googleServicesTokens),
+        timeZone || 'UTC',
+        chatId
+      );
+
+      let finalResponse = mcpResult.content;
+
+      // ✅ Fallback for when the model fails to generate a response
+      if (!finalResponse || finalResponse.trim() === "") {
+        finalResponse = "I'm sorry, I encountered an issue while trying to access your Google services. Please try again later.";
+      }
+
+      // Save messages to chat
+      if (chatId) {
+        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
+        if (!chat) {
+          return res.status(404).json({ error: 'Chat not found' });
+        }
+
+        await prisma.message.create({
+          data: {
+            chatId,
+            role: 'USER',
+            content: prompt,
+          }
+        });
+
+        // Build UI-friendly metadata for frontend rendering
+        let assistantMetadata = JSON.stringify({
+          type: 'google_services_response',
+          service: service,
+          timestamp: new Date().toISOString()
+        });
+
+        await prisma.message.create({
+          data: {
+            chatId,
+            role: 'ASSISTANT',
+            content: finalResponse,
+            tokens: finalResponse.length,
+            metadata: assistantMetadata
+          }
+        });
+
+        // Update chat title
+        await prisma.chat.update({
+          where: { id: chatId },
+          data: {
+            updatedAt: new Date(),
+            title: chat.title === 'New Chat'
+              ? `📅 ${service === 'calendar' ? 'Calendar' : service === 'drive' ? 'Drive' : 'Google'}: ${prompt.substring(0, 30)}${prompt.length > 30 ? '...' : ''}`
+              : chat.title
+          }
+        });
+      }
+
+      // Track usage
+      const tokens = finalResponse.length;
+      await usageService.recordUsage(userId, model, tokens, tokens * 0.001);
+
+      res.json({
+        success: true,
+        content: finalResponse,
+
+        tokens
+      });
+
+    } catch (error) {
+      console.error('Google Services AI generation error:', error);
+
+      // Handle re-authentication errors
+      const isAuthError = error.message?.includes('reconnect your account') ||
+        error.message?.includes('connection has expired');
+
+      if (isAuthError) {
+        // Clear invalid tokens
+        await prisma.user.update({
+          where: { id: req.user.id },
+          data: { googleServicesTokens: null }
+        });
+
+        return res.json({
+          success: true,
+          requiresConnection: true,
+          message: error.message
+        });
+      }
+
+      res.status(500).json({ error: error.message || 'Google Services AI generation failed' });
     }
   }
 );
