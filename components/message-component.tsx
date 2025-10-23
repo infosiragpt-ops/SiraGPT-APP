@@ -46,6 +46,7 @@ import ChartComponent from './chart-component';
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import ProcessingGmailCard from "./ProcessingGmailCard"
+import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
@@ -482,7 +483,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
     // Optimized message content rendering with performance safeguards
     const MessageContent = () => {
-        if (message.role === 'ASSISTANT' && (message.content === '[GENERATING_IMAGE]' || message.content === '[PROCESSING_GMAIL]')) {
+        if (message.role === 'ASSISTANT' && (message.content === '[GENERATING_IMAGE]' || message.content === '[PROCESSING_GMAIL]' || message.content === '[PROCESSING_CALENDAR_ACTION]' || message.content === '[PROCESSING_DRIVE_ACTION]')) {
             return null;
         }
         // Don't render markdown for image-only messages to improve performance
@@ -957,6 +958,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
         if (message.role === "ASSISTANT" && message.content === "[PROCESSING_GMAIL]") {
             return <ProcessingGmailCard />;
+        }
+
+        if (message.role === "ASSISTANT" && message.content === "[PROCESSING_CALENDAR_ACTION]") {
+            return <ProcessingGoogleServicesCard action="calendar" />;
+        }
+
+        if (message.role === "ASSISTANT" && message.content === "[PROCESSING_DRIVE_ACTION]") {
+            return <ProcessingGoogleServicesCard action="drive" />;
         }
 
 

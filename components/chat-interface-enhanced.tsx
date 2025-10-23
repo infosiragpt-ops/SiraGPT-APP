@@ -1529,11 +1529,14 @@ But first, you need to connect your Gmail account securely using the button belo
       if (!currentChat) {
         await createNewChat('google_services', prompt);
       } else {
+        const isCalendarAction = prompt.toLowerCase().includes('event') || prompt.toLowerCase().includes('meeting') || prompt.toLowerCase().includes('calendar');
+        const loadingContent = isCalendarAction ? '[PROCESSING_CALENDAR_ACTION]' : '[PROCESSING_DRIVE_ACTION]';
+
         const assistantPlaceholder = {
           id: `msg-assistant-processing-${Date.now()}`,
           chatId: currentChat.id,
           role: 'ASSISTANT' as const,
-          content: '[PROCESSING_GOOGLE_SERVICES]',
+          content: loadingContent,
           timestamp: new Date().toISOString(),
         };
 
@@ -1555,7 +1558,7 @@ But first, you need to connect your Gmail account securely using the button belo
           const updateChatWithConnection = (prevChat: any) => {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg: any) => {
-              if (msg.content === '[PROCESSING_GOOGLE_SERVICES]') {
+              if (msg.content === '[PROCESSING_CALENDAR_ACTION]' || msg.content === '[PROCESSING_DRIVE_ACTION]') {
                 return {
                   ...msg,
                   content: `**Google Services Connection Required**
@@ -1587,7 +1590,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const updateChatWithError = (prevChat: any) => {
         if (!prevChat) return prevChat;
         const newMessages = prevChat.messages.map((msg: any) => {
-          if (msg.content === '[PROCESSING_GOOGLE_SERVICES]') {
+          if (msg.content === '[PROCESSING_CALENDAR_ACTION]' || msg.content === '[PROCESSING_DRIVE_ACTION]') {
             return { ...msg, content: "", error: errorMessage };
           }
           return msg;

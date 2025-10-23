@@ -555,11 +555,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               timestamp: new Date().toISOString(),
             };
 
+            const isCalendarAction = initialContent.toLowerCase().includes('event') || initialContent.toLowerCase().includes('meeting') || initialContent.toLowerCase().includes('calendar');
+            const loadingContent = isCalendarAction ? '[PROCESSING_CALENDAR_ACTION]' : '[PROCESSING_DRIVE_ACTION]';
+
             const assistantPlaceholder = {
               id: `msg-assistant-processing-${Date.now()}`,
               chatId: newChat.id,
               role: 'ASSISTANT' as const,
-              content: '[PROCESSING_GOOGLE_SERVICES]',
+              content: loadingContent,
               timestamp: new Date().toISOString(),
             };
 

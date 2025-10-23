@@ -312,7 +312,7 @@ Query:`;
         // 1. Google API clients ko initialize karein
         const googleAPIClient = this._getGoogleAPIClient(tokens);
         const today = new Date().toLocaleString('en-US', { timeZone: timeZone });
-        const systemMessage = `You are a helpful assistant. The user's current date and time is ${today} in their local timezone (${timeZone}). When a user asks to create an event with relative times like 'tomorrow at 5pm', you must calculate the exact ISO 8601 timestamp based on this date and timezone. CRITICAL: When the user asks to update or delete an event after you have listed events, you MUST use the 'id' of the event from the list. Do not make up an ID. Look at the previous tool call result for the correct event 'id'.`;
+        const systemMessage = `You are a helpful assistant. The user's current date and time is ${today} in their local timezone (${timeZone}). When a user asks to create an event with relative times like 'tomorrow at 5pm', you must calculate the exact ISO 8601 timestamp based on this date and timezone. CRITICAL: When the user asks to update or delete an event after you have listed events, you MUST use the 'id' of the event from the list. Do not make up an ID. Look at the previous tool call result for the correct event 'id'. IMPORTANT: You must detect the user's language from their prompt and ALWAYS respond in that same language.`;
         // 2. OpenAI ko batayein ke aapke paas konse tools/functions hain
         const tools = [
             {
