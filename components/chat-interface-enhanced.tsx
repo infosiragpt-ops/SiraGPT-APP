@@ -12,6 +12,7 @@ import {
   Globe,
   Bot,
   ChevronDown,
+  ChevronRight,
   X,
   Upload,
   Menu,
@@ -41,7 +42,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
+import { Switch } from "@/components/ui/switch"
 import MessageComponent from "./message-component"
 import VoiceControls from "./voice-controls"
 import SpeechToTextComponent from "./speech-to-text-component"
@@ -74,9 +79,7 @@ const ActionsDropdown = ({
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   isGmailActive,
-  setIsGmailActive,
   isGoogleServicesActive,
-  setIsGoogleServicesActive,
   setShowAudioPanel,
   setAudioTab,
   handleAndUploadFiles,
@@ -87,7 +90,11 @@ const ActionsDropdown = ({
   isGeneratingVideo,
   isGeneratingPPT,
   isProcessingGmail,
-  isProcessingGoogleServices
+  isProcessingGoogleServices,
+
+  handleGmailToggle,
+  handleGoogleServicesToggle,
+
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
@@ -107,29 +114,14 @@ const ActionsDropdown = ({
 
   // Function to handle single selection - deactivate others when one is selected
   const handleWebSearchToggle = () => {
-
     setChatType('text');
     if (!isWebSearchActive) {
       // Deactivate other options
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
-      setIsGmailActive(false);
-      setIsGoogleServicesActive(false);
     }
     setIsWebSearchActive(!isWebSearchActive);
 
-  };
-
-  const handleGmailToggle = async () => {
-    setChatType('text');
-    if (!isGmailActive) {
-      // Deactivate other options
-      setIsWebSearchActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsGoogleServicesActive(false);
-    }
-    setIsGmailActive(!isGmailActive);
   };
 
 
@@ -139,8 +131,7 @@ const ActionsDropdown = ({
     if (newState) {
       setIsWebSearchActive(false);
       setIsVideoGenerationActive(false);
-      setIsGmailActive(false);
-      setIsGoogleServicesActive(false);
+
       setChatType('image');
     } else {
       setChatType('text');
@@ -154,10 +145,9 @@ const ActionsDropdown = ({
     const newState = !isVideoGenerationActive;
 
     if (newState) {
-      setIsWebSearchActive(false);
+      //setIsWebSearchActive(false);
       setIsImageGenerationActive(false);
-      setIsGmailActive(false);
-      setIsGoogleServicesActive(false);
+
 
       setChatType('video');
     } else {
@@ -166,17 +156,7 @@ const ActionsDropdown = ({
 
     setIsVideoGenerationActive(newState);
   };
-  const handleGoogleServicesToggle = async () => {
-    setChatType('text');
-    if (!isGoogleServicesActive) {
-      // Deactivate other options
-      setIsWebSearchActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsGmailActive(false);
-    }
-    setIsGoogleServicesActive(!isGoogleServicesActive);
-  };
+
 
   const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
 
@@ -216,7 +196,6 @@ const ActionsDropdown = ({
           accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
           onChange={handleFilesSelected}
         />
-
         {/* Web Search */}
         <DropdownMenuItem
           onClick={handleWebSearchToggle}
@@ -236,73 +215,83 @@ const ActionsDropdown = ({
               <div className="font-medium text-sm">
                 {isWebSearchActive ? 'Web Search Active' : 'Web Search'}
               </div>
-              <div className="text-xs text-muted-foreground">
-                {isWebSearching ? 'Searching...' : 'Search the internet for answers'}
-              </div>
             </div>
             {isWebSearchActive && (
               <div className="w-2 h-2 bg-green-500 rounded-full" />
             )}
           </div>
         </DropdownMenuItem>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <div className="flex items-center gap-3 w-full">
+              <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
+                  <path d="M16.5 12.5C16.5 14.9853 14.4853 17 12 17C9.51472 17 7.5 14.9853 7.5 12.5C7.5 10.0147 9.51472 8 12 8C14.4853 8 16.5 10.0147 16.5 12.5Z" stroke="currentColor" stroke-width="1.5" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <div className="font-medium text-sm flex items-center">
+                  Connectors
+                </div>
+              </div>
+            </div>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
 
-        {/* Gmail */}
-        <DropdownMenuItem
-          onClick={handleGmailToggle}
-          disabled={isProcessingGmail}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
-              ? 'bg-red-100 dark:bg-red-900/20'
-              : 'bg-red-100 dark:bg-red-900/20'
-              }`}>
-              <Mail className={`h-4 w-4 ${isGmailActive
-                ? 'text-red-600 dark:text-red-400'
-                : 'text-red-600 dark:text-red-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isGmailActive ? 'Gmail Active' : 'Gmail'}
+            {/* Gmail */}
+            <DropdownMenuItem
+              onClick={handleGmailToggle}
+              disabled={isProcessingGmail}
+            >
+              <div className="flex items-center gap-3 w-full">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
+                  ? 'bg-red-100 dark:bg-red-900/20'
+                  : 'bg-red-100 dark:bg-red-900/20'
+                  }`}>
+                  <Mail className={`h-4 w-4 ${isGmailActive
+                    ? 'text-red-600 dark:text-red-400'
+                    : 'text-red-600 dark:text-red-400'
+                    }`} />
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-sm">
+                    {isGmailActive ? 'Gmail Active' : 'Gmail'}
+                  </div>
+                </div>
+                {isGmailActive && (
+                  <div className="w-2 h-2 bg-red-500 rounded-full" />
+                )}
               </div>
-              <div className="text-xs text-muted-foreground">
-                {isProcessingGmail ? 'Processing...' : 'Send, read, and manage emails'}
-              </div>
-            </div>
-            {isGmailActive && (
-              <div className="w-2 h-2 bg-red-500 rounded-full" />
-            )}
-          </div>
-        </DropdownMenuItem>
+            </DropdownMenuItem>
 
-        {/* Google Services */}
-        <DropdownMenuItem
-          onClick={handleGoogleServicesToggle}
-          disabled={isProcessingGoogleServices}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleServicesActive
-              ? 'bg-blue-100 dark:bg-blue-900/20'
-              : 'bg-blue-100 dark:bg-blue-900/20'
-              }`}>
-              <div className="flex gap-1">
-                <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                <FolderOpen className="h-4 w-4 text-green-600 dark:text-green-400" />
+            {/* Google Services */}
+            <DropdownMenuItem
+              onClick={handleGoogleServicesToggle}
+              disabled={isProcessingGoogleServices}
+            >
+              <div className="flex items-center gap-3 w-full">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleServicesActive
+                  ? 'bg-blue-100 dark:bg-blue-900/20'
+                  : 'bg-blue-100 dark:bg-blue-900/20'
+                  }`}>
+                  <div className="flex gap-1">
+                    <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                    <FolderOpen className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  </div>
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-sm">
+                    {isGoogleServicesActive ? 'Google Services Active' : 'Google Services'}
+                  </div>
+                </div>
+                {isGoogleServicesActive && (
+                  <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                )}
               </div>
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isGoogleServicesActive ? 'Google Services Active' : 'Google Services'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {isProcessingGoogleServices ? 'Processing...' : 'Calendar & Drive'}
-              </div>
-            </div>
-            {isGoogleServicesActive && (
-              <div className="w-2 h-2 bg-blue-500 rounded-full" />
-            )}
-          </div>
-        </DropdownMenuItem>
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
 
         <DropdownMenuSeparator />
 
@@ -578,6 +567,9 @@ const ActiveToolsDisplay = ({
   isGoogleServicesActive,
   setIsGoogleServicesActive,
   setChatType,
+
+  handleGmailToggle,
+  handleGoogleServicesToggle
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
@@ -590,22 +582,24 @@ const ActiveToolsDisplay = ({
   isGoogleServicesActive: boolean;
   setIsGoogleServicesActive: (value: boolean) => void;
   setChatType: (type: any) => void;
+
+  handleGmailToggle: () => void;
+  handleGoogleServicesToggle: () => void;
 }) => {
-  const hasActiveTools = isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || isGmailActive || isGoogleServicesActive;
+  const activeConnectors = [
 
-  if (!hasActiveTools) return null;
+    isGmailActive && { id: 'gmail', icon: <Mail className="h-4 w-4 text-red-600" /> },
+    isGoogleServicesActive && { id: 'google', icon: <><Calendar className="h-4 w-4 text-blue-600" /><FolderOpen className="h-4 w-4 text-green-600" /></> },
+  ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
-  const handleWebSearchClose = () => {
-    setIsWebSearchActive(false);
-    setChatType('text');
-  };
+  const hasConnectors = activeConnectors.length > 0;
+  const hasOtherTools = isImageGenerationActive || isVideoGenerationActive || isWebSearchActive;
 
-  const handleGmailClose = () => {
+  if (!hasConnectors && !hasOtherTools) return null;
+
+  const handleCloseAllConnectors = () => {
+
     setIsGmailActive(false);
-    setChatType('text');
-  };
-
-  const handleGoogleServicesClose = () => {
     setIsGoogleServicesActive(false);
     setChatType('text');
   };
@@ -615,13 +609,75 @@ const ActiveToolsDisplay = ({
     setChatType('text');
   };
 
-
   const handleVideoGenerationClose = () => {
     setIsVideoGenerationActive(false);
     setChatType('text');
   };
+
+  const handleWebSearchClose = () => {
+    setIsWebSearchActive(false);
+    setChatType('text');
+  };
   return (
     <div className="flex items-center gap-2">
+      {hasConnectors && (
+        <>
+          <div className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
+            <svg width="15" height="15" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
+              <path d="M16.5 12.5C16.5 14.9853 14.4853 17 12 17C9.51472 17 7.5 14.9853 7.5 12.5C7.5 10.0147 9.51472 8 12 8C14.4853 8 16.5 10.0147 16.5 12.5Z" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+            <span className="font-medium">Connectors</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-800/30 rounded-full ml-1"
+              onClick={handleCloseAllConnectors}
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <div className="flex items-center gap-1.5 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-full text-xs cursor-pointer">
+                <div className="flex items-center gap-1">
+                  {activeConnectors.map(c => <React.Fragment key={c.id}>{c.icon}</React.Fragment>)}
+                </div>
+                <Badge variant="secondary" className="rounded-full h-5 w-5 flex items-center justify-center p-0">{activeConnectors.length}</Badge>
+                <ChevronDown className="h-4 w-4" />
+              </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-red-600" />
+                    <span>Gmail</span>
+                  </div>
+                  <Switch
+                    checked={isGmailActive}
+                    onCheckedChange={handleGmailToggle}
+                  />
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-blue-600" />
+                    <FolderOpen className="h-4 w-4 text-green-600" />
+                    <span>Google Services</span>
+                  </div>
+                  <Switch
+                    checked={isGoogleServicesActive}
+                    onCheckedChange={handleGoogleServicesToggle}
+                  />
+                </div>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      )}
       {isWebSearchActive && (
         <>
           <div className="flex items-center gap-1.5 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 px-2 py-1 rounded-full text-xs border border-green-200 dark:border-green-800">
@@ -638,37 +694,6 @@ const ActiveToolsDisplay = ({
           </div>
 
         </>
-      )}
-      {isGmailActive && (
-        <div className="flex items-center gap-1.5 bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-300 px-2 py-1 rounded-full text-xs border border-red-200 dark:border-red-800">
-          <Mail className="h-3 w-3" />
-          <span className="font-medium">Gmail</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0 hover:bg-red-200 dark:hover:bg-red-800/30 rounded-full ml-1"
-            onClick={handleGmailClose}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
-      )}
-      {isGoogleServicesActive && (
-        <div className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
-          <div className="flex gap-1">
-            <Calendar className="h-3 w-3" />
-            <FolderOpen className="h-3 w-3" />
-          </div>
-          <span className="font-medium">Google Services</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-800/30 rounded-full ml-1"
-            onClick={handleGoogleServicesClose}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
       )}
       {isImageGenerationActive && (
         <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
@@ -795,9 +820,7 @@ const NavbarModelSelector = ({
         {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4" />}
         <span className="text-sm font-medium">{selectedModelData?.displayName || selectedModel}</span>
         <div className="flex items-center gap-1">
-          {aiService.hasApiKey(selectedModel) ? (
-            <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
-          ) : (
+          {(
             <div className="w-2 h-2 bg-red-500 rounded-full" title="API Key required" />
           )}
           <ChevronDown className="h-4 w-4 opacity-70" />
@@ -821,9 +844,7 @@ const NavbarModelSelector = ({
                 <span className="text-sm">{model.displayName}</span>
                 {/* <span className="text-xs text-muted-foreground">{model.name}</span> */}
               </div>
-              {aiService.hasApiKey(model.name) ? (
-                <div className="w-2 h-2 bg-green-500 rounded-full" />
-              ) : (
+              {(
                 <div className="w-2 h-2 bg-red-500 rounded-full" />
               )}
             </DropdownMenuItem>
@@ -900,6 +921,31 @@ function ChatInterfaceContent() {
   const [isGoogleServicesActive, setIsGoogleServicesActive] = React.useState(false);
   const [isProcessingGoogleServices, setIsProcessingGoogleServices] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
+
+
+  const handleGmailToggle = () => {
+    const newState = !isGmailActive;
+    setChatType('text');
+    setIsGmailActive(newState);
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsGoogleServicesActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+    }
+  };
+
+  const handleGoogleServicesToggle = () => {
+    const newState = !isGoogleServicesActive;
+    setChatType('text');
+    setIsGoogleServicesActive(newState);
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsGmailActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+    }
+  };
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
@@ -2205,10 +2251,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isGmailActive={isGmailActive}
-                          setIsGmailActive={setIsGmailActive}
                           isGoogleServicesActive={isGoogleServicesActive}
-                          setIsGoogleServicesActive={setIsGoogleServicesActive}
                           setShowAudioPanel={setShowAudioPanel}
+
+                          handleGmailToggle={handleGmailToggle}
+                          handleGoogleServicesToggle={handleGoogleServicesToggle}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
@@ -2231,6 +2278,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isGoogleServicesActive={isGoogleServicesActive}
                           setIsGoogleServicesActive={setIsGoogleServicesActive}
                           setChatType={setChatType}
+
+                          handleGmailToggle={handleGmailToggle}
+                          handleGoogleServicesToggle={handleGoogleServicesToggle}
                         />
                         <div className="flex-grow" />
                         {!(isLoading && isStreaming) && (
@@ -2486,10 +2536,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isGmailActive={isGmailActive}
-                              setIsGmailActive={setIsGmailActive}
                               isGoogleServicesActive={isGoogleServicesActive}
-                              setIsGoogleServicesActive={setIsGoogleServicesActive}
                               setShowAudioPanel={setShowAudioPanel}
+
+                              handleGmailToggle={handleGmailToggle}
+                              handleGoogleServicesToggle={handleGoogleServicesToggle}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
@@ -2512,6 +2563,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isGoogleServicesActive={isGoogleServicesActive}
                               setIsGoogleServicesActive={setIsGoogleServicesActive}
                               setChatType={setChatType}
+
+                              handleGmailToggle={handleGmailToggle}
+                              handleGoogleServicesToggle={handleGoogleServicesToggle}
                             />
                             <div className="flex-grow" />
                             {!(isLoading && isStreaming) && (
