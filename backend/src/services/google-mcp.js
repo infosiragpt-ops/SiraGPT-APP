@@ -25,7 +25,28 @@ class GoogleMCPService {
             clientId: process.env.GOOGLE_CLIENT_ID,
             clientSecret: process.env.GOOGLE_CLIENT_SECRET,
         });
-        auth.setCredentials(tokens); // Poora token object set karein
+        
+        // Ensure tokens are in the correct format for Google OAuth2Client
+        const credentials = {
+            access_token: tokens.accessToken || tokens.access_token,
+            refresh_token: tokens.refreshToken || tokens.refresh_token,
+            token_type: tokens.tokenType || tokens.token_type || 'Bearer',
+            expiry_date: tokens.expiresAt || tokens.expiry_date,
+            scope: tokens.scope
+        };
+        
+        console.log('Setting Google Services credentials:', { 
+            hasAccessToken: !!credentials.access_token,
+            hasRefreshToken: !!credentials.refresh_token,
+            expiryDate: credentials.expiry_date ? new Date(credentials.expiry_date) : 'none',
+            scope: credentials.scope
+        });
+        
+        if (!credentials.access_token) {
+            throw new Error('Google Services credentials not properly set. Missing access token.');
+        }
+        
+        auth.setCredentials(credentials);
         return {
             calendar: google.calendar({ version: 'v3', auth }),
             drive: google.drive({ version: 'v3', auth }),

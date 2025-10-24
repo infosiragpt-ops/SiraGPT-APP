@@ -12,11 +12,89 @@ class GmailService {
 
   // Set credentials for a user
   setCredentials(tokens) {
-    this.oauth2Client.setCredentials(tokens);
+    // Ensure tokens are in the correct format for Google OAuth2Client
+    const credentials = {
+      access_token: tokens.accessToken || tokens.access_token,
+      refresh_token: tokens.refreshToken || tokens.refresh_token,
+      token_type: tokens.tokenType || tokens.token_type || 'Bearer',
+      expiry_date: tokens.expiresAt || tokens.expiry_date,
+      scope: tokens.scope // Include scope information
+    };
+    
+    console.log('Setting credentials:', { 
+      hasAccessToken: !!credentials.access_token,
+      hasRefreshToken: !!credentials.refresh_token,
+      expiryDate: credentials.expiry_date ? new Date(credentials.expiry_date) : 'none',
+      scope: credentials.scope
+    });
+    
+    if (!credentials.refresh_token) {
+      console.warn('⚠️ No refresh token available. User may need to re-authenticate with consent.');
+    }
+    
+    this.oauth2Client.setCredentials(credentials);
+  }
+
+  // Refresh tokens
+  async refreshTokens(tokens) {
+    try {
+      // Set initial credentials with refresh token
+      const initialCredentials = {
+        access_token: tokens.accessToken || tokens.access_token,
+        refresh_token: tokens.refreshToken || tokens.refresh_token,
+        token_type: tokens.tokenType || tokens.token_type || 'Bearer'
+      };
+      
+      this.oauth2Client.setCredentials(initialCredentials);
+      
+      console.log('Refreshing tokens with refresh_token:', !!initialCredentials.refresh_token);
+      
+      // Get new access token
+      const { credentials } = await this.oauth2Client.refreshAccessToken();
+      
+      console.log('Token refresh successful, new expiry:', new Date(credentials.expiry_date));
+      
+      return {
+        accessToken: credentials.access_token,
+        refreshToken: credentials.refresh_token || tokens.refreshToken || tokens.refresh_token,
+        scope: tokens.scope || 'gmail',
+        tokenType: credentials.token_type || 'Bearer',
+        expiresAt: credentials.expiry_date // Google provides expiry_date
+      };
+    } catch (error) {
+      console.error('Error refreshing Gmail tokens:', error);
+      return null; // Return null to indicate refresh failed
+    }
+  }
+
+  // Check if required Gmail scopes are present
+  hasRequiredScopes(tokens) {
+    const requiredScopes = [
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/gmail.send',
+      'https://www.googleapis.com/auth/gmail.modify'
+    ];
+    
+    const tokenScope = tokens.scope || '';
+    const hasAllScopes = requiredScopes.every(scope => tokenScope.includes(scope));
+    
+    console.log('Scope check:', {
+      tokenScope,
+      hasAllScopes,
+      missingScopes: requiredScopes.filter(scope => !tokenScope.includes(scope))
+    });
+    
+    return hasAllScopes;
   }
 
   // Get Gmail client
   getGmailClient() {
+    // Validate that credentials are set
+    const credentials = this.oauth2Client.credentials;
+    if (!credentials || !credentials.access_token) {
+      throw new Error('Gmail credentials not properly set. Missing access token.');
+    }
+    
     return google.gmail({ version: 'v1', auth: this.oauth2Client });
   }
 

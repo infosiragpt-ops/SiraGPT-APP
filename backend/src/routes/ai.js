@@ -1980,7 +1980,67 @@ But first, you need to connect your Gmail account securely using the button belo
 
       // Use AI to process the Gmail request naturally
       const gmailService = require('../services/gmail');
-      gmailService.setCredentials(JSON.parse(user.gmailTokens));
+      const { decrypt } = require('../utils/encryption');
+      
+      // Decrypt and parse Gmail tokens
+      let decryptedTokens;
+      try {
+        decryptedTokens = JSON.parse(decrypt(user.gmailTokens));
+      } catch (error) {
+        console.error('Error decrypting Gmail tokens:', error);
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid Gmail tokens. Please reconnect Gmail.',
+          requiresConnection: true
+        });
+      }
+      
+      // Always try to set credentials first, then check if refresh is needed
+      gmailService.setCredentials(decryptedTokens);
+      
+      // Check if tokens are expired and need refresh (Google tokens expire in ~1 hour)
+      const isExpired = decryptedTokens.expiresAt && decryptedTokens.expiresAt < Date.now();
+      
+      if (isExpired) {
+        console.log('Gmail tokens expired, attempting refresh...');
+        try {
+          // Try to refresh the token
+          const refreshedTokens = await gmailService.refreshTokens(decryptedTokens);
+          if (refreshedTokens) {
+            console.log('Token refresh successful');
+            // Update user with new tokens
+            const { encrypt } = require('../utils/encryption');
+            await prisma.user.update({
+              where: { id: userId },
+              data: { 
+                gmailTokens: encrypt(JSON.stringify(refreshedTokens))
+              }
+            });
+            // Set the refreshed credentials
+            gmailService.setCredentials(refreshedTokens);
+          } else {
+            throw new Error('Token refresh failed');
+          }
+        } catch (refreshError) {
+          console.error('Token refresh failed:', refreshError);
+          return res.status(401).json({
+            success: false,
+            error: 'Gmail tokens expired. Please reconnect Gmail.',
+            requiresConnection: true
+          });
+        }
+      }
+
+      // Check if tokens have required Gmail scopes
+      if (!gmailService.hasRequiredScopes(decryptedTokens)) {
+        console.error('Gmail tokens missing required scopes');
+        return res.status(403).json({
+          success: false,
+          error: 'Gmail permissions insufficient. Please reconnect Gmail with full permissions.',
+          requiresConnection: true,
+          scopeError: true
+        });
+      }
 
       // Create AI prompt for Gmail assistance
       const systemPrompt = `You are a Gmail assistant AI. The user has asked: "${prompt}"
@@ -3016,10 +3076,74 @@ But first, you need to connect your Google Calendar & Drive account securely usi
         select: { role: true, content: true }
       });
       chatHistory.push({ role: 'USER', content: prompt });
+      // Decrypt and parse Google Services tokens
+      const { decrypt } = require('../utils/encryption');
+      let decryptedTokens;
+      try {
+        decryptedTokens = JSON.parse(decrypt(user.googleServicesTokens));
+      } catch (error) {
+        console.error('Error decrypting Google Services tokens:', error);
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid Google Services tokens. Please reconnect Google Calendar & Drive.',
+          requiresConnection: true
+        });
+      }
+      
+      // Check if tokens are expired and need refresh
+      const isExpired = decryptedTokens.expiresAt && decryptedTokens.expiresAt < Date.now();
+      
+      if (isExpired && decryptedTokens.refreshToken) {
+        console.log('Google Services tokens expired, attempting refresh...');
+        try {
+          // Try to refresh the token using the Google Services OAuth2 client
+          const { OAuth2Client } = require('google-auth-library');
+          const oauth2Client = new OAuth2Client(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_CALENDAR_DRIVE_URI
+          );
+          
+          oauth2Client.setCredentials({
+            access_token: decryptedTokens.accessToken,
+            refresh_token: decryptedTokens.refreshToken
+          });
+          
+          const { credentials } = await oauth2Client.refreshAccessToken();
+          
+          const refreshedTokens = {
+            accessToken: credentials.access_token,
+            refreshToken: credentials.refresh_token || decryptedTokens.refreshToken,
+            tokenType: credentials.token_type || 'Bearer',
+            scope: decryptedTokens.scope,
+            expiresAt: credentials.expiry_date
+          };
+          
+          // Update user with new tokens
+          const { encrypt } = require('../utils/encryption');
+          await prisma.user.update({
+            where: { id: userId },
+            data: { 
+              googleServicesTokens: encrypt(JSON.stringify(refreshedTokens))
+            }
+          });
+          
+          decryptedTokens = refreshedTokens;
+          console.log('Google Services token refresh successful');
+        } catch (refreshError) {
+          console.error('Google Services token refresh failed:', refreshError);
+          return res.status(401).json({
+            success: false,
+            error: 'Google Services tokens expired. Please reconnect Google Calendar & Drive.',
+            requiresConnection: true
+          });
+        }
+      }
+      
       // Process request using OpenAI MCP
       const mcpResult = await googleMCPService.processRequest(
         chatHistory,
-        JSON.parse(user.googleServicesTokens),
+        decryptedTokens,
         timeZone || 'UTC',
         chatId
       );

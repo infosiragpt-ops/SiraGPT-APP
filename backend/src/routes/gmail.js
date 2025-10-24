@@ -16,7 +16,45 @@ async function getUserGmailTokens(userId) {
     throw new Error('Gmail not connected. Please connect Gmail in settings.');
   }
 
-  return JSON.parse(user.gmailTokens);
+  const { decrypt } = require('../utils/encryption');
+  let tokens;
+  
+  try {
+    tokens = JSON.parse(decrypt(user.gmailTokens));
+  } catch (error) {
+    throw new Error('Invalid Gmail tokens. Please reconnect Gmail.');
+  }
+  
+  // Check if tokens are expired and need refresh (Google tokens expire in ~1 hour)
+  const isExpired = tokens.expiresAt && tokens.expiresAt < Date.now();
+  
+  if (isExpired) {
+    console.log('Gmail tokens expired for user', userId, 'attempting refresh...');
+    try {
+      const gmailService = require('../services/gmail');
+      const refreshedTokens = await gmailService.refreshTokens(tokens);
+      
+      if (refreshedTokens) {
+        console.log('Token refresh successful for user', userId);
+        // Update user with new tokens
+        const { encrypt } = require('../utils/encryption');
+        await prisma.user.update({
+          where: { id: userId },
+          data: { 
+            gmailTokens: encrypt(JSON.stringify(refreshedTokens))
+          }
+        });
+        return refreshedTokens;
+      } else {
+        throw new Error('Token refresh failed');
+      }
+    } catch (refreshError) {
+      console.error('Token refresh failed for user', userId, ':', refreshError);
+      throw new Error('Gmail tokens expired. Please reconnect Gmail.');
+    }
+  }
+  
+  return tokens;
 }
 
 // Check Gmail connection status
@@ -27,11 +65,29 @@ router.get('/status', authenticateToken, async (req, res) => {
       select: { gmailTokens: true }
     });
 
-    const isConnected = !!user?.gmailTokens;
+    let isConnected = false;
+    let isExpired = false;
+    
+    if (user?.gmailTokens) {
+      try {
+        const { decrypt } = require('../utils/encryption');
+        const tokens = JSON.parse(decrypt(user.gmailTokens));
+        isConnected = true;
+        
+        // Check if tokens are expired
+        if (tokens.expiresAt && tokens.expiresAt < Date.now()) {
+          isExpired = true;
+        }
+      } catch (error) {
+        console.error('Error decrypting Gmail tokens:', error);
+        isConnected = false;
+      }
+    }
     
     res.json({
       connected: isConnected,
-      status: isConnected ? 'connected' : 'disconnected'
+      expired: isExpired,
+      status: isConnected ? (isExpired ? 'expired' : 'connected') : 'disconnected'
     });
   } catch (error) {
     console.error('Gmail status check error:', error);
