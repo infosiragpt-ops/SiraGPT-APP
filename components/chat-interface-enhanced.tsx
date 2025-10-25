@@ -1719,130 +1719,6 @@ But first, you need to connect your Spotify account securely using the button be
     }
   }
 
-  // Mention activators (used by @-menu)
-  const activateGmailMode = React.useCallback(() => {
-    setChatType('text');
-    setIsWebSearchActive(false);
-    setIsImageGenerationActive(false);
-    setIsVideoGenerationActive(false);
-    setIsGoogleServicesActive(false);
-    setIsGmailActive(true);
-  }, []);
-
-  const activateGoogleServicesMode = React.useCallback(() => {
-    setChatType('text');
-    setIsWebSearchActive(false);
-    setIsImageGenerationActive(false);
-    setIsVideoGenerationActive(false);
-    setIsGmailActive(false);
-    setIsGoogleServicesActive(true);
-  }, []);
-
-  // --- Mention (@) state and helpers ---
-  const [mentionOpen, setMentionOpen] = React.useState(false);
-  const [mentionQuery, setMentionQuery] = React.useState("");
-  const [mentionStart, setMentionStart] = React.useState<number | null>(null);
-  const [mentionPos, setMentionPos] = React.useState<{ left: number; top: number }>({ left: 0, top: 0 });
-
-  const computeMentionPosition = React.useCallback(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    const rect = ta.getBoundingClientRect();
-    // Anchor to the top edge of the textarea; we'll shift the menu upward via CSS transform
-    setMentionPos({ left: Math.round(rect.left + window.scrollX + 12), top: Math.round(rect.top + window.scrollY) });
-  }, []);
-
-  const updateMentionState = React.useCallback((value: string, caretIndex: number) => {
-    // Consider text up to caret; find an '@' that starts a token (start or preceded by whitespace)
-    const uptoCaret = value.slice(0, caretIndex);
-    const match = uptoCaret.match(/(^|\s)@([\w-]*)$/);
-    if (match) {
-      const query = match[2] || "";
-      const atPos = caretIndex - query.length - 1; // position of '@'
-      // Only open if query matches available options by prefix
-      const q = query.toLowerCase();
-      const candidates = ['gmail', 'google services'];
-      const hasMatch = q === '' || candidates.some(c => c.startsWith(q));
-      if (hasMatch) {
-        setMentionOpen(true);
-        setMentionQuery(query);
-        setMentionStart(atPos);
-        computeMentionPosition();
-      } else {
-        setMentionOpen(false);
-        setMentionQuery("");
-        setMentionStart(null);
-      }
-    } else {
-      setMentionOpen(false);
-      setMentionQuery("");
-      setMentionStart(null);
-    }
-  }, [computeMentionPosition]);
-
-  React.useEffect(() => {
-    if (!mentionOpen) return;
-    const handler = () => computeMentionPosition();
-    window.addEventListener('resize', handler);
-    window.addEventListener('scroll', handler, true);
-    return () => {
-      window.removeEventListener('resize', handler);
-      window.removeEventListener('scroll', handler, true);
-    };
-  }, [mentionOpen, computeMentionPosition]);
-
-  const handleMentionSelect = (type: 'gmail' | 'google_services') => {
-    // Activate mode
-    if (type === 'gmail') activateGmailMode();
-    if (type === 'google_services') activateGoogleServicesMode();
-
-    // Remove the full mention token (@ + query) from text; we show the mode as a chip instead
-    setInput(prev => {
-      if (mentionStart == null) return prev.replace(/^@\s*/, '');
-      const caret = textareaRef.current?.selectionStart ?? prev.length;
-      const before = prev.slice(0, mentionStart);
-      const after = prev.slice(caret);
-      return `${before}${after}`;
-    });
-
-    // Close menu and refocus
-    setMentionOpen(false);
-    setMentionQuery("");
-    setMentionStart(null);
-    textareaRef.current?.focus();
-  };
-
-  const MentionMenu = () => {
-    if (!mentionOpen) return null;
-
-    // Filter options by query
-    const options = [
-      { key: 'gmail' as const, label: 'Gmail', icon: <Mail className="h-3 w-3" />, colorBg: 'bg-red-100', colorText: 'text-red-600' },
-      { key: 'google_services' as const, label: 'Google Services', icon: <Calendar className="h-3 w-3" />, colorBg: 'bg-blue-100', colorText: 'text-blue-600' },
-    ].filter(opt => opt.label.toLowerCase().startsWith(mentionQuery.toLowerCase()));
-    if (options.length === 0) return null; // hide the dropdown when no matches
-
-    return (
-      <div
-        className="w-56 rounded-md border bg-popover text-popover-foreground shadow-md z-[1000]"
-        style={{ position: 'fixed', left: mentionPos.left, top: mentionPos.top, transform: 'translateY(-100%) translateY(-8px)' }}
-      >
-        <div className="p-1">
-          {options.map(opt => (
-              <button
-                key={opt.key}
-                type="button"
-                className="w-full flex items-center gap-2 rounded-sm px-2 py-2 text-sm hover:bg-accent hover:text-accent-foreground"
-                onClick={() => handleMentionSelect(opt.key)}
-              >
-                <span className={`inline-flex h-5 w-5 items-center justify-center rounded ${opt.colorBg} ${opt.colorText}`}>{opt.icon}</span>
-                <span>{opt.label}</span>
-              </button>
-            ))}
-        </div>
-      </div>
-    );
-  };
   const handleGmailCommand = async (prompt: string) => {
     setIsProcessingGmail(true);
 
@@ -2581,23 +2457,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         ref={textareaRef}
                         value={input}
                         onChange={(e) => {
-                          const val = e.target.value;
-                          setInput(val);
-                          const caret = (e.target as HTMLTextAreaElement).selectionStart || val.length;
-                          updateMentionState(val, caret);
-                        }}
-                        onKeyUp={(e) => {
-                          const target = e.target as HTMLTextAreaElement;
-                          updateMentionState(target.value, target.selectionStart || target.value.length);
-                        }}
-                        onClick={(e) => {
-                          const target = e.target as HTMLTextAreaElement;
-                          updateMentionState(target.value, target.selectionStart || target.value.length);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Escape' && mentionOpen) {
-                            setMentionOpen(false);
-                          }
+                          setInput(e.target.value);
                         }}
                         onKeyPress={handleKeyPress}
                         placeholder={
@@ -2633,8 +2493,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isWebSearching
                         }
                       />
-                      {/* @ Mention menu (initial view) */}
-                      <MentionMenu />
                       <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2  bg-background/95 p-2 backdrop-blur-sm">
                         <ActionsDropdown
                           chatType={chatType}
@@ -2896,24 +2754,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             ref={textareaRef}
                             value={input}
                             onChange={(e) => {
-                              const val = e.target.value;
-                              setInput(val);
-                              const caret = (e.target as HTMLTextAreaElement).selectionStart || val.length;
-                              updateMentionState(val, caret);
-                            }}
-                            onKeyPress={handleKeyPress}
-                            onKeyUp={(e) => {
-                              const target = e.target as HTMLTextAreaElement;
-                              updateMentionState(target.value, target.selectionStart || target.value.length);
-                            }}
-                            onClick={(e) => {
-                              const target = e.target as HTMLTextAreaElement;
-                              updateMentionState(target.value, target.selectionStart || target.value.length);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Escape' && mentionOpen) {
-                                setMentionOpen(false);
-                              }
+                             setInput(e.target.value);
                             }}
                             placeholder={
                               isImageGenerationActive
@@ -2948,8 +2789,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isWebSearching
                             }
                           />
-                          {/* @ Mention menu (chat view) */}
-                          <MentionMenu />
                           <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 rounded-b-xl bg-background/95 p-2 backdrop-blur-sm">
                             <ActionsDropdown
                               chatType={chatType}
