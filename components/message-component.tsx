@@ -48,6 +48,7 @@ import { CustomCodeBlock } from "./ui/custom-code-block"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
+import SpotifyResults from "./spotify-results"
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
@@ -99,7 +100,7 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
 
 
 // Enhanced Message Component with Video Support
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage }: {
+const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, children }: {
     message: any;
     user: any;
     onRegenerate: () => void;
@@ -107,6 +108,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     isStreaming?: boolean;
     onToggleSplitView?: (content: any) => void;
     isGeneratingImage?: boolean;
+    children?: React.ReactNode;
 }) => {
     // Performance monitoring disabled to prevent overhead
     // const renderStartTime = performance.now()
@@ -691,6 +693,22 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         );
     };
 
+    const SpotifyResultsDisplay = () => {
+        try {
+            if (message.metadata) {
+                const metadata = typeof message.metadata === 'string'
+                    ? JSON.parse(message.metadata)
+                    : message.metadata;
+                if (metadata?.type === 'spotify_results') {
+                    return <SpotifyResults data={metadata.data} />;
+                }
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    };
+
     // Check if this is an image-only message
     const isImageOnlyMessage = () => {
         const hasImageFiles = Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image');
@@ -1108,12 +1126,36 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             <div className="flex flex-wrap gap-1">
                                 {parsedFiles
                                     .filter((file: any) => !file.type?.startsWith('image/') && !file.mimeType?.startsWith('image/'))
-                                    .map((file: any, index: number) => (
-                                        <button key={index} onClick={() => handleViewFile(file)} className="flex items-center gap-1 px-2 py-1 border rounded hover:bg-muted transition-colors">
-                                            <FileText className="h-4 w-4" />
-                                            <span className="text-xs">{file.originalName || file.name || 'File'}</span>
-                                        </button>
-                                    ))}
+                                    .map((file: any, index: number) => {
+                                        const extension = file.originalName?.split('.').pop()?.toLowerCase() || file.name?.split('.').pop()?.toLowerCase();
+                                        let icon;
+                                        switch (extension) {
+                                            case 'pdf':
+                                                icon = <img src="/icons/pdf.png" alt="PDF" className="h-6 w-6" />;
+                                                break;
+                                            case 'doc':
+                                            case 'docx':
+                                                icon = <img src="/icons/Word.png" alt="Word" className="h-6 w-6" />;
+                                                break;
+                                            case 'xls':
+                                            case 'xlsx':
+                                            case 'csv':
+                                                icon = <img src="/icons/Excel.png" alt="Excel" className="h-6 w-6" />;
+                                                break;
+                                            case 'ppt':
+                                            case 'pptx':
+                                                icon = <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-6 w-6" />;
+                                                break;
+                                            default:
+                                                icon = <FileText className="h-4 w-4" />;
+                                        }
+                                        return (
+                                            <button key={index} onClick={() => handleViewFile(file)} className="flex items-center gap-2 px-2 py-1 border rounded hover:bg-muted transition-colors">
+                                                {icon}
+                                                <span className="text-xs">{file.originalName || file.name || 'File'}</span>
+                                            </button>
+                                        );
+                                    })}
                             </div>
                         )}
                     </div>
@@ -1185,6 +1227,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <GmailConnectionDisplay />
                                 <GoogleServicesConnectionDisplay />
                                 <SpotifyConnectionDisplay />
+                                <SpotifyResultsDisplay />
+                                {children}
                             </>
                         )}
 

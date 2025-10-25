@@ -23,6 +23,7 @@ interface Message {
   }
   presentation?: string // Add this line
   error?: any
+  metadata?: string
 }
 
 // Update the Chat interface around line 24
@@ -439,161 +440,112 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     },
     [currentChat, user, token, selectedModel, uploadedFiles]
   );
+  const handleNewChatWithPlaceholder = useCallback(async (newChat: Chat, initialContent: string, placeholderContent: string, uploadedFiles: any[]) => {
+    const userMessage = {
+      id: `msg-user-${Date.now()}`,
+      chatId: newChat.id,
+      role: 'USER' as const,
+      content: initialContent,
+      timestamp: new Date().toISOString(),
+      files: uploadedFiles,
+    };
+
+    const assistantPlaceholder = {
+      id: `msg-assistant-processing-${Date.now()}`,
+      chatId: newChat.id,
+      role: 'ASSISTANT' as const,
+      content: placeholderContent,
+      timestamp: new Date().toISOString(),
+    };
+
+    setCurrentChat(prevChat => {
+      if (!prevChat) return prevChat;
+      const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
+      return { ...prevChat, messages: updatedMessages };
+    });
+  }, []);
+
   const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' = 'text', initialContent?: string, initialFiles?: string[]) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
       const response = await apiClient.createChat({
-        title: initialContent ? initialContent.substring(0, 30) : "New Chat", // Use first 30 chars of initialContent as title
+        title: initialContent ? initialContent.substring(0, 30) : "New Chat",
         model: selectedModel,
       });
       const newChat = response.chat;
-
-      // Initialize messages array
-      let messages: Message[] = [];
-
-
-      newChat.messages = messages;
+      newChat.messages = [];
 
       setChats((prev) => [newChat, ...prev]);
       localStorage.setItem('currentChatId', newChat.id);
       setCurrentChat(newChat);
-      setUploadedFiles([]); // Clear uploaded files for new chat
+      setUploadedFiles([]);
 
-      // If initialContent is provided, immediately call addMessage to get AI response
       if (initialContent) {
-        if (type === 'image') {
-          // For image generation, call the image API directly
-          try {
-            const userMessage = {
-              id: `msg-user-${Date.now()}`,
-              chatId: newChat.id,
-              role: 'USER' as const,
-              content: initialContent,
-              timestamp: new Date().toISOString(),
-              files: uploadedFiles,
-            };
+        try {
+          switch (type) {
+            case 'image':
+              await handleNewChatWithPlaceholder(newChat, initialContent, '[GENERATING_IMAGE]', uploadedFiles);
 
-            const assistantPlaceholder = {
-              id: `msg-assistant-generating-${Date.now()}`,
-              chatId: newChat.id,
-              role: 'ASSISTANT' as const,
-              content: '[GENERATING_IMAGE]',
-              timestamp: new Date().toISOString(),
-            };
+              const imageGenerationPayload = {
+                prompt: initialContent,
+                chatId: newChat.id,
+                provider: selectProvider,
+                model: selectedModel,
+              };
+              if (initialFiles && initialFiles.length > 0) {
+                (imageGenerationPayload as any).fileId = initialFiles[0];
+              }
+              await apiClient.generateImage(imageGenerationPayload);
+              break;
+            case 'video':
+              await addVideoMessage(initialContent, [], newChat);
+              break;
+            case 'gmail':
+              await handleNewChatWithPlaceholder(newChat, initialContent, '[PROCESSING_GMAIL]', uploadedFiles);
 
-            setCurrentChat(prevChat => {
-              if (!prevChat) return prevChat;
-              const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
-              return { ...prevChat, messages: updatedMessages };
-            });
+              await apiClient.generateGmailResponse({
+                prompt: initialContent,
+                chatId: newChat.id,
+                model: selectedModel,
+                type: 'gmail',
+              });
+              break;
+            case 'google_services':
+              const isCalendarAction = initialContent.toLowerCase().includes('event') || initialContent.toLowerCase().includes('meeting') || initialContent.toLowerCase().includes('calendar');
+              const loadingContent = isCalendarAction ? '[PROCESSING_CALENDAR_ACTION]' : '[PROCESSING_DRIVE_ACTION]';
 
-            const imageGenerationPayload = {
-              prompt: initialContent,
-              chatId: newChat.id,
-              provider: selectProvider,
-              model: selectedModel,
-            };
+              await handleNewChatWithPlaceholder(newChat, initialContent, loadingContent, uploadedFiles);
 
-            if (initialFiles && initialFiles.length > 0) {
-              (imageGenerationPayload as any).fileId = initialFiles[0];
-            }
-            await apiClient.generateImage(imageGenerationPayload);
-            await selectChat(newChat.id);
-          } catch (error) {
-            console.error('Image generation failed during chat creation:', error);
-            throw error;
+              await apiClient.generateGoogleServicesResponse({
+                prompt: initialContent,
+                chatId: newChat.id,
+                model: selectedModel,
+              });
+              break;
+            case 'spotify':
+              await handleNewChatWithPlaceholder(newChat, initialContent, '[PROCESSING_SPOTIFY]', uploadedFiles);
+
+              await apiClient.processSpotifyCommand({
+                prompt: initialContent,
+                chatId: newChat.id,
+              });
+              break;
+            default:
+              await addMessage(initialContent, initialFiles, newChat);
+              break;
           }
-        } else if (type === 'video') {
-          // For video generation, call addVideoMessage
-          await addVideoMessage(initialContent, [], newChat);
-        } else if (type === 'gmail') {
-          // For Gmail, call the Gmail AI endpoint
-          try {
-            const userMessage = {
-              id: `msg-user-${Date.now()}`,
-              chatId: newChat.id,
-              role: 'USER' as const,
-              content: initialContent,
-              timestamp: new Date().toISOString(),
-            };
-
-            const assistantPlaceholder = {
-              id: `msg-assistant-processing-${Date.now()}`,
-              chatId: newChat.id,
-              role: 'ASSISTANT' as const,
-              content: '[PROCESSING_GMAIL]',
-              timestamp: new Date().toISOString(),
-            };
-
-            setCurrentChat(prevChat => {
-              if (!prevChat) return prevChat;
-              const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
-              return { ...prevChat, messages: updatedMessages };
-            });
-
-            const gmailPayload = {
-              prompt: initialContent,
-              chatId: newChat.id,
-              model: selectedModel,
-              type: 'gmail',
-            };
-
-            await apiClient.generateGmailResponse(gmailPayload);
-            await selectChat(newChat.id);
-          } catch (error) {
-            console.error('Gmail processing failed during chat creation:', error);
-            throw error;
-          }
-        } else if (type === 'google_services') {
-          try {
-            const userMessage = {
-              id: `msg-user-${Date.now()}`,
-              chatId: newChat.id,
-              role: 'USER' as const,
-              content: initialContent,
-              timestamp: new Date().toISOString(),
-            };
-
-            const isCalendarAction = initialContent.toLowerCase().includes('event') || initialContent.toLowerCase().includes('meeting') || initialContent.toLowerCase().includes('calendar');
-            const loadingContent = isCalendarAction ? '[PROCESSING_CALENDAR_ACTION]' : '[PROCESSING_DRIVE_ACTION]';
-
-            const assistantPlaceholder = {
-              id: `msg-assistant-processing-${Date.now()}`,
-              chatId: newChat.id,
-              role: 'ASSISTANT' as const,
-              content: loadingContent,
-              timestamp: new Date().toISOString(),
-            };
-
-            setCurrentChat(prevChat => {
-              if (!prevChat) return prevChat;
-              const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
-              return { ...prevChat, messages: updatedMessages };
-            });
-
-            const googleServicesPayload = {
-              prompt: initialContent,
-              chatId: newChat.id,
-              model: selectedModel,
-            };
-
-            await apiClient.generateGoogleServicesResponse(googleServicesPayload);
-            await selectChat(newChat.id);
-          } catch (error) {
-            console.error('Google Services processing failed during chat creation:', error);
-            throw error;
-          }
-        } else {
-          // For text, use regular addMessage
-          await addMessage(initialContent, initialFiles, newChat); // Pass newChat as the third parameter
+          await selectChat(newChat.id);
+        } catch (error) {
+          console.error(`${type} processing failed during chat creation:`, error);
+          throw error;
         }
         return newChat;
       }
     } catch (error) {
       console.error("Failed to create chat:", error);
     }
-  }, [user, token, selectedModel, availableModels, setChatType, addMessage]);
+  }, [user, token, selectedModel, availableModels, setChatType, addMessage, handleNewChatWithPlaceholder]);
 
   const selectChat = useCallback(
     async (chatId: string) => {

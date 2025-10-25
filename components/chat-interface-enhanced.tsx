@@ -24,7 +24,9 @@ import {
   ArrowUp,
   Mail,
   Calendar,
-  FolderOpen
+  FolderOpen,
+  NetworkIcon,
+  Network
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -57,7 +59,7 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 import { AppSidebar } from "./app-sidebar"
-import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard" 
+import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
 import {
   SidebarProvider,
   Sidebar,
@@ -65,6 +67,7 @@ import {
 } from "@/components/ui/sidebar"
 import { PresentationView } from "./presentation-view"
 import { CodePreview } from "./code-preview"
+import SpotifyResults from "./spotify-results"
 
 
 // Enhanced Actions Dropdown Component
@@ -230,10 +233,14 @@ const ActionsDropdown = ({
           <DropdownMenuSubTrigger>
             <div className="flex items-center gap-3 w-full">
               <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                {/* <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
                   <path d="M16.5 12.5C16.5 14.9853 14.4853 17 12 17C9.51472 17 7.5 14.9853 7.5 12.5C7.5 10.0147 9.51472 8 12 8C14.4853 8 16.5 10.0147 16.5 12.5Z" stroke="currentColor" stroke-width="1.5" />
-                </svg>
+                  <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
+
+                </svg> */}
+
+                <Network />
               </div>
               <div className="flex-1">
                 <div className="font-medium text-sm flex items-center">
@@ -459,17 +466,17 @@ const getFileIcon = (file: any) => {
 
   switch (extension) {
     case 'pdf':
-      return wrapIconInSmallSquare(<FileText className="h-5 w-5 text-white" />, "#ef4444"); // red
+      return <img src="/icons/pdf.png" alt="PDF" className="h-8 w-8" />;
     case 'doc':
     case 'docx':
-      return wrapIconInSmallSquare(<FileText className="h-5 w-5 text-white" />, "#2563eb"); // blue
+      return <img src="/icons/Word.png" alt="Word" className="h-8 w-8" />;
     case 'xls':
     case 'xlsx':
     case 'csv':
-      return wrapIconInSmallSquare(<FileSpreadsheet className="h-5 w-5 text-white" />, "#16a34a"); // green
+      return <img src="/icons/Excel.png" alt="Excel" className="h-8 w-8" />;
     case 'ppt':
     case 'pptx':
-      return wrapIconInSmallSquare(<File className="h-5 w-5 text-white" />, "#f97316"); // orange
+      return <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-8 w-8" />;
     case 'txt':
       return wrapIconInSmallSquare(<FileText className="h-5 w-5 text-white" />, "#6b7280"); // grey
     case 'mp4':
@@ -686,10 +693,12 @@ const ActiveToolsDisplay = ({
       {hasConnectors && (
         <>
           <div className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
-            <svg width="15" height="15" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            {/* <svg width="15" height="15" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
               <path d="M16.5 12.5C16.5 14.9853 14.4853 17 12 17C9.51472 17 7.5 14.9853 7.5 12.5C7.5 10.0147 9.51472 8 12 8C14.4853 8 16.5 10.0147 16.5 12.5Z" stroke="currentColor" stroke-width="1.5" />
-            </svg>
+
+            </svg> */}
+            <Network />
             <span className="font-medium">Connectors</span>
             <Button
               variant="ghost"
@@ -1124,7 +1133,25 @@ But first, you need to connect your Spotify account securely using the button be
           setCurrentChat(updateChatWithConnection);
           toast.error('Spotify connection required');
         } else {
-          await selectChat(currentChat?.id ?? "");
+          const updateChatWithSpotifyResults = (prevChat: any) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg: any) => {
+              if (msg.content === '[PROCESSING_SPOTIFY]') {
+                return {
+                  ...msg,
+                  content: response.generalResponse || "Here are your Spotify results:",
+                  metadata: JSON.stringify({
+                    type: 'spotify_results',
+                    data: response
+                  })
+                };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          };
+
+          setCurrentChat(updateChatWithSpotifyResults);
           toast.success('Spotify response generated!');
         }
       }

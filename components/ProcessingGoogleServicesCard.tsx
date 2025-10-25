@@ -38,7 +38,7 @@ const ProcessingGoogleServicesCard: React.FC<ProcessingGoogleServicesCardProps> 
     }, [action]);
 
     return (
-        <Card className="w-full max-w-md mx-auto border-border/30 shadow-sm">
+        <Card className="w-full max-w-md border-border/30 shadow-sm">
             <CardContent className="p-4">
                 <div className="flex items-center gap-4">
                     <div className="p-3 bg-muted rounded-full">

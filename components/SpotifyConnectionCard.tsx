@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { apiClient } from "@/lib/api"
 import { toast } from "sonner"
+import { CheckCircle } from "lucide-react"
 
 export default function SpotifyConnectionCard() {
   const [isConnecting, setIsConnecting] = React.useState(false)
-   const [isConnected, setIsConnected] = React.useState(false);
+  const [isConnected, setIsConnected] = React.useState(false);
 
   // ✅ NAYA useEffect: Page load hone par status check karega
   React.useEffect(() => {
@@ -22,7 +23,7 @@ export default function SpotifyConnectionCard() {
       }
     };
     checkStatus();
-  }, []); 
+  }, []);
 
   const handleConnect = async () => {
     setIsConnecting(true)
@@ -39,6 +40,22 @@ export default function SpotifyConnectionCard() {
     } finally {
       setIsConnecting(false)
     }
+  }
+
+  if (isConnected) {
+    return (
+      <Card className="w-full max-w-md border-green-500">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CheckCircle className="h-6 w-6 text-green-500" />
+            <span>Connected to Spotify</span>
+          </CardTitle>
+          <CardDescription>
+            Your Spotify account is successfully connected. You can now use Spotify features in the chat.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    )
   }
 
   return (

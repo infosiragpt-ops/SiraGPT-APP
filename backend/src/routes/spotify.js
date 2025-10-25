@@ -22,7 +22,7 @@ router.get('/callback', async (req, res) => {
     const { access_token, refresh_token } = await spotifyService.handleCallback(code);
 
     console.log(access_token, refresh_token);
-    
+
     const tokensToStore = {
       access_token: access_token,
       refresh_token: refresh_token,
@@ -33,18 +33,18 @@ router.get('/callback', async (req, res) => {
       where: { id: userId },
       data: {
         // Us object ko JSON string bana kar `spotifyTokens` field mein save karein
-        spotifyTokens: JSON.stringify(tokensToStore), 
+        spotifyTokens: JSON.stringify(tokensToStore),
       },
     });
-    
+
     // User ko frontend par redirect karein
     res.redirect('http://localhost:3000/chat');
 
   } catch (error) {
     console.log('Error during Spotify callback:', error);
     res.redirect('http://localhost:3000/connections?spotify_connected=false');
-    
-}
+
+  }
 
 });
 
@@ -64,14 +64,42 @@ router.post('/command', authenticateToken, async (req, res) => {
           content: prompt,
         },
       });
-
-      await prisma.message.create({
-        data: {
-          chatId,
-          role: 'ASSISTANT',
-          content: JSON.stringify(result, null, 2),
-        },
-      });
+      // await prisma.message.create({
+      //   data: {
+      //     chatId,
+      //     role: 'ASSISTANT',
+      //     content: result.generalResponse || "Here are your Spotify results:",
+      //     metadata: {
+      //       type: 'spotify_results',
+      //       data: result
+      //     },
+      //   },
+      // });
+      if (result.requiresConnection) {
+        await prisma.message.create({
+          data: {
+            chatId,
+            role: 'ASSISTANT',
+            content: "your Spotify account",
+            metadata: {
+              type: 'spotify_connection_required',
+              showConnectionCard: true
+            },
+          },
+        });
+      } else {
+        await prisma.message.create({
+          data: {
+            chatId,
+            role: 'ASSISTANT',
+            content: result.generalResponse || "Here are your Spotify results:",
+            metadata: {
+              type: 'spotify_results',
+              data: result
+            },
+          },
+        });
+      }
     }
 
     res.json(result);
