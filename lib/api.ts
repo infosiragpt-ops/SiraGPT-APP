@@ -1132,24 +1132,17 @@ class ApiClient {
   }
 
   async deleteGmailEmail(emailId: string) {
-    return this.request(`/gmail/emails/${emailId}`, {
+    return this.request(`/gmail/email/${emailId}`, {
       method: 'DELETE',
     });
   }
 
-  async replyToGmailEmail(emailId: string, data: { message: string }) {
-    return this.request(`/gmail/emails/${emailId}/reply`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
+  // Prefer using replyGmail below which matches backend contract
 
-  async searchGmailEmails(query: string) {
-    return this.request('/gmail/search', {
-      // Backend uses GET /api/gmail/search?q=...
-      method: 'GET',
-      // Fallback to POST logic kept above is removed to match backend
-      // For convenience, allow passing query via URL here
+  async searchGmailEmails(query: string, limit: number = 10) {
+    const q = encodeURIComponent(query);
+    return this.request(`/gmail/search?q=${q}&limit=${limit}`, {
+      method: 'GET'
     });
   }
 
@@ -1166,6 +1159,22 @@ class ApiClient {
     return this.request('/gmail/reply', {
       method: 'POST',
       body: JSON.stringify(data)
+    });
+  }
+
+  // Star/unstar email
+  async starGmailEmail(messageId: string, starred: boolean) {
+    return this.request(`/gmail/email/${messageId}/star`, {
+      method: 'PATCH',
+      body: JSON.stringify({ starred })
+    });
+  }
+
+  // Archive/unarchive email
+  async archiveGmailEmail(messageId: string, archive: boolean) {
+    return this.request(`/gmail/email/${messageId}/archive`, {
+      method: 'PATCH',
+      body: JSON.stringify({ archive })
     });
   }
 

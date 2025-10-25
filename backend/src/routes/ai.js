@@ -2113,7 +2113,7 @@ Important Guidelines:
 - Prefer concise lists. When listing emails, also include a machine-readable JSON block at the end using this exact wrapper:
   <EMAILS_JSON>{
    "emails": [
-    {"id":"...","threadId":"...","subject":"...","from":"...","to":"...","date":"ISO-8601","snippet":"...","link":"https://mail.google.com/mail/#all/..."}
+    {"id":"...","threadId":"...","subject":"...","from":"...","to":"...","date":"ISO-8601","snippet":"...","link":"https://mail.google.com/mail/#all/...","isUnread":BOOLEAN",},
    ],
    "count": NUMBER
   }</EMAILS_JSON>

@@ -251,6 +251,50 @@ router.patch('/email/:messageId/mark', authenticateToken, async (req, res) => {
   }
 });
 
+// Star/Unstar email
+router.patch('/email/:messageId/star', authenticateToken, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { starred = true } = req.body;
+
+    const tokens = await getUserGmailTokens(req.user.id);
+    gmailService.setCredentials(tokens);
+
+    const result = await gmailService.starEmail({ messageId, starred });
+
+    res.json({
+      success: true,
+      message: `Email ${starred ? 'starred' : 'unstarred'} successfully`,
+      messageId: result.messageId
+    });
+  } catch (error) {
+    console.error('Star email error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Archive/Unarchive email
+router.patch('/email/:messageId/archive', authenticateToken, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { archive = true } = req.body;
+
+    const tokens = await getUserGmailTokens(req.user.id);
+    gmailService.setCredentials(tokens);
+
+    const result = await gmailService.archiveEmail({ messageId, archive });
+
+    res.json({
+      success: true,
+      message: `Email ${archive ? 'archived' : 'moved to inbox'} successfully`,
+      messageId: result.messageId
+    });
+  } catch (error) {
+    console.error('Archive email error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get email thread
 router.get('/thread/:threadId', authenticateToken, async (req, res) => {
   try {

@@ -69,6 +69,7 @@ class GmailService {
 
   // Check if required Gmail scopes are present
   hasRequiredScopes(tokens) {
+    console.log('Checking Gmail token scopes...',tokens);
     const requiredScopes = [
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.send',
@@ -335,6 +336,63 @@ class GmailService {
     } catch (error) {
       console.error('Error marking email:', error);
       throw new Error(`Failed to mark email: ${error.message}`);
+    }
+  }
+
+  // Star or unstar an email
+  async starEmail({ messageId, starred = true, userId = 'me' }) {
+    try {
+      const gmail = this.getGmailClient();
+
+      const labelsToAdd = starred ? ['STARRED'] : [];
+      const labelsToRemove = starred ? [] : ['STARRED'];
+
+      await gmail.users.messages.modify({
+        userId,
+        id: messageId,
+        requestBody: {
+          addLabelIds: labelsToAdd,
+          removeLabelIds: labelsToRemove
+        }
+      });
+
+      return {
+        success: true,
+        messageId,
+        starred
+      };
+    } catch (error) {
+      console.error('Error starring email:', error);
+      throw new Error(`Failed to update star status: ${error.message}`);
+    }
+  }
+
+  // Archive or move back to inbox (archive=true removes INBOX label)
+  async archiveEmail({ messageId, archive = true, userId = 'me' }) {
+    try {
+      const gmail = this.getGmailClient();
+
+      // Archiving in Gmail = remove INBOX label. Unarchive = add INBOX back.
+      const labelsToAdd = archive ? [] : ['INBOX'];
+      const labelsToRemove = archive ? ['INBOX'] : [];
+
+      await gmail.users.messages.modify({
+        userId,
+        id: messageId,
+        requestBody: {
+          addLabelIds: labelsToAdd,
+          removeLabelIds: labelsToRemove
+        }
+      });
+
+      return {
+        success: true,
+        messageId,
+        archived: archive
+      };
+    } catch (error) {
+      console.error('Error archiving email:', error);
+      throw new Error(`Failed to update archive status: ${error.message}`);
     }
   }
 

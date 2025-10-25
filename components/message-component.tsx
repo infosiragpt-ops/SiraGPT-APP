@@ -814,35 +814,40 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const GmailSummary = ({ message }: { message: any }) => {
         try {
             const rawContent: string = typeof message.content === 'string' ? message.content : '';
-            const removeEmailsJson = (text: string) => text.replace(/<EMAILS_JSON>[\s\S]*?<\/EMAILS_JSON>/g, '').trim();
-            const withoutJson = removeEmailsJson(rawContent);
+            // Remove the embedded JSON block
+            const withoutJson = rawContent.replace(/<EMAILS_JSON>[\s\S]*?<\/EMAILS_JSON>/g, '').trim();
 
-            // Remove numbered lists (1. or 1) ), markdown headings, detail lines, and UI echoes
-            const cleanedLines = withoutJson
-                .split('\n')
-                .map(l => l.trim())
-                .filter(line => {
-                    if (!line) return false;
-                    // numbered list like "1.", "1)" or "1) **Subject**" or "1. **Subject**"
-                    if (/^\d+\s*[\.)]/.test(line)) return false;
-                    // remove lines that are just markdown list markers or detail fields
-                    if (/^[>-]\s*/.test(line)) return false;
-                    if (/^(From:|Received:|Snippet:|Open:)/i.test(line)) return false;
-                    if (/^Gmail\s*•/i.test(line)) return false;
-                    if (/^Want me to|If you need|Would you like me to/i.test(line)) return false;
-                    // remove short utility lines like "Open in Gmail" or "Mark as read"
-                    if (/Open in Gmail|Mark as read|Mark as unread/i.test(line)) return false;
-                    return true;
-                });
+            if (!withoutJson) return null;
 
-            if (cleanedLines.length === 0) return null;
+            // If we also have a structured emails payload, trim out detailed per-email bullets/links
+            const hasStructuredEmails = Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
+                || /https:\/\/mail\.google\.com\/mail\//i.test(rawContent);
 
-            // Keep a short summary: up to 3 lines joined
-            const summary = cleanedLines.slice(0, 3).join(' ');
+            let cleaned = withoutJson;
+            if (hasStructuredEmails) {
+                // Strategy: keep narrative paragraphs and totals; drop paragraphs that look like
+                // per-email bullets or contain direct Gmail links (to avoid duplication with the list below)
+                const paras = withoutJson.split(/\n\n+/);
+                const keep: string[] = [];
+                for (const p of paras) {
+                    const pTrim = p.trim();
+                    const hasGmailLink = /https:\/\/mail\.google\.com\/mail\//i.test(pTrim) || /\bOpen in Gmail\b/i.test(pTrim) || /\bView:\b/i.test(pTrim);
+                    const looksLikeEmailBullet = /^[-•]/.test(pTrim) && (/(From:|To:|Ref:|Consumer:|Amount|PKR|USD|View:)/i.test(pTrim));
+                    const isNumberedList = /^\d+\s*[\.)]/.test(pTrim);
+                    if (hasGmailLink || looksLikeEmailBullet || isNumberedList) {
+                        continue; // drop
+                    }
+                    keep.push(pTrim);
+                }
+                // Ensure we don't return empty; if everything was dropped, fall back to the first few lines
+                cleaned = keep.join('\n\n').trim() || withoutJson.split('\n').slice(0, 6).join('\n');
+            }
 
             return (
-                <div className="mb-2 text-md text-foreground/90">
-                    {summary}
+                <div className="mb-2 text-md text-foreground/90 prose prose-sm dark:prose-invert max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, rehypeRaw]}>
+                        {cleaned}
+                    </ReactMarkdown>
                 </div>
             );
         } catch {
@@ -865,6 +870,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         };
 
         const { jsonText } = extractEmailsJsonBlock(typeof message.content === 'string' ? message.content : '');
+
+        const updateLabelIds = (labelIds: any, label: string, present: boolean) => {
+            const base: string[] = Array.isArray(labelIds) ? labelIds : [];
+            if (present) {
+                return base.includes(label) ? base : [...base, label];
+            }
+            return base.filter((l) => l !== label);
+        };
 
         const initialEmails: any[] = gmailEntry.emails || [];
         const [emails, setEmails] = useState<any[]>(initialEmails);
@@ -898,6 +911,57 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             }
         };
 
+        const toggleStar = async (em: any) => {
+            const id = em.id || em.messageId;
+            if (!id) return;
+            const isStarred = !!(em.isStarred ?? (em.labelIds?.includes?.('STARRED')));
+            try {
+                setBusyMap((m) => ({ ...m, [id]: true }));
+                await apiClient.starGmailEmail(id, !isStarred);
+                setEmails((prev) => prev.map((e) => e.id === id ? { ...e, isStarred: !isStarred, labelIds: updateLabelIds(e.labelIds, 'STARRED', !isStarred) } : e));
+                toast.success(!isStarred ? 'Starred' : 'Unstarred');
+            } catch (e) {
+                console.error(e);
+                toast.error('Failed to update star');
+            } finally {
+                setBusyMap((m) => ({ ...m, [id]: false }));
+            }
+        };
+
+        const toggleArchive = async (em: any) => {
+            const id = em.id || em.messageId;
+            if (!id) return;
+            const inInbox = !!(em.labelIds?.includes?.('INBOX'));
+            try {
+                setBusyMap((m) => ({ ...m, [id]: true }));
+                // archive = true removes INBOX
+                await apiClient.archiveGmailEmail(id, inInbox);
+                setEmails((prev) => prev.map((e) => e.id === id ? { ...e, labelIds: updateLabelIds(e.labelIds, 'INBOX', !inInbox) } : e));
+                toast.success(inInbox ? 'Archived' : 'Moved to inbox');
+            } catch (e) {
+                console.error(e);
+                toast.error('Failed to update archive state');
+            } finally {
+                setBusyMap((m) => ({ ...m, [id]: false }));
+            }
+        };
+
+        const deleteEmail = async (em: any) => {
+            const id = em.id || em.messageId;
+            if (!id) return;
+            try {
+                setBusyMap((m) => ({ ...m, [id]: true }));
+                await apiClient.deleteGmailEmail(id);
+                setEmails((prev) => prev.filter((e) => (e.id || e.messageId) !== id));
+                toast.success('Deleted');
+            } catch (e) {
+                console.error(e);
+                toast.error('Failed to delete');
+            } finally {
+                setBusyMap((m) => ({ ...m, [id]: false }));
+            }
+        };
+
         const openReply = (em: any) => {
             setReplyForId(em.id || em.messageId);
             setReplyBody("");
@@ -922,6 +986,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             }
         };
 
+        // Detect a Gmail compose link in assistant content
+        const rawContent: string = typeof message.content === 'string' ? message.content : '';
+        const composeMatch = rawContent.match(/https:\/\/mail\.google\.com\/mail\/?[^\s)]+view=cm[^\s)]+/i);
+        const composeUrl = composeMatch ? composeMatch[0] : null;
+
         return (
             <div className="mt-3 p-4 rounded-lg border border-border/40 bg-muted/10">
                 <div className="flex items-center justify-between mb-2">
@@ -929,19 +998,31 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         <Mail className="h-4 w-4" />
                         <span>Gmail • {title} ({emails.length})</span>
                     </div>
+                    {/* {composeUrl && (
+                        <a
+                            href={composeUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs px-2 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90"
+                        >
+                            Compose in Gmail
+                        </a>
+                    )} */}
                 </div>
 
                 <div className="space-y-3">
                     {emails.map((em, idx) => {
                         const dt = em.date ? new Date(em.date) : null;
                         const dateStr = dt ? `${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}` : '';
-                        const threadLink = em.threadId ? `https://mail.google.com/mail/u/0/#inbox/${em.threadId}` : '';
+                        const threadLink = em.threadId ? `https://mail.google.com/mail/u/0/#inbox/${em.threadId}` : em.link;
                         const preview = em.body?.trim()?.slice(0, 220) || em.snippet || '';
                         const id = em.id || em.messageId;
                         const busy = !!busyMap[id];
                         const isUnread = (typeof em.isUnread === 'boolean')
                             ? em.isUnread
-                            : (gmailEntry.filters?.unreadOnly ? true : (gmailEntry.filters?.readOnly ? false : true));
+                            : (Array.isArray(em.labelIds) ? em.labelIds.includes('UNREAD') : false);
+                        const isStarred = (typeof em.isStarred === 'boolean') ? em.isStarred : (Array.isArray(em.labelIds) ? em.labelIds.includes('STARRED') : false);
+                        const inInbox = Array.isArray(em.labelIds) ? em.labelIds.includes('INBOX') : true;
                         const senderInitial = (em.from || '?').trim().charAt(0).toUpperCase();
                         return (
                             <div key={`${id}-${idx}`} className="p-3 rounded-md border border-border/30 bg-background/40">
@@ -953,6 +1034,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             </Avatar>
                                             <div className="font-semibold text-sm line-clamp-1">{em.subject || '(No subject)'}</div>
                                             {isUnread && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Unread</span>}
+                                            {isStarred && <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200">Starred</span>}
                                         </div>
                                         <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{em.from || 'Unknown sender'} • {dateStr}</div>
                                         {preview && <div className="text-sm mt-1 text-foreground/80 line-clamp-2">{preview}</div>}
@@ -983,6 +1065,27 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             >
                                                 {isUnread ? 'Mark as read' : 'Mark as unread'}
                                             </button>
+                                            {/* <button
+                                                disabled={busy}
+                                                onClick={() => toggleStar({ ...em, isStarred })}
+                                                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                            >
+                                                {isStarred ? 'Unstar' : 'Star'}
+                                            </button>
+                                            <button
+                                                disabled={busy}
+                                                onClick={() => toggleArchive({ ...em })}
+                                                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                            >
+                                                {inInbox ? 'Archive' : 'Move to inbox'}
+                                            </button>
+                                            <button
+                                                disabled={busy}
+                                                onClick={() => deleteEmail({ ...em })}
+                                                className="text-xs text-red-500 hover:text-red-600 disabled:opacity-50"
+                                            >
+                                                Delete
+                                            </button> */}
                                             {/* <button
                                                 disabled={busy}
                                                 onClick={() => openReply(em)}
