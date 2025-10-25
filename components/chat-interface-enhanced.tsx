@@ -2311,7 +2311,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               : isWebSearchActive
                                 ? "Enter your search query..."
                                 : isGmailActive
-                                  ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
+                                  ? "Enter Gmail command (e.g., 'get my emails this week')..."
                                   : isGoogleServicesActive
                                     ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
                                     : "Type your message here..."
@@ -2611,7 +2611,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   : isWebSearchActive
                                     ? "Enter your search query..."
                                     : isGmailActive
-                                      ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
+                                      ? "Enter Gmail command (e.g., 'get my emails this week')..."
                                       : isGoogleServicesActive
                                         ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
                                         : "Type your message here..."
