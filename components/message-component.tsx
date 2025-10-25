@@ -50,6 +50,15 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 
+// Adjusted truncateUrl function to ensure links are not overly shortened
+const truncateUrl = (url: string, maxLength: number = 30) => {
+    if (url.length <= maxLength) return url;
+    const domain = url.split('/')[2]; // Extract domain
+    const path = url.split('/').slice(3).join('/'); // Extract path
+    const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
+    return `${domain}/${truncatedPath}`;
+};
+
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
     const chartFile = files.find(f => f.type === 'chart');
@@ -555,7 +564,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
                 strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
                 em: ({ children }: any) => <em className="italic">{children}</em>,
-                a: ({ href, children, ...props }: any) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600" {...props}>{children}</a>
+                a: ({ href, children, ...props }: any) => (
+                    <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
+                        title={href} // Tooltip for full URL
+                        {...props}
+                    >
+                        {truncateUrl(children)}
+                    </a>
+                )
             };
 
             if (isStreaming) {
@@ -834,14 +854,73 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             </div>
         )
     }
+    const GmailSummary = ({ message }: { message: any }) => {
+        try {
+            const rawContent: string = typeof message.content === 'string' ? message.content : '';
+            // Remove the embedded JSON block
+            const withoutJson = rawContent.replace(/<EMAILS_JSON>[\s\S]*?<\/EMAILS_JSON>/g, '').trim();
+
+            if (!withoutJson) return null;
+
+            // If we also have a structured emails payload, trim out detailed per-email bullets/links
+            const hasStructuredEmails = Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
+                || /https:\/\/mail\.google\.com\/mail\//i.test(rawContent);
+
+            let cleaned = withoutJson;
+            if (hasStructuredEmails) {
+                // Strategy: keep narrative paragraphs and totals; drop paragraphs that look like
+                // per-email bullets or contain direct Gmail links (to avoid duplication with the list below)
+                const paras = withoutJson.split(/\n\n+/);
+                const keep: string[] = [];
+                for (const p of paras) {
+                    const pTrim = p.trim();
+                    const hasGmailLink = /https:\/\/mail\.google\.com\/mail\//i.test(pTrim) || /\bOpen in Gmail\b/i.test(pTrim) || /\bView:\b/i.test(pTrim);
+                    const looksLikeEmailBullet = /^[-•]/.test(pTrim) && (/(From:|To:|Ref:|Consumer:|Amount|PKR|USD|View:)/i.test(pTrim));
+                    const isNumberedList = /^\d+\s*[\.)]/.test(pTrim);
+                    if (hasGmailLink || looksLikeEmailBullet || isNumberedList) {
+                        continue; // drop
+                    }
+                    keep.push(pTrim);
+                }
+                // Ensure we don't return empty; if everything was dropped, fall back to the first few lines
+                cleaned = keep.join('\n\n').trim() || withoutJson.split('\n').slice(0, 6).join('\n');
+            }
+
+            return (
+                <div className="mb-2 text-md text-foreground/90 prose prose-sm dark:prose-invert max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, rehypeRaw]}>
+                        {cleaned}
+                    </ReactMarkdown>
+                </div>
+            );
+        } catch {
+            return null;
+        }
+    };
 
     // Gmail emails/search display with inline actions
-    const GmailEmailsDisplay = () => {
+   const GmailEmailsDisplay = () => {
         // Find gmail emails or search results payload
         const gmailEntry = Array.isArray(parsedFiles)
             ? parsedFiles.find((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
             : null;
         if (!gmailEntry) return null;
+
+        const extractEmailsJsonBlock = (text: string) => {
+            const m = text.match(/<EMAILS_JSON>([\s\S]*?)<\/EMAILS_JSON>/);
+            if (!m) return { jsonText: null as string | null, start: -1, end: -1 };
+            return { jsonText: m[1], start: m.index ?? -1, end: (m.index ?? 0) + m[0].length };
+        };
+
+        const { jsonText } = extractEmailsJsonBlock(typeof message.content === 'string' ? message.content : '');
+
+        const updateLabelIds = (labelIds: any, label: string, present: boolean) => {
+            const base: string[] = Array.isArray(labelIds) ? labelIds : [];
+            if (present) {
+                return base.includes(label) ? base : [...base, label];
+            }
+            return base.filter((l) => l !== label);
+        };
 
         const initialEmails: any[] = gmailEntry.emails || [];
         const [emails, setEmails] = useState<any[]>(initialEmails);
@@ -875,6 +954,57 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             }
         };
 
+        const toggleStar = async (em: any) => {
+            const id = em.id || em.messageId;
+            if (!id) return;
+            const isStarred = !!(em.isStarred ?? (em.labelIds?.includes?.('STARRED')));
+            try {
+                setBusyMap((m) => ({ ...m, [id]: true }));
+                await apiClient.starGmailEmail(id, !isStarred);
+                setEmails((prev) => prev.map((e) => e.id === id ? { ...e, isStarred: !isStarred, labelIds: updateLabelIds(e.labelIds, 'STARRED', !isStarred) } : e));
+                toast.success(!isStarred ? 'Starred' : 'Unstarred');
+            } catch (e) {
+                console.error(e);
+                toast.error('Failed to update star');
+            } finally {
+                setBusyMap((m) => ({ ...m, [id]: false }));
+            }
+        };
+
+        const toggleArchive = async (em: any) => {
+            const id = em.id || em.messageId;
+            if (!id) return;
+            const inInbox = !!(em.labelIds?.includes?.('INBOX'));
+            try {
+                setBusyMap((m) => ({ ...m, [id]: true }));
+                // archive = true removes INBOX
+                await apiClient.archiveGmailEmail(id, inInbox);
+                setEmails((prev) => prev.map((e) => e.id === id ? { ...e, labelIds: updateLabelIds(e.labelIds, 'INBOX', !inInbox) } : e));
+                toast.success(inInbox ? 'Archived' : 'Moved to inbox');
+            } catch (e) {
+                console.error(e);
+                toast.error('Failed to update archive state');
+            } finally {
+                setBusyMap((m) => ({ ...m, [id]: false }));
+            }
+        };
+
+        const deleteEmail = async (em: any) => {
+            const id = em.id || em.messageId;
+            if (!id) return;
+            try {
+                setBusyMap((m) => ({ ...m, [id]: true }));
+                await apiClient.deleteGmailEmail(id);
+                setEmails((prev) => prev.filter((e) => (e.id || e.messageId) !== id));
+                toast.success('Deleted');
+            } catch (e) {
+                console.error(e);
+                toast.error('Failed to delete');
+            } finally {
+                setBusyMap((m) => ({ ...m, [id]: false }));
+            }
+        };
+
         const openReply = (em: any) => {
             setReplyForId(em.id || em.messageId);
             setReplyBody("");
@@ -899,6 +1029,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             }
         };
 
+        // Detect a Gmail compose link in assistant content
+        const rawContent: string = typeof message.content === 'string' ? message.content : '';
+        const composeMatch = rawContent.match(/https:\/\/mail\.google\.com\/mail\/?[^\s)]+view=cm[^\s)]+/i);
+        const composeUrl = composeMatch ? composeMatch[0] : null;
+
         return (
             <div className="mt-3 p-4 rounded-lg border border-border/40 bg-muted/10">
                 <div className="flex items-center justify-between mb-2">
@@ -906,15 +1041,31 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         <Mail className="h-4 w-4" />
                         <span>Gmail • {title} ({emails.length})</span>
                     </div>
+                    {/* {composeUrl && (
+                        <a
+                            href={composeUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs px-2 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90"
+                        >
+                            Compose in Gmail
+                        </a>
+                    )} */}
                 </div>
+
                 <div className="space-y-3">
                     {emails.map((em, idx) => {
                         const dt = em.date ? new Date(em.date) : null;
                         const dateStr = dt ? `${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}` : '';
-                        const threadLink = em.threadId ? `https://mail.google.com/mail/u/0/#inbox/${em.threadId}` : '';
+                        const threadLink = em.threadId ? `https://mail.google.com/mail/u/0/#inbox/${em.threadId}` : em.link;
                         const preview = em.body?.trim()?.slice(0, 220) || em.snippet || '';
                         const id = em.id || em.messageId;
                         const busy = !!busyMap[id];
+                        const isUnread = (typeof em.isUnread === 'boolean')
+                            ? em.isUnread
+                            : (Array.isArray(em.labelIds) ? em.labelIds.includes('UNREAD') : false);
+                        const isStarred = (typeof em.isStarred === 'boolean') ? em.isStarred : (Array.isArray(em.labelIds) ? em.labelIds.includes('STARRED') : false);
+                        const inInbox = Array.isArray(em.labelIds) ? em.labelIds.includes('INBOX') : true;
                         const senderInitial = (em.from || '?').trim().charAt(0).toUpperCase();
                         return (
                             <div key={`${id}-${idx}`} className="p-3 rounded-md border border-border/30 bg-background/40">
@@ -925,7 +1076,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                 <AvatarFallback className="text-[10px]">{senderInitial || 'S'}</AvatarFallback>
                                             </Avatar>
                                             <div className="font-semibold text-sm line-clamp-1">{em.subject || '(No subject)'}</div>
-                                            {em.isUnread && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Unread</span>}
+                                            {isUnread && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Unread</span>}
+                                            {isStarred && <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200">Starred</span>}
                                         </div>
                                         <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{em.from || 'Unknown sender'} • {dateStr}</div>
                                         {preview && <div className="text-sm mt-1 text-foreground/80 line-clamp-2">{preview}</div>}
@@ -951,11 +1103,32 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             )}
                                             <button
                                                 disabled={busy}
-                                                onClick={() => toggleRead(em)}
+                                                onClick={() => toggleRead({ ...em, isUnread })}
                                                 className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
                                             >
-                                                {em.isUnread ? 'Mark as read' : 'Mark as unread'}
+                                                {isUnread ? 'Mark as read' : 'Mark as unread'}
                                             </button>
+                                            {/* <button
+                                                disabled={busy}
+                                                onClick={() => toggleStar({ ...em, isStarred })}
+                                                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                            >
+                                                {isStarred ? 'Unstar' : 'Star'}
+                                            </button>
+                                            <button
+                                                disabled={busy}
+                                                onClick={() => toggleArchive({ ...em })}
+                                                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                            >
+                                                {inInbox ? 'Archive' : 'Move to inbox'}
+                                            </button>
+                                            <button
+                                                disabled={busy}
+                                                onClick={() => deleteEmail({ ...em })}
+                                                className="text-xs text-red-500 hover:text-red-600 disabled:opacity-50"
+                                            >
+                                                Delete
+                                            </button> */}
                                             {/* <button
                                                 disabled={busy}
                                                 onClick={() => openReply(em)}
@@ -1218,8 +1391,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             <ShimmerContent />
                         ) : (
                             <>
-                                {!hasGmailEntry && <MessageContent />}
-                                <GmailEmailsDisplay />
+                               {hasGmailEntry ? (
+                                    <>
+                                        <GmailSummary message={message} />
+                                        <GmailEmailsDisplay />
+                                    </>
+                                ) : (
+                                    <MessageContent />
+                                )}
                                 <PPTDisplay />
                                 <VideoDisplay />
                                 <FileDisplay />

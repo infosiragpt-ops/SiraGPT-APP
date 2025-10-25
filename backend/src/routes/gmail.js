@@ -16,7 +16,45 @@ async function getUserGmailTokens(userId) {
     throw new Error('Gmail not connected. Please connect Gmail in settings.');
   }
 
-  return JSON.parse(user.gmailTokens);
+  const { decrypt } = require('../utils/encryption');
+  let tokens;
+  
+  try {
+    tokens = JSON.parse(decrypt(user.gmailTokens));
+  } catch (error) {
+    throw new Error('Invalid Gmail tokens. Please reconnect Gmail.');
+  }
+  
+  // Check if tokens are expired and need refresh (Google tokens expire in ~1 hour)
+  const isExpired = tokens.expiresAt && tokens.expiresAt < Date.now();
+  
+  if (isExpired) {
+    console.log('Gmail tokens expired for user', userId, 'attempting refresh...');
+    try {
+      const gmailService = require('../services/gmail');
+      const refreshedTokens = await gmailService.refreshTokens(tokens);
+      
+      if (refreshedTokens) {
+        console.log('Token refresh successful for user', userId);
+        // Update user with new tokens
+        const { encrypt } = require('../utils/encryption');
+        await prisma.user.update({
+          where: { id: userId },
+          data: { 
+            gmailTokens: encrypt(JSON.stringify(refreshedTokens))
+          }
+        });
+        return refreshedTokens;
+      } else {
+        throw new Error('Token refresh failed');
+      }
+    } catch (refreshError) {
+      console.error('Token refresh failed for user', userId, ':', refreshError);
+      throw new Error('Gmail tokens expired. Please reconnect Gmail.');
+    }
+  }
+  
+  return tokens;
 }
 
 // Check Gmail connection status
@@ -27,11 +65,29 @@ router.get('/status', authenticateToken, async (req, res) => {
       select: { gmailTokens: true }
     });
 
-    const isConnected = !!user?.gmailTokens;
+    let isConnected = false;
+    let isExpired = false;
+    
+    if (user?.gmailTokens) {
+      try {
+        const { decrypt } = require('../utils/encryption');
+        const tokens = JSON.parse(decrypt(user.gmailTokens));
+        isConnected = true;
+        
+        // Check if tokens are expired
+        if (tokens.expiresAt && tokens.expiresAt < Date.now()) {
+          isExpired = true;
+        }
+      } catch (error) {
+        console.error('Error decrypting Gmail tokens:', error);
+        isConnected = false;
+      }
+    }
     
     res.json({
       connected: isConnected,
-      status: isConnected ? 'connected' : 'disconnected'
+      expired: isExpired,
+      status: isConnected ? (isExpired ? 'expired' : 'connected') : 'disconnected'
     });
   } catch (error) {
     console.error('Gmail status check error:', error);
@@ -191,6 +247,50 @@ router.patch('/email/:messageId/mark', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Mark email error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Star/Unstar email
+router.patch('/email/:messageId/star', authenticateToken, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { starred = true } = req.body;
+
+    const tokens = await getUserGmailTokens(req.user.id);
+    gmailService.setCredentials(tokens);
+
+    const result = await gmailService.starEmail({ messageId, starred });
+
+    res.json({
+      success: true,
+      message: `Email ${starred ? 'starred' : 'unstarred'} successfully`,
+      messageId: result.messageId
+    });
+  } catch (error) {
+    console.error('Star email error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Archive/Unarchive email
+router.patch('/email/:messageId/archive', authenticateToken, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { archive = true } = req.body;
+
+    const tokens = await getUserGmailTokens(req.user.id);
+    gmailService.setCredentials(tokens);
+
+    const result = await gmailService.archiveEmail({ messageId, archive });
+
+    res.json({
+      success: true,
+      message: `Email ${archive ? 'archived' : 'moved to inbox'} successfully`,
+      messageId: result.messageId
+    });
+  } catch (error) {
+    console.error('Archive email error:', error);
     res.status(500).json({ error: error.message });
   }
 });
