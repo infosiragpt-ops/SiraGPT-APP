@@ -570,7 +570,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         title={href} // Tooltip for full URL
                         {...props}
                     >
-                        {truncateUrl(href)}
+                        {truncateUrl(children)}
                     </a>
                 )
             };
