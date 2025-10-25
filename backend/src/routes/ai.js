@@ -2078,53 +2078,48 @@ But first, you need to connect your Gmail account securely using the button belo
       const systemPrompt = `You are an expert Gmail assistant with access to the user's Gmail account through the Google Gmail MCP connector. You can help with ALL kinds of Gmail operations.
 
 **Your Capabilities:**
-1. **Reading & Searching Emails:**
-   - Read latest emails, unread emails, or specific emails
-   - Search emails by sender, subject, date, keywords
-   - Filter by labels (INBOX, SENT, DRAFTS, SPAM, TRASH)
-   - Get email details including body, attachments, headers
+1. Reading & Searching Emails
+  - Read latest or unread emails, or specific emails
+  - Search by sender, subject, date, keywords
+  - Filter by labels (INBOX, SENT, DRAFTS, SPAM, TRASH)
+  - Get email details including body, attachments, headers
 
-2. **Sending & Drafting:**
-   - Compose and send new emails
-   - Create drafts for later editing
-   - Reply to existing emails
-   - Forward emails
-   - Send emails with formatting (bold, lists, links)
+2. Sending & Drafting
+  - Compose and send new emails
+  - Create drafts for later editing
+  - Reply to existing emails
+  - Forward emails
+  - Send emails with formatting (bold, lists, links)
 
-3. **Email Management:**
-   - Mark emails as read/unread
-   - Archive emails
-   - Star/unstar important emails
-   - Apply or remove labels
-   - Move emails to trash
-   - Permanently delete emails
+3. Analysis & Reports
+  - Summarize email threads
+  - Analyze email history (trends, frequent senders)
+  - Generate reports (e.g., "emails from banks last month")
+  - Extract specific information (dates, amounts, attachments)
+  - Create tables or structured summaries
+  - REMEMBER PREVIOUS CONTEXT for follow-up questions
 
-4. **Analysis & Reports:**
-   - Summarize email threads
-   - Analyze email history (trends, frequent senders)
-   - Generate reports (e.g., "emails from banks last month")
-   - Extract specific information (dates, amounts, attachments)
-   - Create tables or structured summaries
-   - **REMEMBER PREVIOUS CONTEXT** - if user asks follow-up questions, refer to earlier responses
+4. Multilingual Support
+  - Understand queries in ANY language (English, Urdu, Spanish, etc.)
+  - Respond in the user's preferred language
+  - Handle mixed-language queries
 
-5. **Multilingual Support:**
-   - Understand queries in ANY language (English, Urdu, Spanish, etc.)
-   - Respond in the user's preferred language
-   - Handle mixed-language queries
+Important Guidelines:
+- ALWAYS maintain context from previous messages
+- If a follow-up question comes (like "which ones are less than 1000?"), refer back to your previous response
+- Be helpful and proactive, ask clarifying questions only when essential
+- Provide clear, formatted responses with emoji icons and include Gmail links
+- Handle errors gracefully and respect user privacy
+- Prefer concise lists. When listing emails, also include a machine-readable JSON block at the end using this exact wrapper:
+  <EMAILS_JSON>{
+   "emails": [
+    {"id":"...","threadId":"...","subject":"...","from":"...","to":"...","date":"ISO-8601","snippet":"...","link":"https://mail.google.com/mail/#all/..."}
+   ],
+   "count": NUMBER
+  }</EMAILS_JSON>
+- Do NOT claim to automatically perform inbox-management actions (mark read, archive, delete, label). If asked, provide clear steps and ask for explicit confirmation first.
 
-**Important Guidelines:**
-- **ALWAYS maintain context** from previous messages in the conversation
-- If the user asks a follow-up question (like "which ones are less than 1000?"), refer to your previous response
-- Be helpful and proactive
-- Ask clarifying questions if the request is ambiguous ONLY if you don't have context
-- Provide clear, formatted responses with emoji icons
-- Include email links when showing email results
-- Handle errors gracefully and suggest solutions
-- Respect user privacy - never share sensitive info inappropriately
-- When analyzing, provide insights not just raw data
-- For date queries, use context: "today", "yesterday", "last week", etc.
-
-**Current Context:**
+Current Context:
 - Current Date: ${new Date().toISOString().split('T')[0]}
 - User Request: "${prompt}"
 
@@ -2184,25 +2179,36 @@ Process the user's request naturally and perform the necessary Gmail operations.
               case 'list_messages':
               case 'search_messages':
                 if (output.messages) {
+                   const emails = output.messages.map(msg => ({
+              id: msg.id,
+                    threadId: msg.thread_id,
+                    subject: msg.subject,
+                    from: msg.from,
+                    to: msg.to,
+                    date: msg.date,
+                    snippet: msg.snippet,
+                    body: msg.body,
+                    link: (msg.link || `https://mail.google.com/mail/#all/${msg.id || msg.thread_id}`),
+                    isUnread: !!(msg.is_unread || msg.isUnread || (Array.isArray(msg.labelIds) && msg.labelIds.includes('UNREAD')) || (Array.isArray(msg.labels) && msg.labels.includes('UNREAD')) || (Array.isArray(msg.label_ids) && msg.label_ids.includes('UNREAD')))
+                  }));
+
                   gmailResult = {
                     action: 'read',
-                    emails: output.messages.map(msg => ({
-                      id: msg.id,
-                      threadId: msg.thread_id,
-                      subject: msg.subject,
-                      from: msg.from,
-                      to: msg.to,
-                      date: msg.date,
-                      snippet: msg.snippet,
-                      body: msg.body,
-                    })),
-                    count: output.messages.length
+                    emails,
+                    count: emails.length
+                  };
+
+                  const lower = (prompt || '').toLowerCase();
+                  const filters = {
+                    unreadOnly: /\bunread\b/.test(lower),
+                    readOnly: (/\bread\b/.test(lower) || /\bseen\b/.test(lower)) && !/\bunread\b/.test(lower)
                   };
 
                   assistantFiles = JSON.stringify([{
                     type: 'gmail_emails',
-                    emails: gmailResult.emails,
-                    count: gmailResult.count
+                    emails,
+                    count: emails.length,
+                    filters
                   }]);
                 }
                 break;
@@ -2237,6 +2243,75 @@ Process the user's request naturally and perform the necessary Gmail operations.
           } catch (parseError) {
             console.error('Error parsing MCP output:', parseError);
           }
+        }
+      }
+
+      // ✅ Fallback: If no MCP structured emails, try to extract from model text output
+      if (!gmailResult) {
+        // Prefer JSON wrapped block if present
+        const extractEmailsJson = (text) => {
+          const match = text.match(/<EMAILS_JSON>([\s\S]*?)<\/EMAILS_JSON>/);
+          if (!match) return null;
+          try {
+            const obj = JSON.parse(match[1]);
+            if (obj && Array.isArray(obj.emails)) return obj;
+          } catch { /* ignore */ }
+          return null;
+        };
+
+        const jsonBlock = extractEmailsJson(finalResponse);
+        if (jsonBlock) {
+          gmailResult = {
+            action: 'read',
+            emails: jsonBlock.emails.map(e => ({
+              id: e.id,
+              threadId: e.threadId || e.thread_id,
+              subject: e.subject,
+              from: e.from,
+              to: e.to,
+              date: e.date,
+              snippet: e.snippet,
+              link: e.link,
+              isUnread: typeof e.isUnread === 'boolean' ? e.isUnread : undefined
+            })),
+            count: typeof jsonBlock.count === 'number' ? jsonBlock.count : jsonBlock.emails.length
+          };
+        } else {
+          // Heuristic parse: numbered list with fields
+          const emails = [];
+          const regex = /\n\s*(\d+)\)\s*(.+?)\n-\s*From:\s*(.+?)\n-\s*Received:\s*([^\n]+)\n-\s*Snippet:\s*([\s\S]*?)\n-\s*Open:\s*(\S+)/g;
+          let m;
+          while ((m = regex.exec(finalResponse)) !== null) {
+            emails.push({
+              id: undefined,
+              threadId: undefined,
+              subject: m[2].trim(),
+              from: m[3].trim(),
+              to: undefined,
+              date: m[4].trim(),
+              snippet: m[5].trim(),
+              link: m[6].trim()
+            });
+          }
+          if (emails.length > 0) {
+            gmailResult = { action: 'read', emails, count: emails.length };
+          }
+        }
+
+        if (gmailResult && gmailResult.emails?.length) {
+          const lower = (prompt || '').toLowerCase();
+          const filters = {
+            unreadOnly: /\bunread\b/.test(lower),
+            readOnly: (/\bread\b/.test(lower) || /\bseen\b/.test(lower)) && !/\bunread\b/.test(lower)
+          };
+          assistantFiles = JSON.stringify([
+            {
+              type: 'gmail_emails',
+              emails: gmailResult.emails,
+              count: gmailResult.count,
+              filters
+            }
+          ]);
         }
       }
 

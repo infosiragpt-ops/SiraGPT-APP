@@ -811,14 +811,60 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             </div>
         )
     }
+    const GmailSummary = ({ message }: { message: any }) => {
+        try {
+            const rawContent: string = typeof message.content === 'string' ? message.content : '';
+            const removeEmailsJson = (text: string) => text.replace(/<EMAILS_JSON>[\s\S]*?<\/EMAILS_JSON>/g, '').trim();
+            const withoutJson = removeEmailsJson(rawContent);
+
+            // Remove numbered lists (1. or 1) ), markdown headings, detail lines, and UI echoes
+            const cleanedLines = withoutJson
+                .split('\n')
+                .map(l => l.trim())
+                .filter(line => {
+                    if (!line) return false;
+                    // numbered list like "1.", "1)" or "1) **Subject**" or "1. **Subject**"
+                    if (/^\d+\s*[\.)]/.test(line)) return false;
+                    // remove lines that are just markdown list markers or detail fields
+                    if (/^[>-]\s*/.test(line)) return false;
+                    if (/^(From:|Received:|Snippet:|Open:)/i.test(line)) return false;
+                    if (/^Gmail\s*•/i.test(line)) return false;
+                    if (/^Want me to|If you need|Would you like me to/i.test(line)) return false;
+                    // remove short utility lines like "Open in Gmail" or "Mark as read"
+                    if (/Open in Gmail|Mark as read|Mark as unread/i.test(line)) return false;
+                    return true;
+                });
+
+            if (cleanedLines.length === 0) return null;
+
+            // Keep a short summary: up to 3 lines joined
+            const summary = cleanedLines.slice(0, 3).join(' ');
+
+            return (
+                <div className="mb-2 text-md text-foreground/90">
+                    {summary}
+                </div>
+            );
+        } catch {
+            return null;
+        }
+    };
 
     // Gmail emails/search display with inline actions
-    const GmailEmailsDisplay = () => {
+   const GmailEmailsDisplay = () => {
         // Find gmail emails or search results payload
         const gmailEntry = Array.isArray(parsedFiles)
             ? parsedFiles.find((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
             : null;
         if (!gmailEntry) return null;
+
+        const extractEmailsJsonBlock = (text: string) => {
+            const m = text.match(/<EMAILS_JSON>([\s\S]*?)<\/EMAILS_JSON>/);
+            if (!m) return { jsonText: null as string | null, start: -1, end: -1 };
+            return { jsonText: m[1], start: m.index ?? -1, end: (m.index ?? 0) + m[0].length };
+        };
+
+        const { jsonText } = extractEmailsJsonBlock(typeof message.content === 'string' ? message.content : '');
 
         const initialEmails: any[] = gmailEntry.emails || [];
         const [emails, setEmails] = useState<any[]>(initialEmails);
@@ -884,6 +930,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         <span>Gmail • {title} ({emails.length})</span>
                     </div>
                 </div>
+
                 <div className="space-y-3">
                     {emails.map((em, idx) => {
                         const dt = em.date ? new Date(em.date) : null;
@@ -892,6 +939,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         const preview = em.body?.trim()?.slice(0, 220) || em.snippet || '';
                         const id = em.id || em.messageId;
                         const busy = !!busyMap[id];
+                        const isUnread = (typeof em.isUnread === 'boolean')
+                            ? em.isUnread
+                            : (gmailEntry.filters?.unreadOnly ? true : (gmailEntry.filters?.readOnly ? false : true));
                         const senderInitial = (em.from || '?').trim().charAt(0).toUpperCase();
                         return (
                             <div key={`${id}-${idx}`} className="p-3 rounded-md border border-border/30 bg-background/40">
@@ -902,7 +952,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                 <AvatarFallback className="text-[10px]">{senderInitial || 'S'}</AvatarFallback>
                                             </Avatar>
                                             <div className="font-semibold text-sm line-clamp-1">{em.subject || '(No subject)'}</div>
-                                            {em.isUnread && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Unread</span>}
+                                            {isUnread && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">Unread</span>}
                                         </div>
                                         <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{em.from || 'Unknown sender'} • {dateStr}</div>
                                         {preview && <div className="text-sm mt-1 text-foreground/80 line-clamp-2">{preview}</div>}
@@ -928,10 +978,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             )}
                                             <button
                                                 disabled={busy}
-                                                onClick={() => toggleRead(em)}
+                                                onClick={() => toggleRead({ ...em, isUnread })}
                                                 className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
                                             >
-                                                {em.isUnread ? 'Mark as read' : 'Mark as unread'}
+                                                {isUnread ? 'Mark as read' : 'Mark as unread'}
                                             </button>
                                             {/* <button
                                                 disabled={busy}
@@ -1171,8 +1221,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             <ShimmerContent />
                         ) : (
                             <>
-                                {!hasGmailEntry && <MessageContent />}
-                                <GmailEmailsDisplay />
+                               {hasGmailEntry ? (
+                                    <>
+                                        <GmailSummary message={message} />
+                                        <GmailEmailsDisplay />
+                                    </>
+                                ) : (
+                                    <MessageContent />
+                                )}
                                 <PPTDisplay />
                                 <VideoDisplay />
                                 <FileDisplay />
