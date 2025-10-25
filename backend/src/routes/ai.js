@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const fs = require('fs').promises;
 const fsSync = require('fs'); // ✅ For synchronous file operations
 const path = require('path');
+const { use } = require('passport');
 
 // Initialize OpenAI client
 // const openai = new OpenAI({
@@ -1883,7 +1884,6 @@ router.post(
   }
 );
 
-// ✅ Generate Gmail AI Response - Natural Language Processing
 router.post(
   '/generate-gmail',
   [
@@ -1900,7 +1900,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, model, type } = req.body;
+      const { prompt, chatId, model } = req.body;
       const userId = req.user.id;
 
       console.log('📧 Gmail AI request:', { prompt, chatId, model, userId });
@@ -1949,7 +1949,6 @@ router.post(
             }
           });
 
-          // Save connection required message
           await prisma.message.create({
             data: {
               chatId,
@@ -1978,11 +1977,10 @@ But first, you need to connect your Gmail account securely using the button belo
         });
       }
 
-      // Use AI to process the Gmail request naturally
+      // Decrypt Gmail tokens
+      const { decrypt, encrypt } = require('../utils/encryption');
       const gmailService = require('../services/gmail');
-      const { decrypt } = require('../utils/encryption');
       
-      // Decrypt and parse Gmail tokens
       let decryptedTokens;
       try {
         decryptedTokens = JSON.parse(decrypt(user.gmailTokens));
@@ -1994,10 +1992,10 @@ But first, you need to connect your Gmail account securely using the button belo
           requiresConnection: true
         });
       }
-      
-      // Always try to set credentials first, then check if refresh is needed
+
+      // Always try to set credentials first
       gmailService.setCredentials(decryptedTokens);
-      
+
       // Check if tokens are expired and need refresh (Google tokens expire in ~1 hour)
       const isExpired = decryptedTokens.expiresAt && decryptedTokens.expiresAt < Date.now();
       
@@ -2009,7 +2007,6 @@ But first, you need to connect your Gmail account securely using the button belo
           if (refreshedTokens) {
             console.log('Token refresh successful');
             // Update user with new tokens
-            const { encrypt } = require('../utils/encryption');
             await prisma.user.update({
               where: { id: userId },
               data: { 
@@ -2018,6 +2015,8 @@ But first, you need to connect your Gmail account securely using the button belo
             });
             // Set the refreshed credentials
             gmailService.setCredentials(refreshedTokens);
+            // Use refreshed tokens for MCP
+            decryptedTokens = refreshedTokens;
           } else {
             throw new Error('Token refresh failed');
           }
@@ -2042,544 +2041,202 @@ But first, you need to connect your Gmail account securely using the button belo
         });
       }
 
-      // Create AI prompt for Gmail assistance
-      const systemPrompt = `You are a Gmail assistant AI. The user has asked: "${prompt}"
-
-Based on their request, determine what Gmail action to take and provide a helpful response.
-
-Available actions:
-- Read emails (latest, unread, from specific sender, etc.)
-- Send emails (compose and send to recipients)
-- Search emails (find emails matching criteria)
-- Reply to emails
-- Delete emails
-
-Respond naturally and helpfully. If you need to perform Gmail actions, I will handle the technical implementation.`;
-
-      // Initialize OpenAI client for intent classification and parsing only
-      const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY
-      });
-
-      // Actually perform Gmail actions based on user request with improved AI analysis
-      let gmailResult = null;
-      const lowerPrompt = prompt.toLowerCase();
-
-      try {
-        // AI-powered action classification for better intent detection
-        const actionClassificationPrompt = `Your task is to analyze  the user's real intent** (not just keywords) behind their request.,The input can be in **ANY language**. You must rely on your **multilingual, contextual, and semantic understanding** to identify what the user truly wants, even if they don’t use explicit Gmail-related words
-User Request: "${prompt}"
-
-
-### 🎯 GOAL:
-Classify the user's intent into one clear Gmail-related action.  
-Base your decision on **meaning**, **context**, and **implied behavior** — not only literal keywords.
-
----
-
-### 🧠 EXAMPLES OF INTENT UNDERSTANDING
-- “show my last mail” → likely means **the last email I sent**, so folder = **SENT**, action = **READ**.  
-- “who did I message yesterday” → implies **SENT** folder (user wants sent messages).  
-- “what new emails came today” → **INBOX** + **unread_only = true**.  
-- “mujhe kal bheje gaye emails dikhao” → means “show emails sent yesterday” → folder = SENT.  
-- “enviar correo a Maria” → **SEND** action.  
-- “summarize my last 10 messages” → **ANALYZE** action.  
-- “search all messages about invoice” → **SEARCH** action.
-
----
-
-Classify the user's primary goal into one of these categories based on their intent:
-1.  **READ**: The user wants to view, check, or get information from their emails.
-    (e.g., "show me my last 5 emails", "what's the latest from marketing?", "mujay naye emails dikhao")
-2.  **SEND**: The user's core intent is to transmit a message to an email address. This is the most critical action. Identify this intent from verbs like "send", "write", "compose", "mail", "contact", and their equivalents in ANY language (e.g., "bhejo", "baijo", "likho", "envoyer", "enviar"). If an email address is present and the user wants to communicate with them, it is a SEND action.
-    (e.g., "send an email to bob@example.com", "write a message to Jane", "hamza ko email bhejo", "mujay hamzabhinder5@gmail.com ko message likhna hai")
-3.  **DRAFT**: The user wants to create an email but not send it immediately.
-    (e.g., "draft an email to my boss", "prepare a message")
-4.  **ANALYZE**: The user wants a report, summary, or analysis of their emails. This is different from just reading.
-    (e.g., "give me a report of my email history", "summarize my emails from this week", "reportes de mis histórico de correos")
-5.  **SEARCH**: The user wants to find specific emails based on criteria.
-    (e.g., "find emails about the project", "search for messages from last week")
-6.  **NONE**: The request is not related to any of the above Gmail actions.
-
-Also extract the following details from the request:
--   **number**: How many emails? IMPORTANT rules:
-    *   If the user asks for "last email", "latest email", "my last email", "last mail" (singular) -> extract 1
-    *   If the user asks for "last 5 emails", "latest 10 emails" (with number) -> extract that number
-    *   If the user asks for "emails" (plural) without a number -> extract 10 as default
-    *   Keywords indicating singular: "last", "latest", "recent" + singular noun
--   **email_addresses**: Any email addresses mentioned.
--   **keywords**: Any specific search terms.
--   **folder**: Determine the target folder with these rules:
-    *   If asking about emails THEY SENT (verbs: "sent", "send kia", "bheje", "enviado", "I sent", "maine bheje", "manay send kia") -> "SENT"
-    *   If asking about emails THEY RECEIVED (verbs: "received", "got", "mile", "recibido") -> "INBOX"
-    *   For generic requests like "latest emails", "last mail", "check my mail", "new emails", "mujhe emails dikhao" -> **ALWAYS default to "INBOX"**
-    *   If in doubt, ALWAYS choose "INBOX"
--   **unread_only**: Set to \`true\` if the user ONLY wants unread emails.
--   **read_only**: Set to \`true\` if the user ONLY wants emails they have already read.
--   **start_date**: If the user specifies a start date, a specific day, or a range (e.g., "today", "yesterday", "on the 15th", "last 20 days"), extract the start date in YYYY-MM-DD format. Current date is ${new Date().toISOString().split('T')[0]}.
--   **end_date**: If the user specifies an end date or a range, extract the end date in YYYY-MM-DD format. For a single day request, end_date can be null.
--   **table_summary**: Set to \`true\` if the user explicitly asks for a table.
-
-Respond ONLY with a valid JSON object in the following format:
-{
-  "action": "READ|SEND|DRAFT|ANALYZE|SEARCH|NONE",
-  "folder": "INBOX|SENT",
-  "number": null | <number>,
-  "email_addresses": [],
-  "keywords": [],
-  "unread_only": false,
-  "read_only": false,
-  "start_date": null | "YYYY-MM-DD",
-  "end_date": null | "YYYY-MM-DD",
-  "table_summary": false,
-  "confidence": 0.0-1.0
-}`;
-
-        const classificationResponse = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: 'You are an expert at analyzing Gmail requests. Return only valid JSON.' },
-            { role: 'user', content: actionClassificationPrompt }
-          ],
-          temperature: 0.1
+      // ✅ Get the last assistant message's response ID for context continuity
+      let previousResponseId = null;
+      if (chatId) {
+        const lastAssistantMessage = await prisma.message.findFirst({
+          where: { 
+            chatId,
+            role: 'ASSISTANT'
+          },
+          orderBy: { timestamp: 'desc' },
+          select: {
+            metadata: true
+          }
         });
 
-        let actionAnalysis;
-        try {
-          actionAnalysis = JSON.parse(classificationResponse.choices[0].message.content);
-        } catch (parseError) {
-          console.error('Failed to parse AI action classification:', parseError);
-          console.error('AI Response was:', classificationResponse.choices[0].message.content);
-          // If AI fails to return valid JSON, fallback to a safe default to show the help message.
-          actionAnalysis = { action: 'NONE', confidence: 0.0 };
-        }
-
-        console.log('Gmail Action Analysis:', actionAnalysis);
-
-        // Temporarily disable delete functionality for safety
-        if (actionAnalysis && actionAnalysis.action === 'DELETE') {
-          actionAnalysis.action = 'DELETE_DISABLED';
-        }
-
-        // Perform actions based on AI classification
-        if (actionAnalysis.action === 'READ' || actionAnalysis.action === 'SEARCH') {
-          const maxResults = actionAnalysis.number || 10;
-          const unreadOnly = actionAnalysis.unread_only || false;
-          const readOnly = actionAnalysis.read_only || false;
-          const folder = actionAnalysis.folder || 'INBOX';
-
-          // Build a more sophisticated search query
-          let queryParts = [`in:${folder.toLowerCase()}`];
-          if (actionAnalysis.keywords && actionAnalysis.keywords.length > 0) {
-            queryParts.push(actionAnalysis.keywords.join(' '));
-          }
-          if (actionAnalysis.email_addresses && actionAnalysis.email_addresses.length > 0) {
-            queryParts.push(`from:(${actionAnalysis.email_addresses.join(' OR ')})`);
-          }
-          if (actionAnalysis.start_date) {
-            queryParts.push(`after:${actionAnalysis.start_date}`);
-          }
-          if (actionAnalysis.end_date) {
-            queryParts.push(`before:${actionAnalysis.end_date}`);
-          } else if (actionAnalysis.start_date) {
-            // If only a start date is provided, limit the search to that day
-            const startDate = new Date(actionAnalysis.start_date);
-            startDate.setDate(startDate.getDate() + 1);
-            const beforeDate = startDate.toISOString().split('T')[0];
-            queryParts.push(`before:${beforeDate}`);
-          }
-
-
-          const finalQuery = queryParts.join(' ');
-          console.log('Constructed Gmail Search Query:', finalQuery);
-
-          const emails = await gmailService.searchEmails({
-            query: finalQuery,
-            maxResults: Math.min(maxResults, 50), // Limit to 50 for performance
-            unreadOnly,
-            readOnly
-          });
-
-          gmailResult = {
-            action: actionAnalysis.action,
-            query: finalQuery,
-            emails: emails,
-            count: emails.length,
-            folder,
-            unreadOnly,
-            readOnly
-          };
-        } else if (actionAnalysis.action === 'SEND' || actionAnalysis.action === 'DRAFT') {
-          // Extract email components using AI to parse natural language
-          const sendPrompt = `You are an email parser. Extract email components from this request and return ONLY a valid JSON object, nothing else.
-
-Request: "${prompt}"
-
-Extract and return ONLY this JSON format (no additional text, no explanation):
-{
-  "to": "recipient@email.com",
-  "subject": "email subject here",
-  "body": "detailed email body content here"
-}
-
-Rules:
-- If recipient email is mentioned, use it exactly
-- Create a professional subject line
-- Write a detailed, polite, well-formatted email body with proper paragraphs and line breaks
-- Use \\n\\n for paragraph breaks to ensure proper formatting
-- Structure the email professionally with greeting, main content, and closing
-- Keep [Your Name] as placeholder for signature - do not replace it
-- Return ONLY the JSON object, no other text`;
-
-          const parseResponse = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are a JSON email parser. Return only valid JSON, no other text or explanation.'
-              },
-              {
-                role: 'user',
-                content: sendPrompt
-              }
-            ],
-
-          });
-
+        // Extract response_id from metadata if exists
+        if (lastAssistantMessage?.metadata) {
           try {
-            let responseContent = parseResponse.choices[0].message.content.trim();
-
-            // Clean up the response to ensure it's valid JSON
-            if (responseContent.startsWith('```json')) {
-              responseContent = responseContent.replace(/```json\n?/, '').replace(/```$/, '');
-            }
-            if (responseContent.startsWith('```')) {
-              responseContent = responseContent.replace(/```\n?/, '').replace(/```$/, '');
-            }
-
-            const emailData = JSON.parse(responseContent);
-
-            // Validate that we have required fields
-            if (!emailData.to || !emailData.subject || !emailData.body) {
-              throw new Error('Missing required email fields');
-            }
-
-            // Get user information for proper name replacement
-            const currentUser = await prisma.user.findUnique({
-              where: { id: userId },
-              select: { name: true, email: true }
-            });
-
-            // Replace [Your Name] placeholder with actual user name
-            if (emailData.body.includes('[Your Name]')) {
-              const userName = currentUser?.name || 'User';
-              emailData.body = emailData.body.replace(/\[Your Name\]/g, userName);
-            }
-
-            // ✅ FIX: Rely on AI classification for draft vs. send
-            const isDraft = actionAnalysis.action === 'DRAFT';
-
-            if (isDraft) {
-              // Actually save as draft to Gmail
-              const draftResult = await gmailService.createDraft(emailData);
-              gmailResult = {
-                action: 'draft',
-                result: draftResult,
-                emailData
-              };
-            } else {
-              // Actually send the email
-              const sendResult = await gmailService.sendEmail(emailData);
-              gmailResult = {
-                action: 'send',
-                result: sendResult,
-                emailData
-              };
-            }
-          } catch (parseError) {
-            console.error('Failed to parse email data:', parseError);
-            console.error('AI Response was:', parseResponse.choices[0].message.content);
-
-            // Fallback: Extract email manually from the prompt
-            const emailMatch = prompt.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-            if (emailMatch) {
-              const fallbackEmailData = {
-                to: emailMatch[1],
-                subject: 'Thank you message',
-                body: `Thank you for your recent communication. I appreciate your message and wanted to follow up accordingly.\n\nBest regards`
-              };
-
-              try {
-                const sendResult = await gmailService.sendEmail(fallbackEmailData);
-                gmailResult = {
-                  action: 'send',
-                  result: sendResult,
-                  emailData: fallbackEmailData
-                };
-              } catch (sendError) {
-                gmailResult = {
-                  action: 'error',
-                  error: `Failed to send email: ${sendError.message}`
-                };
-              }
-            } else {
-              gmailResult = {
-                action: 'error',
-                error: 'Could not parse email recipient from your request. Please include a valid email address.'
-              };
-            }
+            const metadata = JSON.parse(lastAssistantMessage.metadata);
+            previousResponseId = metadata.response_id;
+            console.log('📎 Using previous response ID for context:', previousResponseId);
+          } catch (e) {
+            console.log('No previous response ID found');
           }
-        } else if (actionAnalysis.action === 'DELETE_DISABLED') {
-          gmailResult = {
-            action: 'delete_disabled',
-            message: 'Delete functionality is currently disabled. You can search emails or mark them as read instead.'
-          };
-        } else if (actionAnalysis.action === 'SEARCH') {
-        } else if (actionAnalysis.action === 'ANALYZE') {
-          console.log('🔬 Handling ANALYZE action');
-
-          // 1. Perform a targeted search first to get relevant emails
-          const maxResults = actionAnalysis.number || 50; // Analyze up to 50 relevant emails
-          const folder = actionAnalysis.folder || 'INBOX';
-
-          let queryParts = [`in:${folder.toLowerCase()}`];
-          if (actionAnalysis.keywords && actionAnalysis.keywords.length > 0) {
-            queryParts.push(actionAnalysis.keywords.join(' '));
-          }
-          if (actionAnalysis.email_addresses && actionAnalysis.email_addresses.length > 0) {
-            queryParts.push(`from:(${actionAnalysis.email_addresses.join(' OR ')})`);
-          }
-          if (actionAnalysis.start_date) {
-            queryParts.push(`after:${actionAnalysis.start_date}`);
-          }
-          if (actionAnalysis.end_date) {
-            queryParts.push(`before:${actionAnalysis.end_date}`);
-          } else if (actionAnalysis.start_date) {
-            const startDate = new Date(actionAnalysis.start_date);
-            startDate.setDate(startDate.getDate() + 1);
-            const beforeDate = startDate.toISOString().split('T')[0];
-            queryParts.push(`before:${beforeDate}`);
-          }
-
-          const searchQuery = queryParts.join(' ');
-          console.log('Constructed Gmail Search Query for Analysis:', searchQuery);
-
-          const emailsForAnalysis = await gmailService.searchEmails({
-            query: searchQuery,
-            maxResults: Math.min(maxResults, 100) // Hard limit of 100 for analysis performance
-          });
-
-          if (emailsForAnalysis.length === 0) {
-            gmailResult = {
-              action: 'analyze',
-              summary: 'Could not find any emails matching your criteria to analyze.',
-              emails: []
-            };
-          } else {
-            // 2. Prepare the content for the analysis prompt
-            const emailContentForAI = emailsForAnalysis.map(email => {
-              return `From: ${email.from}\nSubject: ${email.subject}\nDate: ${email.date}\nContent: ${email.body || email.snippet}\n---\n`;
-            }).join('\n');
-
-            // 3. Create a new prompt for the AI to generate the report
-            const analysisSystemPrompt = `You are an expert data analyst specializing in email history. Your task is to generate a concise report based on the provided email data and the user's request. The user's request might be in any language, so use your multilingual capabilities to understand it.
-
-User's Request: "${prompt}"
-
-Based on this request and the following email data, create a summary or report. The report should be well-structured, easy to read, and directly address the user's query.
-- If the user asks for a table, you MUST format the output as a markdown table.
-- Use markdown for all formatting (e.g., headings, lists, bold text).
-- Be precise and extract specific data points if requested (e.g., bank expenses, dates, amounts).`;
-
-            const analysisUserPrompt = `Here is the email data matching the user's query:\n\n${emailContentForAI}\n\nPlease generate the report based on my original request: "${prompt}"`;
-
-            // 4. Call the AI service to get the summary
-            const analysisResponse = await openai.chat.completions.create({
-              model: 'gpt-4o', // Use a more powerful model for complex analysis
-              messages: [
-                { role: 'system', content: analysisSystemPrompt },
-                { role: 'user', content: analysisUserPrompt }
-              ],
-              temperature: 0.3,
-            });
-
-            const reportContent = analysisResponse.choices[0].message.content;
-
-            gmailResult = {
-              action: 'analyze',
-              summary: reportContent,
-              emails: emailsForAnalysis
-            };
-          }
-        } else if (lowerPrompt.includes('search') || lowerPrompt.includes('find')) {
-          // Extract search query
-          const searchQuery = prompt.replace(/search|find|emails?|for|in|gmail/gi, '').trim();
-          const emails = await gmailService.searchEmails({
-            query: searchQuery,
-            maxResults: 10
-          });
-
-          gmailResult = {
-            action: 'search',
-            query: searchQuery,
-            emails: emails,
-            count: emails.length
-          };
-        } else if (lowerPrompt.includes('delete')) {
-          // Deletion is disabled
-          gmailResult = {
-            action: 'delete_disabled',
-            message: 'Delete functionality is currently disabled. Try: "mark my last 10 emails as read" or "search newsletters".'
-          };
-        }
-      } catch (gmailError) {
-        console.error('Gmail action error:', gmailError);
-
-        // ✅ IMPROVED: Handle auth errors gracefully and prompt for re-authentication
-        const isAuthError = gmailError.message.includes('No refresh token') ||
-          gmailError.message.includes('invalid_grant') ||
-          gmailError.message.includes('Token has been expired or revoked');
-
-        if (isAuthError) {
-          console.log('Authentication error detected. Clearing user tokens and prompting for reconnect.');
-
-          // Clear the invalid tokens from the database
-          await prisma.user.update({
-            where: { id: userId },
-            data: { gmailTokens: null }
-          });
-
-          // Prepare a user-friendly response that triggers the re-connection UI
-          gmailResult = {
-            action: 'reconnect_required',
-            error: 'Your Gmail connection has expired. Please reconnect your account to continue.',
-            requiresConnection: true
-          };
-        } else {
-          // Handle other types of Gmail errors
-          let errorMessage = gmailError.message;
-          if (gmailError.response?.data?.error?.message) {
-            errorMessage = gmailError.response.data.error.message;
-          }
-
-          gmailResult = {
-            action: 'error',
-            error: errorMessage,
-            errorCode: gmailError.code || gmailError.status,
-            errorType: gmailError.code === 403 ? 'permission' : 'unknown'
-          };
         }
       }
 
-      // Generate response based on actual Gmail results (skip generic AI response unless no action)
-      let finalResponse = '';
+      // Initialize OpenAI client with MCP connector
+      const client = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
+      });
 
-      if (gmailResult) {
-        switch (gmailResult.action.toLowerCase()) {
-          case 'read':
-          case 'search':
-            const emailType = gmailResult.unreadOnly ? 'Unread' : (gmailResult.readOnly ? 'Read' : 'Latest');
-            finalResponse = `📧 **${emailType} Emails (${gmailResult.count})**\n\n`;
+      console.log('🤖 Calling OpenAI with Gmail MCP connector...');
 
-            gmailResult.emails.forEach((email, i) => {
-              const subject = email.subject || '(No subject)';
-              const from = email.from || 'Unknown sender';
-              const dt = email.date ? new Date(email.date) : null;
-              const dateStr = dt ? `${dt.toLocaleDateString()} ${dt.toLocaleTimeString()}` : '';
-              const threadLink = email.threadId ? `https://mail.google.com/mail/u/0/#inbox/${email.threadId}` : '';
+      // Enhanced system prompt to guide Gmail interactions
+      const systemPrompt = `You are an expert Gmail assistant with access to the user's Gmail account through the Google Gmail MCP connector. You can help with ALL kinds of Gmail operations.
 
-              // Clean preview
-              let content = '';
-              if (email.body && email.body.trim()) {
-                content = email.body.length > 220 ? email.body.substring(0, 220) + '...' : email.body;
-              } else if (email.snippet) {
-                content = email.snippet;
-              }
+**Your Capabilities:**
+1. **Reading & Searching Emails:**
+   - Read latest emails, unread emails, or specific emails
+   - Search emails by sender, subject, date, keywords
+   - Filter by labels (INBOX, SENT, DRAFTS, SPAM, TRASH)
+   - Get email details including body, attachments, headers
 
-              finalResponse += `\n---\n\n`;
-              finalResponse += `**${i + 1}. ${subject}**\n`;
-              finalResponse += `${from} • ${dateStr}\n`;
-              if (content) finalResponse += `${content.replace(/\n/g, ' ')}\n`;
-              if (threadLink) finalResponse += `[Open in Gmail](${threadLink})\n`;
-            });
-            break;
+2. **Sending & Drafting:**
+   - Compose and send new emails
+   - Create drafts for later editing
+   - Reply to existing emails
+   - Forward emails
+   - Send emails with formatting (bold, lists, links)
 
-          case 'send':
-            if (gmailResult.result && gmailResult.result.success) {
-              finalResponse = `✅ **Email Sent Successfully!**\n\n`;
-              finalResponse += `**📧 To:** ${gmailResult.emailData.to}\n`;
-              finalResponse += `**📝 Subject:** ${gmailResult.emailData.subject}\n\n`;
-              finalResponse += `**📄 Email Content:**\n\n`;
-              finalResponse += `${gmailResult.emailData.body}\n\n`;
-              finalResponse += `---\n`;
-              finalResponse += `✅ **Delivered successfully** • Message ID: ${gmailResult.result.messageId || 'Generated'}`;
-            } else {
-              finalResponse = `❌ **Failed to Send Email**\n\n`;
-              finalResponse += `There was an error sending your email. Please check the recipient address and try again.\n`;
-              if (gmailResult.result && gmailResult.result.error) {
-                finalResponse += `**Error:** ${gmailResult.result.error}`;
-              }
+3. **Email Management:**
+   - Mark emails as read/unread
+   - Archive emails
+   - Star/unstar important emails
+   - Apply or remove labels
+   - Move emails to trash
+   - Permanently delete emails
+
+4. **Analysis & Reports:**
+   - Summarize email threads
+   - Analyze email history (trends, frequent senders)
+   - Generate reports (e.g., "emails from banks last month")
+   - Extract specific information (dates, amounts, attachments)
+   - Create tables or structured summaries
+   - **REMEMBER PREVIOUS CONTEXT** - if user asks follow-up questions, refer to earlier responses
+
+5. **Multilingual Support:**
+   - Understand queries in ANY language (English, Urdu, Spanish, etc.)
+   - Respond in the user's preferred language
+   - Handle mixed-language queries
+
+**Important Guidelines:**
+- **ALWAYS maintain context** from previous messages in the conversation
+- If the user asks a follow-up question (like "which ones are less than 1000?"), refer to your previous response
+- Be helpful and proactive
+- Ask clarifying questions if the request is ambiguous ONLY if you don't have context
+- Provide clear, formatted responses with emoji icons
+- Include email links when showing email results
+- Handle errors gracefully and suggest solutions
+- Respect user privacy - never share sensitive info inappropriately
+- When analyzing, provide insights not just raw data
+- For date queries, use context: "today", "yesterday", "last week", etc.
+
+**Current Context:**
+- Current Date: ${new Date().toISOString().split('T')[0]}
+- User Request: "${prompt}"
+
+Process the user's request naturally and perform the necessary Gmail operations. Be conversational yet professional. If this is a follow-up question, reference your previous responses.`;
+
+      // ✅ Build the request with optional previous_response_id for context
+      const requestPayload = {
+        model: model || "gpt-4o",
+        tools: [
+          {
+            type: "mcp",
+            server_label: "google_gmail",
+            connector_id: "connector_gmail",
+            authorization: decryptedTokens.accessToken,
+            require_approval: "never",
+          },
+        ],
+        input: `${systemPrompt}\n\n**User:** ${prompt}`,
+      };
+
+      // ✅ Add previous_response_id only if it exists (for context continuity)
+      if (previousResponseId) {
+        requestPayload.previous_response_id = previousResponseId;
+      }
+
+      // Call OpenAI with Gmail MCP connector
+      const resp = await client.responses.create(requestPayload);
+
+      console.log('📬 OpenAI MCP Response:', {
+        id: resp.id,
+        status: resp.status,
+        mcpCallsCount: resp.mcp_calls?.length || 0
+      });
+
+      // Extract the text response and MCP calls
+      const finalResponse = resp.output_text || "I couldn't process your Gmail request.";
+      const mcpCalls = resp.mcp_calls || [];
+      const responseId = resp.id; // ✅ Store this for next request
+
+      // Parse Gmail results from MCP calls
+      let gmailResult = null;
+      let assistantFiles = null;
+
+      if (mcpCalls.length > 0) {
+        // Process the MCP calls to extract Gmail data
+        for (const call of mcpCalls) {
+          if (call.error) {
+            console.error('MCP Call Error:', call.error);
+            continue;
+          }
+
+          try {
+            const output = JSON.parse(call.output);
+            
+            // Handle different Gmail operations based on the function name
+            switch (call.name) {
+              case 'list_messages':
+              case 'search_messages':
+                if (output.messages) {
+                  gmailResult = {
+                    action: 'read',
+                    emails: output.messages.map(msg => ({
+                      id: msg.id,
+                      threadId: msg.thread_id,
+                      subject: msg.subject,
+                      from: msg.from,
+                      to: msg.to,
+                      date: msg.date,
+                      snippet: msg.snippet,
+                      body: msg.body,
+                    })),
+                    count: output.messages.length
+                  };
+
+                  assistantFiles = JSON.stringify([{
+                    type: 'gmail_emails',
+                    emails: gmailResult.emails,
+                    count: gmailResult.count
+                  }]);
+                }
+                break;
+
+              case 'send_message':
+                if (output.success || output.message_id) {
+                  gmailResult = {
+                    action: 'send',
+                    result: {
+                      success: true,
+                      messageId: output.message_id
+                    }
+                  };
+                }
+                break;
+
+              case 'create_draft':
+                if (output.success || output.draft_id) {
+                  gmailResult = {
+                    action: 'draft',
+                    result: {
+                      success: true,
+                      draftId: output.draft_id
+                    }
+                  };
+                }
+                break;
+
+              default:
+                console.log('Unknown MCP call:', call.name);
             }
-            break;
-
-          case 'draft':
-            if (gmailResult.result && gmailResult.result.success) {
-              finalResponse = `📝 **Draft Saved to Gmail Successfully!**\n\n`;
-              finalResponse += `✅ **Saved to your Gmail Drafts folder**\n`;
-              finalResponse += `📧 **To:** ${gmailResult.emailData.to}\n`;
-              finalResponse += `📝 **Subject:** ${gmailResult.emailData.subject}\n\n`;
-              finalResponse += `**📄 Email Content:**\n\n`;
-              finalResponse += `${gmailResult.emailData.body}\n\n`;
-              finalResponse += `---\n`;
-              finalResponse += `💾 **Draft ID:** ${gmailResult.result.draftId}\n`;
-              finalResponse += `� **Check your Gmail Drafts folder** to edit or send this email`;
-            } else {
-              finalResponse = `❌ **Failed to Save Draft**\n\n`;
-              finalResponse += `There was an error saving your email as a draft. Please try again.`;
-            }
-            break;
-
-
-          case 'analyze':
-            finalResponse = `📊 **Email History Report**\n\n`;
-            finalResponse += `${gmailResult.summary}`;
-            break;
-
-          case 'delete_disabled':
-            finalResponse = `🛑 **Delete Disabled**\n\n${gmailResult.message}`;
-            break;
-
-          case 'reconnect_required':
-            finalResponse = `🔌 **Gmail Re-connection Required**\n\n${gmailResult.error}`;
-            break;
-
-          case 'error':
-            // Check if this is a Gmail API not enabled error
-            if (gmailResult.error.includes('Gmail API has not been used') || gmailResult.error.includes('is disabled')) {
-              finalResponse = `🚨 **Gmail API Not Enabled**\n\n` +
-                `The Gmail API needs to be enabled in your Google Cloud Console to access your emails.\n\n` +
-                `**Steps to fix this:**\n` +
-                `1. Visit [Google Cloud Console APIs](https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=58814524073)\n` +
-                `2. Click "Enable" on the Gmail API\n` +
-                `3. Wait a few minutes for the changes to take effect\n` +
-                `4. Try your Gmail request again\n\n` +
-                `**Note:** This is a one-time setup step required for Gmail integration.`;
-            } else {
-              finalResponse = `❌ **Gmail Error**\n\nSorry, there was an error accessing your Gmail: ${gmailResult.error}`;
-            }
-            break;
-        }
-      } else {
-        // No specific Gmail action detected, but check if this is Gmail-related
-        if (lowerPrompt.includes('gmail') || lowerPrompt.includes('email')) {
-          finalResponse = `📧 **Gmail Assistant Ready**\n\n`;
-          finalResponse += `I can help you with Gmail tasks like:\n\n`;
-          finalResponse += `• **📥 Read emails** - \"read my last 5 emails\" or \"show unread emails\"\n`;
-          finalResponse += `• **📤 Send emails** - \"send email to john@example.com about meeting\"\n`;
-          finalResponse += `• **🔍 Search emails** - \"find emails from my boss\" or \"search for project updates\"\n\n`;
-          finalResponse += `What would you like to do with your Gmail?`;
-        } else {
-          finalResponse = 'How can I help with Gmail?';
+          } catch (parseError) {
+            console.error('Error parsing MCP output:', parseError);
+          }
         }
       }
 
@@ -2590,6 +2247,7 @@ Based on this request and the following email data, create a summary or report. 
           return res.status(404).json({ error: 'Chat not found' });
         }
 
+        // Save user message with timestamp
         await prisma.message.create({
           data: {
             chatId,
@@ -2598,37 +2256,7 @@ Based on this request and the following email data, create a summary or report. 
           }
         });
 
-        // Build UI-friendly files payload for frontend rendering
-        let assistantFiles = null;
-        let assistantMetadata = null; // ✅ Initialize metadata
-
-        if (gmailResult) {
-          // Handle different gmail result actions (case-insensitive)
-          const action = gmailResult.action.toLowerCase();
-
-          if (action === 'read' || action === 'search') {
-            assistantFiles = JSON.stringify([{
-              type: action === 'search' ? 'gmail_search_results' : 'gmail_emails',
-              query: gmailResult.query,
-              emails: gmailResult.emails,
-              count: gmailResult.count,
-              filters: gmailResult.filters || { unreadOnly: gmailResult.unreadOnly, readOnly: gmailResult.readOnly }
-            }]);
-          } else if (action === 'analyze') {
-            assistantFiles = JSON.stringify([{
-              type: 'gmail_analysis',
-              summary: gmailResult.summary,
-              sourceEmailCount: gmailResult.emails.length
-            }]);
-          } else if (gmailResult.action === 'reconnect_required') {
-            // ✅ Add metadata to show the connection card on the frontend
-            assistantMetadata = JSON.stringify({
-              type: 'gmail_connection_required',
-              showConnectionCard: true
-            });
-          }
-        }
-
+        // ✅ Save assistant message with response_id in metadata for future context
         await prisma.message.create({
           data: {
             chatId,
@@ -2636,7 +2264,11 @@ Based on this request and the following email data, create a summary or report. 
             content: finalResponse,
             tokens: finalResponse.length,
             files: assistantFiles,
-            metadata: assistantMetadata // ✅ Save metadata to the message
+            metadata: JSON.stringify({
+              response_id: responseId, // ✅ Store OpenAI response ID
+              mcp_calls_count: mcpCalls.length,
+              timestamp: new Date().toISOString()
+            })
           }
         });
 
@@ -2660,12 +2292,25 @@ Based on this request and the following email data, create a summary or report. 
         success: true,
         content: finalResponse,
         gmailResult,
+        responseId, // ✅ Return response ID for debugging
         tokens
       });
 
     } catch (error) {
       console.error('Gmail AI generation error:', error);
-      res.status(500).json({ error: error.message || 'Gmail AI generation failed' });
+      
+      // Handle specific OpenAI MCP errors
+      if (error.message?.includes('authorization') || error.message?.includes('token')) {
+        return res.status(401).json({
+          success: false,
+          error: 'Gmail authorization failed. Please reconnect your Gmail account.',
+          requiresConnection: true
+        });
+      }
+
+      res.status(500).json({ 
+        error: error.message || 'Gmail AI generation failed' 
+      });
     }
   }
 );
