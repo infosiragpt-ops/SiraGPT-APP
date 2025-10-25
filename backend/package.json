@@ -17,6 +17,7 @@
     "db:setup": "node scripts/setup-db.js",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
+     "studio": "prisma studio --port 5556",
     "seed": "js-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.js"
   },
   "dependencies": {
@@ -57,6 +58,7 @@
     "pptxgenjs": "^4.0.1",
     "prisma": "^6.11.1",
     "sharp": "^0.34.3",
+    "spotify-web-api-node": "^5.0.2",
     "stripe": "^18.3.0",
     "tesseract.js": "^5.0.4",
     "tiktoken": "^1.0.22",

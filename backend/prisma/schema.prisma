@@ -28,6 +28,9 @@ model User {
   
   // Google Services Integration (Calendar & Drive)
   googleServicesTokens String?  // Store encrypted Google OAuth tokens for Calendar & Drive as JSON
+
+  // Spotify Integration
+  spotifyTokens String? // Store encrypted Spotify OAuth tokens as JSON
   
   // Stripe Integration Fields
   stripeCustomerId     String?  @unique

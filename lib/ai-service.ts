@@ -68,8 +68,8 @@ Respond with only one word.
             },
             { role: "user", content: prompt },
           ],
-          max_tokens: 10,
-          temperature: 0,
+          
+          temperature: 0.9,
         }),
       });
 

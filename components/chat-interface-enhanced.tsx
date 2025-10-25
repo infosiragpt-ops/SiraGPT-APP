@@ -57,7 +57,7 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
 import { AppSidebar } from "./app-sidebar"
-import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
+import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard" 
 import {
   SidebarProvider,
   Sidebar,
@@ -79,7 +79,9 @@ const ActionsDropdown = ({
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   isGmailActive,
-  isGoogleServicesActive,
+  isGoogleCalendarActive,
+  isGoogleDriveActive,
+  isSpotifyActive,
   setShowAudioPanel,
   setAudioTab,
   handleAndUploadFiles,
@@ -91,9 +93,12 @@ const ActionsDropdown = ({
   isGeneratingPPT,
   isProcessingGmail,
   isProcessingGoogleServices,
+  isProcessingSpotify,
 
   handleGmailToggle,
-  handleGoogleServicesToggle,
+  handleGoogleCalendarToggle,
+  handleGoogleDriveToggle,
+  handleSpotifyToggle,
 
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -249,10 +254,8 @@ const ActionsDropdown = ({
                   ? 'bg-red-100 dark:bg-red-900/20'
                   : 'bg-red-100 dark:bg-red-900/20'
                   }`}>
-                  <Mail className={`h-4 w-4 ${isGmailActive
-                    ? 'text-red-600 dark:text-red-400'
-                    : 'text-red-600 dark:text-red-400'
-                    }`} />
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" />
                 </div>
                 <div className="flex-1">
                   <div className="font-medium text-sm">
@@ -265,28 +268,74 @@ const ActionsDropdown = ({
               </div>
             </DropdownMenuItem>
 
-            {/* Google Services */}
+            {/* Google Calendar */}
             <DropdownMenuItem
-              onClick={handleGoogleServicesToggle}
+              onClick={handleGoogleCalendarToggle}
               disabled={isProcessingGoogleServices}
             >
               <div className="flex items-center gap-3 w-full">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleServicesActive
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleCalendarActive
                   ? 'bg-blue-100 dark:bg-blue-900/20'
                   : 'bg-blue-100 dark:bg-blue-900/20'
                   }`}>
-                  <div className="flex gap-1">
-                    <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                    <FolderOpen className="h-4 w-4 text-green-600 dark:text-green-400" />
-                  </div>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" />
                 </div>
                 <div className="flex-1">
                   <div className="font-medium text-sm">
-                    {isGoogleServicesActive ? 'Google Services Active' : 'Google Services'}
+                    {isGoogleCalendarActive ? 'Calendar Active' : 'Google Calendar'}
                   </div>
                 </div>
-                {isGoogleServicesActive && (
+                {isGoogleCalendarActive && (
                   <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                )}
+              </div>
+            </DropdownMenuItem>
+
+            {/* Google Drive */}
+            <DropdownMenuItem
+              onClick={handleGoogleDriveToggle}
+              disabled={isProcessingGoogleServices}
+            >
+              <div className="flex items-center gap-3 w-full">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleDriveActive
+                  ? 'bg-green-100 dark:bg-green-900/20'
+                  : 'bg-green-100 dark:bg-green-900/20'
+                  }`}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" />
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-sm">
+                    {isGoogleDriveActive ? 'Drive Active' : 'Google Drive'}
+                  </div>
+                </div>
+                {isGoogleDriveActive && (
+                  <div className="w-2 h-2 bg-green-500 rounded-full" />
+                )}
+              </div>
+            </DropdownMenuItem>
+
+            {/* Spotify */}
+            <DropdownMenuItem
+              onClick={handleSpotifyToggle}
+              disabled={isProcessingSpotify}
+            >
+              <div className="flex items-center gap-3 w-full">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isSpotifyActive
+                  ? 'bg-green-100 dark:bg-green-900/20'
+                  : 'bg-green-100 dark:bg-green-900/20'
+                  }`}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" />
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-sm">
+                    {isSpotifyActive ? 'Spotify Active' : 'Spotify'}
+                  </div>
+                </div>
+                {isSpotifyActive && (
+                  <div className="w-2 h-2 bg-green-500 rounded-full" />
                 )}
               </div>
             </DropdownMenuItem>
@@ -564,12 +613,18 @@ const ActiveToolsDisplay = ({
   setIsVideoGenerationActive,
   isGmailActive,
   setIsGmailActive,
-  isGoogleServicesActive,
-  setIsGoogleServicesActive,
+  isGoogleCalendarActive,
+  setIsGoogleCalendarActive,
+  isGoogleDriveActive,
+  setIsGoogleDriveActive,
+  isSpotifyActive,
+  setIsSpotifyActive,
   setChatType,
 
   handleGmailToggle,
-  handleGoogleServicesToggle
+  handleGoogleCalendarToggle,
+  handleGoogleDriveToggle,
+  handleSpotifyToggle
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
@@ -579,17 +634,24 @@ const ActiveToolsDisplay = ({
   setIsVideoGenerationActive: (value: boolean) => void;
   isGmailActive: boolean;
   setIsGmailActive: (value: boolean) => void;
-  isGoogleServicesActive: boolean;
-  setIsGoogleServicesActive: (value: boolean) => void;
+  isGoogleCalendarActive: boolean;
+  setIsGoogleCalendarActive: (value: boolean) => void;
+  isGoogleDriveActive: boolean;
+  setIsGoogleDriveActive: (value: boolean) => void;
+  isSpotifyActive: boolean;
+  setIsSpotifyActive: (value: boolean) => void;
   setChatType: (type: any) => void;
 
   handleGmailToggle: () => void;
-  handleGoogleServicesToggle: () => void;
+  handleGoogleCalendarToggle: () => void;
+  handleGoogleDriveToggle: () => void;
+  handleSpotifyToggle: () => void;
 }) => {
   const activeConnectors = [
-
-    isGmailActive && { id: 'gmail', icon: <Mail className="h-4 w-4 text-red-600" /> },
-    isGoogleServicesActive && { id: 'google', icon: <><Calendar className="h-4 w-4 text-blue-600" /><FolderOpen className="h-4 w-4 text-green-600" /></> },
+    isGmailActive && { id: 'gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
+    isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
+    isGoogleDriveActive && { id: 'drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
+    isSpotifyActive && { id: 'spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
@@ -598,9 +660,10 @@ const ActiveToolsDisplay = ({
   if (!hasConnectors && !hasOtherTools) return null;
 
   const handleCloseAllConnectors = () => {
-
     setIsGmailActive(false);
-    setIsGoogleServicesActive(false);
+    setIsGoogleCalendarActive(false);
+    setIsGoogleDriveActive(false);
+    setIsSpotifyActive(false);
     setChatType('text');
   };
 
@@ -643,7 +706,7 @@ const ActiveToolsDisplay = ({
                 <div className="flex items-center gap-1">
                   {activeConnectors.map(c => <React.Fragment key={c.id}>{c.icon}</React.Fragment>)}
                 </div>
-                <Badge variant="secondary" className="rounded-full h-5 w-5 flex items-center justify-center p-0">{activeConnectors.length}</Badge>
+                {/* <Badge variant="secondary" className="rounded-full h-5 w-5 flex items-center justify-center p-0">{activeConnectors.length}</Badge> */}
                 <ChevronDown className="h-4 w-4" />
               </div>
             </DropdownMenuTrigger>
@@ -652,7 +715,8 @@ const ActiveToolsDisplay = ({
               <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-2">
-                    <Mail className="h-4 w-4 text-red-600" />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" />
                     <span>Gmail</span>
                   </div>
                   <Switch
@@ -664,13 +728,39 @@ const ActiveToolsDisplay = ({
               <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4 text-blue-600" />
-                    <FolderOpen className="h-4 w-4 text-green-600" />
-                    <span>Google Services</span>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" />
+                    <span>Google Calendar</span>
                   </div>
                   <Switch
-                    checked={isGoogleServicesActive}
-                    onCheckedChange={handleGoogleServicesToggle}
+                    checked={isGoogleCalendarActive}
+                    onCheckedChange={handleGoogleCalendarToggle}
+                  />
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" />
+                    <span>Google Drive</span>
+                  </div>
+                  <Switch
+                    checked={isGoogleDriveActive}
+                    onCheckedChange={handleGoogleDriveToggle}
+                  />
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" />
+                    <span>Spotify</span>
+                  </div>
+                  <Switch
+                    checked={isSpotifyActive}
+                    onCheckedChange={handleSpotifyToggle}
                   />
                 </div>
               </DropdownMenuItem>
@@ -918,8 +1008,11 @@ function ChatInterfaceContent() {
   const [isWebSearchActive, setIsWebSearchActive] = React.useState(false);
   const [isGmailActive, setIsGmailActive] = React.useState(false);
   const [isProcessingGmail, setIsProcessingGmail] = React.useState(false);
-  const [isGoogleServicesActive, setIsGoogleServicesActive] = React.useState(false);
+  const [isGoogleCalendarActive, setIsGoogleCalendarActive] = React.useState(false);
+  const [isGoogleDriveActive, setIsGoogleDriveActive] = React.useState(false);
   const [isProcessingGoogleServices, setIsProcessingGoogleServices] = React.useState(false);
+  const [isSpotifyActive, setIsSpotifyActive] = React.useState(false);
+  const [isProcessingSpotify, setIsProcessingSpotify] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
 
 
@@ -929,23 +1022,135 @@ function ChatInterfaceContent() {
     setIsGmailActive(newState);
     if (newState) {
       setIsWebSearchActive(false);
-      setIsGoogleServicesActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
     }
   };
 
-  const handleGoogleServicesToggle = () => {
-    const newState = !isGoogleServicesActive;
+  const handleGoogleCalendarToggle = () => {
+    const newState = !isGoogleCalendarActive;
     setChatType('text');
-    setIsGoogleServicesActive(newState);
+    setIsGoogleCalendarActive(newState);
     if (newState) {
       setIsWebSearchActive(false);
       setIsGmailActive(false);
+      setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
     }
   };
+
+  const handleGoogleDriveToggle = () => {
+    const newState = !isGoogleDriveActive;
+    setChatType('text');
+    setIsGoogleDriveActive(newState);
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+    }
+  };
+
+  const handleSpotifyToggle = () => {
+    const newState = !isSpotifyActive;
+    setChatType('text');
+    setIsSpotifyActive(newState);
+    if (newState) {
+      setIsWebSearchActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+    }
+  };
+
+  const handleSpotifyCommand = async (prompt: string) => {
+    setIsProcessingSpotify(true);
+    try {
+      if (!currentChat) {
+        await createNewChat('spotify', prompt);
+      } else {
+        const assistantPlaceholder = {
+          id: `msg-assistant-processing-${Date.now()}`,
+          chatId: currentChat.id,
+          role: 'ASSISTANT' as const,
+          content: '[PROCESSING_SPOTIFY]',
+          timestamp: new Date().toISOString(),
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
+          return { ...prevChat, messages: updatedMessages };
+        });
+
+        const payload = {
+          prompt,
+          chatId: currentChat?.id,
+        };
+
+        const response = await apiClient.processSpotifyCommand(payload);
+
+        if (response.requiresConnection) {
+          const updateChatWithConnection = (prevChat: any) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg: any) => {
+              if (msg.content === '[PROCESSING_SPOTIFY]') {
+                return {
+                  ...msg,
+                  content: `**Spotify Connection Required**
+
+I can help you with Spotify tasks like:
+- Searching for songs
+- Managing your playlists
+
+But first, you need to connect your Spotify account securely using the button below.`,
+                  metadata: JSON.stringify({
+                    type: 'spotify_connection_required',
+                    showConnectionCard: true
+                  })
+                };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          };
+
+          setCurrentChat(updateChatWithConnection);
+          toast.error('Spotify connection required');
+        } else {
+          await selectChat(currentChat?.id ?? "");
+          toast.success('Spotify response generated!');
+        }
+      }
+    } catch (error: any) {
+      console.error('Spotify error:', error);
+      const errorMessage = error.message || 'Spotify request failed. Please try again.';
+      toast.error(errorMessage);
+
+      const updateChatWithError = (prevChat: any) => {
+        if (!prevChat) return prevChat;
+        const newMessages = prevChat.messages.map((msg: any) => {
+          if (msg.content === '[PROCESSING_SPOTIFY]') {
+            return { ...msg, content: "", error: errorMessage };
+          }
+          return msg;
+        });
+        return { ...prevChat, messages: newMessages };
+      };
+
+      if (currentChat) {
+        setCurrentChat(updateChatWithError);
+      }
+    } finally {
+      setIsProcessingSpotify(false);
+    }
+  }
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
@@ -1191,7 +1396,8 @@ function ChatInterfaceContent() {
       // Reset generation modes when switching chats
       setIsWebSearchActive(false);
       setIsGmailActive(false);
-      setIsGoogleServicesActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
       setChatType('text'); // Always default to text when switching chats
@@ -1418,8 +1624,10 @@ function ChatInterfaceContent() {
         await handleWebSearch();
       } else if (isGmailActive) {
         await handleGmailCommand(msg); // Handle Gmail commands only when Gmail is manually selected
-      } else if (isGoogleServicesActive) {
+      } else if (isGoogleCalendarActive || isGoogleDriveActive) {
         await handleGoogleServicesCommand(msg);
+      } else if (isSpotifyActive) {
+        await handleSpotifyCommand(msg);
       } else if (intent === 'image' || chatType === 'image') {
         await handleImageGeneration(msg, filesToSend.map(f => f.id))
       } else if (isVideoGenerationActive) {
@@ -2217,9 +2425,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 ? "Enter your search query..."
                                 : isGmailActive
                                   ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
-                                  : isGoogleServicesActive
+                                  : (isGoogleCalendarActive || isGoogleDriveActive)
                                     ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
-                                    : "Type your message here..."
+                                    : isSpotifyActive
+                                      ? "Enter Spotify command (e.g., 'search for a song by Queen')..."
+                                      : "Type your message here..."
                         }
                         className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
                         style={{
@@ -2251,11 +2461,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isGmailActive={isGmailActive}
-                          isGoogleServicesActive={isGoogleServicesActive}
+                          isGoogleCalendarActive={isGoogleCalendarActive}
+                          isGoogleDriveActive={isGoogleDriveActive}
+                          isSpotifyActive={isSpotifyActive}
                           setShowAudioPanel={setShowAudioPanel}
 
                           handleGmailToggle={handleGmailToggle}
-                          handleGoogleServicesToggle={handleGoogleServicesToggle}
+                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                          handleGoogleDriveToggle={handleGoogleDriveToggle}
+                          handleSpotifyToggle={handleSpotifyToggle}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
@@ -2275,12 +2489,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isGmailActive={isGmailActive}
                           setIsGmailActive={setIsGmailActive}
-                          isGoogleServicesActive={isGoogleServicesActive}
-                          setIsGoogleServicesActive={setIsGoogleServicesActive}
+                          isGoogleCalendarActive={isGoogleCalendarActive}
+                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                          isGoogleDriveActive={isGoogleDriveActive}
+                          setIsGoogleDriveActive={setIsGoogleDriveActive}
+                          isSpotifyActive={isSpotifyActive}
+                          setIsSpotifyActive={setIsSpotifyActive}
                           setChatType={setChatType}
 
                           handleGmailToggle={handleGmailToggle}
-                          handleGoogleServicesToggle={handleGoogleServicesToggle}
+                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                          handleGoogleDriveToggle={handleGoogleDriveToggle}
+                          handleSpotifyToggle={handleSpotifyToggle}
                         />
                         <div className="flex-grow" />
                         {!(isLoading && isStreaming) && (
@@ -2291,7 +2511,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             />
                             <Button
                               onClick={handleSend}
-                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices}
+                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify}
                               size="sm"
                               className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                             >
@@ -2503,9 +2723,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     ? "Enter your search query..."
                                     : isGmailActive
                                       ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
-                                      : isGoogleServicesActive
+                                      : (isGoogleCalendarActive || isGoogleDriveActive)
                                         ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
-                                        : "Type your message here..."
+                                        : isSpotifyActive
+                                          ? "Enter Spotify command (e.g., 'search for a song by Queen')..."
+                                          : "Type your message here..."
                             }
                             className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
                             style={{
@@ -2536,11 +2758,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isGmailActive={isGmailActive}
-                              isGoogleServicesActive={isGoogleServicesActive}
+                              isGoogleCalendarActive={isGoogleCalendarActive}
+                              isGoogleDriveActive={isGoogleDriveActive}
+                              isSpotifyActive={isSpotifyActive}
                               setShowAudioPanel={setShowAudioPanel}
 
                               handleGmailToggle={handleGmailToggle}
-                              handleGoogleServicesToggle={handleGoogleServicesToggle}
+                              handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                              handleGoogleDriveToggle={handleGoogleDriveToggle}
+                              handleSpotifyToggle={handleSpotifyToggle}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
@@ -2560,12 +2786,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isGmailActive={isGmailActive}
                               setIsGmailActive={setIsGmailActive}
-                              isGoogleServicesActive={isGoogleServicesActive}
-                              setIsGoogleServicesActive={setIsGoogleServicesActive}
+                              isGoogleCalendarActive={isGoogleCalendarActive}
+                              setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                              isGoogleDriveActive={isGoogleDriveActive}
+                              setIsGoogleDriveActive={setIsGoogleDriveActive}
+                              isSpotifyActive={isSpotifyActive}
+                              setIsSpotifyActive={setIsSpotifyActive}
                               setChatType={setChatType}
 
                               handleGmailToggle={handleGmailToggle}
-                              handleGoogleServicesToggle={handleGoogleServicesToggle}
+                              handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                              handleGoogleDriveToggle={handleGoogleDriveToggle}
+                              handleSpotifyToggle={handleSpotifyToggle}
                             />
                             <div className="flex-grow" />
                             {!(isLoading && isStreaming) && (
@@ -2576,7 +2808,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 />
                                 <Button
                                   onClick={handleSend}
-                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices}
+                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify}
                                   size="sm"
                                   className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                                 >

@@ -47,6 +47,7 @@ import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
+import SpotifyConnectionCard from "./SpotifyConnectionCard"
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
@@ -633,6 +634,20 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     }, [message.metadata]);
 
+    const isSpotifyConnectionRequired = useMemo(() => {
+        try {
+            if (message.metadata) {
+                const metadata = typeof message.metadata === 'string'
+                    ? JSON.parse(message.metadata)
+                    : message.metadata;
+                return metadata?.type === 'spotify_connection_required' && metadata?.showConnectionCard;
+            }
+            return false;
+        } catch {
+            return false;
+        }
+    }, [message.metadata]);
+
     // Gmail Connection Component
     const GmailConnectionDisplay = () => {
         if (!isGmailConnectionRequired) return null;
@@ -662,6 +677,16 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         }
                     }}
                 />
+            </div>
+        );
+    };
+
+    const SpotifyConnectionDisplay = () => {
+        if (!isSpotifyConnectionRequired) return null;
+
+        return (
+            <div className="mt-4">
+                <SpotifyConnectionCard />
             </div>
         );
     };
@@ -1159,6 +1184,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} />
                                 <GmailConnectionDisplay />
                                 <GoogleServicesConnectionDisplay />
+                                <SpotifyConnectionDisplay />
                             </>
                         )}
 
