@@ -1,6 +1,20 @@
 const crypto = require('crypto');
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+if (!ENCRYPTION_KEY) {
+  console.error('❌ ENCRYPTION_KEY not set in environment variables!');
+  console.error('   Add ENCRYPTION_KEY to your .env file for consistent token encryption.');
+  process.exit(1);
+}
+
+// Validate encryption key length (should be 64 hex characters = 32 bytes)
+if (ENCRYPTION_KEY.length !== 64) {
+  console.error('❌ ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes)');
+  console.error('   Current length:', ENCRYPTION_KEY.length);
+  console.error('   Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+  process.exit(1);
+}
+
 const IV_LENGTH = 16;
 
 function encrypt(text) {
