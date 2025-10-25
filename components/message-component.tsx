@@ -48,6 +48,15 @@ import { CustomCodeBlock } from "./ui/custom-code-block"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 
+// Adjusted truncateUrl function to ensure links are not overly shortened
+const truncateUrl = (url: string, maxLength: number = 30) => {
+    if (url.length <= maxLength) return url;
+    const domain = url.split('/')[2]; // Extract domain
+    const path = url.split('/').slice(3).join('/'); // Extract path
+    const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
+    return `${domain}/${truncatedPath}`;
+};
+
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
     const chartFile = files.find(f => f.type === 'chart');
@@ -552,7 +561,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
                 strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
                 em: ({ children }: any) => <em className="italic">{children}</em>,
-                a: ({ href, children, ...props }: any) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600" {...props}>{children}</a>
+                a: ({ href, children, ...props }: any) => (
+                    <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
+                        title={href} // Tooltip for full URL
+                        {...props}
+                    >
+                        {truncateUrl(href)}
+                    </a>
+                )
             };
 
             if (isStreaming) {
