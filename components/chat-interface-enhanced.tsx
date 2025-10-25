@@ -240,7 +240,7 @@ const ActionsDropdown = ({
 
                 </svg> */}
 
-                <Network />
+                <Network width="13" height="13" />
               </div>
               <div className="flex-1">
                 <div className="font-medium text-sm flex items-center">
@@ -698,7 +698,7 @@ const ActiveToolsDisplay = ({
               <path d="M16.5 12.5C16.5 14.9853 14.4853 17 12 17C9.51472 17 7.5 14.9853 7.5 12.5C7.5 10.0147 9.51472 8 12 8C14.4853 8 16.5 10.0147 16.5 12.5Z" stroke="currentColor" stroke-width="1.5" />
 
             </svg> */}
-            <Network />
+            <Network width="13" height="13" />
             <span className="font-medium">Connectors</span>
             <Button
               variant="ghost"
@@ -1606,14 +1606,12 @@ But first, you need to connect your Spotify account securely using the button be
     if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices) return
 
     const msg = input.trim()
-    // Deep copy files to avoid reference issues
     const filesToSend = [...uploadedFiles];
-
 
     setInput("")
 
     try {
-      // ✅ STEP 1: Show user message IMMEDIATELY (before any processing)
+      // STEP 1: Show user message IMMEDIATELY
       if (currentChat) {
         const userMessage = {
           id: `msg-user-${Date.now()}`,
@@ -1630,47 +1628,67 @@ But first, you need to connect your Spotify account securely using the button be
         });
       }
 
-      // Clear files AFTER displaying user message
       setUploadedFiles([]);
-      // ✅ STEP 2: Classify intent in background (doesn't block UI)
+
+      // STEP 2: Handle pre-selected modes first, without calling intent
+      if (isWebSearchActive) {
+        await handleWebSearch(msg);
+        return;
+      }
+      if (isGmailActive) {
+        await handleGmailCommand(msg);
+        return;
+      }
+      if (isGoogleCalendarActive || isGoogleDriveActive) {
+        await handleGoogleServicesCommand(msg);
+        return;
+      }
+      if (isSpotifyActive) {
+        await handleSpotifyCommand(msg);
+        return;
+      }
+      if (isImageGenerationActive || chatType === 'image') {
+        await handleImageGeneration(msg, filesToSend.map(f => f.id));
+        return;
+      }
+      if (isVideoGenerationActive || chatType === 'video') {
+        await handleVideoGeneration(msg);
+        return;
+      }
+
+      // STEP 3: If no mode is active, THEN classify intent
       const intent = await aiService.classifyIntent(msg);
 
-      if (intent === 'image' || chatType === 'image' || chatType === 'video') {
+      // File type validation based on intent
+      if (intent === 'image' || intent === 'video') {
         const hasNonImageFiles = filesToSend.some(
           (file) => !file.type?.startsWith('image/')
         );
-
         if (hasNonImageFiles) {
-          toast.error("Only image files are allowed in image/video mode.");
+          toast.error("Only image files are allowed for this task.");
           return;
         }
       }
 
-      // ✅ STEP 3: Handle based on intent (each handler adds AI response)
-      if (isWebSearchActive) {
-        await handleWebSearch();
-      } else if (isGmailActive) {
-        await handleGmailCommand(msg); // Handle Gmail commands only when Gmail is manually selected
-      } else if (isGoogleCalendarActive || isGoogleDriveActive) {
-        await handleGoogleServicesCommand(msg);
-      } else if (isSpotifyActive) {
-        await handleSpotifyCommand(msg);
-      } else if (intent === 'image' || chatType === 'image') {
-        await handleImageGeneration(msg, filesToSend.map(f => f.id))
-      } else if (isVideoGenerationActive) {
-        await handleVideoGeneration(msg);
-      } else if (intent === 'ppt') {
-        await handlePPTGeneration(msg);
-      } else if (intent === 'webdev') {
-        await handleWebDevGeneration(msg);
-      } else {
-        // For text messages, use addMessage but tell it user message already added
-        if (!currentChat) {
-          await createNewChat('text', msg, filesToSend);
-        } else {
-          // Call addMessage with skipUserMessage flag
-          await addMessage(msg, filesToSend, currentChat, true);
-        }
+      // STEP 4: Handle based on classified intent
+      switch (intent) {
+        case 'image':
+          await handleImageGeneration(msg, filesToSend.map(f => f.id));
+          break;
+        case 'ppt':
+          await handlePPTGeneration(msg);
+          break;
+        case 'webdev':
+          await handleWebDevGeneration(msg);
+          break;
+        default:
+          // For text messages (and other unhandled intents)
+          if (!currentChat) {
+            await createNewChat('text', msg, filesToSend);
+          } else {
+            await addMessage(msg, filesToSend, currentChat, true); // skipUserMessage is true
+          }
+          break;
       }
     } catch (err: any) {
       console.error('Send error', err);
@@ -2135,8 +2153,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   const isInitial = !currentChat && !showAudioPanel
 
-  const handleWebSearch = async () => {
-    if (!input.trim()) {
+  const handleWebSearch = async (searchQuery: string) => {
+    if (!searchQuery) {
       toast.error('Please enter a search query');
       return;
     }
@@ -2147,7 +2165,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: `🔍 Web Search: ${input.trim().substring(0, 30)}`,
+          title: `🔍 Web Search: ${searchQuery.substring(0, 30)}`,
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -2164,8 +2182,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
 
     setIsWebSearching(true);
-    const searchQuery = input.trim();
-    setInput(''); // Clear input immediately after starting search
 
     try {
       // Only add user message for new chat (existing chat already has it from handleSend)
