@@ -264,13 +264,8 @@ export default function CreateGPTPage() {
         visibility: formData.visibility,
         category: formData.category || undefined,
         capabilities: formData.capabilities,
-        iconUrl: formData.iconUrl || undefined
-      }
-
-      // Handle icon upload if file is selected
-      if (formData.iconFile) {
-        // Create a text-based icon URL for now (since you mentioned emoji support)
-        toast.info("Custom image upload is not yet implemented. Using text icon instead.")
+        iconUrl: formData.iconUrl || undefined,
+        iconFile: formData.iconFile || undefined,
       }
 
       let result: CustomGPT
@@ -620,7 +615,7 @@ export default function CreateGPTPage() {
                     </div>
 
                     {/* Upload Image Button */}
-                    {/*  <div className="flex gap-2">
+                    <div className="flex gap-2">
                       <Button variant="outline" size="sm" asChild>
                         <label htmlFor="icon-upload" className="cursor-pointer">
                           <Upload className="h-4 w-4 mr-2" />
@@ -639,7 +634,7 @@ export default function CreateGPTPage() {
                           Remove
                         </Button>
                       )}
-                    </div>*/}
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       Choose an emoji, upload an image, or use the first letter of your GPT's name
                     </p>

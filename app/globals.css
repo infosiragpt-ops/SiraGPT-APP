@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import 'katex/dist/katex.min.css';
 @tailwind base;
 @tailwind components;
@@ -87,9 +88,9 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size: 16px;
-    line-height: 1.5;
+    line-height: 1.625;
   }
 }
 
@@ -501,11 +502,15 @@
 
 /* Scrollbar hide utility */
 .scrollbar-hide {
-  -ms-overflow-style: none;  /* IE and Edge */
-  scrollbar-width: none;  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE and Edge */
+  scrollbar-width: none;
+  /* Firefox */
 }
+
 .scrollbar-hide::-webkit-scrollbar {
-  display: none;  /* Chrome, Safari, Opera */
+  display: none;
+  /* Chrome, Safari, Opera */
 }
 
 /* Line clamp utilities for better text truncation */
@@ -524,27 +529,55 @@
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
+
 @keyframes bounce-smooth {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-4px);
+  }
 }
+
 .animate-bounce-smooth {
   animation: bounce-smooth 1.6s infinite ease-in-out;
 }
 
 @keyframes wave {
-  0% { transform: translateX(-100%); opacity: 0.3; }
-  50% { opacity: 0.6; }
-  100% { transform: translateX(100%); opacity: 0.3; }
+  0% {
+    transform: translateX(-100%);
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+
+  100% {
+    transform: translateX(100%);
+    opacity: 0.3;
+  }
 }
+
 .animate-wave {
   animation: wave 3s infinite linear;
 }
 
 @keyframes glow {
-  0%, 100% { box-shadow: 0 0 25px rgba(16, 185, 129, 0.6); }
-  50% { box-shadow: 0 0 35px rgba(16, 185, 129, 0.8); }
+
+  0%,
+  100% {
+    box-shadow: 0 0 25px rgba(16, 185, 129, 0.6);
+  }
+
+  50% {
+    box-shadow: 0 0 35px rgba(16, 185, 129, 0.8);
+  }
 }
+
 .animate-glow {
   animation: glow 2s infinite ease-in-out;
 }

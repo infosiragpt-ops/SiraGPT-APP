@@ -100,6 +100,8 @@ const GPTAvatar = ({ gpt }: { gpt: CustomGPT }) => {
   const isImageUrl = gpt.iconUrl && (
     gpt.iconUrl.startsWith('http') ||
     gpt.iconUrl.startsWith('https') ||
+    gpt.iconUrl.startsWith('/upload') ||
+
     gpt.iconUrl.startsWith('data:')
   )
 
@@ -107,7 +109,7 @@ const GPTAvatar = ({ gpt }: { gpt: CustomGPT }) => {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={gpt.iconUrl}
+        src={process.env.NEXT_PUBLIC_IMAGE_URL! + gpt.iconUrl}
         alt={`${gpt.name} icon`}
         className="w-10 h-10 sm:w-12 sm:h-12 rounded-full object-cover flex-shrink-0"
       />
@@ -530,9 +532,9 @@ export default function GPTsPage() {
               </p>
             </div>
             <DialogFooter className="mt-4 sm:mt-6">
-              <Button 
-                type="button" 
-                variant="secondary" 
+              <Button
+                type="button"
+                variant="secondary"
                 onClick={() => setShareDialogOpen(false)}
                 className="w-full sm:w-auto text-sm"
               >

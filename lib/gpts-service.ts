@@ -33,6 +33,7 @@ export interface CustomGPT {
 export interface CreateGPTData {
   name: string
   description?: string
+  iconFile?: File
   iconUrl?: string
   instructions: string
   greetingMessage?: string
@@ -139,14 +140,24 @@ class GPTsService {
 
   async createGPT(gptData: CreateGPTData): Promise<CustomGPT> {
     try {
+      const { iconFile, ...jsonData } = gptData
+      const formData = new FormData()
+
+      // Append JSON data as a string
+      formData.append('gpts', JSON.stringify(jsonData))
+
+      // Append file if it exists
+      if (iconFile) {
+        formData.append('icon', iconFile)
+      }
+
       const response = await fetch(this.baseUrl, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
         },
         credentials: 'include',
-        body: JSON.stringify(gptData),
+        body: formData,
       })
 
       if (!response.ok) {
@@ -164,15 +175,24 @@ class GPTsService {
 
   async updateGPT(id: string, gptData: Partial<CreateGPTData>): Promise<CustomGPT> {
     try {
+      const { iconFile, ...jsonData } = gptData
+      const formData = new FormData()
+
+      // Append JSON data as a string
+      formData.append('gpts', JSON.stringify(jsonData))
+
+      // Append file if it exists
+      if (iconFile) {
+        formData.append('icon', iconFile)
+      }
+
       const response = await fetch(`${this.baseUrl}/${id}`, {
         method: 'PUT',
         headers: {
-          'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-
         },
         credentials: 'include',
-        body: JSON.stringify(gptData),
+        body: formData,
       })
 
       if (!response.ok) {

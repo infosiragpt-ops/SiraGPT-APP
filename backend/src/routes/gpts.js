@@ -1,6 +1,7 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticateToken } = require('../middleware/auth');
+const upload = require('../middleware/upload');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -173,13 +174,13 @@ router.get('/share/:shareId', async (req, res) => {
 });
 
 // POST /api/gpts - Create new GPT
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
   try {
     const userId = req.user.id;
+    const gptData = JSON.parse(req.body.gpts);
     const {
       name,
       description,
-      iconUrl,
       instructions,
       greetingMessage,
       modelName,
@@ -190,7 +191,12 @@ router.post('/', authenticateToken, async (req, res) => {
       category,
       actions,
       capabilities
-    } = req.body;
+    } = gptData;
+
+    let iconUrl = gptData.iconUrl;
+    if (req.file) {
+      iconUrl = `/uploads/${req.user.id}/${req.file.filename}`;
+    }
 
     // Validation
     if (!name || !instructions) {
@@ -241,14 +247,14 @@ router.post('/', authenticateToken, async (req, res) => {
 });
 
 // PUT /api/gpts/:id - Update GPT
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
+    const gptData = JSON.parse(req.body.gpts);
     const {
       name,
       description,
-      iconUrl,
       instructions,
       greetingMessage,
       modelName,
@@ -258,7 +264,12 @@ router.put('/:id', authenticateToken, async (req, res) => {
       visibility,
       category,
       actions
-    } = req.body;
+    } = gptData;
+
+    let iconUrl = gptData.iconUrl;
+    if (req.file) {
+      iconUrl = `/uploads/${req.user.id}/${req.file.filename}`;
+    }
 
     // Check if GPT exists and user owns it
     const existingGpt = await prisma.customGpt.findUnique({

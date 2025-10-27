@@ -474,6 +474,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     }, [message.files])
 
+    const hasFiles = parsedFiles && parsedFiles.length > 0;
+    const hasContent = message.content && message.content.trim() !== "";
+
     // Detect if this assistant message includes a structured Gmail payload to avoid duplicate markdown
     const hasGmailEntry = useMemo(() => {
         return Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
@@ -899,7 +902,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     };
 
     // Gmail emails/search display with inline actions
-   const GmailEmailsDisplay = () => {
+    const GmailEmailsDisplay = () => {
         // Find gmail emails or search results payload
         const gmailEntry = Array.isArray(parsedFiles)
             ? parsedFiles.find((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
@@ -1349,38 +1352,42 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
             <div className={`flex flex-col w-full ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
-                    <Card className="group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white">
-                        {isEditing ? (
-                            <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
-                                <Textarea
-                                    value={editedContent}
-                                    onChange={(e) => setEditedContent(e.target.value)}
-                                    className="min-h-[80px]"
-                                />
-                                <div className="flex gap-2 justify-end">
-                                    <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)}>Cancel</Button>
-                                    <Button size="sm" onClick={handleEditSave}>Save</Button>
-                                </div>
-                            </div>
-                        ) : (
-                            <>
-                                <div className="absolute bottom-1 right-1 hidden group-hover:flex items-center gap-1 bg-background/80 backdrop-blur-sm p-1 rounded-md border">
-                                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard.writeText(message.content); toast.success("Copied!"); }} title="Copy">
-                                        <Copy size={14} />
-                                    </Button>
-                                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsEditing(true)} title="Edit">
-                                        <Pencil size={14} />
-                                    </Button>
-                                </div>
+                    <>
+                        {hasFiles && (
+                            <Card className="group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white">
                                 <FileDisplay />
-                                <div className="mt-2" />
-                                <MessageContent />
-
-                                {/* Preview is now an on-demand button within each code block header */}
-
-                            </>
+                            </Card>
                         )}
-                    </Card>
+                        {hasContent && (
+                            <Card className={`group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ${hasFiles ? 'mt-2' : ''}`}>
+                                {isEditing ? (
+                                    <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
+                                        <Textarea
+                                            value={editedContent}
+                                            onChange={(e) => setEditedContent(e.target.value)}
+                                            className="min-h-[80px]"
+                                        />
+                                        <div className="flex gap-2 justify-end">
+                                            <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)}>Cancel</Button>
+                                            <Button size="sm" onClick={handleEditSave}>Save</Button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="absolute bottom-1 right-1 hidden group-hover:flex items-center gap-1 bg-background/80 backdrop-blur-sm p-1 rounded-md border">
+                                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard.writeText(message.content); toast.success("Copied!"); }} title="Copy">
+                                                <Copy size={14} />
+                                            </Button>
+                                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsEditing(true)} title="Edit">
+                                                <Pencil size={14} />
+                                            </Button>
+                                        </div>
+                                        <MessageContent />
+                                    </>
+                                )}
+                            </Card>
+                        )}
+                    </>
                 )}
 
                 {message.role === 'ASSISTANT' && (
@@ -1391,7 +1398,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             <ShimmerContent />
                         ) : (
                             <>
-                               {hasGmailEntry ? (
+                                {hasGmailEntry ? (
                                     <>
                                         <GmailSummary message={message} />
                                         <GmailEmailsDisplay />
