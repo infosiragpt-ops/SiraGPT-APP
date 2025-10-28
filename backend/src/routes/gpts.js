@@ -411,8 +411,8 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
     }
 
     // Check access permissions
-    if (gpt.creatorId !== userId) {
-      return res.status(403).json({ error: 'Access denied' });
+    if (gpt.visibility === 'PRIVATE' && gpt.creatorId !== userId) {
+      return res.status(403).json({ error: 'Access denied. This GPT is private.' });
     }
 
     // Create a new chat with this GPT
