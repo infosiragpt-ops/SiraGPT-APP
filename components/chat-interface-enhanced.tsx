@@ -2534,7 +2534,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isLoading ||
                           isGeneratingImage ||
                           isGeneratingVideo ||
-                          isUploading ||
+                          
                           isWebSearching
                         }
                       />
@@ -2832,7 +2832,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             disabled={
                               // isLoading ||
                               isGeneratingVideo ||
-                              isUploading ||
+                             
                               isWebSearching
                             }
                           />
