@@ -770,10 +770,10 @@ export default function CreateGPTPage() {
                   value={formData.instructions}
                   onChange={(e) => handleInputChange("instructions", e.target.value)}
                   rows={8}
-                  maxLength={8000}
+                  maxLength={50000}
                 />
                 <div className="text-xs text-muted-foreground">
-                  {formData.instructions.length}/8000 characters
+                  {formData.instructions.length}/50000 characters
                 </div>
               </div>
 
