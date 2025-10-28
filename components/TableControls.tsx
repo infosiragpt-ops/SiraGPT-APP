@@ -93,7 +93,7 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
     return (
         <div className="flex items-center justify-between -pb-8 -mb-5 border-t border-l border-r rounded-t-xl">
             {/* {title && <h3 className="text-lg font-semibold">{title}</h3>} */}
-            <div className="text-lg pl-2 font-semibold">{title || 'Generated Table'}</div>
+            <div className="text-lg pl-2 font-semibold">{ }</div>
             <div className="flex items-center space-x-2">
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>

@@ -174,10 +174,10 @@ const ActionsDropdown = ({
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 w-8 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
+          className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
           disabled={isDisabled}
         >
-          <Plus className="h-4 w-4" />
+          <Plus className="h-5 w-5" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
@@ -1582,13 +1582,28 @@ But first, you need to connect your Spotify account securely using the button be
     }
   };
 
-  // Drag and Drop event handlers
+  // Drag and Drop event handlers with drag counter to prevent flickering
+  const dragCounter = React.useRef(0);
+
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
+  };
+
+  const handleDragIn = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
       setIsDragging(true);
-    } else if (e.type === "dragleave") {
+    }
+  };
+
+  const handleDragOut = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
       setIsDragging(false);
     }
   };
@@ -1597,40 +1612,64 @@ But first, you need to connect your Spotify account securely using the button be
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
+    dragCounter.current = 0;
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       handleAndUploadFiles(e.dataTransfer.files);
     }
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices) return
+    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices) return;
 
-    const msg = input.trim()
+    const msg = input.trim();
     const filesToSend = [...uploadedFiles];
+    setInput("");
+    setUploadedFiles([]);
 
-    setInput("")
+    let isNewChat = !currentChat;
+    let chatToUpdate = currentChat;
+    let duumychatId = `temp-chat-${Date.now()}`
+
+    // Optimistically add the user message to the UI immediately.
+    const userMessage = {
+      id: `msg-user-${Date.now()}`,
+      chatId: currentChat?.id || duumychatId,
+      role: 'USER' as const,
+      content: msg,
+      timestamp: new Date().toISOString(),
+      files: filesToSend,
+    };
+    const assistantPlaceholder = {
+      id: `msg-assistant-processing-${Date.now()}`,
+      chatId: currentChat?.id || duumychatId,
+      role: 'ASSISTANT' as const,
+      content: '',
+      timestamp: new Date().toISOString(),
+    };
+
+    if (isNewChat) {
+      const tempChat = {
+        id: userMessage.chatId,
+        title: msg.substring(0, 30),
+        messages: [userMessage, assistantPlaceholder],
+        customGptId: null,
+        customGpt: null,
+      };
+      setCurrentChat(tempChat as any);
+      chatToUpdate = tempChat as any;
+    } else {
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), userMessage];
+        return { ...prevChat, messages: updatedMessages };
+      });
+    }
 
     try {
-      // STEP 1: Show user message IMMEDIATELY
-      if (currentChat) {
-        const userMessage = {
-          id: `msg-user-${Date.now()}`,
-          chatId: currentChat.id,
-          role: 'USER' as const,
-          content: msg,
-          timestamp: new Date().toISOString(),
-          files: uploadedFiles,
-        };
-        setCurrentChat(prevChat => {
-          if (!prevChat) return prevChat;
-          const updatedMessages = [...(prevChat.messages || []), userMessage];
-          return { ...prevChat, messages: updatedMessages };
-        });
-      }
+      // After optimistic update, run the logic.
+      // For existing chats, we pass `true` to `addMessage` to skip re-adding the user message.
+      // For new chats, `createNewChat` will handle creating the chat, and the context will replace the temp chat.
 
-      setUploadedFiles([]);
-
-      // STEP 2: Handle pre-selected modes first, without calling intent
       if (isWebSearchActive) {
         await handleWebSearch(msg);
         return;
@@ -1656,21 +1695,20 @@ But first, you need to connect your Spotify account securely using the button be
         return;
       }
 
-      // STEP 3: If no mode is active, THEN classify intent
       const intent = await aiService.classifyIntent(msg);
 
-      // File type validation based on intent
       if (intent === 'image' || intent === 'video') {
         const hasNonImageFiles = filesToSend.some(
           (file) => !file.type?.startsWith('image/')
         );
         if (hasNonImageFiles) {
           toast.error("Only image files are allowed for this task.");
+          // Note: The optimistic message is already shown. This is a trade-off.
+          // A more complex implementation could remove the optimistic message on validation failure.
           return;
         }
       }
 
-      // STEP 4: Handle based on classified intent
       switch (intent) {
         case 'image':
           await handleImageGeneration(msg, filesToSend.map(f => f.id));
@@ -1682,11 +1720,10 @@ But first, you need to connect your Spotify account securely using the button be
           await handleWebDevGeneration(msg);
           break;
         default:
-          // For text messages (and other unhandled intents)
-          if (!currentChat) {
+          if (isNewChat) {
             await createNewChat('text', msg, filesToSend);
           } else {
-            await addMessage(msg, filesToSend, currentChat, true); // skipUserMessage is true
+            await addMessage(msg, filesToSend, chatToUpdate, true); // skipUserMessage is true
           }
           break;
       }
@@ -1704,7 +1741,7 @@ But first, you need to connect your Spotify account securely using the button be
       // Add error message to chat
       const errorMessage = {
         id: `msg-error-${Date.now()}`,
-        chatId: currentChat?.id || 'unknown',
+        chatId: chatToUpdate?.id || 'unknown',
         role: 'ASSISTANT' as const,
         content: '',
         timestamp: new Date().toISOString(),
@@ -1718,7 +1755,6 @@ But first, you need to connect your Spotify account securely using the button be
       });
     }
   }
-
   const handleGmailCommand = async (prompt: string) => {
     setIsProcessingGmail(true);
 
@@ -2148,6 +2184,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
+  // Prevent Enter key from adding new line when not holding Shift
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
   const removeFile = (index: number) => {
     setUploadedFiles(uploadedFiles.filter((_, i) => i !== index))
   }
@@ -2302,9 +2346,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   return (
     <div
       className="flex h-full flex-col relative"
-      onDragEnter={handleDrag}
+      onDragEnter={handleDragIn}
       onDragOver={handleDrag}
-      onDragLeave={handleDrag}
+      onDragLeave={handleDragOut}
       onDrop={handleDrop}
     >
       {isDragging && (
@@ -2459,6 +2503,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onChange={(e) => {
                           setInput(e.target.value);
                         }}
+                        onKeyDown={handleKeyDown}
                         onKeyPress={handleKeyPress}
                         placeholder={
                           isImageGenerationActive
@@ -2754,8 +2799,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             ref={textareaRef}
                             value={input}
                             onChange={(e) => {
-                             setInput(e.target.value);
+                              setInput(e.target.value);
                             }}
+                            onKeyDown={handleKeyDown}
+                            onKeyPress={handleKeyPress}
                             placeholder={
                               isImageGenerationActive
                                 ? "Describe the image you want to create..."
