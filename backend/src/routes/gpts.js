@@ -207,8 +207,8 @@ router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
       return res.status(400).json({ error: 'Name must be 100 characters or less' });
     }
 
-    if (instructions.length > 8000) {
-      return res.status(400).json({ error: 'Instructions must be 8000 characters or less' });
+    if (instructions.length > 50000) {
+      return res.status(400).json({ error: 'Instructions must be 50000 characters or less' });
     }
 
     const gpt = await prisma.customGpt.create({
@@ -289,8 +289,8 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
       return res.status(400).json({ error: 'Name must be 100 characters or less' });
     }
 
-    if (instructions && instructions.length > 8000) {
-      return res.status(400).json({ error: 'Instructions must be 8000 characters or less' });
+    if (instructions && instructions.length > 50000) {
+      return res.status(400).json({ error: 'Instructions must be 50000 characters or less' });
     }
 
     const updatedGpt = await prisma.customGpt.update({
