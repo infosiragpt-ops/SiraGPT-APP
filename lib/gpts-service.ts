@@ -293,7 +293,7 @@ class GPTsService {
 
   validateInstructions(instructions: string): string | null {
     if (!instructions.trim()) return 'Instructions are required'
-    if (instructions.length > 8000) return 'Instructions must be 8000 characters or less'
+    if (instructions.length > 50000) return 'Instructions must be 50000 characters or less'
     return null
   }
 
