@@ -9,19 +9,19 @@ const bcrypt = require('bcryptjs');
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: "/api/auth/google/callback",
+  callbackURL: process.env.GOOGLE_AUTH_URI,
   scope: [
     'profile',
     'email',
-     'https://www.googleapis.com/auth/gmail.readonly',
-     'https://www.googleapis.com/auth/gmail.send',
-     'https://www.googleapis.com/auth/gmail.modify',
-     'https://www.googleapis.com/auth/calendar',
-     'https://www.googleapis.com/auth/calendar.events',
-     'https://www.googleapis.com/auth/drive',
-     'https://www.googleapis.com/auth/drive.file',
-     'https://www.googleapis.com/auth/drive.readonly',
-     'https://www.googleapis.com/auth/drive.metadata.readonly'
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/drive.readonly',
+    'https://www.googleapis.com/auth/drive.metadata.readonly'
   ],
   accessType: 'offline',  // Important: Get refresh token
   prompt: 'consent'        // Force consent screen to get refresh token
@@ -30,17 +30,17 @@ passport.use(new GoogleStrategy({
     console.log('Google OAuth callback - accessToken:', !!accessToken);
     console.log('Google OAuth callback - refreshToken:', !!refreshToken);
     console.log('Google OAuth callback - profile scopes:', profile._json?.scope);
-    
+
     if (!refreshToken) {
       console.error('❌ No refresh token received! User may need to revoke app access and re-authenticate.');
       console.error('📋 To get refresh token: Go to https://myaccount.google.com/permissions, revoke access to your app, then re-authenticate.');
-      
+
       // Check if user already has a refresh token stored
       const existingUser = await prisma.user.findUnique({
         where: { email: profile.emails[0].value },
         select: { gmailTokens: true }
       });
-      
+
       if (existingUser?.gmailTokens) {
         const { decrypt } = require('../utils/encryption');
         try {
@@ -65,17 +65,17 @@ passport.use(new GoogleStrategy({
         }
       }
     }
-    
+
     // Encrypt tokens (you should use a proper encryption library)
     const { encrypt } = require('../utils/encryption'); // Create this utility
-    
+
     // Store full scope information from Google
     const fullScopes = [
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/gmail.modify'
     ].join(' ');
-    
+
     const gmailTokens = JSON.stringify({
       accessToken,
       refreshToken,
@@ -83,7 +83,7 @@ passport.use(new GoogleStrategy({
       scope: fullScopes,
       expiresAt: Date.now() + 3600000 // 1 hour (Google's default)
     });
-    
+
     const googleServicesScopes = [
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/calendar.events',
@@ -92,7 +92,7 @@ passport.use(new GoogleStrategy({
       'https://www.googleapis.com/auth/drive.readonly',
       'https://www.googleapis.com/auth/drive.metadata.readonly'
     ].join(' ');
-    
+
     const googleServicesTokens = JSON.stringify({
       accessToken,
       refreshToken,
@@ -110,7 +110,7 @@ passport.use(new GoogleStrategy({
       // Update user with Google ID and tokens
       user = await prisma.user.update({
         where: { id: user.id },
-        data: { 
+        data: {
           googleId: profile.id,
           gmailTokens: encrypt(gmailTokens),
           googleServicesTokens: encrypt(googleServicesTokens)

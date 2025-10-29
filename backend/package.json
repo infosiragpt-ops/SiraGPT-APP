@@ -17,7 +17,6 @@
     "db:setup": "node scripts/setup-db.js",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-     "studio": "prisma studio --port 5556",
     "seed": "js-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.js"
   },
   "dependencies": {
