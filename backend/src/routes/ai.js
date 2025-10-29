@@ -760,7 +760,7 @@ router.post(
       }
 
       // Generate image using OpenAI DALL-E with timeout
-      let imageUrl, tokens = 1000;
+      let imageUrl, tokens = 10000;
       if (provider === "Gemini") {
 
 
@@ -1147,7 +1147,7 @@ router.post(
             chatId,
             role: 'ASSISTANT',
             content: imageUrl,
-            tokens: 1000,
+            tokens: 10000,
             files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt, fileId: newFileId }])
           }
         });
@@ -1164,7 +1164,7 @@ router.post(
       }
 
       await prisma.apiUsage.create({
-        data: { userId, model, tokens: 1000, cost: 1000 * 0.001 }
+        data: { userId, model, tokens: 10000, cost: 1000 * 0.001 }
       });
 
       const updatedUser = await prisma.user.update({
@@ -1980,7 +1980,7 @@ But first, you need to connect your Gmail account securely using the button belo
       // Decrypt Gmail tokens
       const { decrypt, encrypt } = require('../utils/encryption');
       const gmailService = require('../services/gmail');
-      
+
       let decryptedTokens;
       try {
         decryptedTokens = JSON.parse(decrypt(user.gmailTokens));
@@ -1998,7 +1998,7 @@ But first, you need to connect your Gmail account securely using the button belo
 
       // Check if tokens are expired and need refresh (Google tokens expire in ~1 hour)
       const isExpired = decryptedTokens.expiresAt && decryptedTokens.expiresAt < Date.now();
-      
+
       if (isExpired) {
         console.log('Gmail tokens expired, attempting refresh...');
         try {
@@ -2009,7 +2009,7 @@ But first, you need to connect your Gmail account securely using the button belo
             // Update user with new tokens
             await prisma.user.update({
               where: { id: userId },
-              data: { 
+              data: {
                 gmailTokens: encrypt(JSON.stringify(refreshedTokens))
               }
             });
@@ -2045,7 +2045,7 @@ But first, you need to connect your Gmail account securely using the button belo
       let previousResponseId = null;
       if (chatId) {
         const lastAssistantMessage = await prisma.message.findFirst({
-          where: { 
+          where: {
             chatId,
             role: 'ASSISTANT'
           },
@@ -2173,14 +2173,14 @@ Process the user's request naturally and perform the necessary Gmail operations.
 
           try {
             const output = JSON.parse(call.output);
-            
+
             // Handle different Gmail operations based on the function name
             switch (call.name) {
               case 'list_messages':
               case 'search_messages':
                 if (output.messages) {
-                   const emails = output.messages.map(msg => ({
-              id: msg.id,
+                  const emails = output.messages.map(msg => ({
+                    id: msg.id,
                     threadId: msg.thread_id,
                     subject: msg.subject,
                     from: msg.from,
@@ -2373,7 +2373,7 @@ Process the user's request naturally and perform the necessary Gmail operations.
 
     } catch (error) {
       console.error('Gmail AI generation error:', error);
-      
+
       // Handle specific OpenAI MCP errors
       if (error.message?.includes('authorization') || error.message?.includes('token')) {
         return res.status(401).json({
@@ -2383,8 +2383,8 @@ Process the user's request naturally and perform the necessary Gmail operations.
         });
       }
 
-      res.status(500).json({ 
-        error: error.message || 'Gmail AI generation failed' 
+      res.status(500).json({
+        error: error.message || 'Gmail AI generation failed'
       });
     }
   }
@@ -2809,10 +2809,10 @@ But first, you need to connect your Google Calendar & Drive account securely usi
           requiresConnection: true
         });
       }
-      
+
       // Check if tokens are expired and need refresh
       const isExpired = decryptedTokens.expiresAt && decryptedTokens.expiresAt < Date.now();
-      
+
       if (isExpired && decryptedTokens.refreshToken) {
         console.log('Google Services tokens expired, attempting refresh...');
         try {
@@ -2823,14 +2823,14 @@ But first, you need to connect your Google Calendar & Drive account securely usi
             process.env.GOOGLE_CLIENT_SECRET,
             process.env.GOOGLE_REDIRECT_CALENDAR_DRIVE_URI
           );
-          
+
           oauth2Client.setCredentials({
             access_token: decryptedTokens.accessToken,
             refresh_token: decryptedTokens.refreshToken
           });
-          
+
           const { credentials } = await oauth2Client.refreshAccessToken();
-          
+
           const refreshedTokens = {
             accessToken: credentials.access_token,
             refreshToken: credentials.refresh_token || decryptedTokens.refreshToken,
@@ -2838,16 +2838,16 @@ But first, you need to connect your Google Calendar & Drive account securely usi
             scope: decryptedTokens.scope,
             expiresAt: credentials.expiry_date
           };
-          
+
           // Update user with new tokens
           const { encrypt } = require('../utils/encryption');
           await prisma.user.update({
             where: { id: userId },
-            data: { 
+            data: {
               googleServicesTokens: encrypt(JSON.stringify(refreshedTokens))
             }
           });
-          
+
           decryptedTokens = refreshedTokens;
           console.log('Google Services token refresh successful');
         } catch (refreshError) {
@@ -2859,7 +2859,7 @@ But first, you need to connect your Google Calendar & Drive account securely usi
           });
         }
       }
-      
+
       // Process request using OpenAI MCP
       const mcpResult = await googleMCPService.processRequest(
         chatHistory,
