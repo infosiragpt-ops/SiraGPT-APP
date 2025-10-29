@@ -1249,7 +1249,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         </div>
                     )}
                 {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "USER" && (
-                    <div className="mt-2 pt-2 border-t border-border/20 flex flex-wrap gap-2">
+                    <div className=" border-t border-border/20 flex flex-wrap gap-2">
                         {Array.isArray(parsedFiles) && parsedFiles.some((file: any) => file.type?.startsWith('image/') || file.mimeType?.startsWith('image/')) ? (
                             // Only images, aligned right
                             <div className="flex flex-wrap gap-1 ml-auto">
@@ -1343,7 +1343,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
 
     return (
-        <div className="flex gap-4 my-4">
+        <div className="flex gap-4 my-2">
             {/* {message.role === "ASSISTANT" && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
                     <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
@@ -1354,12 +1354,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 {message.role === 'USER' && (
                     <>
                         {hasFiles && (
-                            <Card className="group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white">
+                            <Card className="group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ">
                                 <FileDisplay />
                             </Card>
                         )}
                         {hasContent && (
-                            <Card className={`group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ${hasFiles ? 'mt-2' : ''}`}>
+                            <Card className={`group relative pt-3 pl-3 pr-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ${hasFiles ? 'mt-1' : ''} `}>
                                 {isEditing ? (
                                     <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
                                         <Textarea

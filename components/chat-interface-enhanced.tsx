@@ -177,7 +177,7 @@ const ActionsDropdown = ({
           className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
           disabled={isDisabled}
         >
-          <Plus className="h-5 w-5" />
+          <Plus className="h-8 w-8" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
@@ -986,6 +986,7 @@ function ChatInterfaceContent() {
     updateMessageInChat,
     isStreaming, // ✅ isStreaming ko yahan se fetch karein
     stopStreaming,
+    isSwitchingChat,
 
   } = useChat()
 
@@ -1000,6 +1001,24 @@ function ChatInterfaceContent() {
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
+
+  // Auto-scroll to bottom function
+  const scrollToBottom = React.useCallback(() => {
+    if (scrollAreaRef.current) {
+      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      if (scrollContainer) {
+        // Use setTimeout to ensure the DOM has updated before scrolling
+        setTimeout(() => {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }, 0);
+      }
+    }
+  }, []);
+
+  // Scroll to bottom only when the chat is changed
+  React.useEffect(() => {
+    scrollToBottom();
+  }, [currentChat?.id]);
 
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -2744,8 +2763,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               ) : (
                 <>
                   {/* Messages */}
+                  {isSwitchingChat && (
+                    <div className="fixed inset-0 z-40 flex items-center justify-center pointer-events-none">
+                      <div className="flex items-center gap-3 rounded-full border bg-background/80 backdrop-blur px-4 py-2 shadow-sm">
+                        <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/40 border-t-foreground animate-spin" />
+                        <span className="text-sm text-muted-foreground">Switching chat…</span>
+                      </div>
+                    </div>
+                  )}
                   <ScrollArea className="flex-1 p-2 md:p-4 mb-6" ref={scrollAreaRef}>
-                    <div className="space-y-4 max-w-4xl mx-auto w-full">
+                    <div className="space-y-4 max-w-3xl mx-auto w-full">
                       {(() => {
                         const messages = currentChat?.messages || [];
                         const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
@@ -2753,6 +2780,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                         return (
                           <>
+                            {isSwitchingChat && (
+                              <div className="flex items-center justify-center py-4">
+                                <div className="flex items-center gap-2 text-muted-foreground">
+                                  <span className="h-2 w-2 rounded-full bg-muted-foreground/70 typing-dot" />
+                                  <span className="h-2 w-2 rounded-full bg-muted-foreground/70 typing-dot" />
+                                  <span className="h-2 w-2 rounded-full bg-muted-foreground/70 typing-dot" />
+                                  <span className="text-sm">Switching chat…</span>
+                                </div>
+                              </div>
+                            )}
                             {stableMessages.map((message) => (
                               <MessageComponent
                                 key={message.id}
@@ -2783,7 +2820,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                   {/* Input & Actions */}
 
-                  <div className="px-2 md:px-4">
+                  <div className="px-2 md:px-4 sticky bottom-0 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 pt-2">
                     <div className="max-w-4xl mx-auto space-y-3">
                       {/* Input Area */}
 
