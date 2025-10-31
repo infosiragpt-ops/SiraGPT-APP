@@ -99,8 +99,7 @@ export class AIService {
       return "Sorry, I encountered an error while processing your request."
     }
   }
-
-  async classifyIntent(prompt: string): Promise<string> {
+  async classifyIntent(prompt: string, conversationHistory: any[] = []): Promise<string> {
     const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
     if (!apiKey) {
       console.error("OpenAI API key not found for intent classification.");
@@ -117,6 +116,11 @@ export class AIService {
       return 'text';
     }
 
+    const history = conversationHistory
+      .slice(-10) // Get the last 10 messages
+      .map(msg => `${msg.role}: ${msg.content}`)
+      .join('\n');
+
     try {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
@@ -129,11 +133,11 @@ export class AIService {
           messages: [
             {
               role: "system",
-              content: `You are an expert at classifying user intent. Analyze the user's prompt (which could be in any language) and classify it into one of these categories: 'gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'webdev', or 'text'.
+              content: `You are an expert at classifying user intent based on the latest message and conversation history. Analyze the user's prompt and classify it into one of these categories: 'gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'webdev', or 'text'.
 
-- 'gmail': Sending, reading, or managing emails. Examples: "send an email to hamza", "read my last 5 emails", "enviar un correo electrónico".
-- 'google_services': Interacting with Google Calendar or Drive. Examples: "show my meetings for tomorrow", "find my marketing presentation on Drive", "mostrar mis eventos del calendario", "busca mi reporte de ventas en Drive".
-- 'web_search': Finding information on the internet. Examples: "who is the president of France?", "what is the weather today?", "¿quién es el presidente de Francia?".
+- 'gmail': Sending, reading, or managing emails.
+- 'google_services': Interacting with Google Calendar or Drive.
+- 'web_search': Finding information on the internet.
 - 'image': Generating images.
 - 'video': Generating videos.
 - 'ppt': Creating presentations.
@@ -141,32 +145,15 @@ export class AIService {
 - 'webdev': Building websites or UI components.
 - 'text': For all other general conversation, questions, and text generation.
 
-
 IMPORTANT: 
+    - Consider the conversation history for context. A simple "yes" might mean "yes, create the website we just discussed."
     - Only classify as 'webdev' if the user is **creating** or **building** a UI or web page. If the request involves **debugging**, **explaining**, or **reviewing code**, classify it as 'text'.
-    - If the user asks for **specific languages** (e.g., "HTML", "React", "CSS"), check if the request is related to **building** a UI. If yes, classify as 'webdev'.
-    - If the user is asking for a general explanation of something (e.g., "What is React?"), classify as 'text'.
     
-Examples:
-- "Design a dark mode developer portfolio" → 'webdev' (web development)
-- "Create a React component" → 'webdev' (web development) 
-- "Build a landing page" → 'webdev' (web development)
-- "Make me a website for my business" → 'webdev' (web development)
-- "Create HTML/CSS for a login form" → 'webdev' (web development)
-- "encuentra mi presentación de marketing del último trimestre en Drive" → 'google_services'
-- "Generate an image of a cat" → 'image' (visual content)
-- "Create a logo design" → 'image' (visual design)
-- "Make a video of sunset" → 'video' (video content)
-- "Explain how React works" → 'text' (explanation)
-- "What is JavaScript?" → 'text' (question)
-Respond with only one word.
-
-`,
+Respond with only one word.`,
             },
-            { role: "user", content: prompt },
+            { role: "user", content: `Conversation History:\n${history}\n\nLatest User Prompt: "${prompt}"` },
           ],
-
-          temperature: 0.9,
+          temperature: 0.2,
         }),
       });
 

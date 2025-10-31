@@ -497,8 +497,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     };
 
     // Optimized message content rendering with performance safeguards
-    const MessageContent = () => {
-        if (message.role === 'ASSISTANT' && (message.content === '[GENERATING_IMAGE]' || message.content === '[PROCESSING_GMAIL]' || message.content === '[PROCESSING_CALENDAR_ACTION]' || message.content === '[PROCESSING_DRIVE_ACTION]')) {
+    const MessageContent = ({ content }: { content: string }) => {
+        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]')) {
             return null;
         }
         // Don't render markdown for image-only messages to improve performance
@@ -611,7 +611,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     // rehypePlugins={[rehypeKatex, rehypeRaw]} //for advacne show website in our app
                     components={components}
                 >
-                    {message.content}
+                    {content}
                 </ReactMarkdown>
             </div>
         );
@@ -628,6 +628,48 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         [parsedFiles]
     )
     const isPPTMessage = !!pptEntry
+
+    const displayedContent = useMemo(() => {
+        if (isPPTMessage && pptEntry.structure?.slides?.length > 0) {
+            const presentationContent = pptEntry.structure.slides.map((slide: any, index: number) => {
+                const title = slide.title || `Slide ${index + 1}`;
+                const contentInput = slide.content;
+                let content = '';
+
+                // Ensure content is a string before processing
+                if (typeof contentInput === 'string') {
+                    content = contentInput;
+                } else if (Array.isArray(contentInput)) {
+                    content = contentInput.join('\n');
+                }
+
+                // Check if content is already a list to avoid double-bulleting
+                const isAlreadyList = content.trim().startsWith('* ') || content.trim().startsWith('- ') || /^\d+\.\s/.test(content.trim());
+
+                if (content && !isAlreadyList) {
+                    content = content
+                        .split('\n')
+                        .filter((line: string) => line.trim() !== '')
+                        .map((line: string) => `* ${line.trim()}`)
+                        .join('\n');
+                }
+
+                return `### ${title}\n${content}`;
+            }).join('\n\n');
+
+            // Replace the placeholder text with the formatted presentation content
+            if (message.content && typeof message.content === 'string') {
+                const placeholderRegex = /generated presentation.*$/i;
+                if (placeholderRegex.test(message.content)) {
+                    return message.content.replace(placeholderRegex, presentationContent);
+                }
+            }
+
+            // Fallback: append if no placeholder is found
+            return `${message.content}\n\n${presentationContent}`;
+        }
+        return message.content;
+    }, [message.content, isPPTMessage, pptEntry]);
 
     // Check for Gmail connection requirement
     const isGmailConnectionRequired = useMemo(() => {
@@ -749,8 +791,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             slides: pptEntry.structure?.slides || [],
             filename: pptEntry.filename || pptEntry.path,
         };
-        const slideCount = pptEntry.slideCount || 0;
-
 
         const getPPTUrl = () => {
             const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
@@ -774,27 +814,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         };
 
         return (
-            <div className="mt-3 p-4 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20">
-                <div className="flex items-center gap-2 text-sm mb-2">
-                    <FileText className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                    <span className="font-semibold text-blue-900 dark:text-blue-100">{presentationData.title}</span>
-                </div>
-                <div className="text-sm text-blue-700 dark:text-blue-300 mb-3">
-                    📊 {slideCount} slides • PowerPoint Presentation
-                </div>
-                <div className="flex gap-2">
-                    <Button size="sm" variant="default" onClick={() => {
-                        const event = new CustomEvent('preview-presentation', { detail: { presentation: presentationData } });
-                        window.dispatchEvent(event);
-                    }} className="bg-blue-600 hover:bg-blue-700">
-                        <Eye className="h-4 w-4 mr-2" />
-                        Preview
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={downloadPPT}>
-                        <Download className="h-4 w-4 mr-2" />
-                        Download
-                    </Button>
-                </div>
+            <div className="flex gap-2 mt-4">
+                <Button size="sm" variant="default" onClick={() => {
+                    const event = new CustomEvent('preview-presentation', { detail: { presentation: presentationData } });
+                    window.dispatchEvent(event);
+                }} className="bg-blue-600 hover:bg-blue-700">
+                    <Eye className="h-4 w-4 mr-2" />
+                    Preview
+                </Button>
+                <Button size="sm" variant="outline" onClick={downloadPPT}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Download
+                </Button>
             </div>
         );
     };
@@ -1382,7 +1413,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                 <Pencil size={14} />
                                             </Button>
                                         </div>
-                                        <MessageContent />
+                                        <MessageContent content={message.content} />
                                     </>
                                 )}
                             </Card>
@@ -1404,7 +1435,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                         <GmailEmailsDisplay />
                                     </>
                                 ) : (
-                                    <MessageContent />
+                                    <MessageContent content={displayedContent} />
                                 )}
                                 <PPTDisplay />
                                 <VideoDisplay />

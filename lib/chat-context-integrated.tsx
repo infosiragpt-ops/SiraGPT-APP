@@ -336,7 +336,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const streamId = crypto.randomUUID();
       setCurrentStreamId(streamId);
       try {
-        const intent = await aiService.classifyIntent(content);
+        const intent = await aiService.classifyIntent(content, currentChat?.messages || []);
         console.log('intent', intent);
 
         if (intent === 'chart') {

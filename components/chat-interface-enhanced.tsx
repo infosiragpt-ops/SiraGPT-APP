@@ -1304,32 +1304,32 @@ But first, you need to connect your Spotify account securely using the button be
       showPresentation(event.detail.presentation);
     };
 
-    window.addEventListener('preview-presentation', handleManualPreview);
+    // window.addEventListener('preview-presentation', handleManualPreview);
 
     // Logic to automatically show the presentation when it's generated
-    if (isGeneratingPPT && currentChat?.messages && currentChat.messages.length > 0) {
-      const lastMessage = currentChat.messages[currentChat.messages.length - 1];
+    // if (isGeneratingPPT && currentChat?.messages && currentChat.messages.length > 0) {
+    //   const lastMessage = currentChat.messages[currentChat.messages.length - 1];
 
-      // Check if the last message is from the assistant and contains the presentation file
-      if (lastMessage.role === 'ASSISTANT' && lastMessage.files) {
-        try {
-          const parsedFiles = typeof lastMessage.files === 'string' ? JSON.parse(lastMessage.files) : lastMessage.files;
-          const pptEntry = parsedFiles.find((f: any) => f?.type === 'presentation' || f?.type === 'ppt');
+    //   // Check if the last message is from the assistant and contains the presentation file
+    //   if (lastMessage.role === 'ASSISTANT' && lastMessage.files) {
+    //     try {
+    //       const parsedFiles = typeof lastMessage.files === 'string' ? JSON.parse(lastMessage.files) : lastMessage.files;
+    //       const pptEntry = parsedFiles.find((f: any) => f?.type === 'presentation' || f?.type === 'ppt');
 
-          if (pptEntry) {
-            const presentationData = {
-              title: pptEntry.title || 'AI Presentation',
-              slides: pptEntry.structure?.slides || [],
-              filename: pptEntry.filename || pptEntry.path,
-            };
-            // Directly call the function to show the presentation
-            showPresentation(presentationData);
-          }
-        } catch (e) {
-          console.error("Failed to parse files for auto-preview:", e);
-        }
-      }
-    }
+    //       if (pptEntry) {
+    //         const presentationData = {
+    //           title: pptEntry.title || 'AI Presentation',
+    //           slides: pptEntry.structure?.slides || [],
+    //           filename: pptEntry.filename || pptEntry.path,
+    //         };
+    //         // Directly call the function to show the presentation
+    //         showPresentation(presentationData);
+    //       }
+    //     } catch (e) {
+    //       console.error("Failed to parse files for auto-preview:", e);
+    //     }
+    //   }
+    // }
 
     // Cleanup the event listener
     return () => {
@@ -1714,7 +1714,7 @@ But first, you need to connect your Spotify account securely using the button be
         return;
       }
 
-      const intent = await aiService.classifyIntent(msg);
+      const intent = await aiService.classifyIntent(msg, chatToUpdate?.messages || []);
 
       if (intent === 'image' || intent === 'video') {
         const hasNonImageFiles = filesToSend.some(
@@ -2150,7 +2150,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   const handlePPTGeneration = async (prompt: string) => {
     setIsGeneratingPPT(true);
-    setShowPresentationPreview(true); // Show the view with the loader immediately
+    //setShowPresentationPreview(true); // Show the view with the loader immediately
     setSelectedPresentation(null);
     try {
       let newChat = currentChat;
@@ -2192,7 +2192,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error: any) {
       console.error('PPT generation failed:', error);
       toast.error(error.message || 'PPT generation failed');
-      setIsGeneratingPPT(false); // Stop loading on error
+      //  setIsGeneratingPPT(false); // Stop loading on error
     }
   };
 
@@ -2553,7 +2553,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isLoading ||
                           isGeneratingImage ||
                           isGeneratingVideo ||
-                          
+
                           isWebSearching
                         }
                       />
@@ -2869,7 +2869,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             disabled={
                               // isLoading ||
                               isGeneratingVideo ||
-                             
+
                               isWebSearching
                             }
                           />
