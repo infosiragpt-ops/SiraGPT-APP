@@ -40,9 +40,11 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             </div>
             {isPdf ? (
                 <iframe
-                    src={url}
+                    src={`https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`}
                     width="100%"
                     height="100%"
+                    frameBorder="0"
+                    title="PDF Preview"
                     className="w-full h-full"
                 ></iframe>
             ) : (
