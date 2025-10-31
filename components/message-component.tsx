@@ -1223,29 +1223,99 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         return (
             <>
                 {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "ASSISTANT" && parsedFiles.some(f => f.type === 'document') && (
-                    <div className="mt-3 space-y-2">
+                    <div className="mt-3 space-y-3">
                         {parsedFiles
                             .filter((file: any) => file.type === 'document')
-                            .map((file: any, index: number) => (
-                                <div key={index} className="flex items-center gap-2">
-                                    <Button asChild variant="outline" size="sm" className="bg-muted hover:bg-muted/80">
-                                        <a href={file.downloadUrl} download={file.name} className="flex items-center">
-                                            <Download className="h-4 w-4 mr-2" />
-                                            Download {file.name}
-                                        </a>
-                                    </Button>
-                                    {(file.name.endsWith('.docx') || file.name.endsWith('.doc') || file.name.endsWith('.pdf')) && (
-                                        <Button variant="outline" size="sm" onClick={() => onDocumentPreview && onDocumentPreview(
+                            .map((file: any, index: number) => {
+                                const getFileIcon = () => {
+                                    if (file.name.endsWith('.pdf')) {
+                                        return <img src="/icons/pdf.png" alt="PDF" className="h-10 w-10" />;
+                                    } else if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
+                                        return <img src="/icons/Word.png" alt="Word" className="h-10 w-10" />;
+                                    }
+                                    return <FileText className="h-10 w-10 text-primary" />;
+                                };
 
-                                            file.downloadUrl
+                                const getFileTypeLabel = () => {
+                                    if (file.name.endsWith('.pdf')) return 'PDF Document';
+                                    if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) return 'Word Document';
+                                    return 'Document';
+                                };
 
-                                        )}>
-                                            <Eye className="h-4 w-4 mr-2" />
-                                            Preview
-                                        </Button>
-                                    )}
-                                </div>
-                            ))
+                                const formatFileSize = (bytes: number) => {
+                                    if (!bytes) return '';
+                                    const kb = bytes / 1024;
+                                    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+                                    return `${(kb / 1024).toFixed(1)} MB`;
+                                };
+
+                                return (
+                                    <Card key={index} className="p-5 hover:shadow-lg transition-all duration-200 border-2 border-border/50 hover:border-primary/30 bg-gradient-to-br from-card to-card/50">
+                                        <div className="flex items-start gap-4">
+                                            <div className="flex-shrink-0 p-3 rounded-xl bg-primary/5">
+                                                {getFileIcon()}
+                                            </div>
+                                            <div className="flex-1 min-w-0 space-y-3">
+                                                <div>
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <h4 className="font-semibold text-base truncate">{file.name}</h4>
+                                                        <Badge variant="secondary" className="text-xs font-medium">
+                                                            {getFileTypeLabel()}
+                                                        </Badge>
+                                                    </div>
+                                                    {file.size && (
+                                                        <p className="text-xs text-muted-foreground font-medium">
+                                                            {formatFileSize(file.size)}
+                                                        </p>
+                                                    )}
+                                                </div>
+
+                                                <div className="flex flex-wrap gap-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={async () => {
+                                                            try {
+                                                                // Fetch the file as blob for proper download
+                                                                const response = await fetch(file.downloadUrl);
+                                                                const blob = await response.blob();
+                                                                const url = window.URL.createObjectURL(blob);
+                                                                const a = document.createElement('a');
+                                                                a.href = url;
+                                                                a.download = file.name;
+                                                                document.body.appendChild(a);
+                                                                a.click();
+                                                                window.URL.revokeObjectURL(url);
+                                                                document.body.removeChild(a);
+                                                                toast.success('Download started!');
+                                                            } catch (error) {
+                                                                console.error('Download error:', error);
+                                                                toast.error('Download failed');
+                                                            }
+                                                        }}
+                                                        className="h-9 px-4 font-medium hover:bg-primary/10"
+                                                    >
+                                                        <Download className="h-4 w-4 mr-2" />
+                                                        Download
+                                                    </Button>
+
+                                                    {(file.name.endsWith('.docx') || file.name.endsWith('.doc') || file.name.endsWith('.pdf')) && (
+                                                        <Button
+                                                            variant="default"
+                                                            size="sm"
+                                                            onClick={() => onDocumentPreview && onDocumentPreview(file.downloadUrl)}
+                                                            className="h-9 px-4 font-medium shadow-sm hover:shadow-md"
+                                                        >
+                                                            <Eye className="h-4 w-4 mr-2" />
+                                                            Preview in Chat
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </Card>
+                                );
+                            })
                         }
                     </div>
                 )}

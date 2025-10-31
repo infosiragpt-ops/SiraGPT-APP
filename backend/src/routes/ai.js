@@ -12,8 +12,9 @@ const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
 const mime = require('mime-types');
-const { Document, Packer, Paragraph, HeadingLevel, TextRun } = require('docx');
+const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle } = require('docx');
 const PDFDocument = require('pdfkit');
+const htmlDocx = require('html-docx-js');
 
 
 // Dependencies ko file ke top par import karen
@@ -362,7 +363,15 @@ You have a MathJax render environment.
 Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX. You don't need to define who you are act like a simple just example some
 say hello so give the answer hello how can i help you
 
-When a user asks you to create a document, report, or any text file (e.g., .docx, .pdf, .md), you must first generate the content of the document using markdown for structure (e.g., # for Heading 1, ## for Heading 2). Then, you must wrap the entire document content in a special tag. The format is [CREATE_DOCUMENT:filename.ext]...document content...[/CREATE_DOCUMENT]. Replace 'filename.ext' with an appropriate filename for the document, for example 'market_analysis_report.docx' or 'summary.pdf'. The content inside the tags will be saved as a file. The full response, including the tags, will be visible in the chat.`
+When a user explicitly asks to create a document, report, or a file with a specific format (e.g., "create a word document", "make a report about...", "save this as a .pdf"):
+1. If the user has provided content in their message, USE THAT EXACT CONTENT for the document. DO NOT generate new content.
+2. If the user has NOT provided content, then generate appropriate content based on their request.
+3. Use markdown for structure (e.g., # for Heading 1, ## for Heading 2).
+4. Wrap the ENTIRE document content in this special tag: [CREATE_DOCUMENT:filename.ext]...document content...[/CREATE_DOCUMENT]
+5. Replace 'filename.ext' with an appropriate filename (e.g., 'report.docx', 'summary.pdf').
+6. The content inside the tags will be saved as a file.
+
+IMPORTANT: A simple request for a "summary" should NOT create a document unless a file format is specified. If the user says something like "create a Word document from this content" or "make a PDF from this information", you MUST use their provided content exactly as they gave it. DO NOT create new content unless specifically asked to do so.`
         };
       }
 
@@ -572,39 +581,50 @@ When a user asks you to create a document, report, or any text file (e.g., .docx
             const extension = path.extname(safeFilename).toLowerCase();
 
             if (extension === '.docx') {
-              const doc = new Document({
-                sections: [{
-                  children: chatContent.split('\n').map(line => {
-                    line = line.trim();
-                    if (line.startsWith('# ')) return new Paragraph({ text: line.substring(2), heading: HeadingLevel.HEADING_1, spacing: { after: 200 } });
-                    if (line.startsWith('## ')) return new Paragraph({ text: line.substring(3), heading: HeadingLevel.HEADING_2, spacing: { after: 180 } });
-                    if (line.startsWith('### ')) return new Paragraph({ text: line.substring(4), heading: HeadingLevel.HEADING_3, spacing: { after: 160 } });
-                    if (line.startsWith('* ') || line.startsWith('- ')) return new Paragraph({ text: line.substring(2), bullet: { level: 0 } });
+              const { marked } = await import('marked');
 
-                    const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g).filter(part => part);
-                    const textRuns = parts.map(part => {
-                      if (part.startsWith('**') && part.endsWith('**')) {
-                        return new TextRun({ text: part.slice(2, -2), bold: true });
-                      }
-                      if (part.startsWith('*') && part.endsWith('*')) {
-                        return new TextRun({ text: part.slice(1, -1), italics: true });
-                      }
-                      return new TextRun(part);
-                    });
+              // Configure marked with a custom renderer for better table and code block handling
+              const renderer = new marked.Renderer();
+              renderer.table = (header, body) => {
+                return `<table style="border: 1px solid #ddd; border-collapse: collapse; width: 100%;"><thead>${header}</thead><tbody>${body}</tbody></table>`;
+              };
+              renderer.tablerow = (content) => {
+                return `<tr style="border: 1px solid #ddd;">${content}</tr>`;
+              };
+              renderer.tablecell = (content, flags) => {
+                const style = `border: 1px solid #ddd; padding: 8px; text-align: ${flags.align || 'left'};`;
+                return `<td style="${style}">${content}</td>`;
+              };
+              renderer.code = (code, language) => {
+                // Use a simple background color and preserve whitespace
+                return `<pre style="background-color: #f4f4f4; padding: 10px; border-radius: 5px; white-space: pre-wrap; font-family: monospace;"><code>${code}</code></pre>`;
+              };
 
-                    return new Paragraph({ children: textRuns, spacing: { after: 100 } });
-                  }),
-                }],
-              });
-              const buffer = await Packer.toBuffer(doc);
-              await fs.writeFile(filePath, buffer);
+              marked.setOptions({ renderer });
+
+              // Do NOT strip math delimiters. Let them pass through.
+              const processedContent = chatContent;
+
+              // Convert markdown to HTML
+              const htmlContent = marked(processedContent);
+
+              // Convert HTML to DOCX
+              const docxBlob = htmlDocx.asBlob(htmlContent);
+              const docxArrayBuffer = await docxBlob.arrayBuffer();
+              const docxBuffer = Buffer.from(docxArrayBuffer);
+              await fs.writeFile(filePath, docxBuffer);
+
             } else if (extension === '.pdf') {
               await new Promise((resolve, reject) => {
                 const doc = new PDFDocument({ margin: 50 });
                 const stream = fsSync.createWriteStream(filePath);
                 doc.pipe(stream);
 
-                chatContent.split('\n').forEach(line => {
+                // Pre-process content: convert LaTeX
+                const cleanContent = chatContent;
+
+                // Basic markdown parsing
+                cleanContent.split('\n').forEach(line => {
                   line = line.trim();
                   if (line.startsWith('# ')) {
                     doc.fontSize(24).font('Helvetica-Bold').text(line.substring(2), { paragraphGap: 10 });
@@ -612,16 +632,24 @@ When a user asks you to create a document, report, or any text file (e.g., .docx
                     doc.fontSize(18).font('Helvetica-Bold').text(line.substring(3), { paragraphGap: 8 });
                   } else if (line.startsWith('### ')) {
                     doc.fontSize(14).font('Helvetica-Bold').text(line.substring(4), { paragraphGap: 6 });
+                  } else if (line.startsWith('|') && line.endsWith('|')) {
+                    // Basic table handling (draws as plain text)
+                    const cells = line.split('|').map(c => c.trim()).slice(1, -1);
+                    doc.fontSize(10).font('Courier').text(cells.join('\t\t'), { paragraphGap: 5 });
+                  } else if (line.startsWith('---') || line.startsWith('|-')) {
+                    // Ignore table separators
                   } else if (line.startsWith('* ') || line.startsWith('- ')) {
-                    doc.fontSize(12).font('Helvetica').text(`• ${line.substring(2)}`, { paragraphGap: 5 });
+                    doc.fontSize(12).font('Helvetica').text(`• ${line.substring(2)}`, { paragraphGap: 5, indent: 20 });
                   } else if (line.trim() === '') {
                     doc.moveDown();
                   } else {
                     // Basic support for bold and italic
-                    const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g).filter(part => part);
+                    const parts = line.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g).filter(part => part);
                     parts.forEach((part, index) => {
                       let isBold = false;
                       let isItalic = false;
+                      let isCode = false;
+
                       if (part.startsWith('**') && part.endsWith('**')) {
                         part = part.slice(2, -2);
                         isBold = true;
@@ -630,15 +658,23 @@ When a user asks you to create a document, report, or any text file (e.g., .docx
                         part = part.slice(1, -1);
                         isItalic = true;
                       }
+                      if (part.startsWith('`') && part.endsWith('`')) {
+                        part = part.slice(1, -1);
+                        isCode = true;
+                      }
 
-                      if (isBold && isItalic) doc.font('Helvetica-BoldOblique');
+                      if (isCode) doc.font('Courier');
+                      else if (isBold && isItalic) doc.font('Helvetica-BoldOblique');
                       else if (isBold) doc.font('Helvetica-Bold');
                       else if (isItalic) doc.font('Helvetica-Oblique');
                       else doc.font('Helvetica');
 
-                      doc.fontSize(12).text(part, { continued: true });
+                      const isLastPart = index === parts.length - 1;
+                      doc.fontSize(12).text(part, {
+                        continued: !isLastPart,
+                        paragraphGap: isLastPart ? 5 : 0
+                      });
                     });
-                    doc.text('', { continued: false, paragraphGap: 5 });
                   }
                 });
 
@@ -2149,7 +2185,7 @@ Important Guidelines:
 - Prefer concise lists. When listing emails, also include a machine-readable JSON block at the end using this exact wrapper:
   <EMAILS_JSON>{
    "emails": [
-    {"id":"...","threadId":"...","subject":"...","from":"...","to":"...","date":"ISO-8601","snippet":"...","link":"https://mail.google.com/mail/#all/...","isUnread":BOOLEAN",},
+    {"id":"...","threadId":"...","subject":"...","from":"...","to":"...","date":"ISO-8061","snippet":"...","link":"https://mail.google.com/mail/#all/...","isUnread":BOOLEAN",},
    ],
    "count": NUMBER
   }</EMAILS_JSON>
@@ -2703,7 +2739,7 @@ Every element should feel intentionally designed, polished, and premium. The use
         res.status(500).json({ error: error.message || 'Web development generation failed' });
       } else {
         try {
-          res.write(`data: ${JSON.stringify({ error: error.message || 'Web development generation failed' })}\n\n`);
+          res.write(`data: ${JSON.stringify({ error: error.message || 'AI generation failed' })}\n\n`);
         } catch (writeError) {
           console.error('Failed to write error to stream:', writeError);
         }
