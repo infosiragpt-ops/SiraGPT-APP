@@ -12,7 +12,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         return null;
     }
 
-    const officeUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`;
+    const isPdf = url.toLowerCase().endsWith('.pdf');
 
     return (
         <div className="relative w-full h-full bg-background">
@@ -38,14 +38,23 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
                     </svg>
                 </button>
             </div>
-            <iframe
-                src={officeUrl}
-                width="100%"
-                height="100%"
-                frameBorder="0"
-                title="Document Preview"
-                className="w-full h-full"
-            ></iframe>
+            {isPdf ? (
+                <iframe
+                    src={url}
+                    width="100%"
+                    height="100%"
+                    className="w-full h-full"
+                ></iframe>
+            ) : (
+                <iframe
+                    src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`}
+                    width="100%"
+                    height="100%"
+                    frameBorder="0"
+                    title="Document Preview"
+                    className="w-full h-full"
+                ></iframe>
+            )}
         </div>
     );
 }

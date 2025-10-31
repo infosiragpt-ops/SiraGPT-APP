@@ -245,19 +245,15 @@ Respond with only one word.
 `,
         }
       ];
-      if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-        for (const msg of conversationHistory) {
-          // handle messages in same structure as you saved earlier
-          const role = msg.role === "USER" ? "user" : "assistant";
 
-          if (Array.isArray(msg.content)) {
-            // Content with images etc.
-            const textPart = msg.content.find((c: any) => c.type === "text")?.text || "";
-            messages.push({ role, content: textPart });
-          } else {
-            // Normal text message
-            messages.push({ role, content: msg.content });
-          }
+      if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+        const recentMessages = conversationHistory.slice(-2); // last 2 messages only
+        for (const msg of recentMessages) {
+          const role = msg.role === "USER" ? "user" : "assistant";
+          const textPart = Array.isArray(msg.content)
+            ? msg.content.find((c: any) => c.type === "text")?.text || ""
+            : msg.content;
+          messages.push({ role, content: textPart });
         }
       }
 
