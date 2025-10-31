@@ -91,37 +91,31 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
         }
     };
     return (
-        <div className="flex items-center justify-between -pb-8 -mb-5 border-t border-l border-r rounded-t-xl">
-            {/* {title && <h3 className="text-lg font-semibold">{title}</h3>} */}
-            <div className="text-lg pl-2 font-semibold">{ }</div>
-            <div className="flex items-center space-x-2">
-                <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="transition-transform transform hover:scale-110">
-                            {/* <Download className="h-5 w-5" /> */}
-                            <Download className="h-5 w-5 cursor-pointer hover:opacity-75 transition" />
-
-                        </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent>
-                        <DropdownMenuItem onClick={() => handleDownload('csv')}>
-                            Download as CSV
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleDownload('excel')}>
-                            Download as Excel
-                        </DropdownMenuItem>
-                    </DropdownMenuContent>
-                </DropdownMenu>
-                <Button variant="ghost" size="icon" onClick={onExpand} className="transition-transform transform hover:scale-110">
-                    <Expand className="h-5 w-5 cursor-pointer hover:opacity-75 transition" />
-
-                </Button>
-            </div>
+        <div className="absolute top-2 right-2 z-10 flex items-center space-x-1 rounded-lg bg-background/70 p-1 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200">
+            <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7">
+                        <Download className="h-4 w-4" />
+                    </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => handleDownload('csv')}>
+                        Download as CSV
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleDownload('excel')}>
+                        Download as Excel
+                    </DropdownMenuItem>
+                </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="ghost" size="icon" onClick={onExpand} className="h-7 w-7">
+                <Expand className="h-4 w-4" />
+            </Button>
         </div>
     );
 };
 
 export default TableControls;
+
 
 
 // import React, { useState } from 'react';

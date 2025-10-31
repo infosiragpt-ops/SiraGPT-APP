@@ -12,7 +12,7 @@ const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
 const mime = require('mime-types');
-const { Document, Packer, Paragraph, HeadingLevel, TextRun} = require('docx');
+const { Document, Packer, Paragraph, HeadingLevel, TextRun } = require('docx');
 const PDFDocument = require('pdfkit');
 
 
@@ -538,7 +538,7 @@ When a user asks you to create a document, report, or any text file (e.g., .docx
         if (docMatch && docMatch.groups) {
           const { filename, content } = docMatch.groups;
           const chatContent = content.trim();
-          
+
           const uploadsDir = path.join(__dirname, '../../uploads/documents', userId);
           await fs.mkdir(uploadsDir, { recursive: true });
           const safeFilename = filename.replace(/[^a-zA-Z0-9_.-]/g, '_');
@@ -572,79 +572,79 @@ When a user asks you to create a document, report, or any text file (e.g., .docx
             const extension = path.extname(safeFilename).toLowerCase();
 
             if (extension === '.docx') {
-                const doc = new Document({
-                    sections: [{
-                        children: chatContent.split('\n').map(line => {
-                            line = line.trim();
-                            if (line.startsWith('# ')) return new Paragraph({ text: line.substring(2), heading: HeadingLevel.HEADING_1, spacing: { after: 200 } });
-                            if (line.startsWith('## ')) return new Paragraph({ text: line.substring(3), heading: HeadingLevel.HEADING_2, spacing: { after: 180 } });
-                            if (line.startsWith('### ')) return new Paragraph({ text: line.substring(4), heading: HeadingLevel.HEADING_3, spacing: { after: 160 } });
-                            if (line.startsWith('* ') || line.startsWith('- ')) return new Paragraph({ text: line.substring(2), bullet: { level: 0 } });
-                            
-                            const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g).filter(part => part);
-                            const textRuns = parts.map(part => {
-                                if (part.startsWith('**') && part.endsWith('**')) {
-                                    return new TextRun({ text: part.slice(2, -2), bold: true });
-                                }
-                                if (part.startsWith('*') && part.endsWith('*')) {
-                                    return new TextRun({ text: part.slice(1, -1), italics: true });
-                                }
-                                return new TextRun(part);
-                            });
+              const doc = new Document({
+                sections: [{
+                  children: chatContent.split('\n').map(line => {
+                    line = line.trim();
+                    if (line.startsWith('# ')) return new Paragraph({ text: line.substring(2), heading: HeadingLevel.HEADING_1, spacing: { after: 200 } });
+                    if (line.startsWith('## ')) return new Paragraph({ text: line.substring(3), heading: HeadingLevel.HEADING_2, spacing: { after: 180 } });
+                    if (line.startsWith('### ')) return new Paragraph({ text: line.substring(4), heading: HeadingLevel.HEADING_3, spacing: { after: 160 } });
+                    if (line.startsWith('* ') || line.startsWith('- ')) return new Paragraph({ text: line.substring(2), bullet: { level: 0 } });
 
-                            return new Paragraph({ children: textRuns, spacing: { after: 100 } });
-                        }),
-                    }],
-                });
-                const buffer = await Packer.toBuffer(doc);
-                await fs.writeFile(filePath, buffer);
-            } else if (extension === '.pdf') {
-                await new Promise((resolve, reject) => {
-                    const doc = new PDFDocument({ margin: 50 });
-                    const stream = fsSync.createWriteStream(filePath);
-                    doc.pipe(stream);
-
-                    chatContent.split('\n').forEach(line => {
-                        line = line.trim();
-                        if (line.startsWith('# ')) {
-                            doc.fontSize(24).font('Helvetica-Bold').text(line.substring(2), { paragraphGap: 10 });
-                        } else if (line.startsWith('## ')) {
-                            doc.fontSize(18).font('Helvetica-Bold').text(line.substring(3), { paragraphGap: 8 });
-                        } else if (line.startsWith('### ')) {
-                            doc.fontSize(14).font('Helvetica-Bold').text(line.substring(4), { paragraphGap: 6 });
-                        } else if (line.startsWith('* ') || line.startsWith('- ')) {
-                            doc.fontSize(12).font('Helvetica').text(`• ${line.substring(2)}`, { paragraphGap: 5 });
-                        } else if (line.trim() === '') {
-                            doc.moveDown();
-                        } else {
-                            // Basic support for bold and italic
-                            const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g).filter(part => part);
-                            parts.forEach((part, index) => {
-                                let isBold = false;
-                                let isItalic = false;
-                                if (part.startsWith('**') && part.endsWith('**')) {
-                                    part = part.slice(2, -2);
-                                    isBold = true;
-                                }
-                                if (part.startsWith('*') && part.endsWith('*')) {
-                                    part = part.slice(1, -1);
-                                    isItalic = true;
-                                }
-                                
-                                if (isBold && isItalic) doc.font('Helvetica-BoldOblique');
-                                else if (isBold) doc.font('Helvetica-Bold');
-                                else if (isItalic) doc.font('Helvetica-Oblique');
-                                else doc.font('Helvetica');
-
-                                doc.fontSize(12).text(part, { continued: true });
-                            });
-                            doc.text('', { continued: false, paragraphGap: 5 });
-                        }
+                    const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g).filter(part => part);
+                    const textRuns = parts.map(part => {
+                      if (part.startsWith('**') && part.endsWith('**')) {
+                        return new TextRun({ text: part.slice(2, -2), bold: true });
+                      }
+                      if (part.startsWith('*') && part.endsWith('*')) {
+                        return new TextRun({ text: part.slice(1, -1), italics: true });
+                      }
+                      return new TextRun(part);
                     });
 
-                    doc.end();
-                    stream.on('finish', resolve).on('error', reject);
+                    return new Paragraph({ children: textRuns, spacing: { after: 100 } });
+                  }),
+                }],
+              });
+              const buffer = await Packer.toBuffer(doc);
+              await fs.writeFile(filePath, buffer);
+            } else if (extension === '.pdf') {
+              await new Promise((resolve, reject) => {
+                const doc = new PDFDocument({ margin: 50 });
+                const stream = fsSync.createWriteStream(filePath);
+                doc.pipe(stream);
+
+                chatContent.split('\n').forEach(line => {
+                  line = line.trim();
+                  if (line.startsWith('# ')) {
+                    doc.fontSize(24).font('Helvetica-Bold').text(line.substring(2), { paragraphGap: 10 });
+                  } else if (line.startsWith('## ')) {
+                    doc.fontSize(18).font('Helvetica-Bold').text(line.substring(3), { paragraphGap: 8 });
+                  } else if (line.startsWith('### ')) {
+                    doc.fontSize(14).font('Helvetica-Bold').text(line.substring(4), { paragraphGap: 6 });
+                  } else if (line.startsWith('* ') || line.startsWith('- ')) {
+                    doc.fontSize(12).font('Helvetica').text(`• ${line.substring(2)}`, { paragraphGap: 5 });
+                  } else if (line.trim() === '') {
+                    doc.moveDown();
+                  } else {
+                    // Basic support for bold and italic
+                    const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g).filter(part => part);
+                    parts.forEach((part, index) => {
+                      let isBold = false;
+                      let isItalic = false;
+                      if (part.startsWith('**') && part.endsWith('**')) {
+                        part = part.slice(2, -2);
+                        isBold = true;
+                      }
+                      if (part.startsWith('*') && part.endsWith('*')) {
+                        part = part.slice(1, -1);
+                        isItalic = true;
+                      }
+
+                      if (isBold && isItalic) doc.font('Helvetica-BoldOblique');
+                      else if (isBold) doc.font('Helvetica-Bold');
+                      else if (isItalic) doc.font('Helvetica-Oblique');
+                      else doc.font('Helvetica');
+
+                      doc.fontSize(12).text(part, { continued: true });
+                    });
+                    doc.text('', { continued: false, paragraphGap: 5 });
+                  }
                 });
+
+                doc.end();
+                stream.on('finish', resolve).on('error', reject);
+              });
             } else {
               await fs.writeFile(filePath, chatContent);
             }
@@ -662,7 +662,7 @@ When a user asks you to create a document, report, or any text file (e.g., .docx
             newFiles = [];
           }
         }
-        
+
         await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles);
       } else {
         // Handle non-authenticated user case if necessary
@@ -1777,6 +1777,7 @@ router.post(
     body('chatId').isString().withMessage('chatId is required'),
     body('provider').optional().isString(),
     body('model').optional().isString(),
+    body('files').optional().isArray(),
   ],
   authenticateToken,
   async (req, res) => {
@@ -1786,7 +1787,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o' } = req.body;
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
       const userId = req.user.id;
 
       console.log('📊 PPT generation request:', { prompt, chatId, provider, model });
@@ -1824,16 +1825,46 @@ router.post(
       }
 
       // Save user message
+      let finalPrompt = prompt;
+      let processedFiles = [];
+      if (files && files.length > 0) {
+        processedFiles = await Promise.all(
+          files.map(async (fileId) => {
+            const file = await prisma.file.findFirst({
+              where: { id: fileId, userId }
+            });
+            if (file) {
+              return {
+                id: file.id,
+                name: file.originalName,
+                extractedText: file.extractedText,
+                mimeType: file.mimeType,
+                path: file.path
+              };
+            }
+            return null;
+          })
+        ).then(results => results.filter(Boolean));
+
+        if (processedFiles.length > 0) {
+          const fileContext = processedFiles.map(f => {
+            const content = f.extractedText || 'File content could not be extracted.';
+            return `--- Attached File: ${f.name} ---\n${content}\n--- End of File ---`;
+          }).join('\n\n');
+          finalPrompt = `${prompt}\n\nUse the following content from the attached file(s) as context for the presentation:\n\n${fileContext}`;
+        }
+      }
       await prisma.message.create({
         data: {
           chatId,
           role: 'USER',
           content: prompt,
+          files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
         }
       });
 
       // Generate PPT using AI service
-      const pptResult = await aiService.generatePPT(prompt, provider, model);
+      const pptResult = await aiService.generatePPT(finalPrompt, provider, model);
 
       // Save assistant message with PPT data
       const assistantMessage = await prisma.message.create({
