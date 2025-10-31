@@ -65,6 +65,7 @@ import {
   Sidebar,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { DocumentPreview } from "./document-preview"
 import { PresentationView } from "./presentation-view"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
@@ -1204,6 +1205,7 @@ But first, you need to connect your Spotify account securely using the button be
   const [showPresentationPreview, setShowPresentationPreview] = React.useState(false);
   const [selectedPresentation, setSelectedPresentation] = React.useState<any>(null);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
+  const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<string | null>(null);
 
 
   // Search sources state - all enabled by default
@@ -1354,6 +1356,10 @@ But first, you need to connect your Spotify account securely using the button be
   const handleToggleSplitView = (content: any) => {
     setSplitViewContent(content)
   }
+
+  const handleDocumentPreview = (url: string) => {
+    setDocumentPreviewUrl(url);
+  };
 
   React.useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -2383,7 +2389,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className={`flex flex-col h-full ${showPresentationPreview || isGeneratingPPT ? 'w-1/2' : 'w-full'}`}>
+        <div className={`flex flex-col h-full ${showPresentationPreview || isGeneratingPPT || documentPreviewUrl ? 'w-1/2' : 'w-full'}`}>
           {/* Header */}
           <div className=" border-border/40 p-4">
             <div className="flex items-center justify-between">
@@ -2802,6 +2808,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 updateMessageInChat={editAndRegenerate}
                                 isStreaming={false}
                                 onToggleSplitView={handleToggleSplitView}
+                                onDocumentPreview={handleDocumentPreview}
                               />
                             ))}
                             {streamingMessage && (
@@ -2813,6 +2820,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 updateMessageInChat={editAndRegenerate}
                                 isStreaming={true}
                                 onToggleSplitView={handleToggleSplitView}
+                                onDocumentPreview={handleDocumentPreview}
                               />
                             )}
                           </>
@@ -2989,6 +2997,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         {splitViewContent && (
           <div className="w-full border-l border-border/40">
             <CodePreview {...splitViewContent} onClose={() => setSplitViewContent(null)} />
+          </div>
+        )}
+        {documentPreviewUrl && (
+          <div className="w-1/2 border-l border-border/40">
+            <DocumentPreview
+              url={documentPreviewUrl}
+              onClose={() => setDocumentPreviewUrl(null)}
+            />
           </div>
         )}
         {(showPresentationPreview || isGeneratingPPT) && (

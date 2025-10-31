@@ -52,11 +52,11 @@ import SpotifyResults from "./spotify-results"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
 const truncateUrl = (url: string, maxLength: number = 30) => {
-    if (url.length <= maxLength) return url;
-    const domain = url.split('/')[2]; // Extract domain
-    const path = url.split('/').slice(3).join('/'); // Extract path
-    const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
-    return `${domain}/${truncatedPath}`;
+    // if (url.length <= maxLength) return url;
+    // const domain = url.split('/')[2]; // Extract domain
+    // const path = url.split('/').slice(3).join('/'); // Extract path
+    // const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
+    // return `${domain}/${truncatedPath}`;
 };
 
 // Chart Display Component
@@ -109,7 +109,7 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
 
 
 // Enhanced Message Component with Video Support
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, children }: {
+const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, children }: {
     message: any;
     user: any;
     onRegenerate: () => void;
@@ -117,6 +117,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     isStreaming?: boolean;
     onToggleSplitView?: (content: any) => void;
     isGeneratingImage?: boolean;
+    onDocumentPreview?: (url: string) => void;
     children?: React.ReactNode;
 }) => {
     // Performance monitoring disabled to prevent overhead
@@ -1233,6 +1234,16 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             Download {file.name}
                                         </a>
                                     </Button>
+                                    {(file.name.endsWith('.docx') || file.name.endsWith('.doc') || file.name.endsWith('.pdf')) && (
+                                        <Button variant="outline" size="sm" onClick={() => onDocumentPreview && onDocumentPreview(
+
+                                            file.downloadUrl
+
+                                        )}>
+                                            <Eye className="h-4 w-4 mr-2" />
+                                            Preview
+                                        </Button>
+                                    )}
                                 </div>
                             ))
                         }
