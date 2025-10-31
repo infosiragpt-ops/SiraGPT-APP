@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Download, Expand } from 'lucide-react';
 import { Button } from './ui/button';
 import {
@@ -32,8 +32,8 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
 
     const isImageMessage = content.startsWith('http') && (content.includes('uploads/images') || content.includes('oaidalleapiprodscus') || content.includes('dalle'));
 
-    // Detect if content has downloadable data
-    const tableData = detectTableData(content);
+    // Memoize table data detection to prevent infinite loops
+    const tableData = useMemo(() => detectTableData(content), [content]);
 
     // If no structured data found and not an image, don't show download buttons
     if (!tableData && !content.trim() && !isImageMessage) {
@@ -91,23 +91,39 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
         }
     };
     return (
-        <div className="absolute top-2 right-2 z-10 flex items-center space-x-1 rounded-lg bg-background/70 p-1 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity duration-200">
+        <div className="absolute top-2 right-2 z-10 flex items-center space-x-1 rounded-lg bg-background/90 p-1 backdrop-blur-sm border border-border/50 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 ease-in-out transform scale-90 group-hover:scale-100 shadow-sm">
             <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-7 w-7">
+                    <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-7 w-7 hover:bg-accent/80 transition-colors duration-200"
+                        disabled={isDownloading}
+                    >
                         <Download className="h-4 w-4" />
                     </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => handleDownload('csv')}>
+                <DropdownMenuContent align="end" className="min-w-[160px]">
+                    <DropdownMenuItem 
+                        onClick={() => handleDownload('csv')}
+                        disabled={isDownloading}
+                    >
                         Download as CSV
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleDownload('excel')}>
+                    <DropdownMenuItem 
+                        onClick={() => handleDownload('excel')}
+                        disabled={isDownloading}
+                    >
                         Download as Excel
                     </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>
-            <Button variant="ghost" size="icon" onClick={onExpand} className="h-7 w-7">
+            <Button 
+                variant="ghost" 
+                size="icon" 
+                onClick={onExpand} 
+                className="h-7 w-7 hover:bg-accent/80 transition-colors duration-200"
+            >
                 <Expand className="h-4 w-4" />
             </Button>
         </div>

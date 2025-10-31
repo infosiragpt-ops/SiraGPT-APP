@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -476,7 +476,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     }, [message.files])
 
     const hasFiles = parsedFiles && parsedFiles.length > 0;
-    const hasContent = message.content && message.content.trim() !== "";
+    const hasContent = useMemo(() => message.content && message.content.trim() !== "", [message.content]);
 
     // Detect if this assistant message includes a structured Gmail payload to avoid duplicate markdown
     const hasGmailEntry = useMemo(() => {
@@ -529,33 +529,42 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 h3: ({ children }: any) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
                 blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
                 table: ({ node, children, ...props }: any) => {
-                    const tHead = node.children.find((child: any) => child.tagName === 'thead');
-                    const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                    const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
-                    const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
-                    const handleExpand = () => {
+                    // Memoize table data processing to prevent infinite loops
+                    const tableProcessing = useMemo(() => {
+                        const tHead = node.children.find((child: any) => child.tagName === 'thead');
+                        const tBody = node.children.find((child: any) => child.tagName === 'tbody');
+                        const headers = tHead?.children?.[1]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
+                        const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e != "\n") ?? []) ?? [];
+                        
+                        let title = '';
+                        const parent = node.parent;
+                        if (parent) {
+                            const tableIndex = parent.children.indexOf(node);
+                            for (let i = tableIndex - 1; i >= 0; i--) {
+                                const sibling = parent.children[i];
+                                if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
+                                    title = getNodeText(sibling);
+                                    break;
+                                }
+                                if (sibling.type !== 'text' || sibling.value.trim() !== '') {
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        return { headers, data, title };
+                    }, [node]);
+
+                    const { headers, data, title } = tableProcessing;
+                    
+                    const handleExpand = useCallback(() => {
                         setTableHeaders(headers);
                         setTableData(data);
                         setTableTitle(title);
                         setIsTableExpanded(true);
-                    };
-                    let title = '';
-                    const parent = node.parent;
-                    if (parent) {
-                        const tableIndex = parent.children.indexOf(node);
-                        for (let i = tableIndex - 1; i >= 0; i--) {
-                            const sibling = parent.children[i];
-                            if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
-                                title = getNodeText(sibling);
-                                break;
-                            }
-                            if (sibling.type !== 'text' || sibling.value.trim() !== '') {
-                                break;
-                            }
-                        }
-                    }
+                    }, [headers, data, title]);
                     return (
-                        <div className="relative mt-3">
+                        <div className="group relative mt-3">
                             <TableControls content={message.content} messageId={message.id} onExpand={handleExpand} title={title} />
                             <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
                                 <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
