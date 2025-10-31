@@ -1714,7 +1714,7 @@ But first, you need to connect your Spotify account securely using the button be
         return;
       }
 
-      const intent = await aiService.classifyIntent(msg);
+      const intent = await aiService.classifyIntent(msg, chatToUpdate?.messages || []);
 
       if (intent === 'image' || intent === 'video') {
         const hasNonImageFiles = filesToSend.some(

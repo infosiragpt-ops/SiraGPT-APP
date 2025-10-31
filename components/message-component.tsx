@@ -1190,6 +1190,23 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
         return (
             <>
+                {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "ASSISTANT" && parsedFiles.some(f => f.type === 'document') && (
+                    <div className="mt-3 space-y-2">
+                        {parsedFiles
+                            .filter((file: any) => file.type === 'document')
+                            .map((file: any, index: number) => (
+                                <div key={index} className="flex items-center gap-2">
+                                    <Button asChild variant="outline" size="sm" className="bg-muted hover:bg-muted/80">
+                                        <a href={file.downloadUrl} download={file.name} className="flex items-center">
+                                            <Download className="h-4 w-4 mr-2" />
+                                            Download {file.name}
+                                        </a>
+                                    </Button>
+                                </div>
+                            ))
+                        }
+                    </div>
+                )}
                 {((Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
                     (message.role === "ASSISTANT" && message.content.startsWith('http') &&
                         (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
