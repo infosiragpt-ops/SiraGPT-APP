@@ -16,7 +16,7 @@ const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, Tab
 const PDFDocument = require('pdfkit');
 const htmlDocx = require('html-docx-js');
 
-
+const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
 const fs = require('fs').promises;
 const fsSync = require('fs'); // ✅ For synchronous file operations
@@ -581,106 +581,197 @@ IMPORTANT: A simple request for a "summary" should NOT create a document unless 
             const extension = path.extname(safeFilename).toLowerCase();
 
             if (extension === '.docx') {
-              const { marked } = await import('marked');
+            //   const { marked } = await import('marked');
 
-              // Configure marked with a custom renderer for better table and code block handling
-              const renderer = new marked.Renderer();
-              renderer.table = (header, body) => {
-                return `<table style="border: 1px solid #ddd; border-collapse: collapse; width: 100%;"><thead>${header}</thead><tbody>${body}</tbody></table>`;
-              };
-              renderer.tablerow = (content) => {
-                return `<tr style="border: 1px solid #ddd;">${content}</tr>`;
-              };
-              renderer.tablecell = (content, flags) => {
-                const style = `border: 1px solid #ddd; padding: 8px; text-align: ${flags.align || 'left'};`;
-                return `<td style="${style}">${content}</td>`;
-              };
-              renderer.code = (code, language) => {
-                // Use a simple background color and preserve whitespace
-                return `<pre style="background-color: #f4f4f4; padding: 10px; border-radius: 5px; white-space: pre-wrap; font-family: monospace;"><code>${code}</code></pre>`;
-              };
+            //   // Configure marked with a custom renderer for better table and code block handling
+            //  const tokens = marked.lexer(chatContent);
+            // const docChildren = [];
+            
+            // // Markdown ko DOCX elements mein convert karein
+            // tokens.forEach(token => {
+            //     if (token.type === 'heading') {
+            //         docChildren.push(new Paragraph({
+            //             text: token.text,
+            //             heading: `Heading${token.depth}`,
+            //         }));
+            //     } else if (token.type === 'paragraph') {
+            //         docChildren.push(new Paragraph(token.text));
+            //     } else if (token.type === 'table') {
+            //         const tableRows = [];
+            //         // Header
+            //         tableRows.push(new TableRow({
+            //             children: token.header.map(headerCell => new TableCell({
+            //                 children: [new Paragraph({ text: headerCell.text, bold: true })],
+            //                 width: { size: 4535, type: WidthType.DXA },
+            //             })),
+            //             tableHeader: true,
+            //         }));
+            //         // Body rows
+            //         token.rows.forEach(row => {
+            //             tableRows.push(new TableRow({
+            //                 children: row.map(cell => new TableCell({
+            //                     children: [new Paragraph(cell.text)],
+            //                 })),
+            //             }));
+            //         });
+            //         const table = new Table({
+            //             rows: tableRows,
+            //             width: { size: 100, type: WidthType.PERCENT },
+            //         });
+            //         docChildren.push(table);
+            //     } else {
+            //          docChildren.push(new Paragraph(token.raw));
+            //     }
+            // });
 
-              marked.setOptions({ renderer });
+            // const doc = new Document({
+            //     sections: [{
+            //         children: docChildren,
+            //     }],
+            // });
 
-              // Do NOT strip math delimiters. Let them pass through.
-              const processedContent = chatContent;
+            // const buffer = await Packer.toBuffer(doc);
+            // await fs.writeFile(filePath, buffer);
 
-              // Convert markdown to HTML
-              const htmlContent = marked(processedContent);
+           const tempMarkdownPath = filePath + '.md';
+    await fs.writeFile(tempMarkdownPath, chatContent);
 
-              // Convert HTML to DOCX
-              const docxBlob = htmlDocx.asBlob(htmlContent);
-              const docxArrayBuffer = await docxBlob.arrayBuffer();
-              const docxBuffer = Buffer.from(docxArrayBuffer);
-              await fs.writeFile(filePath, docxBuffer);
+    // 2. Ab Pandoc ko saaf saaf command denge ke is temp file se parho aur .docx file banao.
+    //    Yeh tareeqa sab se zyada reliable hai.
+    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown -t docx --mathjax -o "${filePath}"`;
+
+    console.log(`Executing Pandoc command: ${pandocCommand}`);
+
+    // 3. Command ko Promise ke andar chalayein taake async/await kaam kare
+    await new Promise((resolve, reject) => {
+        exec(pandocCommand, (error, stdout, stderr) => {
+            // Kaam poora hone par temporary markdown file ko delete kar dein
+            fs.unlink(tempMarkdownPath, (unlinkErr) => {
+                if (unlinkErr) console.error("Temporary markdown file delete nahi ho saki:", unlinkErr);
+            });
+
+            if (error) {
+                console.error(`Pandoc command execution error: ${error.message}`);
+                console.error(`Pandoc stderr: ${stderr}`);
+                return reject(error);
+            }
+            if (stderr) {
+                console.warn(`Pandoc stderr (warnings): ${stderr}`);
+            }
+            
+            console.log('Pandoc ne file kamyabi se bana di hai.');
+            resolve(stdout);
+        });
+    });
 
             } else if (extension === '.pdf') {
-              await new Promise((resolve, reject) => {
-                const doc = new PDFDocument({ margin: 50 });
-                const stream = fsSync.createWriteStream(filePath);
-                doc.pipe(stream);
+const puppeteer = require('puppeteer');
+            const { marked } = require('marked');
 
-                // Pre-process content: convert LaTeX
-                const cleanContent = chatContent;
+          const htmlContent = marked.parse(chatContent);
 
-                // Basic markdown parsing
-                cleanContent.split('\n').forEach(line => {
-                  line = line.trim();
-                  if (line.startsWith('# ')) {
-                    doc.fontSize(24).font('Helvetica-Bold').text(line.substring(2), { paragraphGap: 10 });
-                  } else if (line.startsWith('## ')) {
-                    doc.fontSize(18).font('Helvetica-Bold').text(line.substring(3), { paragraphGap: 8 });
-                  } else if (line.startsWith('### ')) {
-                    doc.fontSize(14).font('Helvetica-Bold').text(line.substring(4), { paragraphGap: 6 });
-                  } else if (line.startsWith('|') && line.endsWith('|')) {
-                    // Basic table handling (draws as plain text)
-                    const cells = line.split('|').map(c => c.trim()).slice(1, -1);
-                    doc.fontSize(10).font('Courier').text(cells.join('\t\t'), { paragraphGap: 5 });
-                  } else if (line.startsWith('---') || line.startsWith('|-')) {
-                    // Ignore table separators
-                  } else if (line.startsWith('* ') || line.startsWith('- ')) {
-                    doc.fontSize(12).font('Helvetica').text(`• ${line.substring(2)}`, { paragraphGap: 5, indent: 20 });
-                  } else if (line.trim() === '') {
-                    doc.moveDown();
-                  } else {
-                    // Basic support for bold and italic
-                    const parts = line.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g).filter(part => part);
-                    parts.forEach((part, index) => {
-                      let isBold = false;
-                      let isItalic = false;
-                      let isCode = false;
+            // HTML template jismein MathJax shamil hai
+          const fullHtml = `
+                <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <title>Generated Document</title>
+                        
+                        <!-- YEH HISSA MASLE KO HAL KAREGA: MathJax ki Configuration -->
+                        <script>
+                            window.MathJax = {
+                                tex: {
+                                    inlineMath: [['$', '$'], ['\\(', '\\)']] // '$...$' ko math samjhe
+                                },
+                                svg: {
+                                    fontCache: 'global'
+                                }
+                            };
+                        </script>
+                        
+                        <!-- MathJax ki library -->
+                        <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 
-                      if (part.startsWith('**') && part.endsWith('**')) {
-                        part = part.slice(2, -2);
-                        isBold = true;
-                      }
-                      if (part.startsWith('*') && part.endsWith('*')) {
-                        part = part.slice(1, -1);
-                        isItalic = true;
-                      }
-                      if (part.startsWith('`') && part.endsWith('`')) {
-                        part = part.slice(1, -1);
-                        isCode = true;
-                      }
+                        <!-- Behtar styling ke liye CSS -->
+                        <style>
+                            body { 
+                                font-family: 'Helvetica', 'Arial', sans-serif; 
+                                margin: 40px; 
+                                line-height: 1.6;
+                                font-size: 12pt;
+                            }
+                            table { 
+                                border-collapse: collapse; 
+                                width: 100%; 
+                                margin-bottom: 1em; 
+                            }
+                            th, td { 
+                                border: 1px solid #ddd; 
+                                padding: 8px; 
+                                text-align: left;
+                            }
+                            th { 
+                                background-color: #f2f2f2; 
+                            }
+                            pre, code { 
+                                background-color: #f8f8f8; 
+                                padding: 2px 5px; 
+                                border-radius: 4px;
+                                font-family: 'Courier New', Courier, monospace;
+                            }
+                            pre {
+                                padding: 10px;
+                                display: block;
+                                white-space: pre-wrap;
+                            }
+                            h1, h2, h3 {
+                                border-bottom: 1px solid #eaecef;
+                                padding-bottom: 0.3em;
+                                margin-top: 24px;
+                                margin-bottom: 16px;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        ${htmlContent}
+                    </body>
+                </html>
+            `;
+            
+            // 3. Puppeteer ko launch karein
+            const browser = await puppeteer.launch({ 
+                headless: "new", // "new" headless mode behtar hai
+                args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+            });
+            const page = await browser.newPage();
+            
+            // 4. HTML content ko page mein load karein
+            await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
 
-                      if (isCode) doc.font('Courier');
-                      else if (isBold && isItalic) doc.font('Helvetica-BoldOblique');
-                      else if (isBold) doc.font('Helvetica-Bold');
-                      else if (isItalic) doc.font('Helvetica-Oblique');
-                      else doc.font('Helvetica');
+            // 5. SAB SE ZAROORI HISSA: MathJax ke render hone ka intezar karein
+            // Yeh code line page ko roke rakhegi jab tak MathJax tamam formulas ko
+            // aala quality mein convert na kar de.
+            await page.evaluate(async () => {
+                // MathJax ke typeset hone ka promise wait karega
+                await window.MathJax.startup.promise;
+            });
+            
+            // 6. Ab PDF generate karein (jab math sahi ho chuka hai)
+            await page.pdf({
+                path: filePath,
+                format: 'A4',
+                printBackground: true,
+                margin: {
+                    top: '40px',
+                    right: '40px',
+                    bottom: '40px',
+                    left: '40px'
+                }
+            });
 
-                      const isLastPart = index === parts.length - 1;
-                      doc.fontSize(12).text(part, {
-                        continued: !isLastPart,
-                        paragraphGap: isLastPart ? 5 : 0
-                      });
-                    });
-                  }
-                });
+            // 7. Browser ko band kar dein
+            await browser.close();
 
-                doc.end();
-                stream.on('finish', resolve).on('error', reject);
-              });
             } else {
               await fs.writeFile(filePath, chatContent);
             }

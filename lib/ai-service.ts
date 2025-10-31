@@ -240,6 +240,7 @@ Examples:
 - "Make a video of sunset" → 'video' (video content)
 - "Explain how React works" → 'text' (explanation)
 - "What is JavaScript?" → 'text' (question)
+- "Creating Word document or file" => text
 Respond with only one word.
 
 `,
