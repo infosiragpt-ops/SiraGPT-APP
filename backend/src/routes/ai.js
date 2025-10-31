@@ -11,6 +11,9 @@ const googleMCPService = require('../services/google-mcp');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
+const mime = require('mime-types');
+const { Document, Packer, Paragraph, HeadingLevel, TextRun} = require('docx');
+const PDFDocument = require('pdfkit');
 
 
 // Dependencies ko file ke top par import karen
@@ -83,152 +86,9 @@ async function countMonthlyApiCalls(userId) {
   return count;
 }
 
-// ...existing code...
-/*
-router.post(
-  '/generate',
-  [
-    body('model').trim().notEmpty().withMessage('Model is required'),
-    // body('prompt').trim().notEmpty().withMessage('Prompt is required'),
-    body('messages').isArray({ min: 1 }).withMessage('Messages array is required'),
-
-    body('chatId').optional().isString(),
-    body('files').optional().isArray(),
-    body('type').optional().isIn(['text', 'image']).withMessage('Type must be text or image'),
-  ],
-  authenticateToken,
-  async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
-
-      const { model, messages, chatId, files } = req.body;
-      const userId = req.user.id;
-
-      const userPrompt = messages[messages.length - 1].content;
-      console.log("linints", req.user.apiUsage, req.user.monthlyLimit);
-
-      // Decide karein ki text generate karna hai ya image
-      const type = userPrompt.toLowerCase().includes('image') || userPrompt.toLowerCase().includes('photo') ? 'image' : 'text';
-
-      // ✅ Check monthly limit
-      if (req.user.apiUsage >= req.user.monthlyLimit) {
-        return res.status(429).json({
-          error: 'Monthly API limit exceeded',
-          usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-        });
-      }
-
-      // ✅ Process attached files
-      let processedFiles = [];
-      if (files && files.length > 0) {
-        processedFiles = await Promise.all(
-          files.map(async (fileId) => {
-            const file = await prisma.file.findFirst({
-              where: { id: fileId, userId }
-            });
-            return file ? {
-              id: file.id,
-              name: file.originalName,
-              extractedText: file.extractedText
-            } : null;
-          })
-        ).then(results => results.filter(Boolean));
-      }
-
-      let content, tokens;
-
-      if (type === 'image') {
-
-        //return res.status(400).json({ error: 'Image generation only supported with dall-e-3' });
-
-        content = await aiService.generateImageResponse('ChatGPT', model, userPrompt);
-        tokens = 500; // fixed (adjust if needed)
-      } else {
-        // const fileContext = processedFiles.length > 0
-        //   ? '\n\nAttached files:\n' + processedFiles.map(f => `- ${f.name}: ${f.extractedText || '...'}`).join('\n')
-        //   : '';
-        // content = await aiService.generateResponse('ChatGPT', model, messages + fileContext);
-        // tokens = content.length + prompt.length + fileContext.length;
-        // CHANGE 3: AI service ko 'prompt' ke bajaye poora 'messages' array bhejein
-        const fileContext = processedFiles.length > 0
-          ? '\n\nAttached files:\n' + processedFiles.map(f => `- ${f.name}: ${f.extractedText || '...'}`).join('\n')
-          : '';
-
-        if (fileContext) {
-          messages[messages.length - 1].content += fileContext;
-        }
-        const completion = await openai.chat.completions.create({
-          model: chat.model || 'gpt-4o',
-          messages: await getChatHistoryAsOpenAIMessages(req.params.id)
-        });
-
-        content = completion.choices[0].message.content;
-        //  content = await aiService.generateResponse('ChatGPT', model, messages); // Yahan poora array bhejein
-        tokens = content.length + userPrompt.length; // Token calculation update karein
-      }
-
-      // ✅ Save messages if chatId provided
-      if (chatId) {
-        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
-        if (!chat) {
-          return res.status(404).json({ error: 'Chat not found' });
-        }
-
-        await prisma.message.create({
-          data: {
-            chatId,
-            role: 'USER',
-            content: userPrompt,
-
-            files: processedFiles.length > 0 ? processedFiles : undefined
-          }
-        });
-        console.log("IMAGETEST");
-
-        await prisma.message.create({
-          data: { chatId, role: 'ASSISTANT', content, tokens }
-        });
-
-        await prisma.chat.update({
-          where: { id: chatId },
-          data: {
-            updatedAt: new Date(),
-            title: chat.title === 'New Chat'
-              ? userPrompt.slice(0, 50) + (userPrompt.length > 50 ? '...' : '')
-              : chat.title
-          }
-        });
-      }
-
-      // ✅ Track usage
-      await prisma.apiUsage.create({
-        data: { userId, model, tokens, cost: tokens * 0.001 }
-      });
-
-      const updatedUser = await prisma.user.update({
-        where: { id: userId },
-        data: { apiUsage: { increment: tokens } }
-      });
-
-      res.json({
-        content,
-        tokens,
-        files: processedFiles,
-        usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
-      });
-
-    } catch (error) {
-      console.error('AI generation error:', error);
-      res.status(500).json({ error: error.message || 'AI generation failed' });
-    }
-  }
-);*/
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = []) {
   try {
-    console.log("Background task: Saving to database...");
+    console.log("Background task: Saving to database...", { assistantFiles });
 
 
     // ✅ Token calculation with tiktoken
@@ -254,7 +114,13 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       });
 
       await prisma.message.create({
-        data: { chatId, role: 'ASSISTANT', content: fullResponseContent, tokens }
+        data: {
+          chatId,
+          role: 'ASSISTANT',
+          content: fullResponseContent,
+          tokens,
+          files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null
+        }
       });
 
       await prisma.chat.update({
@@ -284,6 +150,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
     console.error("Error in background database save:", dbError);
   }
 }
+
 const streamControllers = new Map();
 router.post(
   '/generate',
@@ -493,7 +360,9 @@ You have a MathJax render environment.
 - Use $(tex_formula)$ in-line delimiters to display equations instead of backslash;
 - The render environment only uses $ (single dollarsign) as a container delimiter, never output $$.
 Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX. You don't need to define who you are act like a simple just example some
-say hello so give the answer hello how can i help you`
+say hello so give the answer hello how can i help you
+
+When a user asks you to create a document, report, or any text file (e.g., .docx, .pdf, .md), you must first generate the content of the document using markdown for structure (e.g., # for Heading 1, ## for Heading 2). Then, you must wrap the entire document content in a special tag. The format is [CREATE_DOCUMENT:filename.ext]...document content...[/CREATE_DOCUMENT]. Replace 'filename.ext' with an appropriate filename for the document, for example 'market_analysis_report.docx' or 'summary.pdf'. The content inside the tags will be saved as a file. The full response, including the tags, will be visible in the chat.`
         };
       }
 
@@ -659,9 +528,145 @@ say hello so give the answer hello how can i help you`
       }
 
       const tokens = fullResponseContent.length + prompt.length;
+      let finalContent = fullResponseContent;
+      let newFiles = [];
 
       if (isAuth) {
-        await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, fullResponseContent, tokens, actualModel, processedFiles);
+        const docRegex = /\[CREATE_DOCUMENT:(?<filename>[^\]]+)\](?<content>[\s\S]*?)\[\/CREATE_DOCUMENT\]/;
+        const docMatch = fullResponseContent.match(docRegex);
+
+        if (docMatch && docMatch.groups) {
+          const { filename, content } = docMatch.groups;
+          const chatContent = content.trim();
+          
+          const uploadsDir = path.join(__dirname, '../../uploads/documents', userId);
+          await fs.mkdir(uploadsDir, { recursive: true });
+          const safeFilename = filename.replace(/[^a-zA-Z0-9_.-]/g, '_');
+          const filePath = path.join(uploadsDir, safeFilename);
+
+          try {
+            const newFileRecord = await prisma.file.create({
+              data: {
+                userId: userId,
+                filename: safeFilename,
+                originalName: filename,
+                mimeType: mime.lookup(safeFilename) || 'application/octet-stream',
+                size: 0, // Placeholder
+                path: filePath,
+              },
+            });
+
+            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+            const fileUrl = `${baseUrl}/uploads/documents/${userId}/${safeFilename}`;
+
+            newFiles.push({
+              type: 'document',
+              id: newFileRecord.id,
+              name: newFileRecord.originalName,
+              filename: newFileRecord.filename,
+              mimeType: newFileRecord.mimeType,
+              downloadUrl: fileUrl,
+              path: newFileRecord.path,
+            });
+
+            const extension = path.extname(safeFilename).toLowerCase();
+
+            if (extension === '.docx') {
+                const doc = new Document({
+                    sections: [{
+                        children: chatContent.split('\n').map(line => {
+                            line = line.trim();
+                            if (line.startsWith('# ')) return new Paragraph({ text: line.substring(2), heading: HeadingLevel.HEADING_1, spacing: { after: 200 } });
+                            if (line.startsWith('## ')) return new Paragraph({ text: line.substring(3), heading: HeadingLevel.HEADING_2, spacing: { after: 180 } });
+                            if (line.startsWith('### ')) return new Paragraph({ text: line.substring(4), heading: HeadingLevel.HEADING_3, spacing: { after: 160 } });
+                            if (line.startsWith('* ') || line.startsWith('- ')) return new Paragraph({ text: line.substring(2), bullet: { level: 0 } });
+                            
+                            const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g).filter(part => part);
+                            const textRuns = parts.map(part => {
+                                if (part.startsWith('**') && part.endsWith('**')) {
+                                    return new TextRun({ text: part.slice(2, -2), bold: true });
+                                }
+                                if (part.startsWith('*') && part.endsWith('*')) {
+                                    return new TextRun({ text: part.slice(1, -1), italics: true });
+                                }
+                                return new TextRun(part);
+                            });
+
+                            return new Paragraph({ children: textRuns, spacing: { after: 100 } });
+                        }),
+                    }],
+                });
+                const buffer = await Packer.toBuffer(doc);
+                await fs.writeFile(filePath, buffer);
+            } else if (extension === '.pdf') {
+                await new Promise((resolve, reject) => {
+                    const doc = new PDFDocument({ margin: 50 });
+                    const stream = fsSync.createWriteStream(filePath);
+                    doc.pipe(stream);
+
+                    chatContent.split('\n').forEach(line => {
+                        line = line.trim();
+                        if (line.startsWith('# ')) {
+                            doc.fontSize(24).font('Helvetica-Bold').text(line.substring(2), { paragraphGap: 10 });
+                        } else if (line.startsWith('## ')) {
+                            doc.fontSize(18).font('Helvetica-Bold').text(line.substring(3), { paragraphGap: 8 });
+                        } else if (line.startsWith('### ')) {
+                            doc.fontSize(14).font('Helvetica-Bold').text(line.substring(4), { paragraphGap: 6 });
+                        } else if (line.startsWith('* ') || line.startsWith('- ')) {
+                            doc.fontSize(12).font('Helvetica').text(`• ${line.substring(2)}`, { paragraphGap: 5 });
+                        } else if (line.trim() === '') {
+                            doc.moveDown();
+                        } else {
+                            // Basic support for bold and italic
+                            const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g).filter(part => part);
+                            parts.forEach((part, index) => {
+                                let isBold = false;
+                                let isItalic = false;
+                                if (part.startsWith('**') && part.endsWith('**')) {
+                                    part = part.slice(2, -2);
+                                    isBold = true;
+                                }
+                                if (part.startsWith('*') && part.endsWith('*')) {
+                                    part = part.slice(1, -1);
+                                    isItalic = true;
+                                }
+                                
+                                if (isBold && isItalic) doc.font('Helvetica-BoldOblique');
+                                else if (isBold) doc.font('Helvetica-Bold');
+                                else if (isItalic) doc.font('Helvetica-Oblique');
+                                else doc.font('Helvetica');
+
+                                doc.fontSize(12).text(part, { continued: true });
+                            });
+                            doc.text('', { continued: false, paragraphGap: 5 });
+                        }
+                    });
+
+                    doc.end();
+                    stream.on('finish', resolve).on('error', reject);
+                });
+            } else {
+              await fs.writeFile(filePath, chatContent);
+            }
+
+            const finalStats = await fs.stat(filePath);
+            await prisma.file.update({
+              where: { id: newFileRecord.id },
+              data: { size: finalStats.size },
+            });
+            newFiles[0].size = finalStats.size;
+
+          } catch (fileError) {
+            console.error("Error creating document:", fileError);
+            finalContent = "I tried to create the document, but an error occurred while saving the file.";
+            newFiles = [];
+          }
+        }
+        
+        await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles);
+      } else {
+        // Handle non-authenticated user case if necessary
+        await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles);
       }
 
     } catch (error) {

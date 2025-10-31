@@ -121,6 +121,11 @@ export class AIService {
       .map(msg => `${msg.role}: ${msg.content}`)
       .join('\n');
 
+    const history = conversationHistory
+      .slice(-10) // Get the last 10 messages
+      .map(msg => `${msg.role}: ${msg.content}`)
+      .join('\n');
+
     try {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
@@ -134,7 +139,11 @@ export class AIService {
             {
               role: "system",
               content: `You are an expert at classifying user intent based on the latest message and conversation history. Analyze the user's prompt and classify it into one of these categories: 'gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'webdev', or 'text'.
+              content: `You are an expert at classifying user intent based on the latest message and conversation history.Analyze the user's prompt and classify it into one of these categories: 'gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'webdev', or 'text'.
 
+- 'gmail': Sending, reading, or managing emails.
+- 'google_services': Interacting with Google Calendar or Drive.
+- 'web_search': Finding information on the internet.
 - 'gmail': Sending, reading, or managing emails.
 - 'google_services': Interacting with Google Calendar or Drive.
 - 'web_search': Finding information on the internet.
@@ -145,32 +154,38 @@ export class AIService {
 - 'webdev': Building websites or UI components.
 - 'text': For all other general conversation, questions, and text generation.
 
-IMPORTANT: 
-    - Consider the conversation history for context. A simple "yes" might mean "yes, create the website we just discussed."
-    - Only classify as 'webdev' if the user is **creating** or **building** a UI or web page. If the request involves **debugging**, **explaining**, or **reviewing code**, classify it as 'text'.
+                IMPORTANT: 
+    - Consider the conversation history for context.A simple "yes" might mean "yes, create the website we just discussed."
+    - Consider the conversation history for context.A simple "yes" might mean "yes, create the website we just discussed."
+    - Only classify as 'webdev' if the user is ** creating ** or ** building ** a UI or web page.If the request involves ** debugging **, ** explaining **, or ** reviewing code **, classify it as 'text'.
     
 Respond with only one word.`,
             },
-            { role: "user", content: `Conversation History:\n${history}\n\nLatest User Prompt: "${prompt}"` },
+            { role: "user", content: `Conversation History: \n${ history }\n\nLatest User Prompt: "${prompt}"` },
+    
+Respond with only one word.`,
+            },
+    { role: "user", content: `Conversation History:\n${history}\n\nLatest User Prompt: "${prompt}"` },
           ],
-          temperature: 0.2,
+    temperature: 0.2,
+      temperature: 0.2,
         }),
-      });
+});
 
-      if (!response.ok) throw new Error(`API error: ${response.statusText}`);
-      const data = await response.json();
-      const intent = data.choices[0].message.content.toLowerCase().trim();
-      console.log('intent FROM OPEN AI', intent);
+if (!response.ok) throw new Error(`API error: ${response.statusText}`);
+const data = await response.json();
+const intent = data.choices[0].message.content.toLowerCase().trim();
+console.log('intent FROM OPEN AI', intent);
 
-      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'webdev', 'text'];
-      if (validIntents.includes(intent)) {
-        return intent;
-      }
-      return 'text'; // Default fallback
+const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'webdev', 'text'];
+if (validIntents.includes(intent)) {
+  return intent;
+}
+return 'text'; // Default fallback
     } catch (error) {
-      console.error("Intent classification failed:", error);
-      return 'text'; // Default on error
-    }
+  console.error("Intent classification failed:", error);
+  return 'text'; // Default on error
+}
   }
 }
 
