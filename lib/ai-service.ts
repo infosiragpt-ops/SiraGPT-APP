@@ -220,7 +220,10 @@ export class AIService {
 * French: "crée une présentation sur l'IA", "génère des slides"
 - 'chart': Creating charts or graphs. Examples: "create a bar chart", "make a pie graph".
 - 'webdev': Building websites or UI components. Examples: "build a login page", "create a React component".
-- 'text': For all other general conversation, questions, and text generation.
+- 'text': For all other general conversation, questions, and text generation. 
+  This includes structured text outputs such as tables, dummy data, formatted lists, or code-generated textual data.
+  If the user asks to create a “table”, “list”, “dataset”, or “dummy data” without explicitly mentioning charts, slides, or presentations, classify as 'text'.
+
 
 
 IMPORTANT: 
