@@ -696,7 +696,7 @@ export default function ModelsPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent>
-                        <DropdownMenuItem onSelect={() => { setEditingModel(model); setIsEditDialogOpen(true); }}>
+                          <DropdownMenuItem onSelect={() => { setEditingModel(model); setTimeout(() => setIsEditDialogOpen(true), 0); }}>
                           <Settings className="mr-2 h-4 w-4" />
                           Edit Model
                         </DropdownMenuItem>

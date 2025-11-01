@@ -156,7 +156,7 @@ export default function UsersPage() {
       monthlyLimit: u.monthlyLimit ?? 0,
     })
     setEditFormErrors({})
-    setShowEditModal(true)
+     setTimeout(() => setShowEditModal(true), 0)
   }
 
 // 2) Replace your existing handleAddUser function with this improved version:
@@ -251,7 +251,7 @@ const handleEditUser = async () => {
   try {
     // Build payload only with fields that changed to avoid accidental overwrites
     const payload: any = {}
-
+    console.log(form)
     if (String(form.name ?? "") !== String(editingUser.name ?? "")) {
       payload.name = form.name
     }
@@ -597,7 +597,7 @@ const handleEditUser = async () => {
           {addFormErrors.monthlyLimit ? (
             <p className="text-sm text-red-600 mt-1">{addFormErrors.monthlyLimit}</p>
           ) : (
-            <p className="text-xs text-muted-foreground mt-1">Number of API calls allowed per month.</p>
+            <p className="text-xs text-muted-foreground mt-1">Number of credits per month.</p>
           )}
         </div>
       </div>
@@ -644,6 +644,7 @@ const handleEditUser = async () => {
       setEditFormErrors({})
       // keep form password cleared when closing
       setForm(f => ({ ...f, password: "" }))
+      
     }
     setShowEditModal(open)
   }}
@@ -695,7 +696,7 @@ const handleEditUser = async () => {
             <SelectContent>
               <SelectItem value="FREE">FREE</SelectItem>
               <SelectItem value="PRO">PRO</SelectItem>
-              <SelectItem value="PRO_MAX">PRO_MAX</SelectItem>
+              <SelectItem value="PRO_MAX">PRO MAX</SelectItem>
               <SelectItem value="ENTERPRISE">ENTERPRISE</SelectItem>
             </SelectContent>
           </Select>
