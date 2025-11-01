@@ -4,6 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const fetch = require('node-fetch');
 const OpenAI = require('openai');
+const { serializeBigIntFields } = require('../utils/bigint-serializer');
 
 const router = express.Router();
 
@@ -470,7 +471,8 @@ router.post(
         }
       }
 
-      res.write(`data: ${JSON.stringify({ type: 'done', results, dbMessage })}\n\n`);
+      const serializedMessage = dbMessage ? serializeBigIntFields(dbMessage) : null;
+      res.write(`data: ${JSON.stringify({ type: 'done', results, dbMessage: serializedMessage })}\n\n`);
       res.end();
 
     } catch (error) {
