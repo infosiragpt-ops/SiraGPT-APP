@@ -363,15 +363,29 @@ You have a MathJax render environment.
 Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX. You don't need to define who you are act like a simple just example some
 say hello so give the answer hello how can i help you
 
-When a user explicitly asks to create a document, report, or a file with a specific format (e.g., "create a word document", "make a report about...", "save this as a .pdf"):
-1. If the user has provided content in their message, USE THAT EXACT CONTENT for the document. DO NOT generate new content.
-2. If the user has NOT provided content, then generate appropriate content based on their request.
-3. Use markdown for structure (e.g., # for Heading 1, ## for Heading 2).
-4. Wrap the ENTIRE document content in this special tag: [CREATE_DOCUMENT:filename.ext]...document content...[/CREATE_DOCUMENT]
-5. Replace 'filename.ext' with an appropriate filename (e.g., 'report.docx', 'summary.pdf').
-6. The content inside the tags will be saved as a file.
+**CRITICAL DOCUMENT CREATION RULES:**
+When a user asks to create a document using previous content (phrases like "with the information you gave me", "using the above data", "with the content I provided", "make a Word document from this", etc.):
 
-IMPORTANT: A simple request for a "summary" should NOT create a document unless a file format is specified. If the user says something like "create a Word document from this content" or "make a PDF from this information", you MUST use their provided content exactly as they gave it. DO NOT create new content unless specifically asked to do so.`
+1. **DO NOT REPEAT CONTENT**: Never repeat existing conversation content in your main response message
+2. **BRIEF ACKNOWLEDGMENT ONLY**: Give a short response like "I'll create a Document with the content from my previous response"  
+3. **USE [CREATE_DOCUMENT] TAGS**: Put the actual content only inside [CREATE_DOCUMENT:filename.ext]...[/CREATE_DOCUMENT]
+4. **EXTRACT FROM HISTORY**: Use exact content from previous assistant messages in this conversation 
+
+Document Creation Process:
+1. If user references previous content ("the information you gave me", "above data", etc.), extract that content from conversation history
+2. If user provides content in their current message, use that exact content
+3. If user asks for completely new content, then generate it
+4. Use markdown for structure (# for Heading 1, ## for Heading 2).
+5. Wrap the ENTIRE document content in: [CREATE_DOCUMENT:filename.ext]...content...[/CREATE_DOCUMENT]
+6. Replace 'filename.ext' with appropriate filename (e.g., 'report.docx', 'summary.pdf')
+
+
+EXAMPLES:
+- "Create a Word document with the information you just provided" → Use content from your last assistant message
+- "Make a PDF from the data above" → Use content from previous assistant responses  
+- "Generate a new report about climate change" → Create new content as requested
+
+IMPORTANT: Never regenerate content when the user clearly references previously provided information. Always prioritize using existing conversation content over generating new content.`
         };
       }
 
@@ -546,7 +560,29 @@ IMPORTANT: A simple request for a "summary" should NOT create a document unless 
 
         if (docMatch && docMatch.groups) {
           const { filename, content } = docMatch.groups;
-          const chatContent = content.trim();
+          let chatContent = content.trim();
+
+          // If content is minimal/empty, extract from previous conversation
+          if (chatContent.length < 100) {
+            console.log('📄 Document content too short, extracting from conversation history...');
+
+            // Get recent assistant messages with substantial content
+            const recentAssistantMessages = messages
+              .filter(msg => msg.role === 'assistant' && msg.content && msg.content.length > 500)
+              .slice(-2); // Last 2 substantial messages
+
+            if (recentAssistantMessages.length > 0) {
+              chatContent = recentAssistantMessages
+                .map(msg => msg.content)
+                .join('\n\n---\n\n');
+              console.log(`✅ Extracted ${chatContent.length} characters from conversation history`);
+            }
+          }
+
+          // Remove any [CREATE_DOCUMENT] tags from the main response to avoid duplication
+          finalContent = fullResponseContent.replace(docRegex, '').trim();
+
+          console.log(`📄 Creating document: ${filename} (${chatContent.length} chars)`);
 
           const uploadsDir = path.join(__dirname, '../../uploads/documents', userId);
           await fs.mkdir(uploadsDir, { recursive: true });
@@ -581,97 +617,98 @@ IMPORTANT: A simple request for a "summary" should NOT create a document unless 
             const extension = path.extname(safeFilename).toLowerCase();
 
             if (extension === '.docx') {
-            //   const { marked } = await import('marked');
+              //   const { marked } = await import('marked');
 
-            //   // Configure marked with a custom renderer for better table and code block handling
-            //  const tokens = marked.lexer(chatContent);
-            // const docChildren = [];
-            
-            // // Markdown ko DOCX elements mein convert karein
-            // tokens.forEach(token => {
-            //     if (token.type === 'heading') {
-            //         docChildren.push(new Paragraph({
-            //             text: token.text,
-            //             heading: `Heading${token.depth}`,
-            //         }));
-            //     } else if (token.type === 'paragraph') {
-            //         docChildren.push(new Paragraph(token.text));
-            //     } else if (token.type === 'table') {
-            //         const tableRows = [];
-            //         // Header
-            //         tableRows.push(new TableRow({
-            //             children: token.header.map(headerCell => new TableCell({
-            //                 children: [new Paragraph({ text: headerCell.text, bold: true })],
-            //                 width: { size: 4535, type: WidthType.DXA },
-            //             })),
-            //             tableHeader: true,
-            //         }));
-            //         // Body rows
-            //         token.rows.forEach(row => {
-            //             tableRows.push(new TableRow({
-            //                 children: row.map(cell => new TableCell({
-            //                     children: [new Paragraph(cell.text)],
-            //                 })),
-            //             }));
-            //         });
-            //         const table = new Table({
-            //             rows: tableRows,
-            //             width: { size: 100, type: WidthType.PERCENT },
-            //         });
-            //         docChildren.push(table);
-            //     } else {
-            //          docChildren.push(new Paragraph(token.raw));
-            //     }
-            // });
+              //   // Configure marked with a custom renderer for better table and code block handling
+              //  const tokens = marked.lexer(chatContent);
+              // const docChildren = [];
 
-            // const doc = new Document({
-            //     sections: [{
-            //         children: docChildren,
-            //     }],
-            // });
+              // // Markdown ko DOCX elements mein convert karein
+              // tokens.forEach(token => {
+              //     if (token.type === 'heading') {
+              //         docChildren.push(new Paragraph({
+              //             text: token.text,
+              //             heading: `Heading${token.depth}`,
+              //         }));
+              //     } else if (token.type === 'paragraph') {
+              //         docChildren.push(new Paragraph(token.text));
+              //     } else if (token.type === 'table') {
+              //         const tableRows = [];
+              //         // Header
+              //         tableRows.push(new TableRow({
+              //             children: token.header.map(headerCell => new TableCell({
+              //                 children: [new Paragraph({ text: headerCell.text, bold: true })],
+              //                 width: { size: 4535, type: WidthType.DXA },
+              //             })),
+              //             tableHeader: true,
+              //         }));
+              //         // Body rows
+              //         token.rows.forEach(row => {
+              //             tableRows.push(new TableRow({
+              //                 children: row.map(cell => new TableCell({
+              //                     children: [new Paragraph(cell.text)],
+              //                 })),
+              //             }));
+              //         });
+              //         const table = new Table({
+              //             rows: tableRows,
+              //             width: { size: 100, type: WidthType.PERCENT },
+              //         });
+              //         docChildren.push(table);
+              //     } else {
+              //          docChildren.push(new Paragraph(token.raw));
+              //     }
+              // });
 
-            // const buffer = await Packer.toBuffer(doc);
-            // await fs.writeFile(filePath, buffer);
+              // const doc = new Document({
+              //     sections: [{
+              //         children: docChildren,
+              //     }],
+              // });
 
-           const tempMarkdownPath = filePath + '.md';
-    await fs.writeFile(tempMarkdownPath, chatContent);
+              // const buffer = await Packer.toBuffer(doc);
+              // await fs.writeFile(filePath, buffer);
 
-    // 2. Ab Pandoc ko saaf saaf command denge ke is temp file se parho aur .docx file banao.
-    //    Yeh tareeqa sab se zyada reliable hai.
-    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown -t docx --mathjax -o "${filePath}"`;
+              const tempMarkdownPath = filePath + '.md';
+              await fs.writeFile(tempMarkdownPath, chatContent);
 
-    console.log(`Executing Pandoc command: ${pandocCommand}`);
+              // 2. Ab Pandoc ko saaf saaf command denge ke is temp file se parho aur .docx file banao.
+              //    Yeh tareeqa sab se zyada reliable hai.
+              const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown -t docx --mathjax -o "${filePath}"`;
 
-    // 3. Command ko Promise ke andar chalayein taake async/await kaam kare
-    await new Promise((resolve, reject) => {
-        exec(pandocCommand, (error, stdout, stderr) => {
-            // Kaam poora hone par temporary markdown file ko delete kar dein
-            fs.unlink(tempMarkdownPath, (unlinkErr) => {
-                if (unlinkErr) console.error("Temporary markdown file delete nahi ho saki:", unlinkErr);
-            });
+              console.log(`Executing Pandoc command: ${pandocCommand}`);
 
-            if (error) {
-                console.error(`Pandoc command execution error: ${error.message}`);
-                console.error(`Pandoc stderr: ${stderr}`);
-                return reject(error);
-            }
-            if (stderr) {
-                console.warn(`Pandoc stderr (warnings): ${stderr}`);
-            }
-            
-            console.log('Pandoc ne file kamyabi se bana di hai.');
-            resolve(stdout);
-        });
-    });
+              // 3. Command ko Promise ke andar chalayein taake async/await kaam kare
+              await new Promise((resolve, reject) => {
+                exec(pandocCommand, (error, stdout, stderr) => {
+                  // Kaam poora hone par temporary markdown file ko delete kar dein
+                  fs.unlink(tempMarkdownPath, (unlinkErr) => {
+                    if (unlinkErr) console.error("Temporary markdown file delete nahi ho saki:", unlinkErr);
+                  });
+
+                  if (error) {
+                    console.error(`Pandoc command execution error: ${error.message}`);
+                    console.error(`Pandoc stderr: ${stderr}`);
+                    return reject(error);
+                  }
+                  if (stderr) {
+                    console.warn(`Pandoc stderr (warnings): ${stderr}`);
+                  }
+
+                  console.log('Pandoc ne file kamyabi se bana di hai.');
+                  resolve(stdout);
+                });
+              });
 
             } else if (extension === '.pdf') {
-const puppeteer = require('puppeteer');
-            const { marked } = require('marked');
+              const puppeteer = require('puppeteer');
+              const { marked } = await import('marked');
 
-          const htmlContent = marked.parse(chatContent);
 
-            // HTML template jismein MathJax shamil hai
-          const fullHtml = `
+              const htmlContent = marked.parse(chatContent);
+
+              // HTML template jismein MathJax shamil hai
+              const fullHtml = `
                 <html>
                     <head>
                         <meta charset="UTF-8">
@@ -737,40 +774,39 @@ const puppeteer = require('puppeteer');
                     </body>
                 </html>
             `;
-            
-            // 3. Puppeteer ko launch karein
-            const browser = await puppeteer.launch({ 
-                headless: "new", // "new" headless mode behtar hai
-                args: ['--no-sandbox', '--disable-setuid-sandbox'] 
-            });
-            const page = await browser.newPage();
-            
-            // 4. HTML content ko page mein load karein
-            await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
 
-            // 5. SAB SE ZAROORI HISSA: MathJax ke render hone ka intezar karein
-            // Yeh code line page ko roke rakhegi jab tak MathJax tamam formulas ko
-            // aala quality mein convert na kar de.
-            await page.evaluate(async () => {
+              // 3. Puppeteer ko launch karein
+              const browser = await puppeteer.launch({
+                headless: "new", // "new" headless mode behtar hai
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
+              });
+              const page = await browser.newPage();
+
+              // 4. HTML content ko page mein load karein
+              await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
+
+              // 5. SAB SE ZAROORI HISSA: MathJax ke render hone ka intezar karein
+              // Yeh code line page ko roke rakhegi jab tak MathJax tamam formulas ko
+              // aala quality mein convert na kar de.
+              await page.evaluate(async () => {
                 // MathJax ke typeset hone ka promise wait karega
                 await window.MathJax.startup.promise;
-            });
-            
-            // 6. Ab PDF generate karein (jab math sahi ho chuka hai)
-            await page.pdf({
+              });
+
+              // 6. Ab PDF generate karein (jab math sahi ho chuka hai)
+              await page.pdf({
                 path: filePath,
                 format: 'A4',
                 printBackground: true,
                 margin: {
-                    top: '40px',
-                    right: '40px',
-                    bottom: '40px',
-                    left: '40px'
+                  top: '40px',
+                  right: '40px',
+                  bottom: '40px',
+                  left: '40px'
                 }
-            });
-
-            // 7. Browser ko band kar dein
-            await browser.close();
+              });
+              // 7. Browser ko band kar dein
+              await browser.close();
 
             } else {
               await fs.writeFile(filePath, chatContent);
@@ -789,6 +825,7 @@ const puppeteer = require('puppeteer');
             newFiles = [];
           }
         }
+        console.log('finalContent', finalContent);
 
         await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles);
       } else {

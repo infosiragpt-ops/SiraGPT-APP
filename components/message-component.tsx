@@ -52,11 +52,11 @@ import SpotifyResults from "./spotify-results"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
 const truncateUrl = (url: string, maxLength: number = 30) => {
-    // if (url.length <= maxLength) return url;
-    // const domain = url.split('/')[2]; // Extract domain
-    // const path = url.split('/').slice(3).join('/'); // Extract path
-    // const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
-    // return `${domain}/${truncatedPath}`;
+    if (url.length <= maxLength) return url;
+    const domain = url.split('/')[2]; // Extract domain
+    const path = url.split('/').slice(3).join('/'); // Extract path
+    const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
+    return `${domain}/${truncatedPath}`;
 };
 
 // Chart Display Component
@@ -563,11 +563,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     const handleExpand = () => {
                         const tHead = node.children.find((child: any) => child.tagName === 'thead');
                         const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                        console.log(tHead);
-                        
+                        console.log(children);
+
                         const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
                         const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
-                        
+
                         setTableHeaders(headers);
                         setTableData(data);
                         setTableTitle(title);

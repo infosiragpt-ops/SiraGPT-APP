@@ -39,6 +39,43 @@ class AIService {
     }
 
     /**
+     * Detect if user is requesting document creation from existing content
+     * @param {string} userRequest - Latest user message
+     * @param {Array} messages - Full conversation history
+     * @returns {boolean} - True if this is a document creation request
+     */
+    isDocumentCreationFromExistingContent(userRequest, messages) {
+        const request = userRequest.toLowerCase();
+
+        // Keywords that indicate document creation from existing content
+        const documentKeywords = [
+            'create', 'convert', 'make', 'generate', 'save as', 'export',
+            'pdf', 'word', 'doc', 'docx', 'document', 'file'
+        ];
+
+        const referenceKeywords = [
+            'above', 'previous', 'earlier', 'that content', 'the content',
+            'what you gave me', 'what you provided', 'your response',
+            'from your answer', 'with the information', 'uper wala content',
+            'jo tumne diya', 'jo content', 'pehle wala'
+        ];
+
+        const hasDocumentKeyword = documentKeywords.some(keyword => request.includes(keyword));
+        const hasReferenceKeyword = referenceKeywords.some(keyword => request.includes(keyword));
+
+        // Check if there's substantial content in recent assistant messages
+        const recentAssistantMessages = messages
+            .filter(msg => msg.role === 'assistant' && msg.content)
+            .slice(-3); // Last 3 assistant messages
+
+        const hasSubstantialPreviousContent = recentAssistantMessages.some(msg =>
+            msg.content && msg.content.length > 500
+        );
+
+        return hasDocumentKeyword && hasReferenceKeyword && hasSubstantialPreviousContent;
+    }
+
+    /**
      * Helper function to convert image file to base64 format for vision API
      * @param {string} imagePath - Path to the image file
      * @param {string} mimeType - MIME type of the image
@@ -85,7 +122,6 @@ class AIService {
         let fullResponseContent = '';
         try {
             const client = this.getClient(provider);
-
             // ✅ IMPROVED: Handle images properly for vision API
             if (files && files.length > 0) {
                 const imageFiles = files.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
