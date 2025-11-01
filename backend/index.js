@@ -7,6 +7,7 @@ const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const passport = require('./src/config/passport');
+const { bigintSerializerMiddleware } = require('./src/utils/bigint-serializer');
 require('dotenv').config();
 
 const authRoutes = require('./src/routes/auth');
@@ -75,6 +76,9 @@ app.use(compression({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
+
+// BigInt serialization middleware
+app.use(bigintSerializerMiddleware);
 
 // Session configuration for Google OAuth
 app.use(session({

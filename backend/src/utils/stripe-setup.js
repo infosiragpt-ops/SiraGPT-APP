@@ -53,8 +53,8 @@ async function getPriceIdForPlan(plan) {
   if (!setting) {
     // For development/demo mode, return a dummy price ID
     const dummyPriceIds = {
-      BASIC: 'price_demo_basic',
-      STANDARD: 'price_demo_standard', 
+      PRO: 'price_demo_pro',
+      PRO_MAX: 'price_demo_pro_max', 
       ENTERPRISE: 'price_demo_enterprise'
     };
     

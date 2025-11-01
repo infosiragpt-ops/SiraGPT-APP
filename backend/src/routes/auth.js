@@ -6,6 +6,7 @@ const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const passport = require('../config/passport');
 const { OAuth2Client } = require('google-auth-library');
+const { serializeUser } = require('../utils/bigint-serializer');
 
 const router = express.Router();
 
@@ -573,8 +574,9 @@ router.post('/login', [
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
+    const serializedUser = serializeUser(userWithoutPassword);
     res.json({
-      user: userWithoutPassword,
+      user: serializedUser,
       token
     });
   } catch (error) {
@@ -587,7 +589,8 @@ router.post('/login', [
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const { password: _, ...userWithoutPassword } = req.user;
-    res.json({ user: userWithoutPassword });
+    const serializedUser = serializeUser(userWithoutPassword);
+    res.json({ user: serializedUser });
   } catch (error) {
     console.error('Get user error:', error);
     res.status(500).json({ error: 'Failed to get user' });

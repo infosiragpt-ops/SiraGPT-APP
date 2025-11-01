@@ -30,26 +30,26 @@ function PaymentSuccessContent() {
     limit: string,
     features: string[]
   }> = {
-    BASIC: {
+    PRO: {
       color: 'from-blue-500 to-cyan-500',
       badge: 'bg-blue-500',
       icon: Crown,
-      limit: '10,000 calls/month',
-      features: ['AI Chat', 'Text Generation', 'Basic Support']
+      limit: '500,000 tokens/month',
+      features: ['500,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features']
     },
-    STANDARD: {
+    PRO_MAX: {
       color: 'from-purple-500 to-pink-500',
       badge: 'bg-purple-500',
       icon: Sparkles,
-      limit: '30,000 calls/month',
-      features: ['Everything in Basic', 'Image Generation', 'Priority Support', 'Advanced Models']
+      limit: '1,000,000 tokens/month',
+      features: ['1,000,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features', 'Enhanced rate limits']
     },
     ENTERPRISE: {
       color: 'from-amber-500 to-orange-500',
       badge: 'bg-amber-500',
       icon: Crown,
-      limit: '10M calls/month',
-      features: ['Everything in Standard', 'Audio Generation', 'Video Generation', 'Dedicated Support', 'Custom Integration']
+      limit: '10,000,000 tokens/month',
+      features: ['10,000,000 tokens per month', 'All features', 'Dedicated support', 'Custom integrations', 'SLA guaranteed']
     }
   }
 

@@ -59,26 +59,26 @@ export default function SubscriptionManager() {
       price: 0,
       features: ['Basic AI Chat', 'Community Support']
     },
-    BASIC: {
+    PRO: {
       color: 'from-blue-500 to-cyan-500',
       icon: Crown,
-      limit: '10,000 calls/month',
+      limit: '500,000 tokens/month',
       price: 5,
-      features: ['AI Chat', 'Text Generation', 'Email Support']
+      features: ['All AI models', 'Priority support', 'Advanced features', 'Enhanced rate limits']
     },
-    STANDARD: {
+    PRO_MAX: {
       color: 'from-purple-500 to-pink-500', 
       icon: Sparkles,
-      limit: '30,000 calls/month',
+      limit: '1,000,000 tokens/month',
       price: 15,
-      features: ['Everything in Basic', 'Image Generation', 'Priority Support', 'Advanced Models']
+      features: ['Everything in Pro', 'Higher token limits', 'Priority support', 'Advanced Models', 'Enhanced rate limits']
     },
     ENTERPRISE: {
       color: 'from-amber-500 to-orange-500',
       icon: Zap,
-      limit: '10M calls/month',
+      limit: '10,000,000 tokens/month',
       price: 99,
-      features: ['Everything in Standard', 'Audio Generation', 'Video Generation', 'Dedicated Support', 'Custom Integration']
+      features: ['Everything in Pro Max', 'Massive token limits', 'Dedicated Support', 'Custom Integration', 'SLA guaranteed']
     }
   }
 
@@ -383,7 +383,7 @@ export default function SubscriptionManager() {
 
             <Separator />
 
-            <div className="flex items-center justify-between p-4 border rounded-lg">
+            {/* <div className="flex items-center justify-between p-4 border rounded-lg">
               <div>
                 <p className="font-medium">Billing Portal</p>
                 <p className="text-sm text-muted-foreground">
@@ -394,7 +394,7 @@ export default function SubscriptionManager() {
                 <ExternalLink className="h-3 w-3 mr-2" />
                 Open Portal
               </Button>
-            </div>
+            </div> */}
           </CardContent>
         </Card>
       )}

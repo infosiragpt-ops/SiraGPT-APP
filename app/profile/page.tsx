@@ -334,7 +334,7 @@ function ProfileContent() {
                   <div className="flex justify-between">
                     <span className="text-sm">Current Plan</span>
                     <Badge
-                      variant={user.plan === "ENTERPRISE" ? "default" : user.plan === "STANDARD" ? "secondary" : "outline"}
+                      variant={user.plan === "ENTERPRISE" ? "default" : user.plan === "PRO_MAX" ? "secondary" : "outline"}
                     >
                       {user.plan || 'FREE'}
                     </Badge>

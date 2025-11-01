@@ -336,7 +336,7 @@ const handleEditUser = async () => {
     }
   }
 
-  const plans = useMemo(() => ["All", "FREE", "BASIC", "STANDARD", "ENTERPRISE"], [])
+  const plans = useMemo(() => ["All", "FREE", "PRO", "PRO_MAX", "ENTERPRISE"], [])
 
   return (
     <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
@@ -574,8 +574,8 @@ const handleEditUser = async () => {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="FREE">Free</SelectItem>
-              <SelectItem value="BASIC">Basic</SelectItem>
-              <SelectItem value="STANDARD">Standard</SelectItem>
+              <SelectItem value="PRO">Pro</SelectItem>
+              <SelectItem value="PRO_MAX">Pro Max</SelectItem>
               <SelectItem value="ENTERPRISE">Enterprise</SelectItem>
             </SelectContent>
           </Select>
@@ -694,8 +694,8 @@ const handleEditUser = async () => {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="FREE">FREE</SelectItem>
-              <SelectItem value="BASIC">BASIC</SelectItem>
-              <SelectItem value="STANDARD">STANDARD</SelectItem>
+              <SelectItem value="PRO">PRO</SelectItem>
+              <SelectItem value="PRO_MAX">PRO_MAX</SelectItem>
               <SelectItem value="ENTERPRISE">ENTERPRISE</SelectItem>
             </SelectContent>
           </Select>

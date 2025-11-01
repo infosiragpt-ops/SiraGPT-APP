@@ -4,6 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
+const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
 
 const router = express.Router();
 
@@ -31,8 +32,11 @@ router.get('/', authenticateToken, async (req, res) => {
       })
     ]);
 
+    // Serialize BigInt fields before sending response
+    const serializedChats = chats.map(chat => serializeChat(chat));
+    
     res.json({
-      chats,
+      chats: serializedChats,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -96,7 +100,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Chat not found' });
     }
 
-    res.json({ chat });
+    // Serialize BigInt fields before sending response
+    const serializedChat = serializeChat(chat);
+    res.json({ chat: serializedChat });
   } catch (error) {
     console.error('Get chat error:', error);
     res.status(500).json({ error: 'Failed to fetch chat' });

@@ -121,7 +121,7 @@ router.put('/notifications/:id/read', authenticateToken, async (req, res) => {
 
 // Preview plan change
 router.post('/plan-change/preview', subscriptionLimiter, [
-  body('newPlan').isIn(['BASIC', 'STANDARD', 'ENTERPRISE']).withMessage('Invalid plan')
+  body('newPlan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan')
 ], authenticateToken, async (req, res) => {
   try {
     const { newPlan } = req.body;
@@ -138,7 +138,7 @@ router.post('/plan-change/preview', subscriptionLimiter, [
 
 // Execute plan change
 router.post('/plan-change/execute', subscriptionLimiter, [
-  body('newPlan').isIn(['BASIC', 'STANDARD', 'ENTERPRISE']).withMessage('Invalid plan'),
+  body('newPlan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan'),
   body('immediate').isBoolean().withMessage('Immediate must be boolean')
 ], authenticateToken, async (req, res) => {
   try {
@@ -170,7 +170,7 @@ router.post('/plan-change/cancel', subscriptionLimiter, authenticateToken, async
 
 // Create Stripe checkout session
 router.post('/stripe', paymentLimiter, [
-  body('plan').isIn(['BASIC', 'STANDARD', 'ENTERPRISE']).withMessage('Invalid plan')
+  body('plan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan')
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -220,8 +220,8 @@ router.post('/stripe', paymentLimiter, [
     
     // Calculate amount for payment record
     const planAmounts = {
-      BASIC: 5.00,
-      STANDARD: 15.00,
+      PRO: 5.00,
+      PRO_MAX: 15.00,
       ENTERPRISE: 99.00
     };
 
@@ -408,9 +408,9 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
 
         // Update user subscription - ADD new plan limits to existing monthlyLimit
         const planCredits = {
-          BASIC: 10000,
-          STANDARD: 30000,
-          ENTERPRISE: 100000
+          PRO: 500000,
+          PRO_MAX: 1000000,
+          ENTERPRISE: 10000000
         };
 
         // Get current user to add to existing limits
@@ -446,9 +446,9 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
 
         // Update user subscription - ADD new plan limits to existing monthlyLimit
         const planCredits = {
-          BASIC: 10000,
-          STANDARD: 30000,
-          ENTERPRISE: 100000
+          PRO: 500000,
+          PRO_MAX: 1000000,
+          ENTERPRISE: 10000000
         };
 
         // Get current user to add to existing limits
@@ -664,8 +664,8 @@ router.post(
   [
     // optional validators: monthlyLimit if provided must be integer
     body('plan')
-      .isIn(['BASIC', 'STANDARD', 'ENTERPRISE'])
-      .withMessage('Invalid plan (allowed: BASIC, STANDARD, ENTERPRISE)'),
+      .isIn(['PRO', 'PRO_MAX', 'ENTERPRISE'])
+      .withMessage('Invalid plan (allowed: PRO, PRO_MAX, ENTERPRISE)'),
     body('monthlyLimit').optional().isInt({ min: 0 }).withMessage('monthlyLimit must be an integer >= 0'),
   ],
   async (req, res) => {
@@ -679,9 +679,9 @@ router.post(
 
       // Default plan credits (used when monthlyLimit isn't supplied)
       const planCredits = {
-        BASIC: 10000,
-        STANDARD: 30000,
-        ENTERPRISE: 100000,
+        PRO: 500000,
+        PRO_MAX: 1000000,
+        ENTERPRISE: 10000000,
       };
 
       const add = typeof monthlyLimit !== 'undefined' && monthlyLimit !== null
@@ -796,9 +796,9 @@ async function handleCheckoutSessionCompleted(session) {
 
     // Update user subscription - ADD new plan limits to existing monthlyLimit
     const planCredits = {
-      BASIC: 10000,
-      STANDARD: 30000,
-      ENTERPRISE: 100000
+      PRO: 500000,
+      PRO_MAX: 1000000,
+      ENTERPRISE: 10000000
     };
 
     // Get current user to add to existing limits

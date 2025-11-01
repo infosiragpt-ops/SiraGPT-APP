@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { apiClient } from "@/lib/api"
 
-type Plan = "FREE" | "BASIC" | "STANDARD" | "ENTERPRISE"
+type Plan = "FREE" | "PRO" | "PRO_MAX" | "ENTERPRISE"
 
 interface UpgradeModalProps {
   open: boolean
@@ -50,7 +50,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   const [loadingPlan, setLoadingPlan] = React.useState<Plan | null>(null)
 
   // Use auth context directly for the most up-to-date user data
-  const { user: authUser, updateUser } = useAuth()
+  const { user: authUser } = useAuth()
   
   // Use auth context user if available, fallback to prop user
   const currentUser = authUser || user
@@ -61,9 +61,9 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   const remainingCalls = monthlyLimit - monthlyCallLimit
 
   const planMeta: Record<Exclude<Plan, "FREE">, { price: number; creditsLabel: string; monthlyLimit: number }> = {
-    BASIC: { price: 5, creditsLabel: "10,000 / month", monthlyLimit: 10000 },
-    STANDARD: { price: 15, creditsLabel: "30,000 / month", monthlyLimit: 30000 },
-    ENTERPRISE: { price: 99, creditsLabel: "100,000 / month", monthlyLimit: 100000 },
+    PRO: { price: 5, creditsLabel: "500,000 tokens / month", monthlyLimit: 500000 },
+    PRO_MAX: { price: 15, creditsLabel: "1,000,000 tokens / month", monthlyLimit: 1000000 },
+    ENTERPRISE: { price: 99, creditsLabel: "10,000,000 tokens / month", monthlyLimit: 10000000 },
   }
 
   const subscribe = async (plan: Exclude<Plan, "FREE">) => {
@@ -172,64 +172,64 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
               </div>
             </div>
 
-            {/* BASIC */}
+            {/* PRO */}
             <div className="rounded-2xl p-8 bg-gradient-to-b from-white/10 to-white/5 border border-border/30 shadow-lg min-h-[400px] flex flex-col transition hover:shadow-xl hover:scale-[1.02] duration-200">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-semibold">PRO</h3>
-                  <div className="text-xs text-muted-foreground mt-1">GPT, Web, Image</div>
+                  <div className="text-xs text-muted-foreground mt-1">All AI models, Priority support</div>
                 </div>
                 <div className="text-right">
                   <div className="text-xl font-bold">$5</div>
-                  <div className="text-xs text-muted-foreground">10,000 / month</div>
+                  <div className="text-xs text-muted-foreground">500,000 tokens / month</div>
                 </div>
               </div>
 
               <div className="mt-6 space-y-3 text-sm">
-                <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="Chat (GPT)" desc="Conversational assistant" included />
+                <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="All AI Models" desc="GPT, Claude, Gemini, etc." included />
                 <FeatureRow icon={<Globe className="h-5 w-5" />} title="Web search" desc="Integrated web results" included />
                 <FeatureRow icon={<ImageIcon className="h-5 w-5" />} title="Image generation" desc="Included" included />
-                <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="Not included" included={false} />
+                  <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="Not included" included={false} />
                 <FeatureRow icon={<Video className="h-5 w-5" />} title="Video generation" desc="Not included" included={false} />
               </div>
 
               <div className="mt-8 border-t border-border/30 pt-6 flex flex-col items-center gap-3">
-                {currentPlan === "BASIC" ? (
+                {currentPlan === "PRO" ? (
                   <Button size="sm" variant="outline" disabled className="w-full">Current Plan</Button>
                 ) : (
-                  <Button size="sm" onClick={() => subscribe("BASIC")} disabled={isSubscribing || !!loadingPlan} className="w-full">
+                  <Button size="sm" onClick={() => subscribe("PRO")} disabled={isSubscribing || !!loadingPlan} className="w-full">
                     Subscribe
                   </Button>
                 )}
               </div>
             </div>
 
-            {/* STANDARD */}
+            {/* PRO_MAX */}
             <div className="rounded-2xl p-8 bg-gradient-to-b from-primary/10 to-primary/5 border border-border/30 shadow-lg min-h-[400px] flex flex-col transition hover:shadow-xl hover:scale-[1.02] duration-200">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-semibold">PRO MAX</h3>
-                  <div className="text-xs text-muted-foreground mt-1 h-4">All features + ElevenLabs</div>
+                  <div className="text-xs text-muted-foreground mt-1 h-4">Everything in Pro + Enhanced limits</div>
                 </div>
                 <div className="text-right">
                   <div className="text-xl font-bold">$15</div>
-                  <div className="text-xs text-muted-foreground h-4">30,000 / month</div>
+                  <div className="text-xs text-muted-foreground h-4">1,000,000 tokens / month</div>
                 </div>
               </div>
 
               <div className="mt-6 space-y-3 text-sm">
-                <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="Chat (GPT)" desc="Included" included />
-                <FeatureRow icon={<Globe className="h-5 w-5" />} title="Web search" desc="Included" included />
+                <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="Everything in Pro" desc="All Pro features" included />
+                       <FeatureRow icon={<Globe className="h-5 w-5" />} title="Web search" desc="Included" included />
                 <FeatureRow icon={<ImageIcon className="h-5 w-5" />} title="Image generation" desc="Included" included />
                 <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="Included" included />
                 <FeatureRow icon={<Video className="h-5 w-5" />} title="Video generation" desc="Included" included />
               </div>
 
               <div className="mt-8 border-t border-border/30 pt-6 flex flex-col items-center gap-3">
-                {currentPlan === "STANDARD" ? (
+                {currentPlan === "PRO_MAX" ? (
                   <Button size="sm" variant="outline" disabled className="w-full">Current Plan</Button>
                 ) : (
-                  <Button size="sm" onClick={() => subscribe("STANDARD")} disabled={isSubscribing || !!loadingPlan} className="w-full">
+                  <Button size="sm" onClick={() => subscribe("PRO_MAX")} disabled={isSubscribing || !!loadingPlan} className="w-full">
                     Subscribe
                   </Button>
                 )}
@@ -245,7 +245,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                 </div>
                 <div className="text-right">
                   <div className="text-xl font-bold">$99</div>
-                  <div className="text-xs text-muted-foreground h-4">100,000 / month</div>
+                  <div className="text-xs text-muted-foreground h-4">10,000,000 tokens / month</div>
                 </div>
               </div>
 

@@ -7,6 +7,7 @@ const bcrypt = require('bcryptjs');
 const router = express.Router();
 const stripeService = require('../services/stripe');
 const axios = require('axios');
+const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serializer');
 
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
@@ -153,8 +154,10 @@ router.get('/users', async (req, res) => {
       prisma.user.count({ where })
     ]);
 
+    const serializedUsers = users.map(user => serializeUser(user));
+    
     res.json({
-      users,
+      users: serializedUsers,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -357,7 +360,8 @@ router.put(
         }
       })
 
-      res.json({ user })
+      const serializedUser = serializeUser(user);
+      res.json({ user: serializedUser })
     } catch (error) {
       console.error('Update user error:', error)
       // Prisma-specific unique constraint error handling (optional)
