@@ -30,13 +30,18 @@
 //                 index = (index + 1) % messages.length
 //                 setMessage(messages[index])
 //                 setFade(false)
-//             }, 800)
+//             }, 3000)
 //         }, 2500)
 //         return () => clearInterval(interval)
 //     }, [])
 
 //     return (
 //         <div className="flex items-center gap-3 my-4">
+//             <img
+//                 src="/icons/dot.png"
+//                 alt="thinking icon"
+//                 className="w-4 h-4 animate-heartbeat"
+//             />
 //             <p
 //                 className={clsx(
 //                     "text-sm text-muted-foreground transition-all duration-500 animate-subtle-pulse",
@@ -50,7 +55,6 @@
 // }
 
 
-// file: components/thinking-placeholder.tsx
 "use client"
 
 import { useEffect, useState } from "react"
@@ -114,7 +118,7 @@ export const ThinkingPlaceholder = () => {
         <div className="flex items-center gap-3 my-4">
             {phase === "dots" ? (
                 <div className="flex space-x-1">
-                    {[...Array(3)].map((_, i) => (
+                    {/* {[...Array(3)].map((_, i) => (
                         <span
                             key={i}
                             className={clsx(
@@ -123,7 +127,15 @@ export const ThinkingPlaceholder = () => {
                                 "transition-opacity duration-300"
                             )}
                         />
-                    ))}
+                    ))} */}
+                    <div className="relative w-4 h-4 subtle-pulse">
+                        <img
+                            src="/icons/dot.png"
+                            alt="thinking icon"
+                            className="w-full h-full animate-heartbeat"
+                        />
+
+                    </div>
                 </div>
             ) : (
                 <p
