@@ -49,6 +49,7 @@ import ProcessingGmailCard from "./ProcessingGmailCard"
 import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
+import { ThinkingPlaceholder } from "./thinking-placeholder"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
 const truncateUrl = (url: string, maxLength: number = 30) => {
@@ -286,14 +287,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 setVideoLoading(false);
             }
         }
-    };
-    const ShimmerContent = () => {
-        return (
-            <div className="flex items-start gap-2 text-muted-foreground py-2 px-4">
-                <Sparkles className="h-4 w-4 text-primary animate-bounce mt-0.5" />
-                <p className="text-sm font-medium animate-pulse">Thinking...</p>
-            </div>
-        );
     };
 
     const ErrorMessage = ({ onRegenerate }: { onRegenerate: () => void }) => (
@@ -1544,7 +1537,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (
-                            <ShimmerContent />
+                            <ThinkingPlaceholder />
                         ) : (
                             <>
                                 {hasGmailEntry ? (
