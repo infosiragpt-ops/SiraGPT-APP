@@ -617,88 +617,211 @@ IMPORTANT: Never regenerate content when the user clearly references previously 
             const extension = path.extname(safeFilename).toLowerCase();
 
             if (extension === '.docx') {
-              //   const { marked } = await import('marked');
+           // Step 1: Clean and normalize markdown tables
+    let cleanedContent = chatContent;
+    
+    // Function to fix malformed tables
+    function normalizeMarkdownTables(content) {
+        // Split content into lines
+        const lines = content.split('\n');
+        const result = [];
+        let i = 0;
+        
+        while (i < lines.length) {
+            const line = lines[i];
+            
+            // Check if this line looks like a table row
+            if (line.includes('|') && line.trim().startsWith('|')) {
+                const tableLines = [];
+                
+                // Collect all consecutive table lines
+                while (i < lines.length && lines[i].includes('|')) {
+                    tableLines.push(lines[i]);
+                    i++;
+                }
+                
+                if (tableLines.length >= 2) {
+                    // Process the table
+                    const processedTable = fixTable(tableLines);
+                    result.push(''); // Add blank line before table
+                    result.push(...processedTable);
+                    result.push(''); // Add blank line after table
+                } else {
+                    result.push(...tableLines);
+                }
+            } else {
+                result.push(line);
+                i++;
+            }
+        }
+        
+        return result.join('\n');
+    }
+    
+    // Function to fix individual table
+    function fixTable(tableLines) {
+        // Parse all rows
+        const rows = tableLines.map(line => {
+            // Remove leading/trailing pipes and split
+            return line.trim()
+                .replace(/^\|/, '')
+                .replace(/\|$/, '')
+                .split('|')
+                .map(cell => cell.trim());
+        });
+        
+        if (rows.length === 0) return tableLines;
+        
+        // Determine number of columns from first row (header)
+        const numColumns = rows[0].length;
+        
+        // Check if second row is a separator row
+        const isSeparatorRow = (row) => {
+            return row.every(cell => /^[-:|\s]+$/.test(cell));
+        };
+        
+        let headerRow = rows[0];
+        let dataRows = [];
+        let separatorExists = false;
+        
+        if (rows.length > 1 && isSeparatorRow(rows[1])) {
+            separatorExists = true;
+            dataRows = rows.slice(2);
+        } else {
+            dataRows = rows.slice(1);
+        }
+        
+        // Normalize all rows to have same number of columns
+        const normalizeRow = (row) => {
+            if (row.length < numColumns) {
+                // Pad with empty cells
+                return [...row, ...Array(numColumns - row.length).fill('')];
+            } else if (row.length > numColumns) {
+                // Truncate extra cells
+                return row.slice(0, numColumns);
+            }
+            return row;
+        };
+        
+        headerRow = normalizeRow(headerRow);
+        dataRows = dataRows.map(normalizeRow);
+        
+        // Build corrected table
+        const result = [];
+        
+        // Header row
+        result.push('| ' + headerRow.join(' | ') + ' |');
+        
+        // Separator row
+        result.push('| ' + Array(numColumns).fill('---').join(' | ') + ' |');
+        
+        // Data rows
+        dataRows.forEach(row => {
+            result.push('| ' + row.join(' | ') + ' |');
+        });
+        
+        return result;
+    }
+    
+    cleanedContent = normalizeMarkdownTables(cleanedContent);
 
-              //   // Configure marked with a custom renderer for better table and code block handling
-              //  const tokens = marked.lexer(chatContent);
-              // const docChildren = [];
+    // Step 2: Write content to temporary markdown file
+    const tempMarkdownPath = filePath + '.md';
+    await fs.writeFile(tempMarkdownPath, cleanedContent);
 
-              // // Markdown ko DOCX elements mein convert karein
-              // tokens.forEach(token => {
-              //     if (token.type === 'heading') {
-              //         docChildren.push(new Paragraph({
-              //             text: token.text,
-              //             heading: `Heading${token.depth}`,
-              //         }));
-              //     } else if (token.type === 'paragraph') {
-              //         docChildren.push(new Paragraph(token.text));
-              //     } else if (token.type === 'table') {
-              //         const tableRows = [];
-              //         // Header
-              //         tableRows.push(new TableRow({
-              //             children: token.header.map(headerCell => new TableCell({
-              //                 children: [new Paragraph({ text: headerCell.text, bold: true })],
-              //                 width: { size: 4535, type: WidthType.DXA },
-              //             })),
-              //             tableHeader: true,
-              //         }));
-              //         // Body rows
-              //         token.rows.forEach(row => {
-              //             tableRows.push(new TableRow({
-              //                 children: row.map(cell => new TableCell({
-              //                     children: [new Paragraph(cell.text)],
-              //                 })),
-              //             }));
-              //         });
-              //         const table = new Table({
-              //             rows: tableRows,
-              //             width: { size: 100, type: WidthType.PERCENT },
-              //         });
-              //         docChildren.push(table);
-              //     } else {
-              //          docChildren.push(new Paragraph(token.raw));
-              //     }
-              // });
+    // Step 3: Create a reference document with proper table styling
+    const { Document: DocxDocument, Packer, Paragraph: DocxParagraph, Table: DocxTable, 
+            TableRow: DocxTableRow, TableCell: DocxTableCell, WidthType, 
+            BorderStyle, AlignmentType, HeadingLevel } = require('docx');
 
-              // const doc = new Document({
-              //     sections: [{
-              //         children: docChildren,
-              //     }],
-              // });
+    // Create a simple reference document with table styling
+    const referenceDoc = new DocxDocument({
+        sections: [{
+            children: [
+                new DocxParagraph({
+                    text: "Reference Document",
+                    heading: HeadingLevel.HEADING_1
+                })
+            ]
+        }],
+        styles: {
+            default: {
+                document: {
+                    run: {
+                        font: "Calibri",
+                        size: 22
+                    },
+                    paragraph: {
+                        spacing: { line: 276, before: 20 * 72 * 0.05, after: 20 * 72 * 0.05 }
+                    }
+                }
+            }
+        }
+    });
 
-              // const buffer = await Packer.toBuffer(doc);
-              // await fs.writeFile(filePath, buffer);
+    const referenceDocPath = path.join(__dirname, '../../uploads/temp', 'reference.docx');
+    await fs.mkdir(path.dirname(referenceDocPath), { recursive: true });
+    const referenceBuffer = await Packer.toBuffer(referenceDoc);
+    await fs.writeFile(referenceDocPath, referenceBuffer);
 
-              const tempMarkdownPath = filePath + '.md';
-              await fs.writeFile(tempMarkdownPath, chatContent);
-
-              // 2. Ab Pandoc ko saaf saaf command denge ke is temp file se parho aur .docx file banao.
-              //    Yeh tareeqa sab se zyada reliable hai.
-              const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown -t docx --mathjax -o "${filePath}"`;
+    // Step 4: Use Pandoc with reference document for proper table styling
+    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown+pipe_tables+grid_tables -t docx --mathjax --reference-doc="${referenceDocPath}" -o "${filePath}"`;
 
               console.log(`Executing Pandoc command: ${pandocCommand}`);
 
-              // 3. Command ko Promise ke andar chalayein taake async/await kaam kare
-              await new Promise((resolve, reject) => {
-                exec(pandocCommand, (error, stdout, stderr) => {
-                  // Kaam poora hone par temporary markdown file ko delete kar dein
-                  fs.unlink(tempMarkdownPath, (unlinkErr) => {
-                    if (unlinkErr) console.error("Temporary markdown file delete nahi ho saki:", unlinkErr);
-                  });
+    // Step 5: Execute Pandoc command
+    await new Promise((resolve, reject) => {
+        exec(pandocCommand, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+            // Clean up temporary files
+            fs.unlink(tempMarkdownPath, (unlinkErr) => {
+                if (unlinkErr) console.error("Temporary markdown file could not be deleted:", unlinkErr);
+            });
 
-                  if (error) {
-                    console.error(`Pandoc command execution error: ${error.message}`);
-                    console.error(`Pandoc stderr: ${stderr}`);
-                    return reject(error);
-                  }
-                  if (stderr) {
-                    console.warn(`Pandoc stderr (warnings): ${stderr}`);
-                  }
+            if (error) {
+                console.error(`Pandoc command execution error: ${error.message}`);
+                console.error(`Pandoc stderr: ${stderr}`);
+                return reject(error);
+            }
+            if (stderr) {
+                console.warn(`Pandoc stderr (warnings): ${stderr}`);
+            }
+            
+            console.log('Pandoc successfully created the Word document with tables.');
+            resolve(stdout);
+        });
+    });
 
-                  console.log('Pandoc ne file kamyabi se bana di hai.');
-                  resolve(stdout);
-                });
-              });
+    // Step 6: Post-process the document to add table borders using docx library
+    const PizZip = require('pizzip');
+    const Docxtemplater = require('docxtemplater');
+    
+    // Read the generated docx file
+    const docxBuffer = await fs.readFile(filePath);
+    const zip = new PizZip(docxBuffer);
+    
+    // Modify the document.xml to add table borders
+    const documentXml = zip.file('word/document.xml').asText();
+    
+    // Add table borders to all tables
+    const modifiedXml = documentXml.replace(
+        /<w:tblPr>/g,
+        `<w:tblPr>
+            <w:tblBorders>
+                <w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+                <w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+                <w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+                <w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+                <w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+                <w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/>
+            </w:tblBorders>`
+    );
+    
+    // Write back the modified XML
+    zip.file('word/document.xml', modifiedXml);
+    
+    // Generate and save the modified document
+    const modifiedBuffer = zip.generate({ type: 'nodebuffer' });
+    await fs.writeFile(filePath, modifiedBuffer);
 
             } else if (extension === '.pdf') {
               const puppeteer = require('puppeteer');
