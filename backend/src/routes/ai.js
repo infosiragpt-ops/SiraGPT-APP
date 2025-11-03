@@ -577,6 +577,75 @@ IMPORTANT: Never regenerate content when the user clearly references previously 
             }
           }
 
+          // ✅ Find and inject chart image when relevant
+          try {
+            // Check if we should include chart based on multiple conditions
+            const promptLower = (prompt || '').toLowerCase();
+            const contentLower = chatContent.toLowerCase();
+
+            // Chart-related keywords
+            const chartKeywords = ['chart', 'graph', 'visualization', 'plot', 'diagram', 'شارٹ', 'گراف'];
+
+            // Content request keywords (when user asks for "all content", "complete content", etc.)
+            // English, Urdu, Spanish, Portuguese
+            const contentRequestKeywords = [
+              // English
+              'all', 'complete', 'entire', 'full', 'everything', 'above', 'whole',
+              // Urdu
+              'saara', 'sara', 'poora', 'tamam', 'uper', 'سارا', 'پورا', 'تمام', 'اوپر',
+              // Spanish
+              'todo', 'todos', 'completo', 'entero', 'arriba', 'superior', 'lleno',
+              // Portuguese  
+              'tudo', 'completo', 'inteiro', 'acima', 'superior', 'cheio'
+            ];
+
+            // Condition 1: User explicitly mentions chart/graph
+            const hasChartKeywords = chartKeywords.some(keyword =>
+              promptLower.includes(keyword) || contentLower.includes(keyword)
+            );
+
+            // Condition 2: User asks for "all content" or "complete content"
+            const asksForAllContent = contentRequestKeywords.some(keyword =>
+              promptLower.includes(keyword)
+            );
+
+            // Condition 3: Check if the AI-generated content references a chart/visualization
+            const contentReferencesChart = /chart|graph|visualization|plot|diagram|شارٹ|گراف/i.test(chatContent);
+
+            // Include chart if ANY of these conditions are true
+            const shouldIncludeChart = hasChartKeywords || (asksForAllContent && contentReferencesChart);
+
+            if (shouldIncludeChart) {
+              const chartMessage = historyMessages
+                .slice()
+                .reverse()
+                .find(msg => {
+                  if (msg.role === 'ASSISTANT' && msg.files) {
+                    try {
+                      const files = JSON.parse(msg.files);
+                      return Array.isArray(files) && files.some(f => f.type === 'chart' && f.imageUrl);
+                    } catch { return false; }
+                  }
+                  return false;
+                });
+
+              if (chartMessage) {
+                const files = JSON.parse(chartMessage.files);
+                const chartFile = files.find(f => f.type === 'chart' && f.imageUrl);
+                if (chartFile && chartFile.imageUrl) {
+                  console.log(`🖼️ Including chart in document (hasChartKeywords: ${hasChartKeywords}, asksForAllContent: ${asksForAllContent}, contentReferencesChart: ${contentReferencesChart})`);
+                  // Prepend the image in Markdown format. Pandoc will handle the conversion.
+                  const chartImageMarkdown = `![Chart Visualization](${chartFile.imageUrl})\n\n`;
+                  chatContent = chartImageMarkdown + chatContent;
+                }
+              }
+            } else {
+              console.log('📄 Chart not relevant for this document. Skipping chart injection.');
+            }
+          } catch (chartError) {
+            console.error("Error processing chart for document:", chartError);
+          }
+
           // Remove any [CREATE_DOCUMENT] tags from the main response to avoid duplication
           finalContent = fullResponseContent.replace(docRegex, '').trim();
 

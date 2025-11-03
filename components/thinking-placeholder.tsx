@@ -128,7 +128,7 @@ export const ThinkingPlaceholder = () => {
                             )}
                         />
                     ))} */}
-                    <div className="relative  w-8 h-8  subtle-pulse">
+                    <div className="relative  w-6 h-6  subtle-pulse">
                         <img
                             src="/icons/dot.png"
                             alt="thinking icon"

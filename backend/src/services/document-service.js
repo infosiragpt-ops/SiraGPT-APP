@@ -5,12 +5,89 @@ const { exec } = require('child_process');
 const { Document, Packer, Paragraph, HeadingLevel } = require('docx');
 const puppeteer = require('puppeteer');
 const PizZip = require('pizzip');
+const axios = require('axios');
 
 
 async function createDocx(filePath, content) {
-    // --- Step 1: Semantic Table Parsing & Normalization ---
-    let cleanedContent = content;
+    // --- Step 1: Extract and save base64 images ---
+    const tempDir = path.join(__dirname, '../../uploads/temp');
+    await fs.mkdir(tempDir, { recursive: true });
 
+    // const imageFiles = [];
+    // let imageCounter = 0;
+
+    // Extract all images (base64 and URLs) and save them as files synchronously
+    // const allImageMatches = Array.from(content.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g));
+
+    // for (const match of allImageMatches) {
+    //     try {
+    //         const [fullMatch, alt, imageSource] = match;
+    //         let imagePath;
+    //         let imageName;
+
+    //         // Check if it's a base64 image
+    //         if (imageSource.startsWith('data:image/')) {
+    //             const urlMatches = imageSource.match(/^data:image\/([^;]+);base64,(.+)$/);
+    //             if (urlMatches) {
+    //                 const ext = urlMatches[1];
+    //                 const base64Data = urlMatches[2];
+    //                 imageName = `chart_image_${imageCounter++}.${ext}`;
+    //                 imagePath = path.join(tempDir, imageName);
+
+    //                 // Save the base64 image file
+    //                 const buffer = Buffer.from(base64Data, 'base64');
+    //                 await fs.writeFile(imagePath, buffer);
+
+    //                 imageFiles.push({ original: fullMatch, path: imagePath, alt });
+    //                 console.log(`Saved base64 chart image: ${imageName}`);
+    //             }
+    //         }
+    //         // Check if it's a URL (http, https, or absolute file path)
+    //         else if (imageSource.startsWith('http://') || imageSource.startsWith('https://') || imageSource.startsWith('file://') || path.isAbsolute(imageSource)) {
+    //             try {
+    //                 // Determine file extension from URL or default to png
+    //                 let ext = 'png';
+    //                 const urlExt = imageSource.split('.').pop()?.split('?')[0];
+    //                 if (urlExt && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(urlExt.toLowerCase())) {
+    //                     ext = urlExt.toLowerCase();
+    //                 }
+
+    //                 imageName = `chart_image_${imageCounter++}.${ext}`;
+    //                 imagePath = path.join(tempDir, imageName);
+
+    //                 // Download the image from URL
+    //                 if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
+    //                     const response = await axios.get(imageSource, { responseType: 'arraybuffer' });
+    //                     await fs.writeFile(imagePath, response.data);
+    //                     console.log(`Downloaded URL chart image: ${imageName}`);
+    //                 }
+    //                 // Copy local file
+    //                 else {
+    //                     const localPath = imageSource.replace('file://', '');
+    //                     const imageData = await fs.readFile(localPath);
+    //                     await fs.writeFile(imagePath, imageData);
+    //                     console.log(`Copied local chart image: ${imageName}`);
+    //                 }
+
+    //                 imageFiles.push({ original: fullMatch, path: imagePath, alt });
+    //             } catch (downloadErr) {
+    //                 console.error(`Failed to download/copy image from ${imageSource}:`, downloadErr);
+    //                 // Keep original if download fails
+    //                 continue;
+    //             }
+    //         }
+    //     } catch (err) {
+    //         console.error('Error processing image:', err);
+    //     }
+    // }
+
+    // Replace all processed images with local file paths
+    let cleanedContent = content;
+    // for (const img of imageFiles) {
+    //     cleanedContent = cleanedContent.replace(img.original, `![${img.alt}](${img.path})`);
+    // }
+
+    // --- Step 2: Semantic Table Parsing & Normalization ---
     // Highly improved normalization of markdown tables (including uneven columns etc.)
     function normalizeMarkdownTables(md) {
         const lines = md.split('\n');
@@ -42,7 +119,6 @@ async function createDocx(filePath, content) {
                 // Add header (assume always first row)
                 result.push('');
                 result.push('| ' + full[0].join(' | ') + ' |');
-                result.push('| ' + Array(colCount).fill('---').join(' | ') + ' |');
                 for (let i = 1; i < full.length; i++) {
                     result.push('| ' + full[i].join(' | ') + ' |');
                 }
@@ -72,11 +148,11 @@ async function createDocx(filePath, content) {
 
     cleanedContent = normalizeMarkdownTables(cleanedContent);
 
-    // --- Step 2: Write Markdown to temp file for Pandoc ---
+    // --- Step 3: Write Markdown to temp file for Pandoc ---
     const tempMarkdownPath = filePath + '.md';
     await fs.writeFile(tempMarkdownPath, cleanedContent);
 
-    // --- Step 3: Create reference doc for Calibri font and nice base styles ---
+    // --- Step 4: Create reference doc for Calibri font and nice base styles ---
     const referenceDoc = new Document({
         sections: [{
             children: [new Paragraph({ text: "Reference Document", heading: HeadingLevel.HEADING_1 })]
@@ -95,15 +171,26 @@ async function createDocx(filePath, content) {
     const referenceBuffer = await Packer.toBuffer(referenceDoc);
     await fs.writeFile(referenceDocPath, referenceBuffer);
 
-    // --- Step 4: Pandoc Convert (with grid_tables for best accuracy) ---
-    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown+pipe_tables+grid_tables -t docx --mathjax --reference-doc="${referenceDocPath}" -o "${filePath}"`;
+    // --- Step 5: Pandoc Convert (with grid_tables and image extraction enabled) ---
+    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown+pipe_tables+grid_tables -t docx --extract-media="${tempDir}" --mathjax --reference-doc="${referenceDocPath}" -o "${filePath}"`;
     console.log(`Executing Pandoc command: ${pandocCommand}`);
 
     await new Promise((resolve, reject) => {
-        exec(pandocCommand, { maxBuffer: 15 * 1024 * 1024 }, (error, stdout, stderr) => {
-            fs.unlink(tempMarkdownPath, (unlinkErr) => {
-                if (unlinkErr) console.error("Temporary markdown file could not be deleted:", unlinkErr);
-            });
+        exec(pandocCommand, { maxBuffer: 15 * 1024 * 1024 }, async (error, stdout, stderr) => {
+            // Clean up temporary files
+            try {
+                await fs.unlink(tempMarkdownPath);
+                // Clean up saved image files
+                for (const imageFile of imageFiles) {
+                    try {
+                        await fs.unlink(imageFile.path);
+                    } catch (unlinkErr) {
+                        console.error("Image file could not be deleted:", unlinkErr);
+                    }
+                }
+            } catch (unlinkErr) {
+                console.error("Temporary markdown file could not be deleted:", unlinkErr);
+            }
             if (error) {
                 console.error(`Pandoc command execution error: ${error.message}`);
                 console.error(`Pandoc stderr: ${stderr}`);
@@ -118,23 +205,23 @@ async function createDocx(filePath, content) {
         });
     });
 
-    // --- Step 5: Modify All Table Styles in XML for Beautiful Styling ---
+    // --- Step 6: Modify All Table Styles in XML for Beautiful Styling ---
     const docxBuffer = await fs.readFile(filePath);
     const zip = new PizZip(docxBuffer);
     let documentXml = zip.file('word/document.xml').asText();
 
     // Enhance table, header, cell and border styles in the document XML
-    // Inject: borders, cell margin, even shading on header row, vertical/horizontal alignment for best look
+    // Inject: borders, cell margin, vertical/horizontal alignment for best look
     documentXml = documentXml.replace(
         /<w:tblPr>/g,
         `<w:tblPr>
             <w:tblBorders>
-                <w:top w:val="single" w:sz="12" w:space="0" w:color="217346"/>
-                <w:left w:val="single" w:sz="12" w:space="0" w:color="217346"/>
-                <w:bottom w:val="single" w:sz="12" w:space="0" w:color="217346"/>
-                <w:right w:val="single" w:sz="12" w:space="0" w:color="217346"/>
-                <w:insideH w:val="single" w:sz="10" w:space="0" w:color="CCCCCC"/>
-                <w:insideV w:val="single" w:sz="10" w:space="0" w:color="CCCCCC"/>
+                <w:top w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+                <w:left w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+                <w:bottom w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+                <w:right w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+                <w:insideH w:val="single" w:sz="10" w:space="0" w:color="000000"/>
+                <w:insideV w:val="single" w:sz="10" w:space="0" w:color="000000"/>
             </w:tblBorders>
             <w:tblCellMar>
                 <w:top w:w="120" w:type="dxa"/>
@@ -146,15 +233,12 @@ async function createDocx(filePath, content) {
         `
     );
 
-    // Add beautiful shading and bolding for table headers
-    // (apply a light background to the first row of each table)
+    // Add blue background and bold formatting for table headers
+    // (apply blue background to the first row of each table)
     documentXml = documentXml.replace(
         /(<w:tr>)(\s*<w:tc>)/g,
         (match, p1, p2, offset, string) => {
             // Only apply to header row (first w:tr after a w:tbl element)
-            // Do not re-shade data rows (a little hacky, but effective for simple tables)
-            // This shadings only the header of each table.
-            // Find if (in preceding 200 chars) there is a <w:tbl> (which means first row of table)
             const slice = string.substring(Math.max(0, offset - 250), offset);
             if (slice.includes('<w:tbl>')) {
                 // Insert cell shading for all <w:tc> in this <w:tr>
@@ -162,10 +246,24 @@ async function createDocx(filePath, content) {
                     '<w:tc>',
                     `<w:tc>
                         <w:tcPr>
-                            <w:shd w:val="clear" w:color="auto" w:fill="EEF6D8"/>
+                            <w:shd w:val="clear" w:color="auto" w:fill="4472C4"/>
                             <w:vAlign w:val="center"/>
                         </w:tcPr>`
                 );
+            }
+            return match;
+        }
+    );
+
+    // Make header row text bold and white
+    documentXml = documentXml.replace(
+        /(<w:tr>[\s\S]*?<w:tbl>[\s\S]*?<w:tc>[\s\S]*?<w:t>)/g,
+        (match) => {
+            // Check if this is a header row
+            const slice = match.substring(Math.max(0, match.length - 500));
+            if (slice.includes('<w:tbl>')) {
+                // Add bold formatting to text runs in header cells
+                return match.replace(/<w:r>/g, '<w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/></w:rPr>');
             }
             return match;
         }
