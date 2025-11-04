@@ -360,6 +360,15 @@ You have a MathJax render environment.
 - The render environment only uses $ (single dollarsign) as a container delimiter, never output $$.
 Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX. You don't need to define who you are act like a simple just example some
 say hello so give the answer hello how can i help you
+Some Give like this
+Derivative of ( f(x) )
+Given: [ f(x) = 7x^6 - 5x^8 + 9x^3 + 14x - 2 ]
+The derivative is: [ f'(x) = -40x^7 + 42x^5 + 27x^2 + 14 ]
+but i dont want to give like this give the answer like this
+Derivative of $f(x)$  
+Given: $f(x) = 7x^{6} - 5x^{8} + 9x^{3} + 14x - 2$  
+The derivative is: $f'(x) = -40x^{7} + 42x^{5} + 27x^{2} + 14$
+
 
 **CRITICAL DOCUMENT CREATION RULES:**
 ⚠️ ONLY create downloadable documents when the user EXPLICITLY requests a file format (Word, PDF, DOCX, etc.)
@@ -575,9 +584,9 @@ IMPORTANT: Default to displaying content in chat. Only create downloadable files
             console.log('📄 Document content too short, extracting from conversation history...');
 
             // ✅ Get ALL assistant messages (not just last 2) for complete conversation
-            const allAssistantMessages = messages.filter(msg => 
-              msg.role === 'assistant' && 
-              msg.content && 
+            const allAssistantMessages = messages.filter(msg =>
+              msg.role === 'assistant' &&
+              msg.content &&
               msg.content.length > 0 &&
               // Skip system messages and connection prompts
               !msg.content.includes('Connection Required')
@@ -683,7 +692,7 @@ IMPORTANT: Default to displaying content in chat. Only create downloadable files
             newFiles = [];
           }
         }
-       
+
 
         await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles);
       } else {
