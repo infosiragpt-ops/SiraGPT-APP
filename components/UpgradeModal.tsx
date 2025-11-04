@@ -261,7 +261,20 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                 {currentPlan === "ENTERPRISE" ? (
                   <Button size="sm" variant="outline" disabled className="w-full">Current Plan</Button>
                 ) : (
-                  <Button size="sm" onClick={() => subscribe("ENTERPRISE")} disabled={isSubscribing || !!loadingPlan} className="w-full">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      const whatsappNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
+                      const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+                      const whatsappUrl = isMobile
+                        ? `https://wa.me/${whatsappNumber}`
+                        : `https://web.whatsapp.com/send?phone=${whatsappNumber}`;
+                        window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+                    }}
+                    disabled={isSubscribing || !!loadingPlan}
+                    className="w-full flex items-center gap-2"
+                  >
+                    <img src="/icons/whatsapp-logo.png" alt="WhatsApp" className="h-5 w-5" />
                     Subscribe
                   </Button>
                 )}
