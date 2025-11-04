@@ -11,94 +11,7 @@ export interface IntentAnalysis {
 export class AIService {
   private apiKey: string = process.env.NEXT_PUBLIC_OPENAI_API_KEY || ""
 
-  // Analyze user intent using OpenAI
-  async analyzeIntent(message: string, conversationHistory: any[]): Promise<IntentAnalysis> {
-    const systemPrompt = `You are a Spotify assistant. Analyze the user's message and determine their intent.
-    
-    Respond with a JSON object containing:
-    - type: one of 'search_tracks', 'search_artists', 'search_playlists', 'get_recommendations', or 'general'
-    - query: the search query or artist name (empty string if not applicable)
-    - confidence: a number between 0 and 1 indicating how confident you are about the intent
-    
-    Examples:
-    - "Show me songs by The Weeknd" -> {"type": "search_tracks", "query": "The Weeknd", "confidence": 0.95}
-    - "Find playlists for workout" -> {"type": "search_playlists", "query": "workout", "confidence": 0.9}
-    - "What's your favorite color?" -> {"type": "general", "query": "", "confidence": 0.8}`
 
-    try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-3.5-turbo",
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: message },
-          ],
-          temperature: 0.3,
-          max_tokens: 200,
-        }),
-      })
-
-      const data = await response.json()
-      const content = data.choices[0].message.content
-
-      // Parse JSON response
-      const jsonMatch = content.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0])
-      }
-
-      return {
-        type: "general",
-        query: "",
-        confidence: 0.5,
-      }
-    } catch (error) {
-      console.error("OpenAI Intent Analysis Error:", error)
-      return {
-        type: "general",
-        query: "",
-        confidence: 0,
-      }
-    }
-  }
-
-  // Generate a general response using OpenAI
-  async generateResponse(message: string, conversationHistory: any[]): Promise<string> {
-    try {
-      const messages = [
-        ...conversationHistory.map((msg: any) => ({
-          role: msg.role,
-          content: msg.content,
-        })),
-        { role: "user", content: message },
-      ]
-
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-3.5-turbo",
-          messages,
-          temperature: 0.7,
-          max_tokens: 500,
-        }),
-      })
-
-      const data = await response.json()
-      return data.choices[0].message.content
-    } catch (error) {
-      console.error("OpenAI Response Generation Error:", error)
-      return "Sorry, I encountered an error while processing your request."
-    }
-  }
   //   async classifyIntent(prompt: string, conversationHistory: any[] = []): Promise<string> {
   //     const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
   //     if (!apiKey) {
@@ -182,7 +95,9 @@ export class AIService {
   //     }
   //   }
 
-  async classifyIntent(prompt: string, conversationHistory: any[] = []): Promise<string> {
+
+  async analyzeIntent(prompt: string) {
+
     const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
     if (!apiKey) {
       console.error("OpenAI API key not found for intent classification.");
@@ -198,6 +113,14 @@ export class AIService {
       if (/\b(website|webpage|html|css|javascript)\b/i.test(lowerCasePrompt)) return 'webdev';
       return 'text';
     }
+  }
+
+  async classifyIntent(prompt: string, conversationHistory: any[] = []): Promise<string> {
+
+    // const intent = await this.analyzeIntent(prompt);
+    // if (intent) {
+    //   return intent;
+    // }
 
     try {
 
@@ -222,9 +145,7 @@ export class AIService {
 - 'webdev': Building websites or UI components. Examples: "build a login page", "create a React component".
 - 'text': For all other general conversation, questions, and text generation. 
   This includes structured text outputs such as tables, dummy data, formatted lists, or code-generated textual data.
-  If the user asks to create a “table”, “list”, “dataset”, or “dummy data” without explicitly mentioning charts, slides, or presentations, classify as 'text'.
-
-
+  If the user asks to create a "table", "list", "dataset", or "dummy data" without explicitly mentioning charts, slides, or presentations, classify as 'text'.
 
 IMPORTANT: 
 - Only classify as 'webdev' if the user is **creating** or **building** a UI or web page. If the request involves **debugging**, **explaining**, or **reviewing code**, classify it as 'text'.
@@ -251,7 +172,7 @@ Respond with only one word.
       ];
 
       if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-        const recentMessages = conversationHistory.slice(-2); // last 2 messages only
+        const recentMessages = conversationHistory.slice(-2);
         for (const msg of recentMessages) {
           const role = msg.role === "USER" ? "user" : "assistant";
           const textPart = Array.isArray(msg.content)
@@ -264,14 +185,15 @@ Respond with only one word.
       // ✅ Finally add the new user prompt
       messages.push({ role: "user", content: prompt });
 
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      // const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/proxy/chat/completions`, {
+
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: "gpt-3.5-turbo",
           messages,
         }),
       });
@@ -288,7 +210,8 @@ Respond with only one word.
       return 'text'; // Default fallback
     } catch (error) {
       console.error("Intent classification failed:", error);
-      return 'text'; // Default on error
+      const fallbackIntent = await this.analyzeIntent(prompt);
+      return fallbackIntent || 'text';
     }
   }
 }
