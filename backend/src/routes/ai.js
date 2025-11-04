@@ -8,13 +8,11 @@ const usageService = require("../services/usage-service");
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const googleMCPService = require('../services/google-mcp');
+const documentService = require('../services/document-service');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
 const mime = require('mime-types');
-const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle } = require('docx');
-const PDFDocument = require('pdfkit');
-const htmlDocx = require('html-docx-js');
 
 const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
@@ -362,16 +360,49 @@ You have a MathJax render environment.
 - The render environment only uses $ (single dollarsign) as a container delimiter, never output $$.
 Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX. You don't need to define who you are act like a simple just example some
 say hello so give the answer hello how can i help you
+Some Give like this
+Derivative of ( f(x) )
+Given: [ f(x) = 7x^6 - 5x^8 + 9x^3 + 14x - 2 ]
+The derivative is: [ f'(x) = -40x^7 + 42x^5 + 27x^2 + 14 ]
+but i dont want to give like this give the answer like this
+Derivative of $f(x)$  
+Given: $f(x) = 7x^{6} - 5x^{8} + 9x^{3} + 14x - 2$  
+The derivative is: $f'(x) = -40x^{7} + 42x^{5} + 27x^{2} + 14$
 
-When a user explicitly asks to create a document, report, or a file with a specific format (e.g., "create a word document", "make a report about...", "save this as a .pdf"):
-1. If the user has provided content in their message, USE THAT EXACT CONTENT for the document. DO NOT generate new content.
-2. If the user has NOT provided content, then generate appropriate content based on their request.
-3. Use markdown for structure (e.g., # for Heading 1, ## for Heading 2).
-4. Wrap the ENTIRE document content in this special tag: [CREATE_DOCUMENT:filename.ext]...document content...[/CREATE_DOCUMENT]
-5. Replace 'filename.ext' with an appropriate filename (e.g., 'report.docx', 'summary.pdf').
-6. The content inside the tags will be saved as a file.
 
-IMPORTANT: A simple request for a "summary" should NOT create a document unless a file format is specified. If the user says something like "create a Word document from this content" or "make a PDF from this information", you MUST use their provided content exactly as they gave it. DO NOT create new content unless specifically asked to do so.`
+**CRITICAL DOCUMENT CREATION RULES:**
+⚠️ ONLY create downloadable documents when the user EXPLICITLY requests a file format (Word, PDF, DOCX, etc.)
+
+**When to CREATE A DOCUMENT FILE:**
+- User explicitly says: "make a Word document", "create a PDF", "download as DOCX"
+- User says: "convert to Word/PDF", "export as document", "save as file"
+- User references file formats: ".docx", ".pdf", "Word file", "PDF file"
+
+**When to DISPLAY IN CHAT (DO NOT create document):**
+- User says: "show me", "create a table", "generate a list", "make a chart"
+- User asks for: "sales projections", "data table", "comparison", "summary"
+- General content requests WITHOUT mentioning file formats
+
+**Document Creation Process (ONLY when file explicitly requested):**
+1. If user references previous content ("the information you gave me", "above data", etc.), extract that content from conversation history
+2. If user provides content in their current message, use that exact content
+3. Use markdown for structure (# for Heading 1, ## for Heading 2)
+4. Wrap the ENTIRE document content in: [CREATE_DOCUMENT:filename.ext]...content...[/CREATE_DOCUMENT]
+5. Replace 'filename.ext' with appropriate filename (e.g., 'report.docx', 'summary.pdf')
+6. Give brief acknowledgment: "I'll create a Document with the content"
+
+**EXAMPLES:**
+✅ CREATE FILE:
+- "Create a Word document with sales projections" → Generate Word file
+- "Make a PDF from the data above" → Generate PDF file
+- "Download this as a DOCX file" → Generate Word file
+
+❌ DISPLAY IN CHAT:
+- "Create a sales projection table" → Display markdown table in chat
+- "Show me revenue trends" → Display content in chat
+- "Generate a comparison chart" → Display in chat
+
+IMPORTANT: Default to displaying content in chat. Only create downloadable files when user explicitly requests a file format.`
         };
       }
 
@@ -546,14 +577,84 @@ IMPORTANT: A simple request for a "summary" should NOT create a document unless 
 
         if (docMatch && docMatch.groups) {
           const { filename, content } = docMatch.groups;
-          const chatContent = content.trim();
+          let chatContent = content.trim();
 
-          const uploadsDir = path.join(__dirname, '../../uploads/documents', userId);
-          await fs.mkdir(uploadsDir, { recursive: true });
-          const safeFilename = filename.replace(/[^a-zA-Z0-9_.-]/g, '_');
-          const filePath = path.join(uploadsDir, safeFilename);
+          // If content is minimal/empty, extract from previous conversation
+          if (chatContent.length < 100) {
+            console.log('📄 Document content too short, extracting from conversation history...');
+
+            // ✅ Get ALL assistant messages (not just last 2) for complete conversation
+            const allAssistantMessages = messages.filter(msg =>
+              msg.role === 'assistant' &&
+              msg.content &&
+              msg.content.length > 0 &&
+              // Skip system messages and connection prompts
+              !msg.content.includes('Connection Required')
+            );
+
+            if (allAssistantMessages.length > 0) {
+              chatContent = allAssistantMessages
+                .map(msg => msg.content)
+                .join('\n\n---\n\n');
+              console.log(`✅ Extracted ${chatContent.length} characters from ${allAssistantMessages.length} messages`);
+            }
+          }
+
+          // ✅ AUTOMATICALLY include ALL charts and images in any document
+          try {
+            console.log('📊 Checking for charts, graphs, and images in conversation history...');
+
+            // Find ALL messages with charts or images
+            const imageMessages = historyMessages.filter(msg => {
+              if (msg.role === 'ASSISTANT' && msg.files) {
+                try {
+                  const files = JSON.parse(msg.files);
+                  return Array.isArray(files) && files.some(f => (f.type === 'chart' && f.imageUrl) || (f.type === 'image' && f.url));
+                } catch { return false; }
+              }
+              return false;
+            });
+
+            if (imageMessages.length > 0) {
+              console.log(`🖼️ Found ${imageMessages.length} image(s)/chart(s) - automatically including in document`);
+
+              // Collect all image/chart markdowns
+              const imageMarkdowns = [];
+              imageMessages.forEach((msg, index) => {
+                try {
+                  const files = JSON.parse(msg.files);
+                  const imageFile = files.find(f => (f.type === 'chart' && f.imageUrl) || (f.type === 'image' && f.url));
+                  if (imageFile) {
+                    const imageUrl = imageFile.imageUrl || imageFile.url;
+                    const imageType = imageFile.type === 'chart' ? 'Chart' : 'Image';
+                    const imageLabel = imageMessages.length > 1 ? `\n\n## ${imageType} ${index + 1}\n\n` : '\n\n';
+                    imageMarkdowns.push(`${imageLabel}![${imageType} Visualization](${imageUrl})\n\n`);
+                  }
+                } catch (e) {
+                  console.error('Error parsing image/chart file:', e);
+                }
+              });
+
+              // Prepend all images/charts to content
+              if (imageMarkdowns.length > 0) {
+                chatContent = imageMarkdowns.join('') + chatContent;
+                console.log(`✅ Automatically added ${imageMarkdowns.length} image(s)/chart(s) to document`);
+              }
+            } else {
+              console.log('📄 No charts or images found in conversation history');
+            }
+          } catch (imageError) {
+            console.error("Error processing images/charts for document:", imageError);
+          }
+
+          // Remove any [CREATE_DOCUMENT] tags from the main response to avoid duplication
+          finalContent = fullResponseContent.replace(docRegex, '').trim();
+
+          console.log(`📄 Creating document: ${filename} (${chatContent.length} chars)`);
 
           try {
+            const { filePath, safeFilename } = await documentService.createDocument(userId, filename, chatContent);
+
             const newFileRecord = await prisma.file.create({
               data: {
                 userId: userId,
@@ -578,204 +679,6 @@ IMPORTANT: A simple request for a "summary" should NOT create a document unless 
               path: newFileRecord.path,
             });
 
-            const extension = path.extname(safeFilename).toLowerCase();
-
-            if (extension === '.docx') {
-            //   const { marked } = await import('marked');
-
-            //   // Configure marked with a custom renderer for better table and code block handling
-            //  const tokens = marked.lexer(chatContent);
-            // const docChildren = [];
-            
-            // // Markdown ko DOCX elements mein convert karein
-            // tokens.forEach(token => {
-            //     if (token.type === 'heading') {
-            //         docChildren.push(new Paragraph({
-            //             text: token.text,
-            //             heading: `Heading${token.depth}`,
-            //         }));
-            //     } else if (token.type === 'paragraph') {
-            //         docChildren.push(new Paragraph(token.text));
-            //     } else if (token.type === 'table') {
-            //         const tableRows = [];
-            //         // Header
-            //         tableRows.push(new TableRow({
-            //             children: token.header.map(headerCell => new TableCell({
-            //                 children: [new Paragraph({ text: headerCell.text, bold: true })],
-            //                 width: { size: 4535, type: WidthType.DXA },
-            //             })),
-            //             tableHeader: true,
-            //         }));
-            //         // Body rows
-            //         token.rows.forEach(row => {
-            //             tableRows.push(new TableRow({
-            //                 children: row.map(cell => new TableCell({
-            //                     children: [new Paragraph(cell.text)],
-            //                 })),
-            //             }));
-            //         });
-            //         const table = new Table({
-            //             rows: tableRows,
-            //             width: { size: 100, type: WidthType.PERCENT },
-            //         });
-            //         docChildren.push(table);
-            //     } else {
-            //          docChildren.push(new Paragraph(token.raw));
-            //     }
-            // });
-
-            // const doc = new Document({
-            //     sections: [{
-            //         children: docChildren,
-            //     }],
-            // });
-
-            // const buffer = await Packer.toBuffer(doc);
-            // await fs.writeFile(filePath, buffer);
-
-           const tempMarkdownPath = filePath + '.md';
-    await fs.writeFile(tempMarkdownPath, chatContent);
-
-    // 2. Ab Pandoc ko saaf saaf command denge ke is temp file se parho aur .docx file banao.
-    //    Yeh tareeqa sab se zyada reliable hai.
-    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown -t docx --mathjax -o "${filePath}"`;
-
-    console.log(`Executing Pandoc command: ${pandocCommand}`);
-
-    // 3. Command ko Promise ke andar chalayein taake async/await kaam kare
-    await new Promise((resolve, reject) => {
-        exec(pandocCommand, (error, stdout, stderr) => {
-            // Kaam poora hone par temporary markdown file ko delete kar dein
-            fs.unlink(tempMarkdownPath, (unlinkErr) => {
-                if (unlinkErr) console.error("Temporary markdown file delete nahi ho saki:", unlinkErr);
-            });
-
-            if (error) {
-                console.error(`Pandoc command execution error: ${error.message}`);
-                console.error(`Pandoc stderr: ${stderr}`);
-                return reject(error);
-            }
-            if (stderr) {
-                console.warn(`Pandoc stderr (warnings): ${stderr}`);
-            }
-            
-            console.log('Pandoc ne file kamyabi se bana di hai.');
-            resolve(stdout);
-        });
-    });
-
-            } else if (extension === '.pdf') {
-const puppeteer = require('puppeteer');
-            const { marked } = require('marked');
-
-          const htmlContent = marked.parse(chatContent);
-
-            // HTML template jismein MathJax shamil hai
-          const fullHtml = `
-                <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <title>Generated Document</title>
-                        
-                        <!-- YEH HISSA MASLE KO HAL KAREGA: MathJax ki Configuration -->
-                        <script>
-                            window.MathJax = {
-                                tex: {
-                                    inlineMath: [['$', '$'], ['\\(', '\\)']] // '$...$' ko math samjhe
-                                },
-                                svg: {
-                                    fontCache: 'global'
-                                }
-                            };
-                        </script>
-                        
-                        <!-- MathJax ki library -->
-                        <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-
-                        <!-- Behtar styling ke liye CSS -->
-                        <style>
-                            body { 
-                                font-family: 'Helvetica', 'Arial', sans-serif; 
-                                margin: 40px; 
-                                line-height: 1.6;
-                                font-size: 12pt;
-                            }
-                            table { 
-                                border-collapse: collapse; 
-                                width: 100%; 
-                                margin-bottom: 1em; 
-                            }
-                            th, td { 
-                                border: 1px solid #ddd; 
-                                padding: 8px; 
-                                text-align: left;
-                            }
-                            th { 
-                                background-color: #f2f2f2; 
-                            }
-                            pre, code { 
-                                background-color: #f8f8f8; 
-                                padding: 2px 5px; 
-                                border-radius: 4px;
-                                font-family: 'Courier New', Courier, monospace;
-                            }
-                            pre {
-                                padding: 10px;
-                                display: block;
-                                white-space: pre-wrap;
-                            }
-                            h1, h2, h3 {
-                                border-bottom: 1px solid #eaecef;
-                                padding-bottom: 0.3em;
-                                margin-top: 24px;
-                                margin-bottom: 16px;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        ${htmlContent}
-                    </body>
-                </html>
-            `;
-            
-            // 3. Puppeteer ko launch karein
-            const browser = await puppeteer.launch({ 
-                headless: "new", // "new" headless mode behtar hai
-                args: ['--no-sandbox', '--disable-setuid-sandbox'] 
-            });
-            const page = await browser.newPage();
-            
-            // 4. HTML content ko page mein load karein
-            await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-
-            // 5. SAB SE ZAROORI HISSA: MathJax ke render hone ka intezar karein
-            // Yeh code line page ko roke rakhegi jab tak MathJax tamam formulas ko
-            // aala quality mein convert na kar de.
-            await page.evaluate(async () => {
-                // MathJax ke typeset hone ka promise wait karega
-                await window.MathJax.startup.promise;
-            });
-            
-            // 6. Ab PDF generate karein (jab math sahi ho chuka hai)
-            await page.pdf({
-                path: filePath,
-                format: 'A4',
-                printBackground: true,
-                margin: {
-                    top: '40px',
-                    right: '40px',
-                    bottom: '40px',
-                    left: '40px'
-                }
-            });
-
-            // 7. Browser ko band kar dein
-            await browser.close();
-
-            } else {
-              await fs.writeFile(filePath, chatContent);
-            }
-
             const finalStats = await fs.stat(filePath);
             await prisma.file.update({
               where: { id: newFileRecord.id },
@@ -789,6 +692,7 @@ const puppeteer = require('puppeteer');
             newFiles = [];
           }
         }
+
 
         await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles);
       } else {

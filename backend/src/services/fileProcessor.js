@@ -78,38 +78,74 @@ class FileProcessor {
     }
   }
 
+
   async processPDF(filePath) {
+    const { franc } = await import('franc');
+
     try {
       const dataBuffer = await fs.readFile(filePath);
-      let data = await pdf(dataBuffer);
-      console.log(`PDF file processed: ${filePath}, length: ${data.text.length}`);
+      const data = await pdf(dataBuffer);
 
-      // If text is minimal, assume it's a scanned PDF and try OCR
-      if (data.text.trim().length < 100) {
-        console.log(`Minimal text extracted from ${filePath}. Attempting OCR...`);
-        let ocrText = '';
-        const document = await pdfToImage(dataBuffer, { scale: 2 });
+      console.log(`PDF processed: ${filePath}, extracted text length: ${data.text.length}`);
 
-        for await (const page of document) {
-          const optimizedImage = await sharp(page)
-            .greyscale()
-            .normalize()
-            .png()
-            .toBuffer();
+      // ✅ If real text exists (not just images)
+      if (data.text.trim().length > 100) return data.text;
 
-          const worker = await createWorker('eng');
-          const { data: { text } } = await worker.recognize(optimizedImage);
-          await worker.terminate();
-          ocrText += text + '\n';
-        }
+      console.log(`Detected scanned PDF → running OCR...`);
 
-        console.log(`OCR complete for ${filePath}. Extracted ${ocrText.length} characters.`);
-        return ocrText;
+      const { pdf: pdfToImg } = await import('pdf-to-img');
+      const pages = await pdfToImg(filePath, { scale: 2 }); // high-resolution conversion
+
+      let ocrText = '';
+
+      // 🧠 Use a single worker for speed (preload multiple languages)
+      const worker = await createWorker('eng+spa'); // ✅ no logger here
+
+      for await (const page of pages) {
+        const optimized = await sharp(page)
+          .greyscale()
+          .normalize()
+          .sharpen()
+          .png()
+          .toBuffer();
+
+        const { data: { text } } = await worker.recognize(optimized);
+        ocrText += text.trim() + '\n';
       }
 
-      return data.text;
+      await worker.terminate();
+
+      // 🧠 Optional: Auto language detection (fast)
+      const langCode = franc(ocrText);
+      const detectedLang = langCode === 'spa' ? 'Spanish' :
+        langCode === 'eng' ? 'English' : 'Unknown';
+      console.log(`Detected language: ${detectedLang}`);
+
+      // 🔁 If OCR was done in wrong language (e.g. Spanish text with low confidence), retry once
+      if (detectedLang === 'Spanish' && !ocrText.match(/[áéíóúñ]/i)) {
+        console.log('Re-running OCR with Spanish focus...');
+        const workerSpa = await createWorker('spa');
+        let spaText = '';
+        for await (const page of pages) {
+          const optimized = await sharp(page)
+            .greyscale()
+            .normalize()
+            .sharpen()
+            .png()
+            .toBuffer();
+          const { data: { text } } = await workerSpa.recognize(optimized);
+          spaText += text.trim() + '\n';
+        }
+        await workerSpa.terminate();
+        if (spaText.trim().length > ocrText.trim().length / 2) {
+          ocrText = spaText;
+        }
+      }
+
+      console.log(`✅ OCR complete: ${ocrText.length} chars extracted`);
+      return ocrText || 'No text detected in image PDF';
     } catch (error) {
-      console.error(`PDF processing error for ${filePath}:`, error);
+      console.error(`❌ PDF processing error for ${filePath}:`, error);
       throw new Error(`PDF processing failed: ${error.message}`);
     }
   }

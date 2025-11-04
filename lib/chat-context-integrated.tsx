@@ -92,7 +92,6 @@ interface ChatContextType {
   hasMoreChats: boolean
   loadMoreChats: () => Promise<void>
   resetChats: () => void
-  isSwitchingChat: boolean
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined)
@@ -114,7 +113,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [hasMoreChats, setHasMoreChats] = useState(true)
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
-  const [isSwitchingChat, setIsSwitchingChat] = useState(false);
 
 
 
@@ -551,7 +549,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const selectChat = useCallback(
     async (chatId: string) => {
-      setIsSwitchingChat(true);
       try {
         const response = await apiClient.getChat(chatId)
         const chat = response.chat
@@ -577,7 +574,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Failed to load chat:", error)
       } finally {
-        setIsSwitchingChat(false);
+
       }
     },
     [],
@@ -1159,7 +1156,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     hasMoreChats,
     loadMoreChats,
     resetChats,
-    isSwitchingChat
   }
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>

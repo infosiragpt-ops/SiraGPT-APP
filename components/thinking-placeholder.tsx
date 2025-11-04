@@ -1,38 +1,152 @@
-// file: components/thinking-placeholder.tsx
+// // file: components/thinking-placeholder.tsx
+// "use client"
+
+// import { useEffect, useState } from "react"
+// import clsx from "clsx"
+
+// const messages = [
+//     "Analyzing your input...",
+//     "Analyzing information...",
+//     "Processing data...",
+//     "Generating response...",
+//     "Refining answer...",
+//     "Almost ready...",
+//     "Double-checking context...",
+//     "Summarizing key points...",
+//     "Making sure everything’s accurate...",
+//     "Finalizing response...",
+//     "Done! Presenting your result..."
+// ]
+
+// export const ThinkingPlaceholder = () => {
+//     const [message, setMessage] = useState(messages[0])
+//     const [fade, setFade] = useState(false)
+
+//     useEffect(() => {
+//         let index = 0
+//         const interval = setInterval(() => {
+//             setFade(true)
+//             setTimeout(() => {
+//                 index = (index + 1) % messages.length
+//                 setMessage(messages[index])
+//                 setFade(false)
+//             }, 3000)
+//         }, 2500)
+//         return () => clearInterval(interval)
+//     }, [])
+
+//     return (
+//         <div className="flex items-center gap-3 my-4">
+//             <img
+//                 src="/icons/dot.png"
+//                 alt="thinking icon"
+//                 className="w-4 h-4 animate-heartbeat"
+//             />
+//             <p
+//                 className={clsx(
+//                     "text-sm text-muted-foreground transition-all duration-500 animate-subtle-pulse",
+//                     fade ? "opacity-0 translate-y-2" : "opacity-100 translate-y-0"
+//                 )}
+//             >
+//                 {message}
+//             </p>
+//         </div>
+//     )
+// }
+
 
 "use client"
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Bot, Sparkles } from "lucide-react"
+import { useEffect, useState } from "react"
+import clsx from "clsx"
+
+const messages = [
+    "Analyzing your input...",
+    "Analyzing information...",
+    "Processing data...",
+    "Generating response...",
+    "Refining answer...",
+    "Almost ready...",
+    "Double-checking context...",
+    "Summarizing key points...",
+    "Making sure everything’s accurate...",
+    "Finalizing response...",
+    "Done! Presenting your result..."
+]
 
 export const ThinkingPlaceholder = () => {
-    return (
-        <div className="flex gap-4 my-4">
-            {/* AI ka Avatar */}
-            <Avatar className="h-8 w-8 flex-shrink-0">
-                <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                    <Bot size={20} />
-                </AvatarFallback>
-            </Avatar>
+    const [phase, setPhase] = useState<"dots" | "text">("dots")
+    const [message, setMessage] = useState(messages[0])
+    const [fade, setFade] = useState(false)
+    const [dotCount, setDotCount] = useState(1)
 
-            <div className="flex flex-col w-full items-start max-w-[85%]">
-                <div className="w-full rounded-lg px-4 py-3 bg-muted">
-                    {/* Shimmer Effect wala Container */}
-                    <div className="animate-pulse">
-                        {/* Pehli line: "Thinking..." */}
-                        <div className="flex items-center gap-2 mb-3">
-                            <Sparkles className="h-4 w-4 text-muted-foreground" />
-                            <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-1/4"></div>
-                        </div>
-                        {/* Baqi lines (placeholders) */}
-                        <div className="space-y-2">
-                            <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-full"></div>
-                            <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-5/6"></div>
-                            <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded w-3/4"></div>
-                        </div>
+    // Handle dots animation for first 3 seconds
+    useEffect(() => {
+        if (phase === "dots") {
+            const dotInterval = setInterval(() => {
+                setDotCount(prev => (prev % 3) + 1)
+            }, 400)
+
+            const timeout = setTimeout(() => {
+                setPhase("text")
+            }, 3000)
+
+            return () => {
+                clearInterval(dotInterval)
+                clearTimeout(timeout)
+            }
+        }
+    }, [phase])
+
+    // Handle rotating text messages after dots phase
+    useEffect(() => {
+        if (phase === "text") {
+            let index = 0
+            const interval = setInterval(() => {
+                setFade(true)
+                setTimeout(() => {
+                    index = (index + 1) % messages.length
+                    setMessage(messages[index])
+                    setFade(false)
+                }, 400)
+            }, 2500)
+            return () => clearInterval(interval)
+        }
+    }, [phase])
+
+    return (
+        <div className="flex items-center gap-3 my-4">
+            {phase === "dots" ? (
+                <div className="flex space-x-1">
+                    {/* {[...Array(3)].map((_, i) => (
+                        <span
+                            key={i}
+                            className={clsx(
+                                "w-2 h-2 bg-muted-foreground rounded-full",
+                                i < dotCount ? "opacity-100" : "opacity-30",
+                                "transition-opacity duration-300"
+                            )}
+                        />
+                    ))} */}
+                    <div className="relative  w-6 h-6  subtle-pulse">
+                        <img
+                            src="/icons/dot.png"
+                            alt="thinking icon"
+                            className="w-full h-full animate-heartbeat"
+                        />
+
                     </div>
                 </div>
-            </div>
+            ) : (
+                <p
+                    className={clsx(
+                        "text-sm text-muted-foreground transition-all duration-500",
+                        fade ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"
+                    )}
+                >
+                    {message}
+                </p>
+            )}
         </div>
     )
 }

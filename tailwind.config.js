@@ -109,6 +109,19 @@ module.exports = {
           from: { transform: "scale(1)" },
           to: { transform: "scale(0.95)" },
         },
+        "subtle-pulse": {
+          "0%, 100%": { opacity: 1 },
+          "50%": { opacity: 0 },
+        },
+        "wave": {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-5px)" },
+        },
+        'heartbeat': {
+          '0%': { transform: 'scale(1)' },
+          '50%': { transform: 'scale(1.2)' },
+          '100%': { transform: 'scale(1)' },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -121,6 +134,9 @@ module.exports = {
         "slide-in-from-right": "slide-in-from-right 0.2s ease-out",
         "zoom-in": "zoom-in 0.2s ease-out",
         "zoom-out": "zoom-out 0.2s ease-out",
+        "subtle-pulse": "subtle-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        "wave": "wave 1.5s ease-in-out infinite",
+        'heartbeat': 'heartbeat 1s ease-in-out infinite',
       },
       fontFamily: {
         sans: ["Times New Roman", "Times", "serif"],

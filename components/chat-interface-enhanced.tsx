@@ -987,7 +987,6 @@ function ChatInterfaceContent() {
     updateMessageInChat,
     isStreaming, // ✅ isStreaming ko yahan se fetch karein
     stopStreaming,
-    isSwitchingChat,
 
   } = useChat()
 
@@ -2772,14 +2771,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               ) : (
                 <>
                   {/* Messages */}
-                  {isSwitchingChat && (
-                    <div className="fixed inset-0 z-40 flex items-center justify-center pointer-events-none">
-                      <div className="flex items-center gap-3 rounded-full border bg-background/80 backdrop-blur px-4 py-2 shadow-sm">
-                        <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/40 border-t-foreground animate-spin" />
-                        <span className="text-sm text-muted-foreground">Switching chat…</span>
-                      </div>
-                    </div>
-                  )}
                   <ScrollArea className="flex-1 p-2 md:p-4 mb-6" ref={scrollAreaRef}>
                     <div className="space-y-4 max-w-3xl mx-auto w-full">
                       {(() => {
@@ -2789,16 +2780,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                         return (
                           <>
-                            {isSwitchingChat && (
-                              <div className="flex items-center justify-center py-4">
-                                <div className="flex items-center gap-2 text-muted-foreground">
-                                  <span className="h-2 w-2 rounded-full bg-muted-foreground/70 typing-dot" />
-                                  <span className="h-2 w-2 rounded-full bg-muted-foreground/70 typing-dot" />
-                                  <span className="h-2 w-2 rounded-full bg-muted-foreground/70 typing-dot" />
-                                  <span className="text-sm">Switching chat…</span>
-                                </div>
-                              </div>
-                            )}
+
                             {stableMessages.map((message) => (
                               <MessageComponent
                                 key={message.id}
