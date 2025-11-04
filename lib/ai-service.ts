@@ -98,21 +98,19 @@ export class AIService {
 
   async analyzeIntent(prompt: string) {
 
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-    if (!apiKey) {
-      console.error("OpenAI API key not found for intent classification.");
-      // Fallback to basic keyword matching
-      const lowerCasePrompt = prompt.toLowerCase();
-      if (/\b(gmail|email|mail|send to|compose)\b/i.test(lowerCasePrompt)) return 'gmail';
-      if (/\b(calendar|event|meeting|schedule|drive|file|document|folder)\b/i.test(lowerCasePrompt)) return 'google_services';
-      if (/\b(search|find|who is|what is|when is|tell me about)\b/i.test(lowerCasePrompt)) return 'web_search';
-      if (/\b(image|photo|picture|drawing|logo)\b/i.test(lowerCasePrompt)) return 'image';
-      if (/\b(video|clip|animation|movie)\b/i.test(lowerCasePrompt)) return 'video';
-      if (/\b(ppt|presentation|slides)\b/i.test(lowerCasePrompt)) return 'ppt';
-      if (/\b(chart|graph|diagram)\b/i.test(lowerCasePrompt)) return 'chart';
-      if (/\b(website|webpage|html|css|javascript)\b/i.test(lowerCasePrompt)) return 'webdev';
-      return 'text';
-    }
+    console.error("Dummy Intent.");
+    // Fallback to basic keyword matching
+    const lowerCasePrompt = prompt.toLowerCase();
+    if (/\b(gmail|email|mail|send to|compose)\b/i.test(lowerCasePrompt)) return 'gmail';
+    if (/\b(calendar|event|meeting|schedule|drive|file|document|folder)\b/i.test(lowerCasePrompt)) return 'google_services';
+    if (/\b(search|find|who is|what is|when is|tell me about)\b/i.test(lowerCasePrompt)) return 'web_search';
+    if (/\b(image|photo|picture|drawing|logo)\b/i.test(lowerCasePrompt)) return 'image';
+    if (/\b(video|clip|animation|movie)\b/i.test(lowerCasePrompt)) return 'video';
+    if (/\b(ppt|presentation|slides)\b/i.test(lowerCasePrompt)) return 'ppt';
+    if (/\b(chart|graph|diagram)\b/i.test(lowerCasePrompt)) return 'chart';
+    if (/\b(website|webpage|html|css|javascript)\b/i.test(lowerCasePrompt)) return 'webdev';
+    return 'text';
+
   }
 
   async classifyIntent(prompt: string, conversationHistory: any[] = []): Promise<string> {
