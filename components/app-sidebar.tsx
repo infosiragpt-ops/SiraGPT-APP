@@ -24,6 +24,7 @@ import {
   LayoutGrid,
   Loader2,
   PenSquare,
+  Shield,
 } from "lucide-react"
 import {
   Sidebar,
@@ -465,6 +466,10 @@ export function AppSidebar() {
                   <DropdownMenuItem onClick={() => router.push("/settings")}>
                     <Settings className="mr-2 h-4 w-4" />
                     Settings
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => router.push("/privacy-policy")}>
+                    <Shield className="mr-2 h-4 w-4" />
+                    Privacy Policy
                   </DropdownMenuItem>
                   {user?.isAdmin && (
                     <>
