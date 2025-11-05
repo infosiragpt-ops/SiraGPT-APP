@@ -513,13 +513,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         // Memoize ReactMarkdown components to prevent unnecessary re-renders
         const components = useMemo(() => {
             const commonProps = {
-                p: ({ children }: any) => <p className="mb-3 text-base">{children}</p>,
-                ul: ({ children }: any) => <ul className="mb-3 pl-6 text-base">{children}</ul>,
-                ol: ({ children }: any) => <ol className="mb-3 pl-6 text-base">{children}</ol>,
-                li: ({ children }: any) => <li className="mb-1 text-base">{children}</li>,
-                h1: ({ children }: any) => <h1 className="mb-4 text-xl font-bold">{children}</h1>,
-                h2: ({ children }: any) => <h2 className="mb-3 text-lg font-semibold">{children}</h2>,
-                h3: ({ children }: any) => <h3 className="mb-2 text-base font-medium">{children}</h3>,
+                p: ({ children }: any) => <p className="mb-4 text-base leading-7">{children}</p>,
+                ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
+                ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
+                li: ({ children }: any) => <li className="mb-1.5 text-base leading-7">{children}</li>,
+                h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
+                h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
+                h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,
                 blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
                 table: ({ node, children, ...props }: any) => {
                     // ✅ Performance Optimization: Skip expensive processing during streaming
