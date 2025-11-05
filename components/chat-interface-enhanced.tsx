@@ -2389,7 +2389,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className={`flex flex-col h-full ${showPresentationPreview || isGeneratingPPT || documentPreviewUrl ? 'w-1/2' : 'w-full'}`}>
+        <div className={`relative flex flex-col h-full ${showPresentationPreview || isGeneratingPPT || documentPreviewUrl ? 'w-1/2' : 'w-full'}`}>
           {/* Header */}
           <div className="absolute top-0 left-0 right-0 z-10 p-4">
             <div className="flex items-center justify-between">
