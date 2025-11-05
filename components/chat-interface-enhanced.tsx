@@ -1295,6 +1295,8 @@ But first, you need to connect your Spotify account securely using the button be
     const showPresentation = (presentation: any) => {
       // Only update if it's a new presentation to prevent loops
       if (selectedPresentation?.filename !== presentation.filename) {
+        setSplitViewContent(null)
+        setDocumentPreviewUrl(null)
         setSelectedPresentation(presentation);
         setShowPresentationPreview(true);
         setIsGeneratingPPT(false);
@@ -1354,10 +1356,16 @@ But first, you need to connect your Spotify account securely using the button be
   }, [setSubscribeOpen]);
 
   const handleToggleSplitView = (content: any) => {
+    setDocumentPreviewUrl(null)
+    setShowPresentationPreview(false)
+    setSelectedPresentation(null)
     setSplitViewContent(content)
   }
 
   const handleDocumentPreview = (url: string) => {
+    setSplitViewContent(null)
+    setShowPresentationPreview(false)
+    setSelectedPresentation(null)
     setDocumentPreviewUrl(url);
   };
 
