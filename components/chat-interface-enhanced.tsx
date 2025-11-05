@@ -1469,6 +1469,10 @@ But first, you need to connect your Spotify account securely using the button be
     setShowAudioPanel(false);
     setShowPresentationPreview(false);
     setSelectedPresentation(null);
+     setDocumentPreviewUrl(null)
+    setShowPresentationPreview(false)
+    setSelectedPresentation(null)
+    setSplitViewContent(null)
   }, [currentChat?.id]);
 
   React.useEffect(() => {
