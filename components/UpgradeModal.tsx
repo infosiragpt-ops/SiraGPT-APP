@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import {toast} from "sonner"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { apiClient } from "@/lib/api"
@@ -51,7 +51,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
   // Use auth context directly for the most up-to-date user data
   const { user: authUser } = useAuth()
-  
+
   // Use auth context user if available, fallback to prop user
   const currentUser = authUser || user
   const currentPlan = currentUser?.plan || "FREE"
@@ -69,7 +69,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   const subscribe = async (plan: Exclude<Plan, "FREE">) => {
     try {
       setLoadingPlan(plan)
-      
+
       if (onSubscribe) {
         await onSubscribe(plan)
       } else {
@@ -81,7 +81,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
         // Create Stripe checkout session
         try {
           const response = await apiClient.createStripePayment({ plan })
-          
+
           if (response.url) {
             // Redirect to Stripe Checkout
             window.location.href = response.url
@@ -91,7 +91,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
           }
         } catch (error: any) {
           console.error("Stripe checkout error:", error)
-          
+
         }
       }
     } catch (err: any) {
@@ -189,7 +189,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                 <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="All AI Models" desc="GPT, Claude, Gemini, etc." included />
                 <FeatureRow icon={<Globe className="h-5 w-5" />} title="Web search" desc="Integrated web results" included />
                 <FeatureRow icon={<ImageIcon className="h-5 w-5" />} title="Image generation" desc="Included" included />
-                  <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="Not included" included={false} />
+                <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="Not included" included={false} />
                 <FeatureRow icon={<Video className="h-5 w-5" />} title="Video generation" desc="Not included" included={false} />
               </div>
 
@@ -219,10 +219,10 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
               <div className="mt-6 space-y-3 text-sm">
                 <FeatureRow icon={<MessageSquare className="h-5 w-5" />} title="Everything in Pro" desc="All Pro features" included />
-                       <FeatureRow icon={<Globe className="h-5 w-5" />} title="Web search" desc="Included" included />
+                <FeatureRow icon={<Globe className="h-5 w-5" />} title="Web search" desc="Included" included />
                 <FeatureRow icon={<ImageIcon className="h-5 w-5" />} title="Image generation" desc="Included" included />
                 <FeatureRow icon={<Mic className="h-5 w-5" />} title="Audio (ElevenLabs)" desc="Included" included />
-                <FeatureRow icon={<Video className="h-5 w-5" />} title="Video generation" desc="Included" included />
+                <FeatureRow icon={<Video className="h-5 w-5" />} title="10 Video generation" desc="Included" included />
               </div>
 
               <div className="mt-8 border-t border-border/30 pt-6 flex flex-col items-center gap-3">
@@ -266,10 +266,12 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                     onClick={() => {
                       const whatsappNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER;
                       const isMobile = /Mobi|Android/i.test(navigator.userAgent);
-                      const whatsappUrl = isMobile
-                        ? `https://wa.me/${whatsappNumber}`
-                        : `https://web.whatsapp.com/send?phone=${whatsappNumber}`;
-                        window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+                      const whatsappUrl =
+                        // isMobile
+                        //   ?
+                        `https://wa.me/${whatsappNumber}`
+                      // : `https://web.whatsapp.com/send?phone=${whatsappNumber}`;
+                      window.open(whatsappUrl, "_blank", "noopener,noreferrer");
                     }}
                     disabled={isSubscribing || !!loadingPlan}
                     className="w-full flex items-center gap-2"
@@ -291,3 +293,4 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
     </Dialog>
   )
 }
+

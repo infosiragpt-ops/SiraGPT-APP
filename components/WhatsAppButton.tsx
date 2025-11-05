@@ -48,7 +48,9 @@ const WhatsAppButton: React.FC<Props> = ({ number, message, className = "" }) =>
     >
       {/* Button with pulse animation */}
       <div className="relative flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-green-500 to-green-600 text-white shadow-lg transition-transform duration-200 hover:scale-110 active:scale-95">
-        <MessageCircle className="w-7 h-7" />
+        {/* <MessageCircle className="w-7 h-7" /> */}
+        <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-8 h-8" />
+
 
         {/* Pulse glow */}
         <span className="absolute inset-0 rounded-full animate-ping bg-green-500 opacity-30"></span>
