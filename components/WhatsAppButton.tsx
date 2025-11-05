@@ -44,22 +44,13 @@ const WhatsAppButton: React.FC<Props> = ({ number, message, className = "" }) =>
       aria-label="Chat on WhatsApp"
       title="Chat on WhatsApp"
       role="button"
-      className={`fixed right-4 bottom-4 z-50 md:right-6 md:bottom-6 group ${className}`}
+      className={`group ${className}`}
     >
-      {/* Button with pulse animation */}
-      <div className="relative flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-green-500 to-green-600 text-white shadow-lg transition-transform duration-200 hover:scale-110 active:scale-95">
-        {/* <MessageCircle className="w-7 h-7" /> */}
-        <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-8 h-8" />
+        <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-7 h-7" />
 
-
-        {/* Pulse glow */}
-        <span className="absolute inset-0 rounded-full animate-ping bg-green-500 opacity-30"></span>
-      </div>
-
-      {/* Tooltip for desktop */}
-      <span className="absolute right-20 bottom-5 hidden md:block bg-black text-white text-sm px-2 py-1 rounded-md shadow-md opacity-0 group-hover:opacity-100 transition-opacity">
-        Chat on WhatsApp
-      </span>
+      {/* <div className="relative flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-green-600 text-white shadow-lg transition-transform duration-200 hover:scale-110 active:scale-95">
+        <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-6 h-6" />
+      </div> */}
     </a>
   )
 }

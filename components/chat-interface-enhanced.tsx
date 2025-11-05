@@ -34,6 +34,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { ThemeToggle } from "@/components/theme-toggle"
+import WhatsAppButton from "@/components/WhatsAppButton"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { aiService } from "@/lib/ai-service"
@@ -2420,6 +2421,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 )}
               </div>
               <div className="flex items-center gap-2">
+                <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 <ThemeToggle />
                 <Button variant="outline" size="sm" onClick={() => setSubscribeOpen(true)}>
                   {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
