@@ -2391,7 +2391,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       <div className="flex flex-1 overflow-hidden">
         <div className={`flex flex-col h-full ${showPresentationPreview || isGeneratingPPT || documentPreviewUrl ? 'w-1/2' : 'w-full'}`}>
           {/* Header */}
-          <div className=" border-border/40 p-4">
+          <div className="absolute top-0 left-0 right-0 z-10 p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="md:hidden">
@@ -2773,8 +2773,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               ) : (
                 <>
                   {/* Messages */}
-                  <ScrollArea className="flex-1 px-0 md:px-4 py-2 mb-6" ref={scrollAreaRef}>
-                    <div className="space-y-6 max-w-3xl mx-auto w-full px-4 md:px-0">
+                  <ScrollArea className="flex-1 px-0 md:px-4 pb-2 mb-6" ref={scrollAreaRef}>
+                    <div className="space-y-6 max-w-3xl mx-auto w-full px-4 md:px-0 pt-24 pb-40">
                       {(() => {
                         const messages = currentChat?.messages || [];
                         const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
@@ -2815,8 +2815,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                   {/* Input & Actions */}
 
-                  <div className="px-2 md:px-4 sticky bottom-0 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 py-4">
-                    <div className="max-w-3xl mx-auto space-y-2">
+                  <div className="absolute bottom-0 left-0 right-0 z-10 px-2 md:px-4 py-4">
+                    <div className="max-w-3xl mx-auto space-y-2 bg-background">
                       {/* Input Area */}
 
                       {/* <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"> */}
