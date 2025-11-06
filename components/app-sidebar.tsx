@@ -264,8 +264,7 @@ export function AppSidebar() {
       <div
         className={cn(
           "transition-all flex flex-col ",
-          state === "open" ? "p-4 pt-2 pl-2" : "p-2",
-          "mt-4"
+          state === "open" ? "p-4 pt-2 pl-2" : "p-2"
         )}
       >
         <SidebarMenuButton

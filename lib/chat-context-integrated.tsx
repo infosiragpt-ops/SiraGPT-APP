@@ -81,7 +81,7 @@ interface ChatContextType {
   setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify'>>
   setUploadedFiles: (files: any[]) => void
   regenerateLastMessage: () => void
-  editAndRegenerate: (messageId: string, newContent: string) => void
+  editAndRegenerate: (messageId: string, newContent: string, files?: any[]) => void
   updateMessageInChat: (messageId: string, newContent: string) => void
   pollVideoStatus: (operationId: string, messageId: string) => void,
 
@@ -758,23 +758,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
-  const editAndRegenerate = useCallback(async (messageId: string, newContent: string) => {
+  const editAndRegenerate = useCallback(async (messageId: string, newContent: string, files?: any[]) => {
     if (!currentChat || isLoading) return;
 
-    // Step 1: Message dhoondein jisko edit kiya gaya
+    // Step 1: Find the message being edited
     const messageIndex = currentChat.messages.findIndex(m => m.id === messageId);
     if (messageIndex === -1) {
-      // toast.error("Original message not found in chat.");
       return;
     }
 
-    // const messagesUpToEdit = currentChat.messages.slice(0, messageIndex + 1);
+    const originalMessage = currentChat.messages[messageIndex];
 
-    // messagesUpToEdit[messageIndex].content = newContent;
-    // Step 2: UI ko update karein. Sirf uss specific message ka content badlein
-    // aur uske baad ke saare messages (purana AI jawab) hata dein.
+    // Step 2: Update the UI. Replace the old user message with the edited version,
+    // and remove all subsequent messages (the old AI response).
     const messagesUpToEdit = currentChat.messages.slice(0, messageIndex);
-    const updatedUserMessage = { ...currentChat.messages[messageIndex], content: newContent };
+
+    // Preserve original files if no new files are provided in the call
+    const updatedFiles = files ?? originalMessage.files;
+
+    const updatedUserMessage = {
+      ...originalMessage,
+      content: newContent,
+      files: updatedFiles,
+    };
 
     const updatedMessages = [...messagesUpToEdit, updatedUserMessage];
 
@@ -809,13 +815,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const streamId = crypto.randomUUID();
     setCurrentStreamId(streamId);
 
+    const parsedFiles = typeof updatedUserMessage.files === 'string'
+      ? JSON.parse(updatedUserMessage.files)
+      : updatedUserMessage.files;
+    console.log('parsedFiles', parsedFiles);
+
     await apiClient.generateAIStream(
       {
         provider: selectProvider,
         model: selectedModel,
         prompt: newContent,
         chatId: currentChat.id,
-        files: [],
+        files: Array.isArray(parsedFiles) ? parsedFiles : [],
         streamId: streamId,
         regenerate: true, // Tell the backend not to create a new user message
       },

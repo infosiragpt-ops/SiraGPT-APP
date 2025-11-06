@@ -114,7 +114,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     message: any;
     user: any;
     onRegenerate: () => void;
-    updateMessageInChat: (messageId: string, newContent: string) => void;
+    updateMessageInChat: (messageId: string, newContent: string, files?: any[]) => void;
     isStreaming?: boolean;
     onToggleSplitView?: (content: any) => void;
     isGeneratingImage?: boolean;
@@ -329,9 +329,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             return;
         }
         try {
-            await apiClient.editUserMessage(message.id, { content: editedContent });
-            updateMessageInChat(message.id, editedContent);
-            toast.success("Message updated!");
+            // We only need to call editAndRegenerate, which now handles the API call.
+            // The files are passed from the original message to be preserved.
+            updateMessageInChat(message.id, editedContent, message.files);
+            toast.success("Message updated and regenerating response...");
             setIsEditing(false);
         } catch (error) {
             toast.error("Failed to update message.");
