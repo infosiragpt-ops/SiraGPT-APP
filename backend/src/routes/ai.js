@@ -85,7 +85,7 @@ async function countMonthlyApiCalls(userId) {
   return count;
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = []) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false) {
   try {
     console.log("Background task: Saving to database...", { assistantFiles });
 
@@ -103,14 +103,16 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         return;
       }
 
-      await prisma.message.create({
-        data: {
-          chatId,
-          role: 'USER',
-          content: prompt,
-          files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
-        }
-      });
+      if (!regenerate) {
+        await prisma.message.create({
+          data: {
+            chatId,
+            role: 'USER',
+            content: prompt,
+            files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
+          }
+        });
+      }
 
       await prisma.message.create({
         data: {
@@ -189,7 +191,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { model, prompt, chatId, files, provider } = req.body;
+      const { model, prompt, chatId, files, provider, regenerate } = req.body;
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
@@ -694,10 +696,10 @@ IMPORTANT: Default to displaying content in chat. Only create downloadable files
         }
 
 
-        await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles);
+        await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles, regenerate);
       } else {
         // Handle non-authenticated user case if necessary
-        await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles);
+        await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles, [], regenerate);
       }
 
     } catch (error) {

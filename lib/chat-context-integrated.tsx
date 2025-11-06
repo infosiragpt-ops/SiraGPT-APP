@@ -758,7 +758,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
-  const editAndRegenerate = async (messageId: string, newContent: string) => {
+  const editAndRegenerate = useCallback(async (messageId: string, newContent: string) => {
     if (!currentChat || isLoading) return;
 
     // Step 1: Message dhoondein jisko edit kiya gaya
@@ -771,16 +771,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // const messagesUpToEdit = currentChat.messages.slice(0, messageIndex + 1);
 
     // messagesUpToEdit[messageIndex].content = newContent;
-    const updatedMessages = currentChat.messages
-      .slice(0, messageIndex + 1)
-      .map((msg, index) => {
-        if (index === messageIndex) {
+    // Step 2: UI ko update karein. Sirf uss specific message ka content badlein
+    // aur uske baad ke saare messages (purana AI jawab) hata dein.
+    const messagesUpToEdit = currentChat.messages.slice(0, messageIndex);
+    const updatedUserMessage = { ...currentChat.messages[messageIndex], content: newContent };
 
-          return { ...msg, content: newContent };
-        }
-        // 4. Baaki messages ko waise hi rehne dein
-        return msg;
-      });
+    const updatedMessages = [...messagesUpToEdit, updatedUserMessage];
 
     setCurrentChat(prev => prev ? { ...prev, messages: updatedMessages } : null);
     setIsLoading(true);
@@ -809,19 +805,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       files: undefined,
     };
     setCurrentChat(prev => prev ? { ...prev, messages: [...prev.messages, aiMessagePlaceholder] } : null);
-
+    setIsStreaming(true);
     const streamId = crypto.randomUUID();
     setCurrentStreamId(streamId);
 
     await apiClient.generateAIStream(
       {
         provider: selectProvider,
-
         model: selectedModel,
         prompt: newContent,
         chatId: currentChat.id,
         files: [],
-        streamId: streamId
+        streamId: streamId,
+        regenerate: true, // Tell the backend not to create a new user message
       },
       (chunk) => {
         // onData: Fill the placeholder
@@ -857,9 +853,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         });
       }
     );
-    apiClient.clearMessageById(messageId);
-
-  };
+  }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId]);
 
   const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
     console.log('🔄 Starting polling for:', operationId);

@@ -274,7 +274,7 @@ class ApiClient {
 
   // ✅ YEH NAYA METHOD STREAMING KE LIYE HAI
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean },
     onData: (chunk: string) => void, // Jab data ka naya tukra aaye
     onClose: () => void, // Jab stream band ho jaye
     onError: (error: Error) => void, // Jab koi error aaye
