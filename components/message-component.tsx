@@ -1392,91 +1392,70 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         </div>
                     )}
                 {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "USER" && (
-                    <div className=" border-t border-border/20 flex flex-wrap gap-2">
-                        {Array.isArray(parsedFiles) && parsedFiles.some((file: any) => file.type?.startsWith('image/') || file.mimeType?.startsWith('image/')) ? (
-                            // Only images, aligned right
-                            <div className="flex flex-wrap gap-1 ml-auto">
-                                {parsedFiles
-                                    .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
-                                    .map((file: any, index: number) => {
-                                        let imageUrl = file.url || file.base64;
-                                        {
-                                            console.log(!imageUrl && file.path);
+                    <div className="flex flex-col items-end gap-2">
+                        {/* Render Images */}
+                        <div className="flex flex-wrap justify-end gap-2">
+                            {parsedFiles
+                                .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
+                                .map((file: any, index: number) => {
+                                    let imageUrl = file.url || file.base64;
+                                    if (!imageUrl && file.path) {
+                                        const normalizedPath = file.path.replace(/\\/g, '/');
+                                        const relativePath = normalizedPath.split('uploads/')[1];
+                                        if (relativePath) {
+                                            const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
+                                            imageUrl = `${baseUrl}/uploads/${relativePath}`;
                                         }
+                                    }
+                                    if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
+                                        imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:5000", "")}`;
+                                    }
+                                    return (
+                                        <img
+                                            key={`img-${index}`}
+                                            src={imageUrl}
+                                            alt={file.name || file.originalName || "Image"}
+                                            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover"
+                                        />
+                                    );
+                                })}
+                        </div>
 
-
-                                        if (!imageUrl && file.path) {
-                                            console.log("file.path.", file.path);
-
-                                            // Extract the part of the path after 'uploads/'
-                                            const normalizedPath = file.path.replace(/\\/g, '/');
-                                            console.log("normalizedPath:", normalizedPath);
-
-                                            // Extract the part after 'uploads/'
-                                            const relativePath = normalizedPath.split('uploads/')[1];
-                                            console.log("relativePath:", relativePath);
-
-                                            if (relativePath) {
-                                                const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
-                                                imageUrl = `${baseUrl}/uploads/${relativePath}`;
-                                                console.log("imageUrl", imageUrl);
-
-                                            }
-                                        }
-
-                                        if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
-                                            imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:5000", "")}`;
-
-                                        }
-
-                                        return (
-                                            <img
-                                                key={index}
-                                                src={imageUrl}
-                                                alt={file.name || file.originalName || "Image"}
-                                                className="max-w-full h-auto rounded-lg max-h-[350px] object-cover"
-                                            />
-                                        );
-                                    })}
-                            </div>
-
-                        ) : (
-                            // Only non-image files, aligned left
-                            <div className="flex flex-wrap gap-1">
-                                {parsedFiles
-                                    .filter((file: any) => !file.type?.startsWith('image/') && !file.mimeType?.startsWith('image/'))
-                                    .map((file: any, index: number) => {
-                                        const extension = file.originalName?.split('.').pop()?.toLowerCase() || file.name?.split('.').pop()?.toLowerCase();
-                                        let icon;
-                                        switch (extension) {
-                                            case 'pdf':
-                                                icon = <img src="/icons/pdf.png" alt="PDF" className="h-6 w-6" />;
-                                                break;
-                                            case 'doc':
-                                            case 'docx':
-                                                icon = <img src="/icons/Word.png" alt="Word" className="h-6 w-6" />;
-                                                break;
-                                            case 'xls':
-                                            case 'xlsx':
-                                            case 'csv':
-                                                icon = <img src="/icons/Excel.png" alt="Excel" className="h-6 w-6" />;
-                                                break;
-                                            case 'ppt':
-                                            case 'pptx':
-                                                icon = <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-6 w-6" />;
-                                                break;
-                                            default:
-                                                icon = <FileText className="h-4 w-4" />;
-                                        }
-                                        return (
-                                            <button key={index} onClick={() => handleViewFile(file)} className="flex items-center gap-2 px-2 py-1 border rounded hover:bg-muted transition-colors">
-                                                {icon}
-                                                <span className="text-xs">{file.originalName || file.name || 'File'}</span>
-                                            </button>
-                                        );
-                                    })}
-                            </div>
-                        )}
+                        {/* Then render other files */}
+                        <div className="flex flex-wrap justify-end gap-2">
+                            {parsedFiles
+                                .filter((file: any) => !file.type?.startsWith('image/') && !file.mimeType?.startsWith('image/'))
+                                .map((file: any, index: number) => {
+                                    const extension = file.originalName?.split('.').pop()?.toLowerCase() || file.name?.split('.').pop()?.toLowerCase();
+                                    let icon;
+                                    switch (extension) {
+                                        case 'pdf':
+                                            icon = <img src="/icons/pdf.png" alt="PDF" className="h-6 w-6" />;
+                                            break;
+                                        case 'doc':
+                                        case 'docx':
+                                            icon = <img src="/icons/Word.png" alt="Word" className="h-6 w-6" />;
+                                            break;
+                                        case 'xls':
+                                        case 'xlsx':
+                                        case 'csv':
+                                            icon = <img src="/icons/Excel.png" alt="Excel" className="h-6 w-6" />;
+                                            break;
+                                        case 'ppt':
+                                        case 'pptx':
+                                            icon = <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-6 w-6" />;
+                                            break;
+                                        default:
+                                            icon = <FileText className="h-4 w-4" />;
+                                    }
+                                    return (
+                                        <button key={`file-${index}`} onClick={() => handleViewFile(file)} className="flex items-center gap-2 px-2 py-1 border rounded hover:bg-muted transition-colors">
+                                            {icon}
+                                            <span className="text-xs">{file.originalName || file.name || 'File'}</span>
+                                        </button>
+                                    );
+                                })}
+                        </div>
                     </div>
                 )}
 
@@ -1497,12 +1476,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 {message.role === 'USER' && (
                     <>
                         {hasFiles && (
-                            <Card className="group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ">
+                            <div className="w-full max-w-[85%] md:max-w-2xl mb-2">
                                 <FileDisplay />
-                            </Card>
+                            </div>
                         )}
                         {hasContent && (
-                            <Card className={`group relative pt-3 pl-3 pr-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white ${hasFiles ? 'mt-1' : ''} `}>
+                            <Card className={`group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white`}>
                                 {isEditing ? (
                                     <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
                                         <Textarea

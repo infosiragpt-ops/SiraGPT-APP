@@ -519,6 +519,7 @@ const ActiveOptionsDisplay = ({
           const progress = uploadProgress[fileId] || 0;
           const isUploading = progress > 0 && progress < 100;
           const isComplete = progress === 100 || file.url;
+          const imageSizeClass = uploadedFiles.length > 1 ? 'h-20 w-20' : 'h-32 w-32';
 
           return (
             <div
@@ -528,7 +529,7 @@ const ActiveOptionsDisplay = ({
                 border border-gray-200
                 rounded-xl
                 text-sm
-                ${isImage ? 'h-32 w-32 p-0' : 'flex items-center gap-2 px-2 py-1'} // Conditional sizing aur padding
+                ${isImage ? `${imageSizeClass} p-0` : 'flex items-center gap-2 px-2 py-1'} // Conditional sizing aur padding
               `}
             >
               {isImage ? (
