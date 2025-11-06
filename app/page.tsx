@@ -185,7 +185,9 @@ export default function Home() {
   return (
     <>
       <GlobalStyles />
-      <div className="min-h-screen bg-gradient-to-b from-white to-gray-100 dark:from-black dark:to-gray-950 text-gray-900 dark:text-white overflow-x-hidden transition-all duration-500 ease-in-out">
+      {/* <div className="min-h-screen bg-gradient-to-b from-white to-gray-100 dark:from-black dark:to-gray-950 text-gray-900 dark:text-white overflow-x-hidden transition-all duration-500 ease-in-out">
+        */}
+      <div className="min-h-screen flex flex-col bg-gradient-to-b from-white to-gray-100 dark:from-black dark:to-gray-950 text-gray-900 dark:text-white overflow-x-hidden transition-all duration-500 ease-in-out">
         <div className="dark:block hidden">
           <Background3D />
         </div>
@@ -224,7 +226,9 @@ export default function Home() {
         {/* Hero Section */}
         <motion.section
           style={{ y: smoothHeroY, opacity: heroOpacity }}
-          className="container mx-auto px-6 min-h-screen flex flex-col justify-center items-center text-center relative"
+          //  className="container mx-auto px-6 min-h-screen flex flex-col justify-center items-center text-center relative"
+
+          className="container mx-auto px-6 flex-grow flex flex-col justify-center items-center text-center relative"
         >
           <div className="max-w-5xl mx-auto">
             <motion.div
@@ -309,6 +313,15 @@ export default function Home() {
           </div>
         </motion.section>
 
+        {/* Footer */}
+        <footer className="bg-gray-100 dark:bg-gray-950 py-6">
+          <div className="container mx-auto px-6 text-center text-gray-600 dark:text-gray-400">
+            <p>&copy; {new Date().getFullYear()} Sira GPT. All rights reserved.</p>
+            <div className="flex justify-center gap-4 mt-4">
+              <a href="/privacy-policy" className="hover:text-indigo-500">Privacy Policy</a>
+            </div>
+          </div>
+        </footer>
       </div>
     </>
   )
