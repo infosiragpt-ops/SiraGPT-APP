@@ -853,7 +853,7 @@ const NavbarModelSelector = ({
     // setSelectedModel('veo-fast');
     return (
       <DropdownMenu>
-        <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
+        <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
           <Video className="h-4 w-4" />
           <span className="text-sm font-medium">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
           <div className="flex items-center gap-1">
@@ -917,7 +917,7 @@ const NavbarModelSelector = ({
   // Default model selector for regular chats
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background hover:bg-muted transition">
+      <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
         {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4" />}
         <span className="text-sm font-medium">{selectedModelData?.displayName || selectedModel}</span>
         <div className="flex items-center gap-1">
@@ -1469,7 +1469,7 @@ But first, you need to connect your Spotify account securely using the button be
     setShowAudioPanel(false);
     setShowPresentationPreview(false);
     setSelectedPresentation(null);
-     setDocumentPreviewUrl(null)
+    setDocumentPreviewUrl(null)
     setShowPresentationPreview(false)
     setSelectedPresentation(null)
     setSplitViewContent(null)
@@ -2435,7 +2435,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               <div className="flex items-center gap-2">
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 <ThemeToggle />
-                <Button variant="outline" size="sm" onClick={() => setSubscribeOpen(true)}>
+                <Button variant="ghost" size="sm" onClick={() => setSubscribeOpen(true)}>
                   {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
                 </Button>
                 <UpgradeModal
