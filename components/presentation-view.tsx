@@ -27,6 +27,9 @@ interface PresentationViewProps {
     presentation?: Presentation | null;
     onClose: () => void;
     isLoading: boolean;
+    isVector?: boolean;
+    colorScheme?: string;
+    category?: string;
 }
 
 const loadingTitles = [
@@ -37,7 +40,7 @@ const loadingTitles = [
     "Almost Ready..."
 ];
 
-export function PresentationView({ presentation, onClose, isLoading }: PresentationViewProps) {
+export function PresentationView({ presentation, onClose, isLoading, isVector, colorScheme, category }: PresentationViewProps) {
     const [currentSlide, setCurrentSlide] = useState(0);
     const [isDownloading, setIsDownloading] = useState(false);
     const [loadingTitle, setLoadingTitle] = useState(loadingTitles[0]);
@@ -80,6 +83,25 @@ export function PresentationView({ presentation, onClose, isLoading }: Presentat
             </div>
         );
     }
+
+    // Display vector presentation badge if applicable
+    const vectorBadge = isVector && (
+        <div className="flex items-center gap-2 text-sm">
+            <span className="px-2 py-1 rounded-md bg-purple-500/10 text-purple-600 dark:text-purple-400 font-medium">
+                🎨 Vector Design
+            </span>
+            {colorScheme && (
+                <span className="px-2 py-1 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs">
+                    {colorScheme}
+                </span>
+            )}
+            {category && (
+                <span className="px-2 py-1 rounded-md bg-green-500/10 text-green-600 dark:text-green-400 text-xs">
+                    {category}
+                </span>
+            )}
+        </div>
+    );
 
     const totalSlides = presentation.slides.length;
 
@@ -210,7 +232,10 @@ export function PresentationView({ presentation, onClose, isLoading }: Presentat
         <div className="w-full h-full bg-background flex flex-col">
             {/* Header */}
             <div className="bg-slate-800/80 backdrop-blur-lg border-b border-slate-700 px-4 py-3 flex items-center justify-between text-white">
-                <h1 className="text-lg font-bold truncate">{presentation.title}</h1>
+                <div className="flex items-center gap-3">
+                    <h1 className="text-lg font-bold truncate">{presentation.title}</h1>
+                    {vectorBadge}
+                </div>
                 <div className="flex items-center gap-2">
                     <Button onClick={handleDownloadPPT} disabled={isDownloading} size="sm" variant="secondary">
                         <Download className="w-4 h-4 mr-2" />

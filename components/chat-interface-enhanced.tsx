@@ -1747,12 +1747,30 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }
 
+      // Check for vector PPT keywords (Gamma-style)
+      const msgLower = msg.toLowerCase();
+      const isVectorPPT = (
+        msgLower.includes('vector ppt') ||
+        msgLower.includes('vector presentation') ||
+        msgLower.includes('gamma style') ||
+        msgLower.includes('gamma-style') ||
+        msgLower.includes('gamma ppt') ||
+        (msgLower.includes('ppt') && msgLower.includes('no images')) ||
+        (msgLower.includes('ppt') && msgLower.includes('no photos')) ||
+        (msgLower.includes('presentation') && msgLower.includes('vector'))
+      );
+
       switch (intent) {
         case 'image':
           await handleImageGeneration(msg, filesToSend.map(f => f.id));
           break;
         case 'ppt':
-          await handlePPTGeneration(msg, filesToSend);
+          // Check if user wants vector PPT
+          if (isVectorPPT) {
+            await handleVectorPPTGeneration(msg, filesToSend);
+          } else {
+            await handlePPTGeneration(msg, filesToSend);
+          }
           break;
         case 'webdev':
           await handleWebDevGeneration(msg);
@@ -2214,6 +2232,65 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error: any) {
       console.error('PPT generation failed:', error);
       toast.error(error.message || 'PPT generation failed');
+      setIsGeneratingPPT(false);
+    }
+  };
+
+  // Vector PPT Generation (Gamma-style, pure vector graphics)
+  const handleVectorPPTGeneration = async (prompt: string, files?: any[]) => {
+    setIsGeneratingPPT(true);
+    setShowPresentationPreview(true);
+    setSelectedPresentation(null);
+    try {
+      let newChat = currentChat;
+      if (!currentChat) {
+        const response = await apiClient.createChat({
+          title: prompt ? prompt.substring(0, 30) : "New Vector PPT",
+          model: selectedModel,
+        });
+        newChat = response.chat;
+        await selectChat(newChat?.id ?? "");
+
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: newChat?.id || '',
+          role: 'USER' as const,
+          content: prompt,
+          timestamp: new Date().toISOString(),
+          files: files,
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
+      }
+
+      const payload = {
+        prompt,
+        chatId: newChat?.id || '',
+        provider: selectProvider,
+        model: selectedModel,
+        files: files?.map(f => f.id) || []
+      };
+
+      const response = await apiClient.generateVectorPPT(payload);
+      
+      // Update presentation view with vector badge
+      const presentationData = {
+        title: response.structure?.title || 'AI Vector Presentation',
+        slides: response.structure?.slides || [],
+        filename: response.filename,
+      };
+      
+      setSelectedPresentation(presentationData);
+      await selectChat(newChat?.id ?? "");
+
+      toast.success(`🎨 Vector presentation created with ${response.slideCount} slides! (${response.colorScheme} theme)`);
+    } catch (error: any) {
+      console.error('Vector PPT generation failed:', error);
+      toast.error(error.message || 'Vector PPT generation failed');
       setIsGeneratingPPT(false);
     }
   };

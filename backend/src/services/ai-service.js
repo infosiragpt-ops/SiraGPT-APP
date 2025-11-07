@@ -9,6 +9,7 @@ const path = require('path');
 const axios = require('axios');
 const FormData = require('form-data');
 const PptxGenJS = require('pptxgenjs');
+const vectorPPTService = require('./vector-ppt-service');
 
 class AIService {
 
@@ -362,6 +363,30 @@ class AIService {
 
     /**
      * Generate a PowerPoint presentation using AI
+     * @param {string} prompt - User's request for PPT content
+     * @param {string} provider - AI provider to use
+     * @param {string} model - AI model to use
+     * @returns {Promise<object>} - Generated PPT file information
+     */
+    /**
+     * Generate a Vector-based PowerPoint presentation (Gamma-style)
+     * @param {string} prompt - User's request for PPT content
+     * @param {string} provider - AI provider to use
+     * @param {string} model - AI model to use
+     * @returns {Promise<object>} - Generated Vector PPT file information
+     */
+    async generateVectorPPT(prompt, provider = "OpenAI", model = "gpt-4o") {
+        try {
+            console.log('🎨 Starting VECTOR presentation generation (Gamma-style)...');
+            return await vectorPPTService.generateVectorPresentation(prompt, provider, model);
+        } catch (error) {
+            console.error('❌ Error generating vector PPT:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate a PowerPoint presentation using AI (WITH IMAGES - OLD VERSION)
      * @param {string} prompt - User's request for PPT content
      * @param {string} provider - AI provider to use
      * @param {string} model - AI model to use

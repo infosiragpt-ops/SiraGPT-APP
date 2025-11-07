@@ -1802,7 +1802,163 @@ router.post("/createVisualizeChart", async (req, res) => {
 });
 
 
-// ✅ Generate PowerPoint Presentation
+// ✅ Generate Vector PowerPoint Presentation (Gamma-style)
+router.post(
+  '/generate-vector-ppt',
+  [
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('chatId').isString().withMessage('chatId is required'),
+    body('provider').optional().isString(),
+    body('model').optional().isString(),
+    body('files').optional().isArray(),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
+      const userId = req.user.id;
+
+      console.log('🎨 Vector PPT generation request:', { prompt, chatId, provider, model });
+
+      // Check monthly limit
+      if (req.user.plan === 'FREE') {
+        const result = await prisma.user.updateMany({
+          where: {
+            id: userId,
+            monthlyCallLimit: { gt: 0 }
+          },
+          data: {
+            monthlyCallLimit: { decrement: 1 }
+          }
+        });
+
+        if (!result || result.count === 0) {
+          return res.status(429).json({
+            error: 'Free monthly queries exhausted. Please upgrade to continue.',
+            remaining: 0
+          });
+        }
+      } else {
+        if (req.user.apiUsage >= req.user.monthlyLimit) {
+          return res.status(429).json({
+            error: 'Monthly API limit exceeded',
+            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
+          });
+        }
+      }
+
+      const chat = await prisma.chat.findUnique({ where: { id: chatId } });
+      if (!chat || chat.userId !== userId) {
+        return res.status(404).json({ error: 'Chat not found or access denied.' });
+      }
+
+      // Process files if provided
+      let finalPrompt = prompt;
+      let processedFiles = [];
+      if (files && files.length > 0) {
+        processedFiles = await Promise.all(
+          files.map(async (fileId) => {
+            const file = await prisma.file.findFirst({
+              where: { id: fileId, userId }
+            });
+            if (file) {
+              return {
+                id: file.id,
+                name: file.originalName,
+                extractedText: file.extractedText,
+                mimeType: file.mimeType,
+                path: file.path
+              };
+            }
+            return null;
+          })
+        ).then(results => results.filter(Boolean));
+
+        if (processedFiles.length > 0) {
+          const fileContext = processedFiles.map(f => {
+            const content = f.extractedText || 'File content could not be extracted.';
+            return `--- Attached File: ${f.name} ---\n${content}\n--- End of File ---`;
+          }).join('\n\n');
+          finalPrompt = `${prompt}\n\nUse the following content from the attached file(s) as context for the presentation:\n\n${fileContext}`;
+        }
+      }
+
+      // Save user message
+      await prisma.message.create({
+        data: {
+          chatId,
+          role: 'USER',
+          content: prompt,
+          files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
+        }
+      });
+
+      // Generate Vector PPT using AI service
+      console.log('🎨 Calling Vector PPT service...');
+      const pptResult = await aiService.generateVectorPPT(finalPrompt, provider, model);
+
+      // Save assistant message with PPT data
+      const assistantMessage = await prisma.message.create({
+        data: {
+          chatId,
+          role: 'ASSISTANT',
+          content: `🎨 Generated vector presentation: "${pptResult.structure.title}" with ${pptResult.slideCount} slides\n\n**Design Style:** ${pptResult.colorScheme}\n**Category:** ${pptResult.category}\n**Pure Vector Graphics:** ✅ No photos used`,
+          tokens: 1500,
+          files: JSON.stringify([{
+            type: 'presentation',
+            subtype: 'vector',
+            filename: pptResult.filename,
+            downloadUrl: pptResult.downloadUrl,
+            slideCount: pptResult.slideCount,
+            title: pptResult.structure.title,
+            colorScheme: pptResult.colorScheme,
+            category: pptResult.category,
+            structure: pptResult.structure
+          }])
+        }
+      });
+
+      // Update chat title
+      await prisma.chat.update({
+        where: { id: chatId },
+        data: {
+          updatedAt: new Date(),
+          title: chat.title === 'New Chat'
+            ? `🎨 Vector PPT: ${prompt.slice(0, 25)}${prompt.length > 25 ? '...' : ''}`
+            : chat.title
+        }
+      });
+
+      // Track usage
+      const tokens = 1500;
+      await usageService.recordUsage(userId, model, tokens, tokens * 0.001);
+
+      console.log('✅ Vector PPT generated and saved successfully');
+
+      res.json({
+        message: 'Vector PPT generated successfully',
+        filename: pptResult.filename,
+        downloadUrl: pptResult.downloadUrl,
+        slideCount: pptResult.slideCount,
+        colorScheme: pptResult.colorScheme,
+        category: pptResult.category,
+        structure: pptResult.structure,
+        assistantMessage
+      });
+
+    } catch (error) {
+      console.error('❌ Vector PPT generation error:', error);
+      res.status(500).json({ error: error.message || 'Vector PPT generation failed' });
+    }
+  }
+);
+
+// ✅ Generate PowerPoint Presentation (WITH IMAGES - OLD VERSION)
 router.post(
   '/generate-ppt',
   [
