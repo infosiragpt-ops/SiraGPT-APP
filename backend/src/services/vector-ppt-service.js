@@ -1,3 +1,4 @@
+// backend/src/services/vector-ppt-service.js
 // Vector-based Presentation Service - Gamma.app style
 // Generates presentations with AI-analyzed content and pure vector graphics
 
@@ -5,6 +6,8 @@ const PptxGenJS = require('pptxgenjs');
 const OpenAI = require('openai');
 const path = require('path');
 const fs = require('fs').promises;
+const vectorShapes = require('./ppt-vector-shapes');
+const { addVectorBackground, backgroundStyles } = require('./ppt-vector-backgrounds');
 
 class VectorPPTService {
     constructor() {
@@ -12,43 +15,75 @@ class VectorPPTService {
     }
 
     /**
-     * Initialize vector graphics library with shapes and patterns
+     * Initialize vector graphics library with patterns and color schemes.
      */
     initializeVectorLibrary() {
         return {
+            patterns: {
+                technology: ['hexagon', 'circuit', 'grid', 'network'],
+                business: ['arrow', 'chart', 'growth', 'target'],
+                education: ['book', 'bulb', 'brain', 'pencil'],
+                health: ['heart', 'pulse', 'cross', 'shield'],
+                finance: ['coin', 'graph', 'trend', 'bar'],
+                marketing: ['megaphone', 'funnel', 'magnet', 'rocket'],
+                data: ['database', 'cloud', 'server', 'analytics']
+            },
             colorSchemes: {
-                professional: { primary: '0d47a1', secondary: '1976d2', accent: '42a5f5', background: 'e3f2fd', text: '000000' },
-                creative: { primary: '4a148c', secondary: '7b1fa2', accent: 'ab47bc', background: 'f3e5f5', text: '000000' },
-                energetic: { primary: 'b71c1c', secondary: 'd32f2f', accent: 'f44336', background: 'ffebee', text: '000000' },
-                calm: { primary: '1b5e20', secondary: '2e7d32', accent: '4caf50', background: 'e8f5e9', text: '000000' },
-                modern: { primary: '212121', secondary: '424242', accent: '757575', background: 'f5f5f5', text: '000000' }
+                professional: { primary: '1e3a8a', secondary: '3b82f6', accent: '60a5fa', background: 'f0f9ff', text: '1e293b' },
+                creative: { primary: '7c3aed', secondary: 'a78bfa', accent: 'c4b5fd', background: 'faf5ff', text: '1e293b' },
+                energetic: { primary: 'dc2626', secondary: 'f97316', accent: 'fbbf24', background: 'fef2f2', text: '1e293b' },
+                calm: { primary: '059669', secondary: '10b981', accent: '6ee7b7', background: 'f0fdf4', text: '1e293b' },
+                modern: { primary: '0f172a', secondary: '475569', accent: '94a3b8', background: 'f8fafc', text: '0f172a' }
             }
         };
     }
 
     /**
-     * Analyze content and determine appropriate visual style
+     * Get AI client based on the provider.
+     * @param {string} provider - The AI provider (e.g., "OpenAI", "Gemini").
+     * @returns {OpenAI} - An instance of the OpenAI client.
+     */
+    getClient(provider) {
+        if (provider === "Gemini") {
+            return new OpenAI({
+                apiKey: process.env.GEMINI_API_KEY,
+                baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+            });
+        }
+        return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    }
+
+    /**
+     * Analyze presentation content to determine the visual style.
+     * @param {object} content - The presentation structure.
+     * @param {string} provider - The AI provider.
+     * @returns {Promise<object>} - A promise that resolves to the visual analysis.
      */
     async analyzeContentForVisuals(content, provider = "OpenAI") {
         try {
             const client = this.getClient(provider);
-            
-            const analysisPrompt = `Analyze this presentation content and determine the mood/tone (professional/creative/energetic/calm/modern).
+            const analysisPrompt = `Analyze this presentation content and determine:
+1. Main topic category (technology/business/education/health/finance/marketing/data)
+2. Mood/tone (professional/creative/energetic/calm/modern)
+3. Key concepts for each slide (for vector visualization)
 
 Content: ${JSON.stringify(content)}
 
 Respond with JSON only:
 {
-    "mood": "professional"
+    "category": "technology",
+    "mood": "professional",
+    "slides": [
+        { "slideIndex": 0, "concepts": ["innovation", "growth", "future"], "vectorType": "network", "emphasis": "high" }
+    ]
 }`;
 
             const response = await client.chat.completions.create({
-                model: provider === "Gemini" ? "gemini-pro" : "gpt-4o-mini",
+                model: provider === "Gemini" ? "gemini-2.0-flash-exp" : "gpt-4o-mini",
                 messages: [
-                    { role: 'system', content: 'You are a visual design expert. Analyze content and suggest a visual mood.' },
+                    { role: 'system', content: 'You are a visual design expert. Analyze content and suggest vector graphics.' },
                     { role: 'user', content: analysisPrompt }
-                ],
-                temperature: 0.2,
+                ]
             });
 
             const analysisText = response.choices[0].message.content;
@@ -56,218 +91,261 @@ Respond with JSON only:
             return JSON.parse(jsonMatch[1].trim());
         } catch (error) {
             console.error('Content analysis error:', error);
-            return { mood: 'professional' };
+            return { category: 'business', mood: 'professional', slides: [] };
         }
     }
 
     /**
-     * Get AI client based on provider
+     * Adds a vector shape to the slide using the external shapes library.
+     * @param {object} slide - The slide object from PptxGenJS.
+     * @param {string} shapeType - The type of shape to add.
+     * @param {number} x - The x-coordinate.
+     * @param {number} y - The y-coordinate.
+     * @param {number} w - The width.
+     * @param {number} h - The height.
+     * @param {object} colors - The color scheme.
      */
-    getClient(provider) {
-        if (provider === "Gemini") {
-            return new OpenAI({
-                apiKey: process.env.GEMINI_API_KEY,
-                baseURL: "https://generativelanguage.googleapis.com/v1beta/",
-            });
-        }
-        return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    }
-
-    // LAYOUT FUNCTIONS
-    addTitleLayout(slide, colors, data) {
-        slide.addShape('rect', { x: 0, y: 0, w: '30%', h: '100%', fill: { color: colors.primary, transparency: 85 } });
-        slide.addShape('rect', { x: '10%', y: '15%', w: '80%', h: '70%', fill: { color: 'FFFFFF' }, shadow: { type: 'outer', color: '333333', blur: 10, offset: 5, angle: 45, opacity: 0.2 } });
-        
-        slide.addText(data.title, { x: '12%', y: '40%', w: '76%', h: '20%', fontSize: 36, bold: true, color: colors.primary, align: 'center', valign: 'middle', autoFit: true });
-        if (data.subtitle) {
-            slide.addText(data.subtitle, { x: '12%', y: '60%', w: '76%', h: '10%', fontSize: 18, color: colors.secondary, align: 'center' });
-        }
-    }
-
-    addContentLayout(slide, colors, data, index) {
-        const layoutChoice = index % 2;
-
-        if (layoutChoice === 0) {
-            slide.addShape('rect', { x: 0, y: 0, w: '100%', h: 1, fill: { color: colors.primary } });
-            slide.addText(data.title, { x: 0.5, y: 0.2, w: 9, h: 0.6, fontSize: 28, bold: true, color: 'FFFFFF', valign: 'middle' });
-            
-            slide.addShape('rect', { x: 9.5, y: 1, w: 0.5, h: '80%', fill: { color: colors.accent, transparency: 80 } });
-
-            const bulletPoints = data.content.map(point => ({
-                text: point,
-                options: { fontSize: 14, color: colors.text, bullet: { type: 'number', style: 'romanLcPeriod' }, paraSpaceAfter: 10 }
-            }));
-            slide.addText(bulletPoints, { x: 0.5, y: 1.2, w: 8.5, h: 4, autoFit: true });
-        } else {
-            slide.addShape('rect', { x: 0, y: 0, w: 0.5, h: '100%', fill: { color: colors.primary } });
-            slide.addText(data.title, { x: 0.8, y: 0.2, w: 9, h: 0.6, fontSize: 28, bold: true, color: colors.primary, valign: 'middle' });
-
-            const bulletPoints = data.content.map(point => ({
-                text: point,
-                options: { fontSize: 14, color: colors.text, bullet: { code: '25CF' }, paraSpaceAfter: 10 }
-            }));
-            slide.addText(bulletPoints, { x: 1.0, y: 1.2, w: 8.5, h: 4, autoFit: true });
-        }
-    }
-
-    addTwoColumnLayout(slide, colors, data) {
-        slide.addShape('rect', { x: 0, y: 0, w: '100%', h: 1, fill: { color: colors.primary } });
-        slide.addText(data.title, { x: 0.5, y: 0.2, w: 9, h: 0.6, fontSize: 28, bold: true, color: 'FFFFFF', valign: 'middle' });
-
-        slide.addShape('line', { x: 5, y: 1.2, w: 0, h: 4, line: { color: colors.accent, width: 2, dashType: 'dash' } });
-
-        const leftBullets = data.leftContent.map(point => ({ text: point, options: { fontSize: 12, color: colors.text, bullet: true, paraSpaceAfter: 8 } }));
-        slide.addText(leftBullets, { x: 0.5, y: 1.2, w: 4.2, h: 4, autoFit: true });
-
-        const rightBullets = data.rightContent.map(point => ({ text: point, options: { fontSize: 12, color: colors.text, bullet: true, paraSpaceAfter: 8 } }));
-        slide.addText(rightBullets, { x: 5.3, y: 1.2, w: 4.2, h: 4, autoFit: true });
-    }
-
-    addVisualLayout(slide, colors, data, index) {
-        const isTextOnLeft = index % 2 === 0;
-        const textX = isTextOnLeft ? 0.5 : 5.5;
-        const shapeX = isTextOnLeft ? 5.0 : 0;
-
-        slide.addShape('rect', { x: shapeX, y: 0, w: '50%', h: '100%', fill: { color: colors.secondary, transparency: 80 } });
-        slide.addShape('arc', { x: shapeX, y: 0, w: 6, h: 6, angleRange: [0, 90], fill: { color: colors.primary, transparency: 85 } });
-
-        slide.addText(data.title, { x: textX, y: 0.5, w: 4.5, h: 0.8, fontSize: 28, bold: true, color: colors.primary, autoFit: true });
-        
-        const bulletPoints = (data.content || []).map(point => ({ text: point, options: { fontSize: 14, color: colors.text, bullet: { code: '2713' }, paraSpaceAfter: 10 } }));
-        slide.addText(bulletPoints, { x: textX, y: 1.5, w: 4.5, h: 3.5, autoFit: true });
-    }
-
-    addProcessLayout(slide, colors, data) {
-        slide.addShape('rect', { x: 0, y: 0, w: '100%', h: 1, fill: { color: colors.primary } });
-        slide.addText(data.title, { x: 0.5, y: 0.2, w: 9, h: 0.6, fontSize: 28, bold: true, color: 'FFFFFF', align: 'center' });
-
-        const steps = data.steps || [];
-        const stepCount = steps.length;
-        const stepWidth = 8 / stepCount;
-        const arrowWidth = 0.5;
-
-        steps.forEach((step, i) => {
-            const xPos = 1 + i * (stepWidth);
-            slide.addShape('roundRect', {
-                x: xPos, y: 2.5, w: stepWidth - arrowWidth, h: 1.5,
-                fill: { color: colors.accent, transparency: 30 },
-                line: { color: colors.primary, width: 1.5 }
-            });
-            slide.addText(step, {
-                x: xPos, y: 2.5, w: stepWidth - arrowWidth, h: 1.5,
-                fontSize: 12, bold: true, color: colors.primary, align: 'center', valign: 'middle', autoFit: true
-            });
-
-            if (i < stepCount - 1) {
-                slide.addShape('rightArrow', {
-                    x: xPos + stepWidth - arrowWidth, y: 3, w: arrowWidth, h: 0.5,
-                    fill: { color: colors.secondary, transparency: 50 }
-                });
-            }
-        });
+    addVectorShape(slide, shapeType, x, y, w, h, colors) {
+        const shapeFunction = vectorShapes[shapeType] || vectorShapes.grid;
+        shapeFunction(slide, x, y, w, h, colors);
     }
 
     /**
-     * Generate complete vector-based presentation
+     * Generates the complete vector-based presentation.
+     * @param {string} prompt - The user's prompt for the presentation.
+     * @param {string} provider - The AI provider.
+     * @param {string} model - The AI model to use.
+     * @returns {Promise<object>} - A promise that resolves to the presentation details.
      */
     async generateVectorPresentation(prompt, provider = "OpenAI", model = "gpt-4o") {
         try {
             const client = this.getClient(provider);
 
             // Step 1: Generate presentation structure
-            const structurePrompt = {
-                role: 'system',
-                content: `You are an expert presentation creator. Create a professional presentation structure.
-Return ONLY valid JSON with this exact format:
-{
-  "title": "Presentation Title",
-  "slides": [
-    { "type": "title", "title": "Main Title", "subtitle": "Engaging subtitle" },
-    { "type": "content", "title": "Slide Title", "content": ["Point 1", "Point 2", "Point 3"] },
-    { "type": "two-column", "title": "Comparison", "leftContent": ["Left point 1"], "rightContent": ["Right point 1"] },
-    { "type": "visual", "title": "Visual Slide", "content": ["Key point 1", "Key point 2"] },
-    { "type": "process", "title": "Process Flow", "steps": ["Step 1", "Step 2", "Step 3"] }
-  ]
-}
-
-Types: "title", "content", "two-column", "visual", "process". Generate 6-8 slides.`
-            };
-
             console.log('🎨 Generating presentation structure...');
-            const structureResponse = await client.chat.completions.create({
-                model: model, messages: [structurePrompt, { role: 'user', content: `Create a presentation about: ${prompt}` }]
-            });
-
-            const responseText = structureResponse.choices[0].message.content;
-            const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || [null, responseText];
-            const pptStructure = JSON.parse(jsonMatch[1].trim());
+            const pptStructure = await this.generatePPTStructure(client, model, prompt);
 
             // Step 2: Analyze content for visual design
             console.log('🎨 Analyzing content for vector design...');
             const visualAnalysis = await this.analyzeContentForVisuals(pptStructure, provider);
             const colorScheme = this.vectorLibrary.colorSchemes[visualAnalysis.mood] || this.vectorLibrary.colorSchemes.professional;
 
-            // Step 3: Create PowerPoint
-            const ppt = new PptxGenJS();
-            ppt.author = 'AI Vector Designer';
-            ppt.subject = pptStructure.title;
-            ppt.title = pptStructure.title;
+            // Step 3: Create and configure the PowerPoint presentation
+            const ppt = this.createPptInstance(pptStructure.title);
 
+            // Step 4: Create slides with vector graphics
+            this.createSlides(ppt, pptStructure, visualAnalysis, colorScheme);
+
+            // Step 5: Save the presentation and get the download URL
             const timestamp = Date.now();
-
-            // Step 4: Create slides with varied layouts
-            for (const [index, slideData] of pptStructure.slides.entries()) {
-                const slide = ppt.addSlide({ layout: 'LAYOUT_16x9' });
-                slide.background = { color: colorScheme.background };
-
-                switch (slideData.type) {
-                    case 'title':
-                        this.addTitleLayout(slide, colorScheme, slideData);
-                        break;
-                    case 'content':
-                        this.addContentLayout(slide, colorScheme, slideData, index);
-                        break;
-                    case 'two-column':
-                        this.addTwoColumnLayout(slide, colorScheme, slideData);
-                        break;
-                    case 'visual':
-                        this.addVisualLayout(slide, colorScheme, slideData, index);
-                        break;
-                    case 'process':
-                        this.addProcessLayout(slide, colorScheme, slideData);
-                        break;
-                    default:
-                        this.addContentLayout(slide, colorScheme, slideData, index);
-                }
-                
-                slide.addText(`${index + 1}`, { x: 9.2, y: 5.2, w: 0.5, h: 0.3, fontSize: 10, color: colorScheme.secondary, align: 'right' });
-            }
-
-            // Step 5: Save presentation
-            const uploadsDir = path.join(__dirname, '../../uploads/presentations');
-            await fs.mkdir(uploadsDir, { recursive: true });
             const filename = `vector-presentation-${timestamp}.pptx`;
-            const filepath = path.join(uploadsDir, filename);
-            await ppt.writeFile({ fileName: filepath });
-
-            const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-            const downloadUrl = `${baseUrl}/uploads/presentations/${filename}`;
+            const { downloadUrl } = await this.savePresentation(ppt, filename);
 
             console.log('✅ Vector presentation generated successfully:', filename);
-
             return {
                 filename,
                 downloadUrl,
                 structure: pptStructure,
                 slideCount: pptStructure.slides.length,
                 colorScheme: visualAnalysis.mood,
-                category: visualAnalysis.category || 'general'
+                category: visualAnalysis.category
             };
-
         } catch (error) {
             console.error('❌ Error generating vector presentation:', error);
             throw error;
         }
+    }
+
+    /**
+     * Generates the presentation structure using an AI model.
+     */
+    async generatePPTStructure(client, model, prompt) {
+        const structurePrompt = {
+            role: 'system',
+            content: `You are an expert presentation creator. Create a professional presentation structure.
+Return ONLY valid JSON with this exact format:
+{
+  "title": "Presentation Title",
+  "slides": [
+    { "type": "title", "title": "Main Title", "subtitle": "Engaging subtitle" },
+    { "type": "content", "title": "Slide Title", "content": ["Point 1", "Point 2", "Point 3", "Point 4"] },
+    { "type": "two-column", "title": "Comparison", "leftContent": ["Left point 1", "Left point 2"], "rightContent": ["Right point 1", "Right point 2"] },
+    { "type": "visual", "title": "Visual Slide", "content": ["Key point 1", "Key point 2"], "visualConcept": "growth and innovation" }
+  ]
+}
+Types: "title", "content", "two-column", "visual". Generate 6-10 slides. Each content slide needs 4-6 detailed points.`
+        };
+
+        const response = await client.chat.completions.create({
+            model,
+            messages: [structurePrompt, { role: 'user', content: `Create a presentation about: ${prompt}` }]
+        });
+
+        const responseText = response.choices[0].message.content;
+        const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || [null, responseText];
+        return JSON.parse(jsonMatch[1].trim());
+    }
+
+    /**
+     * Creates and configures a PptxGenJS instance.
+     */
+    createPptInstance(title) {
+        const ppt = new PptxGenJS();
+        ppt.author = 'AI Vector Designer';
+        ppt.subject = title;
+        ppt.title = title;
+        ppt.defineLayout({ name: 'CUSTOM', width: 10, height: 5.625 });
+        ppt.layout = 'CUSTOM';
+        return ppt;
+    }
+
+    /**
+     * Creates and adds all slides to the presentation.
+     */
+    createSlides(ppt, pptStructure, visualAnalysis, colorScheme) {
+        const backgroundStyleKeys = Object.keys(backgroundStyles);
+        pptStructure.slides.forEach((slideData, index) => {
+            const slide = ppt.addSlide();
+            const backgroundStyle = backgroundStyleKeys[index % backgroundStyleKeys.length];
+            addVectorBackground(slide, backgroundStyle, colorScheme);
+
+            this.addSlideContent(slide, slideData, visualAnalysis, colorScheme, index);
+
+            slide.addText(`${index + 1}`, {
+                x: 9.2, y: 5.2, w: 0.5, h: 0.3,
+                fontSize: 12, color: colorScheme.secondary, align: 'right'
+            });
+        });
+    }
+
+    /**
+     * Adds content to a single slide based on its type.
+     */
+    addSlideContent(slide, slideData, visualAnalysis, colorScheme, index) {
+        switch (slideData.type) {
+            case 'title':
+                this.addTitleSlideContent(slide, slideData, colorScheme);
+                break;
+            case 'content':
+                this.addContentSlideContent(slide, slideData, visualAnalysis, colorScheme, index);
+                break;
+            case 'two-column':
+                this.addTwoColumnSlideContent(slide, slideData, colorScheme);
+                break;
+            case 'visual':
+                this.addVisualSlideContent(slide, slideData, visualAnalysis, colorScheme, index);
+                break;
+            default:
+                this.addContentSlideContent(slide, slideData, visualAnalysis, colorScheme, index);
+        }
+    }
+
+    /**
+     * Adds content for a title slide.
+     */
+    addTitleSlideContent(slide, slideData, colorScheme) {
+        this.addVectorShape(slide, 'swoosh', 6, 1, 3.5, 3.5, colorScheme);
+        slide.addText(slideData.title, {
+            x: 0.5, y: 1.8, w: 5.5, h: 1.5,
+            fontSize: 48, bold: true, color: colorScheme.primary,
+            align: 'left', valign: 'middle', autoFit: true
+        });
+        if (slideData.subtitle) {
+            slide.addText(slideData.subtitle, {
+                x: 0.5, y: 3.3, w: 5.5, h: 0.8,
+                fontSize: 24, color: colorScheme.text,
+                align: 'left', autoFit: true
+            });
+        }
+    }
+
+    /**
+     * Adds content for a standard content slide.
+     */
+    addContentSlideContent(slide, slideData, visualAnalysis, colorScheme, index) {
+        slide.addText(slideData.title, {
+            x: 0.5, y: 0.3, w: 4.5, h: 0.5,
+            fontSize: 36, bold: true, color: colorScheme.primary,
+            align: 'left', valign: 'middle', autoFit: true
+        });
+
+        const bulletPoints = (slideData.content || []).map(point => ({
+            text: point,
+            options: { bullet: { color: colorScheme.secondary }, fontSize: 18, color: colorScheme.text, align: 'left' }
+        }));
+        slide.addText(bulletPoints, { x: 0.5, y: 1.3, w: 4.5, h: 3.5, autoFit: true, valign: 'top' });
+
+        const patterns = this.vectorLibrary.patterns[visualAnalysis.category] || this.vectorLibrary.patterns.business;
+        const selectedPattern = patterns[index % patterns.length];
+        this.addVectorShape(slide, selectedPattern, 5.5, 1.2, 4, 3.8, colorScheme);
+    }
+
+    /**
+     * Adds content for a two-column slide.
+     */
+    addTwoColumnSlideContent(slide, slideData, colorScheme) {
+        slide.addText(slideData.title, {
+            x: 0.5, y: 0.3, w: 9, h: 0.5,
+            fontSize: 36, bold: true, color: colorScheme.primary,
+            align: 'center', valign: 'middle', autoFit: true
+        });
+
+        const leftBulletPoints = (slideData.leftContent || []).map(point => ({
+            text: point,
+            options: { bullet: { color: colorScheme.secondary }, fontSize: 18, color: colorScheme.text, align: 'left' }
+        }));
+        slide.addText(leftBulletPoints, { x: 0.5, y: 1.3, w: 4.5, h: 3.5, autoFit: true, valign: 'top' });
+
+        const rightBulletPoints = (slideData.rightContent || []).map(point => ({
+            text: point,
+            options: { bullet: { color: colorScheme.secondary }, fontSize: 18, color: colorScheme.text, align: 'left' }
+        }));
+        slide.addText(rightBulletPoints, { x: 5.5, y: 1.3, w: 4.5, h: 3.5, autoFit: true, valign: 'top' });
+    }
+
+    /**
+     * Adds content for a visual slide.
+     */
+    addVisualSlideContent(slide, slideData, visualAnalysis, colorScheme, index) {
+        slide.addText(slideData.title, {
+            x: 0.5, y: 0.3, w: 9, h: 0.5,
+            fontSize: 36, bold: true, color: colorScheme.primary,
+            align: 'center', valign: 'middle', autoFit: true
+        });
+
+        if (slideData.visualConcept) {
+            slide.addText(slideData.visualConcept, {
+                x: 0.5, y: 1.0, w: 9, h: 0.5,
+                fontSize: 24, color: colorScheme.text,
+                align: 'center', valign: 'middle', autoFit: true, italic: true
+            });
+        }
+
+        const patterns = this.vectorLibrary.patterns[visualAnalysis.category] || this.vectorLibrary.patterns.business;
+        const selectedPattern = patterns[index % patterns.length];
+        this.addVectorShape(slide, selectedPattern, 2.5, 1.8, 5, 3, colorScheme);
+
+        const bulletPoints = (slideData.content || []).map(point => ({
+            text: point,
+            options: { fontSize: 16, color: colorScheme.text, align: 'center' }
+        }));
+        if (bulletPoints.length > 0) {
+            slide.addText(bulletPoints, { x: 1, y: 4.8, w: 8, h: 0.6, valign: 'middle', autoFit: true });
+        }
+    }
+
+    /**
+     * Saves the presentation to a file.
+     */
+    async savePresentation(ppt, filename) {
+        const uploadsDir = path.join(__dirname, '../../uploads/presentations');
+        await fs.mkdir(uploadsDir, { recursive: true });
+        const filepath = path.join(uploadsDir, filename);
+        await ppt.writeFile({ fileName: filepath });
+
+        const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+        const downloadUrl = `${baseUrl}/uploads/presentations/${filename}`;
+        return { filepath, downloadUrl };
     }
 }
 
