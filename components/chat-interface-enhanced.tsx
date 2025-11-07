@@ -2436,8 +2436,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               <div className="flex items-center gap-2">
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 <ThemeToggle />
-                <Button variant="ghost" size="sm" onClick={() => setSubscribeOpen(true)}>
-                  {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
+                <Button variant="ghost" size={currentPlan === 'FREE' ? 'sm' : 'icon'} onClick={() => setSubscribeOpen(true)} className={currentPlan !== 'FREE' ? 'h-9 w-9' : ''}>
+                  {currentPlan === 'FREE' ? 'Upgrade Plan' : <span role="img" aria-label="Manage Plan" className="text-xl">💰</span>}
                 </Button>
                 <UpgradeModal
                   open={subscribeOpen}
