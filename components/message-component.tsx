@@ -493,7 +493,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
     // Optimized message content rendering with performance safeguards
     const MessageContent = ({ content }: { content: string }) => {
-        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]')) {
+        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]')) {
             return null;
         }
         // Don't render markdown for image-only messages to improve performance
@@ -830,10 +830,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
         return (
             <div className="flex gap-2 mt-4">
-                <Button size="sm" variant="default" onClick={() => {
-                    const event = new CustomEvent('preview-presentation', { detail: { presentation: presentationData } });
-                    window.dispatchEvent(event);
-                }} className="bg-blue-600 hover:bg-blue-700">
+                <Button size="sm" variant="default" onClick={() => onDocumentPreview && onDocumentPreview(getPPTUrl())} className="bg-blue-600 hover:bg-blue-700">
                     <Eye className="h-4 w-4 mr-2" />
                     Preview
                 </Button>
@@ -1219,6 +1216,20 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const FileDisplay = () => {
         if (message.role === 'ASSISTANT' && message.content === '[GENERATING_IMAGE]') {
             return <ImageGenerationEffect />;
+        }
+
+        if (message.role === 'ASSISTANT' && (message.content === '[GENERATING_PPT]' || message.content === '[GENERATING_VECTOR_PPT]')) {
+            return (
+                <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
+                    <div className="flex items-center gap-2 text-sm">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span className="font-medium">Generating Presentation...</span>
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                        Your presentation is being created. This may take a moment.
+                    </div>
+                </div>
+            );
         }
 
         if (message.role === "ASSISTANT" && message.content === "[PROCESSING_GMAIL]") {

@@ -276,7 +276,9 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                     disabled={isSubscribing || !!loadingPlan}
                     className="w-full flex items-center gap-2"
                   >
-                    <img src="/icons/whatsapp-logo.png" alt="WhatsApp" className="h-5 w-5" />
+                    {/* <img src="/icons/whatsapp-logo.png" alt="WhatsApp" className="h-5 w-5" /> */}
+                    <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-6 h-6 invert dark:invert-0" />
+
                     Subscribe
                   </Button>
                 )}
@@ -293,4 +295,3 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
     </Dialog>
   )
 }
-

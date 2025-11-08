@@ -46,7 +46,7 @@ const WhatsAppButton: React.FC<Props> = ({ number, message, className = "" }) =>
       role="button"
       className={`group ${className}`}
     >
-        <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-7 h-7" />
+      <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-5 h-5 dark:invert" />
 
       {/* <div className="relative flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-green-600 text-white shadow-lg transition-transform duration-200 hover:scale-110 active:scale-95">
         <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-6 h-6" />

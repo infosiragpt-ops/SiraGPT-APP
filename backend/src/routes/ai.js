@@ -1804,7 +1804,7 @@ router.post("/createVisualizeChart", async (req, res) => {
 
 // ✅ Generate Vector PowerPoint Presentation (Gamma-style)
 router.post(
-  '/generate-vector-ppt',
+  '/generate-ppt',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').isString().withMessage('chatId is required'),
@@ -1960,7 +1960,7 @@ router.post(
 
 // ✅ Generate PowerPoint Presentation (WITH IMAGES - OLD VERSION)
 router.post(
-  '/generate-ppt',
+  '/generate-ppt2',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').isString().withMessage('chatId is required'),
