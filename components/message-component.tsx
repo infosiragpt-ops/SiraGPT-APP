@@ -485,7 +485,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 {children}
             </CustomCodeBlock>
         ) : (
-            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            <code className="text-sm font-mono  px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {children}
             </code>
         );
