@@ -3233,18 +3233,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             />
           </div>
         )}
-        {(showPresentationPreview || isGeneratingPPT) && (
-          <div className="w-1/2 border-l border-border/40">
-            <PresentationView
-              isLoading={isGeneratingPPT}
-              presentation={selectedPresentation}
-              onClose={() => {
-                setShowPresentationPreview(false);
-                setSelectedPresentation(null);
-              }}
-            />
-          </div>
-        )}
         {isComputerUseActive && (
           <div className="w-full border-l border-border/40">
             <ComputerUseInterface
