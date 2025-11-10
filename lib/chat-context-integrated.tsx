@@ -5,6 +5,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef } f
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { aiService } from "./ai-service"
+import { toast } from "sonner"
 
 interface Message {
   id: string
@@ -782,19 +783,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const editAndRegenerate = useCallback(async (messageId: string, newContent: string, files?: any[]) => {
     if (!currentChat || isLoading) return;
 
-    // Step 1: Find the message being edited
     const messageIndex = currentChat.messages.findIndex(m => m.id === messageId);
-    if (messageIndex === -1) {
-      return;
-    }
+    if (messageIndex === -1) return;
 
     const originalMessage = currentChat.messages[messageIndex];
-
-    // Step 2: Update the UI. Replace the old user message with the edited version,
-    // and remove all subsequent messages (the old AI response).
     const messagesUpToEdit = currentChat.messages.slice(0, messageIndex);
-
-    // Preserve original files if no new files are provided in the call
     const updatedFiles = files ?? originalMessage.files;
 
     const updatedUserMessage = {
@@ -803,88 +796,84 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       files: updatedFiles,
     };
 
-    const updatedMessages = [...messagesUpToEdit, updatedUserMessage];
-
-    setCurrentChat(prev => prev ? { ...prev, messages: updatedMessages } : null);
-    setIsLoading(true);
-
-    try {
-      await apiClient.editUserMessage(messageId, { content: newContent });
-    } catch (error) {
-      //toast.error("Could not save the edited message.");
-      // Error ki soorat mein UI ko wapas purani state par le aayein (optional)
-      console.log("error From edit and regenerate message", error);
-
-      setIsLoading(false);
-      return;
-    }
-
-    // Step 4: Ab naye (edited) prompt se AI stream shuru karein
-    // Yeh code bilkul 'addMessage' jaisa hai, bas user ka message dobara add nahi karta
     const aiMessagePlaceholder: Message = {
       id: `ai-regen-${Date.now()}`,
       chatId: currentChat.id,
       role: 'ASSISTANT',
       content: "",
-      tokens: 0,
       timestamp: new Date().toISOString(),
-
-      files: undefined,
     };
-    setCurrentChat(prev => prev ? { ...prev, messages: [...prev.messages, aiMessagePlaceholder] } : null);
+
+    // Update UI state in one go to prevent race conditions
+    setCurrentChat(prev => prev ? { ...prev, messages: [...messagesUpToEdit, updatedUserMessage, aiMessagePlaceholder] } : null);
+    setIsLoading(true);
     setIsStreaming(true);
     const streamId = crypto.randomUUID();
     setCurrentStreamId(streamId);
 
-    const parsedFiles = typeof updatedUserMessage.files === 'string'
-      ? JSON.parse(updatedUserMessage.files)
-      : updatedUserMessage.files;
-    console.log('parsedFiles', parsedFiles);
+    try {
+      // Update the message in the backend. This should also handle deleting subsequent messages.
+      await apiClient.editUserMessage(messageId, { content: newContent });
 
-    await apiClient.generateAIStream(
-      {
-        provider: selectProvider,
-        model: selectedModel,
-        prompt: newContent,
-        chatId: currentChat.id,
-        files: Array.isArray(parsedFiles) ? parsedFiles : [],
-        streamId: streamId,
-        regenerate: true, // Tell the backend not to create a new user message
-      },
-      (chunk) => {
-        // onData: Fill the placeholder
-        setCurrentChat((prevChat) => {
-          if (!prevChat) return prevChat;
-          const updatedMessages = prevChat.messages.map((msg) => {
-            if (msg.id === aiMessagePlaceholder.id) {
-              return { ...msg, content: msg.content + chunk };
-            }
-            return msg;
+      const parsedFiles = typeof updatedUserMessage.files === 'string'
+        ? JSON.parse(updatedUserMessage.files)
+        : updatedUserMessage.files;
+
+      // Now, generate the new response
+      await apiClient.generateAIStream(
+        {
+          provider: selectProvider,
+          model: selectedModel,
+          prompt: newContent,
+          chatId: currentChat.id,
+          files: Array.isArray(parsedFiles) ? parsedFiles : [], // Pass file IDs
+          streamId: streamId,
+          regenerate: true,
+        },
+        (chunk) => {
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const updatedMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                return { ...msg, content: msg.content + chunk };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: updatedMessages };
           });
-          return { ...prevChat, messages: updatedMessages };
-        });
-      },
-      async () => {
-        // onClose: Stop loading
-        setIsLoading(false);
-        await selectChat(currentChat.id);
-      },
-      (error) => {
-        // onError: Handle error
-        console.error("Streaming failed during regeneration:", error);
-        setIsLoading(false);
-        setCurrentChat((prevChat) => {
-          if (!prevChat) return prevChat;
-          const errorMessages = prevChat.messages.map((msg) => {
-            if (msg.id === aiMessagePlaceholder.id) {
-              return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
-            }
-            return msg;
+        },
+        async () => {
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+          await selectChat(currentChat.id); // Refresh chat from DB
+        },
+        (error) => {
+          console.error("Streaming failed during regeneration:", error);
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const errorMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: errorMessages };
           });
-          return { ...prevChat, messages: errorMessages };
-        });
-      }
-    );
+        }
+      );
+    } catch (error) {
+      console.error("Failed to edit and regenerate:", error);
+      setIsLoading(false);
+      setIsStreaming(false);
+      setCurrentStreamId(null);
+      // Revert UI state on failure
+      setCurrentChat(prev => prev ? { ...prev, messages: currentChat.messages } : null);
+      toast.error("Failed to regenerate response.");
+    }
   }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId]);
 
   const pollVideoStatus = useCallback((operationId: string, messageId: string) => {

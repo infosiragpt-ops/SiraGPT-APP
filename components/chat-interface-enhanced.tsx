@@ -69,7 +69,6 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { DocumentPreview } from "./document-preview"
-import { PresentationView } from "./presentation-view"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
 import ComputerUseInterface from "./ComputerUseInterface"
@@ -1353,8 +1352,6 @@ But first, you need to connect your Spotify account securely using the button be
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
-  const [showPresentationPreview, setShowPresentationPreview] = React.useState(false);
-  const [selectedPresentation, setSelectedPresentation] = React.useState<any>(null);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<string | null>(null);
 
@@ -1441,56 +1438,6 @@ But first, you need to connect your Spotify account securely using the button be
     }
   };
 
-  React.useEffect(() => {
-    // This function handles showing the presentation and stopping the loader
-    const showPresentation = (presentation: any) => {
-      // Only update if it's a new presentation to prevent loops
-      if (selectedPresentation?.filename !== presentation.filename) {
-        setSplitViewContent(null)
-        setDocumentPreviewUrl(null)
-        setSelectedPresentation(presentation);
-        setShowPresentationPreview(true);
-        setIsGeneratingPPT(false);
-      }
-    };
-
-    // Event listener for manual clicks on the "Preview" button in MessageComponent
-    const handleManualPreview = (event: any) => {
-      showPresentation(event.detail.presentation);
-    };
-
-    window.addEventListener('preview-presentation', handleManualPreview);
-
-    // Logic to automatically show the presentation when it's generated
-    if (isGeneratingPPT && currentChat?.messages && currentChat.messages.length > 0) {
-      const lastMessage = currentChat.messages[currentChat.messages.length - 1];
-
-      // Check if the last message is from the assistant and contains the presentation file
-      if (lastMessage.role === 'ASSISTANT' && lastMessage.files) {
-        try {
-          const parsedFiles = typeof lastMessage.files === 'string' ? JSON.parse(lastMessage.files) : lastMessage.files;
-          const pptEntry = parsedFiles.find((f: any) => f?.type === 'presentation' || f?.type === 'ppt');
-
-          if (pptEntry) {
-            const presentationData = {
-              title: pptEntry.title || 'AI Presentation',
-              slides: pptEntry.structure?.slides || [],
-              filename: pptEntry.filename || pptEntry.path,
-            };
-            // Directly call the function to show the presentation
-            showPresentation(presentationData);
-          }
-        } catch (e) {
-          console.error("Failed to parse files for auto-preview:", e);
-        }
-      }
-    }
-
-    // Cleanup the event listener
-    return () => {
-      window.removeEventListener('preview-presentation', handleManualPreview);
-    };
-  }, [currentChat?.messages, isGeneratingPPT, selectedPresentation, setIsGeneratingPPT]);
 
   React.useEffect(() => {
     function handleOpenUpgrade(e: any) {
@@ -1508,15 +1455,11 @@ But first, you need to connect your Spotify account securely using the button be
 
   const handleToggleSplitView = (content: any) => {
     setDocumentPreviewUrl(null)
-    setShowPresentationPreview(false)
-    setSelectedPresentation(null)
     setSplitViewContent(content)
   }
 
   const handleDocumentPreview = (url: string) => {
     setSplitViewContent(null)
-    setShowPresentationPreview(false)
-    setSelectedPresentation(null)
     setDocumentPreviewUrl(url);
   };
 
@@ -1622,11 +1565,7 @@ But first, you need to connect your Spotify account securely using the button be
 
   React.useEffect(() => {
     setShowAudioPanel(false);
-    setShowPresentationPreview(false);
-    setSelectedPresentation(null);
     setDocumentPreviewUrl(null)
-    setShowPresentationPreview(false)
-    setSelectedPresentation(null)
     setSplitViewContent(null)
   }, [currentChat?.id]);
 
@@ -1927,12 +1866,30 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }
 
+      // Check for vector PPT keywords (Gamma-style)
+      const msgLower = msg.toLowerCase();
+      const isVectorPPT = (
+        msgLower.includes('vector ppt') ||
+        msgLower.includes('vector presentation') ||
+        msgLower.includes('gamma style') ||
+        msgLower.includes('gamma-style') ||
+        msgLower.includes('gamma ppt') ||
+        (msgLower.includes('ppt') && msgLower.includes('no images')) ||
+        (msgLower.includes('ppt') && msgLower.includes('no photos')) ||
+        (msgLower.includes('presentation') && msgLower.includes('vector'))
+      );
+
       switch (intent) {
         case 'image':
           await handleImageGeneration(msg, filesToSend.map(f => f.id));
           break;
         case 'ppt':
-          await handlePPTGeneration(msg, filesToSend);
+          // Check if user wants vector PPT
+          if (isVectorPPT) {
+            await handleVectorPPTGeneration(msg, filesToSend);
+          } else {
+            await handlePPTGeneration(msg, filesToSend);
+          }
           break;
         case 'webdev':
           await handleWebDevGeneration(msg);
@@ -2349,8 +2306,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   const handlePPTGeneration = async (prompt: string, files?: any[]) => {
     setIsGeneratingPPT(true);
-    setShowPresentationPreview(true); // Show the view with the loader immediately
-    setSelectedPresentation(null);
     try {
       let newChat = currentChat;
       if (!currentChat) {
@@ -2378,6 +2333,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         });
       }
       // If currentChat exists, user message already added in handleSend
+      const assistantPlaceholder = {
+        id: `msg-assistant-generating-ppt-${Date.now()}`,
+        chatId: newChat?.id || '',
+        role: 'ASSISTANT' as const,
+        content: '[GENERATING_PPT]',
+        timestamp: new Date().toISOString(),
+      };
+
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
+        return { ...prevChat, messages: updatedMessages };
+      });
 
       const payload = {
         prompt,
@@ -2394,6 +2362,71 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error: any) {
       console.error('PPT generation failed:', error);
       toast.error(error.message || 'PPT generation failed');
+    } finally {
+      setIsGeneratingPPT(false);
+    }
+  };
+
+  // Vector PPT Generation (Gamma-style, pure vector graphics)
+  const handleVectorPPTGeneration = async (prompt: string, files?: any[]) => {
+    setIsGeneratingPPT(true);
+    try {
+      let newChat = currentChat;
+      if (!currentChat) {
+        const response = await apiClient.createChat({
+          title: prompt ? prompt.substring(0, 30) : "New Vector PPT",
+          model: selectedModel,
+        });
+        newChat = response.chat;
+        await selectChat(newChat?.id ?? "");
+
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: newChat?.id || '',
+          role: 'USER' as const,
+          content: prompt,
+          timestamp: new Date().toISOString(),
+          files: files,
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), userMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
+      }
+
+      const assistantPlaceholder = {
+        id: `msg-assistant-generating-vector-ppt-${Date.now()}`,
+        chatId: newChat?.id || '',
+        role: 'ASSISTANT' as const,
+        content: '[GENERATING_VECTOR_PPT]',
+        timestamp: new Date().toISOString(),
+      };
+
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
+        return { ...prevChat, messages: updatedMessages };
+      });
+
+      const payload = {
+        prompt,
+        chatId: newChat?.id || '',
+        provider: selectProvider,
+        model: selectedModel,
+        files: files?.map(f => f.id) || []
+      };
+
+      const response = await apiClient.generateVectorPPT(payload);
+
+      await selectChat(newChat?.id ?? "");
+
+      toast.success(`🎨 Vector presentation created with ${response.slideCount} slides! (${response.colorScheme} theme)`);
+    } catch (error: any) {
+      console.error('Vector PPT generation failed:', error);
+      toast.error(error.message || 'Vector PPT generation failed');
+    } finally {
       setIsGeneratingPPT(false);
     }
   };
@@ -2582,7 +2615,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className={`relative flex flex-col h-full ${showPresentationPreview || isGeneratingPPT || documentPreviewUrl ? 'w-1/2' : 'w-full'}`}>
+        <div className={`relative flex flex-col h-full ${documentPreviewUrl ? 'w-1/2' : 'w-full'}`}>
           {/* Header */}
           <div className="absolute top-0 left-0 right-0 z-10 p-4">
             <div className="flex items-center justify-between">
@@ -2616,8 +2649,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               <div className="flex items-center gap-2">
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 <ThemeToggle />
-                <Button variant="ghost" size="sm" onClick={() => setSubscribeOpen(true)}>
-                  {currentPlan === 'FREE' ? 'Upgrade' : 'Manage'} Plan
+                <Button variant="ghost" size={currentPlan === 'FREE' ? 'sm' : 'icon'} onClick={() => setSubscribeOpen(true)} className={currentPlan !== 'FREE' ? 'h-9 w-9' : ''}>
+                  {currentPlan === 'FREE' ? 'Upgrade Plan' : <span role="img" aria-label="Manage Plan" className="text-xl">💰</span>}
                 </Button>
                 <UpgradeModal
                   open={subscribeOpen}

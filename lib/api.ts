@@ -1071,7 +1071,21 @@ class ApiClient {
     }
   }
 
-  // PPT Generation endpoint
+  // Vector PPT Generation endpoint (Gamma-style, pure vector graphics)
+  async generateVectorPPT(data: {
+    prompt: string;
+    chatId: string;
+    provider?: string;
+    model?: string;
+    files?: string[];
+  }) {
+    return this.request('/ai/generate-vector-ppt', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // PPT Generation endpoint (WITH IMAGES - OLD VERSION)
   async generatePPT(data: {
     prompt: string;
     chatId: string;
