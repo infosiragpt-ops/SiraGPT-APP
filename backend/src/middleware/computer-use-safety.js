@@ -86,19 +86,30 @@ const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
 const cleanupExpiredSessions = () => {
   const now = Date.now();
-  const { activeSessions } = require('./computer-use');
   
-  for (const [sessionId, session] of activeSessions.entries()) {
-    if (session.createdAt && now - session.createdAt > SESSION_TIMEOUT) {
-      console.log(`Cleaning up expired session: ${sessionId}`);
-      
-      // Close browser if it exists
-      if (session.browser) {
-        session.browser.close().catch(console.error);
-      }
-      
-      activeSessions.delete(sessionId);
+  try {
+    const { activeSessions } = require('../routes/computer-use');
+    
+    // Check if activeSessions exists and is a Map
+    if (!activeSessions || typeof activeSessions.entries !== 'function') {
+      console.log('Active sessions not initialized or not a Map');
+      return;
     }
+    
+    for (const [sessionId, session] of activeSessions.entries()) {
+      if (session.createdAt && now - session.createdAt > SESSION_TIMEOUT) {
+        console.log(`Cleaning up expired session: ${sessionId}`);
+        
+        // Close browser if it exists
+        if (session.browser) {
+          session.browser.close().catch(console.error);
+        }
+        
+        activeSessions.delete(sessionId);
+      }
+    }
+  } catch (error) {
+    console.log('Error during session cleanup:', error.message);
   }
 };
 

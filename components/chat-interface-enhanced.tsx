@@ -26,7 +26,8 @@ import {
   Calendar,
   FolderOpen,
   NetworkIcon,
-  Network
+  Network,
+  Monitor
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -39,6 +40,7 @@ import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { aiService } from "@/lib/ai-service"
 import { toast } from "sonner"
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -70,6 +72,9 @@ import { DocumentPreview } from "./document-preview"
 import { PresentationView } from "./presentation-view"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
+import ComputerUseInterface from "./ComputerUseInterface"
+import ComputerUseReasoning from "./ComputerUseReasoning"
+import { useComputerUse } from "@/hooks/use-computer-use"
 
 
 // Enhanced Actions Dropdown Component
@@ -83,6 +88,9 @@ const ActionsDropdown = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  isComputerUseActive,
+  setIsComputerUseActive,
+  computerUseStatus,
   isGmailActive,
   isGoogleCalendarActive,
   isGoogleDriveActive,
@@ -100,6 +108,7 @@ const ActionsDropdown = ({
   isProcessingGoogleServices,
   isProcessingSpotify,
 
+  handleComputerUseToggle,
   handleGmailToggle,
   handleGoogleCalendarToggle,
   handleGoogleDriveToggle,
@@ -437,6 +446,38 @@ const ActionsDropdown = ({
               <Badge variant="secondary" className="text-xs">Pro</Badge>
             )}
           </div>
+        </DropdownMenuItem>
+
+        {/* Computer Use Agent */}
+        <DropdownMenuItem
+          onClick={handleComputerUseToggle}
+          disabled={currentPlan === "FREE" || isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isComputerUseActive
+              ? 'bg-indigo-100 dark:bg-indigo-900/20'
+              : 'bg-indigo-100 dark:bg-indigo-900/20'
+              }`}>
+              <Monitor className={`h-4 w-4 ${isComputerUseActive
+                ? 'text-indigo-600 dark:text-indigo-400'
+                : 'text-indigo-600 dark:text-indigo-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isComputerUseActive ? 'Computer Use Active' : 'Computer Use Agent'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                AI that can control browsers and perform tasks
+              </div>
+            </div>
+            {isComputerUseActive && (
+              <div className="w-2 h-2 bg-indigo-500 rounded-full" />
+            )}
+            {currentPlan === "FREE" && (
+              <Badge variant="secondary" className="text-xs">Pro</Badge>
+            )}
+          </div>
         </DropdownMenuItem>      </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -621,6 +662,9 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  isComputerUseActive,
+  setIsComputerUseActive,
+  computerUseStatus,
   isGmailActive,
   setIsGmailActive,
   isGoogleCalendarActive,
@@ -631,6 +675,7 @@ const ActiveToolsDisplay = ({
   setIsSpotifyActive,
   setChatType,
 
+  handleComputerUseToggle,
   handleGmailToggle,
   handleGoogleCalendarToggle,
   handleGoogleDriveToggle,
@@ -642,6 +687,9 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive: (value: boolean) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
+  isComputerUseActive: boolean;
+  setIsComputerUseActive: (value: boolean) => void;
+  computerUseStatus: 'idle' | 'running' | 'completed' | 'error';
   isGmailActive: boolean;
   setIsGmailActive: (value: boolean) => void;
   isGoogleCalendarActive: boolean;
@@ -652,6 +700,7 @@ const ActiveToolsDisplay = ({
   setIsSpotifyActive: (value: boolean) => void;
   setChatType: (type: any) => void;
 
+  handleComputerUseToggle: () => void;
   handleGmailToggle: () => void;
   handleGoogleCalendarToggle: () => void;
   handleGoogleDriveToggle: () => void;
@@ -665,7 +714,7 @@ const ActiveToolsDisplay = ({
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
-  const hasOtherTools = isImageGenerationActive || isVideoGenerationActive || isWebSearchActive;
+  const hasOtherTools = isImageGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
 
   if (!hasConnectors && !hasOtherTools) return null;
 
@@ -689,6 +738,11 @@ const ActiveToolsDisplay = ({
 
   const handleWebSearchClose = () => {
     setIsWebSearchActive(false);
+    setChatType('text');
+  };
+
+  const handleComputerUseClose = () => {
+    setIsComputerUseActive(false);
     setChatType('text');
   };
   return (
@@ -821,6 +875,26 @@ const ActiveToolsDisplay = ({
             size="sm"
             className="h-4 w-4 p-0 hover:bg-orange-200 dark:hover:bg-orange-800/30 rounded-full ml-1"
             onClick={handleVideoGenerationClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+
+      {isComputerUseActive && (
+        <div className="flex items-center gap-1.5 bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded-full text-xs border border-indigo-200 dark:border-indigo-800">
+          <Monitor className="h-3 w-3" />
+          <span className="font-medium">Computer Use</span>
+          <div className={`h-2 w-2 rounded-full ml-1 ${
+            computerUseStatus === 'running' ? 'bg-green-500 animate-pulse' :
+            computerUseStatus === 'completed' ? 'bg-blue-500' :
+            computerUseStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
+          }`} />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-indigo-200 dark:hover:bg-indigo-800/30 rounded-full ml-1"
+            onClick={handleComputerUseClose}
           >
             <X className="h-3 w-3" />
           </Button>
@@ -1044,6 +1118,61 @@ function ChatInterfaceContent() {
   const [isSpotifyActive, setIsSpotifyActive] = React.useState(false);
   const [isProcessingSpotify, setIsProcessingSpotify] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
+  const [isComputerUseActive, setIsComputerUseActive] = React.useState(false);
+  const [computerUseStatus, setComputerUseStatus] = React.useState<'idle' | 'running' | 'completed' | 'error'>('idle');
+  const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
+
+  // Computer Use hook
+  const { 
+    status: computerUseHookStatus, 
+    screenshot: computerUseHookScreenshot, 
+    reasoning: computerUseReasoning,
+    startComputerUse,
+    stopComputerUse,
+    addReasoningStep,
+    clearReasoning
+  } = useComputerUse();
+
+  // Sync hook state with local state
+  React.useEffect(() => {
+    setComputerUseStatus(computerUseHookStatus);
+    setComputerUseScreenshot(computerUseHookScreenshot);
+  }, [computerUseHookStatus, computerUseHookScreenshot]);
+
+  // Add reasoning steps to chat messages as they come in
+  React.useEffect(() => {
+    if (computerUseReasoning.length > 0 && currentChat && isComputerUseActive) {
+      // Find the latest reasoning step
+      const latestStep = computerUseReasoning[computerUseReasoning.length - 1];
+      
+      // Add reasoning step as a chat message
+      const reasoningMessage = {
+        id: `msg-reasoning-${latestStep.timestamp}`,
+        chatId: currentChat.id,
+        role: 'ASSISTANT' as const,
+        content: latestStep.text,
+        timestamp: new Date(latestStep.timestamp).toISOString(),
+        metadata: JSON.stringify({
+          type: 'computer_use_reasoning',
+          stepNumber: computerUseReasoning.length,
+          action: latestStep.action
+        })
+      };
+
+      // Only add if this reasoning step isn't already in the chat
+      const existingMessage = currentChat.messages?.find(msg => 
+        msg.id === reasoningMessage.id
+      );
+
+      if (!existingMessage) {
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), reasoningMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
+      }
+    }
+  }, [computerUseReasoning, currentChat, isComputerUseActive]);
 
 
   const handleGmailToggle = () => {
@@ -1096,7 +1225,28 @@ function ChatInterfaceContent() {
       setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsComputerUseActive(false);
     }
+  };
+
+  const handleComputerUseToggle = () => {
+    const newState = !isComputerUseActive;
+    
+    if (newState) {
+      // Disable other modes
+      setIsWebSearchActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+      setIsSpotifyActive(false);
+      setChatType('computer-use');
+    } else {
+      setChatType('text');
+    }
+    
+    setIsComputerUseActive(newState);
   };
 
   const handleSpotifyCommand = async (prompt: string) => {
@@ -1461,10 +1611,14 @@ But first, you need to connect your Spotify account securely using the button be
       setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsComputerUseActive(false);
       setChatType('text'); // Always default to text when switching chats
+      
+      // Clear Computer Use reasoning when switching chats
+      clearReasoning();
     }
     prevChatIdRef.current = currentChat?.id;
-  }, [currentChat?.id]); // Only trigger when chat ID changes
+  }, [currentChat?.id, clearReasoning]); // Only trigger when chat ID changes
 
   React.useEffect(() => {
     setShowAudioPanel(false);
@@ -1730,6 +1884,32 @@ But first, you need to connect your Spotify account securely using the button be
       }
       if (isVideoGenerationActive || chatType === 'video') {
         await handleVideoGeneration(msg);
+        return;
+      }
+      if (isComputerUseActive || chatType === 'computer-use') {
+        // Handle Computer Use with the hook
+        await startComputerUse(msg, currentChat?.id);
+        
+        // Add reasoning steps to chat as they come in
+        if (computerUseReasoning.length > 0) {
+          const reasoningMessage = {
+            id: `msg-computer-use-${Date.now()}`,
+            chatId: currentChat?.id || duumychatId,
+            role: 'ASSISTANT' as const,
+            content: 'Computer Use Agent is working...',
+            timestamp: new Date().toISOString(),
+            metadata: JSON.stringify({
+              type: 'computer_use_reasoning',
+              reasoning: computerUseReasoning
+            })
+          };
+
+          setCurrentChat(prevChat => {
+            if (!prevChat) return prevChat;
+            const updatedMessages = [...(prevChat.messages || []), reasoningMessage];
+            return { ...prevChat, messages: updatedMessages };
+          });
+        }
         return;
       }
 
@@ -2591,12 +2771,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isComputerUseActive={isComputerUseActive}
+                          setIsComputerUseActive={setIsComputerUseActive}
+                          computerUseStatus={computerUseStatus}
                           isGmailActive={isGmailActive}
                           isGoogleCalendarActive={isGoogleCalendarActive}
                           isGoogleDriveActive={isGoogleDriveActive}
                           isSpotifyActive={isSpotifyActive}
                           setShowAudioPanel={setShowAudioPanel}
 
+                          handleComputerUseToggle={handleComputerUseToggle}
                           handleGmailToggle={handleGmailToggle}
                           handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                           handleGoogleDriveToggle={handleGoogleDriveToggle}
@@ -2618,6 +2802,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isComputerUseActive={isComputerUseActive}
+                          setIsComputerUseActive={setIsComputerUseActive}
+                          computerUseStatus={computerUseStatus}
                           isGmailActive={isGmailActive}
                           setIsGmailActive={setIsGmailActive}
                           isGoogleCalendarActive={isGoogleCalendarActive}
@@ -2628,6 +2815,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsSpotifyActive={setIsSpotifyActive}
                           setChatType={setChatType}
 
+                          handleComputerUseToggle={handleComputerUseToggle}
                           handleGmailToggle={handleGmailToggle}
                           handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                           handleGoogleDriveToggle={handleGoogleDriveToggle}
@@ -2892,12 +3080,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsImageGenerationActive={setIsImageGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              isComputerUseActive={isComputerUseActive}
+                              setIsComputerUseActive={setIsComputerUseActive}
+                              computerUseStatus={computerUseStatus}
                               isGmailActive={isGmailActive}
                               isGoogleCalendarActive={isGoogleCalendarActive}
                               isGoogleDriveActive={isGoogleDriveActive}
                               isSpotifyActive={isSpotifyActive}
                               setShowAudioPanel={setShowAudioPanel}
 
+                              handleComputerUseToggle={handleComputerUseToggle}
                               handleGmailToggle={handleGmailToggle}
                               handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                               handleGoogleDriveToggle={handleGoogleDriveToggle}
@@ -2919,6 +3111,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsImageGenerationActive={setIsImageGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              isComputerUseActive={isComputerUseActive}
+                              setIsComputerUseActive={setIsComputerUseActive}
+                              computerUseStatus={computerUseStatus}
                               isGmailActive={isGmailActive}
                               setIsGmailActive={setIsGmailActive}
                               isGoogleCalendarActive={isGoogleCalendarActive}
@@ -2929,6 +3124,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsSpotifyActive={setIsSpotifyActive}
                               setChatType={setChatType}
 
+                              handleComputerUseToggle={handleComputerUseToggle}
                               handleGmailToggle={handleGmailToggle}
                               handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                               handleGoogleDriveToggle={handleGoogleDriveToggle}
@@ -3013,6 +3209,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 setShowPresentationPreview(false);
                 setSelectedPresentation(null);
               }}
+            />
+          </div>
+        )}
+        {isComputerUseActive && (
+          <div className="w-full border-l border-border/40">
+            <ComputerUseInterface
+              screenshot={computerUseScreenshot}
+              status={computerUseStatus}
+              onClose={() => setIsComputerUseActive(false)}
             />
           </div>
         )}

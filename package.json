@@ -89,6 +89,7 @@
     "tailwindcss-animate": "^1.0.7",
     "tesseract.js": "^5.0.4",
     "vaul": "^0.9.6",
+    "ws": "^8.18.3",
     "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },

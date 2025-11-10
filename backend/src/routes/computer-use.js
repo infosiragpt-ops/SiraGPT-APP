@@ -19,15 +19,18 @@ class CustomComputerUseAgent {
     this.model = 'gpt-4o'; // Use available GPT-4 model
   }
 
-  async analyzeScreenshotAndPlan(task, screenshot) {
-    const prompt = `You are a computer use agent. Analyze this screenshot and determine the next action to accomplish the task: "${task}"
+  async analyzeScreenshotAndPlan(task, screenshot, previousAction = null) {
+    const captchaGuidance = previousAction === 'captcha_retry' ? 
+      '\n\nIMPORTANT: Previous action detected CAPTCHA. The system will automatically handle it by:\n- Refreshing the page\n- Using alternative search engines (DuckDuckGo instead of Google)\n- Trying different approaches\n- You should focus on the main task and ignore CAPTCHA when detected' : '';
+
+    const prompt = `You are a computer use agent. Analyze this screenshot and determine the next action to accomplish the task: "${task}"${captchaGuidance}
 
 Current screenshot shows what's on the browser screen. Based on what you see, provide the next action in this JSON format:
 
 {
   "reasoning": "Brief explanation of what you see and why you're taking this action",
   "action": {
-    "type": "click|type|scroll|wait|navigate|completed",
+    "type": "click|type|scroll|wait|navigate|completed|captcha_detected",
     "x": 100,
     "y": 200,
     "text": "text to type",
@@ -35,8 +38,19 @@ Current screenshot shows what's on the browser screen. Based on what you see, pr
     "scrollDirection": "up|down",
     "scrollAmount": 300
   },
-  "completed": false
+  "completed": false,
+  "captcha_detected": false
 }
+
+CAPTCHA HANDLING: If you see any CAPTCHA, reCAPTCHA, "I'm not a robot", verification challenges, or "unusual traffic" messages:
+- Set "captcha_detected": true and "type": "captcha_detected"
+- The system will automatically handle it by trying alternatives
+- DO NOT try to solve the CAPTCHA manually
+
+ALTERNATIVE STRATEGIES for search tasks:
+- If Google shows CAPTCHA, system will switch to DuckDuckGo
+- If one website blocks access, try similar websites
+- Focus on completing the main objective using different paths
 
 Actions available:
 - click: Click at coordinates {x, y}
@@ -45,6 +59,7 @@ Actions available:
 - navigate: Go to a URL
 - wait: Wait for page to load
 - completed: Task is finished
+- captcha_detected: CAPTCHA detected (will be handled automatically)
 
 Be precise with coordinates. Look for search boxes, buttons, links, forms etc. If the task is completed, set completed: true.
 
@@ -75,21 +90,38 @@ Task: ${task}`;
       // Extract JSON from response
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
+        const result = JSON.parse(jsonMatch[0]);
+        
+        // Additional CAPTCHA detection based on common patterns
+        const reasoningText = result.reasoning?.toLowerCase() || '';
+        if (reasoningText.includes('captcha') || 
+            reasoningText.includes('robot') || 
+            reasoningText.includes('verify') ||
+            reasoningText.includes('unusual traffic') ||
+            reasoningText.includes('verification') ||
+            reasoningText.includes('security check') ||
+            reasoningText.includes('prove you are human')) {
+          result.captcha_detected = true;
+          result.action.type = 'captcha_detected';
+        }
+        
+        return result;
       }
       
       // Fallback if no JSON found
       return {
         reasoning: "Unable to parse action from response",
         action: { type: "wait" },
-        completed: false
+        completed: false,
+        captcha_detected: false
       };
     } catch (error) {
       console.error('Error analyzing screenshot:', error);
       return {
         reasoning: `Error: ${error.message}`,
         action: { type: "wait" },
-        completed: false
+        completed: false,
+        captcha_detected: false
       };
     }
   }
@@ -304,7 +336,9 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
       });
 
       // Analyze screenshot and get next action
-      const response = await agent.analyzeScreenshotAndPlan(task, screenshotBase64);
+      const currentSession = activeSessions.get(sessionId);
+      const previousAction = currentSession?.lastCaptchaRetry ? 'captcha_retry' : null;
+      const response = await agent.analyzeScreenshotAndPlan(task, screenshotBase64, previousAction);
 
       // Send reasoning to frontend
       broadcastToSession(sessionId, {
@@ -315,6 +349,76 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
           action: response.action?.type || 'thinking'
         }
       });
+
+      // Check for CAPTCHA detection
+      if (response.captcha_detected || response.action?.type === 'captcha_detected') {
+        console.log('CAPTCHA detected, trying automatic solutions...');
+        
+        broadcastToSession(sessionId, {
+          type: 'reasoning',
+          data: {
+            reasoning: 'CAPTCHA detected. Trying automatic solutions: refreshing page, using alternative search engines, or trying different approaches...',
+            step: stepCount,
+            action: 'captcha_handling'
+          }
+        });
+        
+        // Try automatic CAPTCHA solutions
+        try {
+          // Solution 1: Refresh the page and try again
+          console.log('Attempting page refresh to bypass CAPTCHA...');
+          await page.reload({ waitUntil: 'networkidle' });
+          await page.waitForTimeout(3000);
+          
+          broadcastToSession(sessionId, {
+            type: 'reasoning',
+            data: {
+              reasoning: 'Refreshed page to bypass CAPTCHA. Continuing with task...',
+              step: stepCount,
+              action: 'refresh'
+            }
+          });
+          
+        } catch (refreshError) {
+          console.log('Page refresh failed, trying alternative approach...');
+          
+          // Solution 2: Try alternative search engine or approach
+          try {
+            if (task.toLowerCase().includes('search') || task.toLowerCase().includes('google')) {
+              console.log('Trying DuckDuckGo as alternative search engine...');
+              await page.goto('https://duckduckgo.com', { waitUntil: 'networkidle' });
+              await page.waitForTimeout(2000);
+              
+              broadcastToSession(sessionId, {
+                type: 'reasoning',
+                data: {
+                  reasoning: 'Google showed CAPTCHA, switching to DuckDuckGo search engine to continue the task...',
+                  step: stepCount,
+                  action: 'alternative_approach'
+                }
+              });
+            } else {
+              // For non-search tasks, wait and retry
+              console.log('Waiting 10 seconds and retrying...');
+              await page.waitForTimeout(10000);
+              
+              broadcastToSession(sessionId, {
+                type: 'reasoning',
+                data: {
+                  reasoning: 'CAPTCHA encountered. Waiting and retrying with different approach...',
+                  step: stepCount,
+                  action: 'retry'
+                }
+              });
+            }
+          } catch (alternativeError) {
+            console.log('Alternative approach failed, continuing with modified task...');
+          }
+        }
+        
+        stepCount++;
+        continue;
+      }
 
       // Check if task is completed
       if (response.completed) {
@@ -676,6 +780,53 @@ router.post('/chat-integration', async (req, res) => {
     
   } catch (error) {
     console.error('Error in chat integration:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Acknowledge safety checks endpoint
+router.post('/acknowledge-safety', async (req, res) => {
+  try {
+    const { sessionId, callId, acknowledgedChecks } = req.body;
+    
+    if (!sessionId || !callId) {
+      return res.status(400).json({
+        success: false,
+        error: 'SessionId and callId are required'
+      });
+    }
+    
+    console.log(`Safety checks acknowledged for session ${sessionId}, call ${callId}`);
+    
+    // Update session state to indicate acknowledgment
+    const session = activeSessions.get(sessionId);
+    if (session && session.captchaDetected) {
+      session.captchaAcknowledged = true;
+      console.log('CAPTCHA acknowledgment flag set for session:', sessionId);
+    }
+    
+    // Broadcast acknowledgment to session
+    broadcastToSession(sessionId, {
+      type: 'safety-acknowledged',
+      data: {
+        callId,
+        acknowledgedChecks,
+        message: 'CAPTCHA acknowledgment received. Please solve the CAPTCHA manually if visible, then the task will continue automatically.'
+      }
+    });
+    
+    res.json({
+      success: true,
+      message: 'Safety checks acknowledged',
+      sessionId,
+      callId
+    });
+    
+  } catch (error) {
+    console.error('Error acknowledging safety checks:', error);
     res.status(500).json({
       success: false,
       error: error.message

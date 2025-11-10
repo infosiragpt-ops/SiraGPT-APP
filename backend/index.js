@@ -27,6 +27,7 @@ const libraryRoutes = require('./src/routes/library');
 const apiProxyRoutes = require('./src/routes/api');
 const gmailRoutes = require('./src/routes/gmail');
 const spotifyRoutes = require('./src/routes/spotify');
+const { router: computerUseRoutes, initializeWebSocketServer } = require('./src/routes/computer-use');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -128,6 +129,7 @@ app.use('/api/library', libraryRoutes);
 app.use('/api/proxy', apiProxyRoutes);
 app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
+app.use('/api/computer-use', computerUseRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -150,10 +152,13 @@ app.use('*', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`🚀 Backend server running on port ${PORT}`);
     console.log(`📊 Environment: ${process.env.NODE_ENV}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/health`);
 });
+
+// Initialize WebSocket server for Computer Use
+initializeWebSocketServer(server);
 
 module.exports = app;

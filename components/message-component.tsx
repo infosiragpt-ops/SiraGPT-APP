@@ -50,6 +50,7 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
+import ComputerUseReasoning from "./ComputerUseReasoning"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
 const truncateUrl = (url: string, maxLength: number = 30) => {
@@ -781,6 +782,28 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     : message.metadata;
                 if (metadata?.type === 'spotify_results') {
                     return <SpotifyResults data={metadata.data} />;
+                }
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    };
+
+    // Computer Use Reasoning Display
+    const ComputerUseReasoningDisplay = () => {
+        try {
+            if (message.metadata) {
+                const metadata = typeof message.metadata === 'string'
+                    ? JSON.parse(message.metadata)
+                    : message.metadata;
+                if (metadata?.type === 'computer_use_reasoning') {
+                    const step = {
+                        text: message.content,
+                        timestamp: Date.now(),
+                        action: metadata?.action
+                    };
+                    return <ComputerUseReasoning step={step} stepNumber={metadata?.stepNumber || 1} />;
                 }
             }
             return null;
@@ -1536,6 +1559,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <GoogleServicesConnectionDisplay />
                                 <SpotifyConnectionDisplay />
                                 <SpotifyResultsDisplay />
+                                <ComputerUseReasoningDisplay />
                                 {children}
                             </>
                         )}

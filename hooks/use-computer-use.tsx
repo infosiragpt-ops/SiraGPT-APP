@@ -1,0 +1,236 @@
+import { useState, useRef, useCallback } from 'react'
+import { toast } from 'sonner'
+
+interface ReasoningStep {
+  text: string
+  timestamp: number
+  action?: string
+}
+
+interface ComputerUseHookReturn {
+  status: 'idle' | 'running' | 'completed' | 'error'
+  screenshot: string | null
+  reasoning: ReasoningStep[]
+  startComputerUse: (task: string, chatId?: string) => Promise<void>
+  stopComputerUse: () => Promise<void>
+  addReasoningStep: (text: string, action?: string) => void
+  clearReasoning: () => void
+}
+
+export const useComputerUse = (): ComputerUseHookReturn => {
+  const [status, setStatus] = useState<'idle' | 'running' | 'completed' | 'error'>('idle')
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [screenshot, setScreenshot] = useState<string | null>(null)
+  const [reasoning, setReasoning] = useState<ReasoningStep[]>([])
+  const [pendingCallId, setPendingCallId] = useState<string | null>(null)
+  
+  const wsRef = useRef<WebSocket | null>(null)
+
+  // Generate unique session ID
+  const generateSessionId = useCallback(() => {
+    return `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  }, [])
+
+  // Add reasoning step
+  const addReasoningStep = useCallback((text: string, action?: string) => {
+    const newStep: ReasoningStep = {
+      text,
+      timestamp: Date.now(),
+      action
+    }
+    setReasoning(prev => [...prev, newStep])
+  }, [])
+
+  // Clear reasoning
+  const clearReasoning = useCallback(() => {
+    setReasoning([])
+  }, [])
+
+  // Handle WebSocket messages
+  const handleWebSocketMessage = useCallback((data: any) => {
+    switch (data.type) {
+      case 'session-started':
+        setScreenshot(data.data.initialScreenshot)
+        addReasoningStep('Session started, analyzing task...')
+        break
+        
+      case 'reasoning':
+        addReasoningStep(data.data.reasoning, data.data.action)
+        break
+        
+      case 'screenshot':
+        setScreenshot(data.data.image)
+        break
+        
+      case 'task-completed':
+        setStatus('completed')
+        setScreenshot(data.data.finalScreenshot)
+        addReasoningStep('✅ Task completed successfully!')
+        toast.success('Computer Use task completed!')
+        break
+        
+      case 'session-stopped':
+        setStatus('idle')
+        addReasoningStep('🛑 Session stopped by user')
+        break
+        
+      case 'error':
+        setStatus('error')
+        addReasoningStep(`❌ Error: ${data.data.error}`)
+        toast.error(`Computer Use error: ${data.data.error}`)
+        break
+        
+      default:
+        console.log('Unknown message type:', data.type)
+    }
+  }, [addReasoningStep])
+
+  // Connect to WebSocket
+  const connectWebSocket = useCallback((sessionId: string) => {
+    const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000')
+
+    const candidateWsUrls = [
+      backendUrl.replace(/^http/, 'ws') + '/ws/computer-use',
+      'ws://localhost:5000/ws/computer-use'
+    ]
+
+    let connected = false
+    let tried = 0
+
+    const tryConnect = (url: string) => {
+      tried++
+      console.log(`Attempting WebSocket connection to ${url}`)
+      const ws = new WebSocket(url)
+      let opened = false
+
+      const cleanup = () => {
+        ws.onopen = null
+        ws.onmessage = null
+        ws.onclose = null
+        ws.onerror = null
+      }
+
+      ws.onopen = () => {
+        opened = true
+        connected = true
+        wsRef.current = ws
+        console.log('Computer Use WebSocket connected to', url)
+        ws.send(JSON.stringify({ type: 'join-session', sessionId }))
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          handleWebSocketMessage(data)
+        } catch (error) {
+          console.error('WebSocket message parsing error:', error)
+        }
+      }
+
+      ws.onclose = (ev) => {
+        cleanup()
+        if (!opened && tried < candidateWsUrls.length) {
+          tryConnect(candidateWsUrls[tried])
+        } else {
+          console.log('Computer Use WebSocket disconnected')
+          if (!connected) {
+            toast.error('Unable to connect to Computer Use server. Make sure backend is running on port 5000.')
+          }
+        }
+      }
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error connecting to', url, error)
+      }
+    }
+
+    tryConnect(candidateWsUrls[0])
+  }, [handleWebSocketMessage])
+
+  // Start Computer Use session
+  const startComputerUse = useCallback(async (task: string, chatId?: string) => {
+    if (!task.trim()) {
+      toast.error('Please provide a task description')
+      return
+    }
+
+    setStatus('running')
+    clearReasoning()
+    setScreenshot(null)
+
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+
+    try {
+      if (chatId) {
+        // Chat-integrated session
+        const resp = await fetch(`${baseUrl}/computer-use/chat-integration`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: task, chatId })
+        })
+
+        const data = await resp.json()
+        if (!data.success) throw new Error(data.error || 'Failed to start chat-integrated session')
+
+        const serverSessionId = data.sessionId || `chat-${chatId}-${Date.now()}`
+        setSessionId(serverSessionId)
+        connectWebSocket(serverSessionId)
+        toast.success('Computer Use session started')
+      } else {
+        // Standalone session
+        const newSessionId = generateSessionId()
+        setSessionId(newSessionId)
+        connectWebSocket(newSessionId)
+
+        const response = await fetch(`${baseUrl}/computer-use/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task, sessionId: newSessionId })
+        })
+
+        const result = await response.json()
+        if (!result.success) throw new Error(result.error || 'Failed to start session')
+
+        toast.success('Computer Use session started!')
+      }
+    } catch (error) {
+      console.error('Error starting session:', error)
+      setStatus('error')
+      toast.error('Failed to start Computer Use session')
+    }
+  }, [generateSessionId, connectWebSocket, clearReasoning])
+
+  // Stop Computer Use session
+  const stopComputerUse = useCallback(async () => {
+    if (!sessionId) return
+    
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+      await fetch(`${baseUrl}/api/computer-use/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId })
+      })
+      
+      setStatus('idle')
+      setSessionId(null)
+      wsRef.current?.close()
+      
+    } catch (error) {
+      console.error('Error stopping session:', error)
+      toast.error('Failed to stop session')
+    }
+  }, [sessionId])
+
+  return {
+    status,
+    screenshot,
+    reasoning,
+    startComputerUse,
+    stopComputerUse,
+    addReasoningStep,
+    clearReasoning
+  }
+}
+
+export default useComputerUse
