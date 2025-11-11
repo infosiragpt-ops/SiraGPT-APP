@@ -214,68 +214,6 @@ const broadcastToSession = (sessionId, data) => {
   });
 };
 
-// Computer Use Action Handler
-async function handleModelAction(page, action) {
-  const actionType = action.type;
-  
-  try {
-    switch (actionType) {
-      case "click": {
-        const { x, y, button = "left" } = action;
-        console.log(`Action: click at (${x}, ${y}) with button '${button}'`);
-        await page.mouse.click(x, y, { button });
-        break;
-      }
-      
-      case "scroll": {
-        const { x, y, scrollX, scrollY } = action;
-        console.log(`Action: scroll at (${x}, ${y}) with offsets (scrollX=${scrollX}, scrollY=${scrollY})`);
-        await page.mouse.move(x, y);
-        await page.evaluate(`window.scrollBy(${scrollX}, ${scrollY})`);
-        break;
-      }
-      
-      case "keypress": {
-        const { keys } = action;
-        for (const k of keys) {
-          console.log(`Action: keypress '${k}'`);
-          if (k.includes("ENTER")) {
-            await page.keyboard.press("Enter");
-          } else if (k.includes("SPACE")) {
-            await page.keyboard.press(" ");
-          } else {
-            await page.keyboard.press(k);
-          }
-        }
-        break;
-      }
-      
-      case "type": {
-        const { text } = action;
-        console.log(`Action: type text '${text}'`);
-        await page.keyboard.type(text);
-        break;
-      }
-      
-      case "wait": {
-        console.log(`Action: wait`);
-        await page.waitForTimeout(2000);
-        break;
-      }
-      
-      case "screenshot": {
-        console.log(`Action: screenshot`);
-        break;
-      }
-      
-      default:
-        console.log("Unrecognized action:", action);
-    }
-  } catch (e) {
-    console.error("Error handling action", action, ":", e);
-    throw e;
-  }
-}
 
 // Get screenshot from Playwright page
 async function getScreenshot(page) {
@@ -548,15 +486,62 @@ router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req
     
     // Generate initial plan
     const plan = await agent.generateInitialPlan(task);
-    
-    // Launch browser
+      // Launch browser with optimized settings for speed and CAPTCHA avoidance
     const browser = await chromium.launch({ 
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      headless: true, // Keep headless for better performance and CAPTCHA avoidance
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor',
+        '--disable-extensions',
+        '--disable-plugins',
+        '--disable-javascript-harmony-shipping',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-dev-shm-usage',
+        '--memory-pressure-off',
+        '--max_old_space_size=4096',
+        '--disable-ipc-flooding-protection'
+      ]
     });
     
-    const page = await browser.newPage();
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      viewport: { width: 1024, height: 768 },
+      locale: 'en-US',
+      // Speed optimizations
+      ignoreHTTPSErrors: true,
+      bypassCSP: true
+    });
+    
+    const page = await context.newPage();
+    
+    // Anti-detection measures
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      window.chrome = { runtime: {} };
+    });
+    
+    // Speed optimizations - allow more resources for better functionality
+    await page.route('**/*', (route) => {
+      const resourceType = route.request().resourceType();
+      // Only block heavy media files, allow images and styles for better UX
+      if (['media', 'font'].includes(resourceType)) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
     await page.setViewportSize({ width: 1024, height: 768 });
+    
+    // Set faster timeouts for better performance
+    page.setDefaultTimeout(15000);
+    page.setDefaultNavigationTimeout(15000);
     
     // Store session
     activeSessions.set(sessionId, {
@@ -564,13 +549,37 @@ router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req
       page,
       task,
       agent,
-      plan,
       status: 'running',
       createdAt: Date.now(),
       lastActivity: Date.now()
     });
     
-    // Navigate to starting URL from plan
+    // Dynamic and intelligent URL routing based on task content
+    // let startingUrl = 'https://www.google.com'; // Default to Google
+    const taskLower = task.toLowerCase();
+    
+    // // Launch browser
+    // const browser = await chromium.launch({ 
+    //   headless: true,
+    //   args: ['--no-sandbox', '--disable-setuid-sandbox']
+    // });
+    
+    // const page = await browser.newPage();
+    // await page.setViewportSize({ width: 1024, height: 768 });
+    
+    // // Store session
+    // activeSessions.set(sessionId, {
+    //   browser,
+    //   page,
+    //   task,
+    //   agent,
+    //   plan,
+    //   status: 'running',
+    //   createdAt: Date.now(),
+    //   lastActivity: Date.now()
+    // });
+    
+    // // Navigate to starting URL from plan
     const startingUrl = plan.startingUrl || 'https://www.google.com';
     await page.goto(startingUrl);
     await page.waitForLoadState('networkidle');
