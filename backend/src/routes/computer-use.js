@@ -127,8 +127,9 @@ class CustomComputerUseAgent {
   //   }
   // CustomComputerUseAgent class ke andar, purane function ki jagah yeh naya function daalein
 
-  async analyzeDomAndPlan(task, simplifiedDom) {
+  async analyzeDomAndPlan(task, simplifiedDom, currentUrl) {
     const prompt = `You are an expert web automation agent. Your task is to: "${task}".
+You are currently on the page: ${currentUrl}
 
 Based on the current state of the webpage, which is represented by the following list of interactive elements in JSON format, decide the next action.
 
@@ -151,7 +152,10 @@ Actions available:
 - type: Type text into an input element. ONLY use this for elements with tag 'input' and an 'inputType' of 'text', 'search', 'email', 'password', or for 'textarea' elements.
 - completed: Use this when the task is finished.
 
-IMPORTANT: Before taking an action, assess if the task is already complete. If you see the final results, all items have been loaded, or there are no more 'next' or 'load more' buttons, set "completed": true to finish the task.
+IMPORTANT: Before taking an action, assess if the task is already complete.
+- If the current page (${currentUrl}) seems to be the final destination or shows the results you were looking for, the task is likely complete.
+- If you have already performed the main search and navigated away from the initial search engine, you should look for the information on the current page, not search again.
+- If you see the final results, all items have been loaded, or there are no more 'next' or 'load more' buttons, set "completed": true to finish the task.
 
 Choose the best element from the list and determine the next action to complete the task.`;
 
@@ -542,7 +546,8 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
       }
 
       // 3. AI ko DOM bhej kar agla action poochein (Naya function call)
-      const response = await agent.analyzeDomAndPlan(task, simplifiedDom);
+      const currentUrl = page.url();
+      const response = await agent.analyzeDomAndPlan(task, simplifiedDom, currentUrl);
 
       broadcastToSession(sessionId, {
         type: 'reasoning',
