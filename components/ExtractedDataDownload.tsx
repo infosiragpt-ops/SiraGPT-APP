@@ -25,9 +25,42 @@ const ExtractedDataDownload: React.FC<ExtractedDataDownloadProps> = ({
   extractedData, 
   finalUrl 
 }) => {
-  const downloadAsHtml = () => {
-    const htmlContent = generateHtmlReport(extractedData)
-    downloadFile(htmlContent, `computer-use-report-${Date.now()}.html`, 'text/html')
+const downloadAsHtml = async () => {
+    let htmlContent;
+    
+    try {
+      // Try to get AI-generated HTML from backend
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+      const response = await fetch(`${backendUrl}/api/computer-use/generate-html`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          extractedData: {
+            ...extractedData,
+            userQuery: extractedData.userQuery || 'Computer Use Task'
+          }
+        })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.success) {
+          htmlContent = result.htmlContent;
+          console.log('✅ Using AI-generated HTML report');
+        } else {
+          console.warn('⚠️ Backend API failed, using fallback');
+          htmlContent = generateHtmlReport(extractedData);
+        }
+      } else {
+        console.warn('⚠️ Backend API error, using fallback');
+        htmlContent = generateHtmlReport(extractedData);
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to connect to backend, using fallback:', error);
+      htmlContent = generateHtmlReport(extractedData);
+    }
+
+    downloadFile(htmlContent, `computer-use-report-${Date.now()}.html`, 'text/html');
   }
 
   const downloadFile = (content: string, filename: string, mimeType: string) => {

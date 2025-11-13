@@ -948,8 +948,107 @@ async function saveExtractedDataToChat(chatId, originalQuery, extractedData, use
   }
 }
 
-// Generate HTML report for download
-function generateHtmlReport(extractedData, originalQuery) {
+// Generate HTML report using AI for complete professional formatting
+async function generateHtmlReport(extractedData, originalQuery) {
+  try {
+    // Prepare data for AI HTML generation
+    const dataForAI = {
+      query: originalQuery,
+      url: extractedData.url,
+      title: extractedData.title,
+      timestamp: extractedData.timestamp,
+      items: extractedData.rawItems || [],
+      itemCount: extractedData.itemCount || 0,
+      extractedContent: extractedData.extractedInfo || extractedData.rawContent || '',
+      success: extractedData.success
+    };
+
+    // Create comprehensive prompt for AI HTML generation
+    const htmlPrompt = `Generate a complete, professional HTML report for a Computer Use extraction task. The report should be modern, clean, and fully functional.
+
+TASK DETAILS:
+- Original Query: "${originalQuery}"
+- Source URL: ${extractedData.url}
+- Page Title: ${extractedData.title}
+- Items Found: ${extractedData.itemCount || 0}
+- Timestamp: ${new Date(extractedData.timestamp).toLocaleString()}
+
+EXTRACTED DATA:
+${extractedData.rawItems && extractedData.rawItems.length > 0 ? 
+  JSON.stringify(extractedData.rawItems.slice(0, 30), null, 2) : 
+  extractedData.extractedInfo || extractedData.rawContent || 'No specific items extracted'
+}
+TOTAL ITEMS TO PROCESS: ${extractedData.rawItems ? extractedData.rawItems.length : 0}
+IMPORTANT: Process ALL items provided in the extracted data, not just a sample.
+
+REQUIREMENTS:
+1. Create a complete HTML document with <!DOCTYPE html>, <head>, and <body>
+2. Use modern, professional CSS (embedded in <style> tags)
+3. Design should be clean, minimal, and business-appropriate
+4. Use a professional color scheme (blues, grays, whites)
+5. Make it fully responsive for mobile and desktop
+6. Include proper typography and spacing
+7. NO emojis or casual elements
+8. If items have links, make them clickable buttons that open in new tabs
+9. For products: show title, price, rating (if available), and "View Product" button
+10. For jobs: show job title, company, location, posted date, and "View Job" button
+11. Use CSS Grid or Flexbox for modern layouts
+12. Include hover effects and smooth transitions
+13. Make sure all URLs are properly formatted and clickable
+14. Add a professional header with the task completion status
+15. Include a footer with generation details
+16. CRITICAL: Process and display ALL items from the extracted data - do not limit or truncate
+17. If there are many items, use efficient CSS and HTML structure
+18. For large datasets, consider pagination or collapsible sections
+19. Ensure the HTML file size is reasonable but complete
+
+DESIGN STYLE:
+- Modern corporate/business look
+- Clean card-based layout for items
+- Professional button styling
+- Subtle shadows and rounded corners
+- Proper white space and typography hierarchy
+- Mobile-first responsive design
+
+Generate ONLY the complete HTML code (no explanations or markdown). The HTML should be ready to save as a .html file and open in a browser.`;
+
+    // Generate HTML using OpenAI
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o', // Use the better model for HTML generation
+      messages: [{ 
+        role: 'system', 
+        content: 'You are an expert HTML generator. Create complete, professional HTML reports that include ALL provided data items. Never truncate or limit the number of items processed.' 
+      }, {
+        role: 'user', 
+        content: htmlPrompt 
+      }],
+      max_tokens: 8000, // Increased for larger datasets
+      temperature: 0.1
+    });
+
+    let generatedHtml = response.choices[0].message.content;
+    
+    // Clean up the response to ensure it's pure HTML
+    generatedHtml = generatedHtml.replace(/^```html\s*/, '').replace(/\s*```$/, '');
+    generatedHtml = generatedHtml.replace(/^```\s*/, '').replace(/\s*```$/, '');
+    
+    // Ensure it starts with DOCTYPE
+    if (!generatedHtml.trim().startsWith('<!DOCTYPE')) {
+      generatedHtml = `<!DOCTYPE html>\n${generatedHtml}`;
+    }
+
+    return generatedHtml;
+    
+  } catch (error) {
+    console.error('Error generating AI HTML report:', error);
+    
+    // Fallback to simple HTML if AI generation fails
+    return generateFallbackHtml(extractedData, originalQuery);
+  }
+}
+
+// Fallback HTML generation if AI fails
+function generateFallbackHtml(extractedData, originalQuery) {
   // Use actual extracted items if available
   let structuredContent = '';
   
@@ -1542,6 +1641,46 @@ function generateHtmlReport(extractedData, originalQuery) {
 </html>`;
 }
 
+// Fallback HTML generation if AI fails
+function generateFallbackHtml(extractedData, originalQuery) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Computer Use Report - ${originalQuery}</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f5f7fa; }
+        .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #007bff; }
+        h1 { color: #007bff; margin: 0; }
+        .content { margin: 20px 0; }
+        .item { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 4px solid #007bff; }
+        .btn { display: inline-block; background: #007bff; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; margin: 5px 0; }
+        .btn:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Computer Use Report</h1>
+            <p>Task: ${originalQuery}</p>
+            <p>Completed: ${new Date(extractedData.timestamp).toLocaleString()}</p>
+        </div>
+        <div class="content">
+            <div class="item">
+                <strong>Source:</strong> <a href="${extractedData.url}" target="_blank">${extractedData.title}</a>
+            </div>
+            <div class="item">
+                <strong>Results:</strong><br>
+                ${extractedData.extractedInfo || extractedData.rawContent || 'No content extracted'}
+            </div>
+        </div>
+    </div>
+</body>
+</html>`;
+}
+
 
 // Execute custom actions
 // async function executeCustomAction(page, action) {
@@ -2111,6 +2250,50 @@ router.post('/acknowledge-safety', async (req, res) => {
       success: false,
       error: error.message
     });
+  }
+});
+
+// HTML generation endpoint
+router.post('/generate-html', async (req, res) => {
+  try {
+    const { extractedData } = req.body;
+
+    if (!extractedData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Extracted data is required'
+      });
+    }
+
+    console.log('Generating AI-powered HTML report...');
+    console.log('Items count to process:', extractedData.rawItems ? extractedData.rawItems.length : 0);
+    
+    // Use the AI HTML generation function with original query
+    const htmlContent = await generateHtmlReport(extractedData, extractedData.userQuery || extractedData.originalQuery);
+
+    res.json({
+      success: true,
+      htmlContent: htmlContent
+    });
+
+  } catch (error) {
+    console.error('Error generating HTML report:', error);
+    
+    // Fallback to basic HTML generation
+    try {
+      const fallbackHtml = generateFallbackHtml(extractedData, extractedData.userQuery || extractedData.originalQuery);
+      res.json({
+        success: true,
+        htmlContent: fallbackHtml,
+        fallback: true
+      });
+    } catch (fallbackError) {
+      console.error('Fallback HTML generation also failed:', fallbackError);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to generate HTML report'
+      });
+    }
   }
 });
 
