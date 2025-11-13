@@ -1843,7 +1843,7 @@ router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req
     const plan = await agent.generateInitialPlan(task);
     // Launch browser with optimized settings for speed and CAPTCHA avoidance
     const browser = await chromium.launch({
-      headless: false, // Keep headless for better performance and CAPTCHA avoidance
+      headless: true, // Keep headless for better performance and CAPTCHA avoidance
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -2172,7 +2172,11 @@ router.post('/chat-integration', async (req, res) => {
     console.log('Session stored:', activeSessions.get(computeSessionId));
 
     // Start computer use session
-    const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
+    console.log("CHECKING ENV VAR:", process.env.BASE_URL); // Yeh line add karein
+
+    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+
+    console.log("USING THIS URL FOR FETCH:", baseUrl); // Yeh line bhi add karein
     const startResponse = await fetch(`${baseUrl}/api/computer-use/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

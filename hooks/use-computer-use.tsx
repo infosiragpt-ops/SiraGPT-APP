@@ -39,7 +39,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null)
   const [finalUrl, setFinalUrl] = useState<string | null>(null)
   const [pendingCallId, setPendingCallId] = useState<string | null>(null)
-  
+
   const wsRef = useRef<WebSocket | null>(null)
 
   // Generate unique session ID
@@ -71,15 +71,15 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         setScreenshot(data.data.initialScreenshot)
         addReasoningStep('Session started, analyzing task...')
         break
-        
+
       case 'reasoning':
         addReasoningStep(data.data.reasoning, data.data.action)
         break
-        
+
       case 'screenshot':
         setScreenshot(data.data.image)
         break
-        
+
       case 'task-completed':
         setStatus('completed')
         setScreenshot(data.data.finalScreenshot)
@@ -90,12 +90,12 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         if (data.data.finalUrl) {
           setFinalUrl(data.data.finalUrl)
         }
-        const completionMessage = data.data.extractedData?.success 
+        const completionMessage = data.data.extractedData?.success
           ? '\u2705 Task completed! Relevant information extracted and saved to chat.'
           : '\u2705 Task completed successfully!'
         addReasoningStep(completionMessage)
         toast.success('Computer Use task completed!')
-        
+
         // If extraction was successful, trigger a chat refresh
         if (data.data.extractedData?.success) {
           setTimeout(() => {
@@ -105,7 +105,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
           }, 1000);
         }
         break
-        
+
       case 'extraction-completed':
         // Handle extraction completion broadcast from backend
         console.log('Extraction completed event received');
@@ -115,18 +115,18 @@ export const useComputerUse = (): ComputerUseHookReturn => {
           }));
         }, 500);
         break
-        
+
       case 'session-stopped':
         setStatus('idle')
         addReasoningStep('🛑 Session stopped by user')
         break
-        
+
       case 'error':
         setStatus('error')
         addReasoningStep(`❌ Error: ${data.data.error}`)
         toast.error(`Computer Use error: ${data.data.error}`)
         break
-        
+
       default:
         console.log('Unknown message type:', data.type)
     }
@@ -134,11 +134,14 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
   // Connect to WebSocket
   const connectWebSocket = useCallback((sessionId: string) => {
-    const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000')
+    const backendUrl = (process.env.NEXT_PUBLIC_URL || 'http://localhost:5000')
 
+    // const candidateWsUrls = [
+    //   backendUrl.replace(/^http/, 'ws') + '/ws/computer-use',
+    //   'ws://localhost:5000/ws/computer-use'
+    // ]
     const candidateWsUrls = [
-      backendUrl.replace(/^http/, 'ws') + '/ws/computer-use',
-      'ws://localhost:5000/ws/computer-use'
+      backendUrl.replace(/^http/, 'ws') + '/ws/computer-use'
     ]
 
     let connected = false
@@ -254,7 +257,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
   // Stop Computer Use session
   const stopComputerUse = useCallback(async () => {
     if (!sessionId) return
-    
+
     try {
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
       await fetch(`${baseUrl}/api/computer-use/stop`, {
@@ -262,11 +265,11 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId })
       })
-      
+
       setStatus('idle')
       setSessionId(null)
       wsRef.current?.close()
-      
+
     } catch (error) {
       console.error('Error stopping session:', error)
       toast.error('Failed to stop session')
