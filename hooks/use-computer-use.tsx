@@ -134,7 +134,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
   // Connect to WebSocket
   const connectWebSocket = useCallback((sessionId: string) => {
-    const backendUrl = (process.env.NEXT_PUBLIC_URL || 'http://localhost:5000')
+    const backendUrl = (process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000')
 
     // const candidateWsUrls = [
     //   backendUrl.replace(/^http/, 'ws') + '/ws/computer-use',
