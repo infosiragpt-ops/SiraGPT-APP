@@ -516,19 +516,19 @@ async function getScreenshot(page) {
 async function extractWebpageContent(page, userQuery, currentUrl) {
   try {
     console.log(`Extracting detailed content from ${currentUrl} based on query: ${userQuery}`);
-    
+
     // Get page title
     const title = await page.title().catch(() => currentUrl);
-    
+
     // Enhanced content extraction for detailed scraping
     const pageContent = await page.evaluate(() => {
       // Remove script and style elements
       const scripts = document.querySelectorAll('script, style, noscript');
       scripts.forEach(el => el.remove());
-      
+
       // Enhanced product/content extraction
       const extractedItems = [];
-      
+
       // Amazon product extraction
       if (window.location.href.includes('amazon')) {
         const products = document.querySelectorAll('[data-component-type="s-search-result"], .s-result-item, .a-section');
@@ -538,7 +538,7 @@ async function extractWebpageContent(page, userQuery, currentUrl) {
           const imageEl = product.querySelector('img');
           const linkEl = product.querySelector('h2 a, .a-link-normal');
           const ratingEl = product.querySelector('[aria-label*="stars"], .a-icon-alt');
-          
+
           if (titleEl && titleEl.textContent.trim()) {
             extractedItems.push({
               type: 'product',
@@ -552,7 +552,7 @@ async function extractWebpageContent(page, userQuery, currentUrl) {
           }
         });
       }
-      
+
       // LinkedIn job extraction
       else if (window.location.href.includes('linkedin')) {
         const jobs = document.querySelectorAll('.job-search-card, .jobs-search__results-list li, .scaffold-layout__list-container li');
@@ -562,7 +562,7 @@ async function extractWebpageContent(page, userQuery, currentUrl) {
           const locationEl = job.querySelector('.job-search-card__location, .job-search-card__metadata-item');
           const linkEl = job.querySelector('a[href*="/jobs/view"]');
           const timeEl = job.querySelector('time, .job-search-card__listdate');
-          
+
           if (titleEl && titleEl.textContent.trim()) {
             extractedItems.push({
               type: 'job',
@@ -576,7 +576,7 @@ async function extractWebpageContent(page, userQuery, currentUrl) {
           }
         });
       }
-      
+
       // Generic content extraction for other sites
       else {
         const contentItems = document.querySelectorAll('article, .product, .item, .card, .listing, .result');
@@ -585,7 +585,7 @@ async function extractWebpageContent(page, userQuery, currentUrl) {
           const descEl = item.querySelector('p, .description, .summary');
           const linkEl = item.querySelector('a');
           const imageEl = item.querySelector('img');
-          
+
           if (titleEl && titleEl.textContent.trim().length > 10) {
             extractedItems.push({
               type: 'content',
@@ -598,15 +598,15 @@ async function extractWebpageContent(page, userQuery, currentUrl) {
           }
         });
       }
-      
+
       // Fallback to general content if no structured items found
       let generalContent = '';
       const contentSelectors = [
-        'main', 'article', '[role="main"]', '.main-content', 
+        'main', 'article', '[role="main"]', '.main-content',
         '#main-content', '.content', '#content', '.post-content',
         '.entry-content', '.article-content'
       ];
-      
+
       for (const selector of contentSelectors) {
         const element = document.querySelector(selector);
         if (element) {
@@ -614,11 +614,11 @@ async function extractWebpageContent(page, userQuery, currentUrl) {
           break;
         }
       }
-      
+
       if (!generalContent) {
         generalContent = document.body.innerText || document.body.textContent || '';
       }
-      
+
       return {
         title: document.title,
         url: window.location.href,
@@ -628,10 +628,10 @@ async function extractWebpageContent(page, userQuery, currentUrl) {
         lastUpdated: new Date().toISOString()
       };
     });
-    
+
     // Format extracted data into structured response
     let formattedContent = '';
-    
+
     if (pageContent.extractedItems && pageContent.extractedItems.length > 0) {
       if (pageContent.extractedItems[0].type === 'product') {
         formattedContent = `# 🛍️ Found ${pageContent.itemCount} Products\n\n`;
@@ -673,17 +673,17 @@ Content:
 ${pageContent.generalContent.substring(0, 3000)}
 
 Provide specific details, prices, names, links, and any relevant data points. Format as structured information with clear headings and bullet points.`;
-      
+
       const response = await openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
         messages: [{ role: 'user', content: extractionPrompt }],
         max_tokens: 1500,
         temperature: 0.1
       });
-      
+
       formattedContent = response.choices[0].message.content;
     }
-    
+
     return {
       success: true,
       url: currentUrl,
@@ -695,7 +695,7 @@ Provide specific details, prices, names, links, and any relevant data points. Fo
       timestamp: new Date().toISOString(),
       userQuery: userQuery
     };
-    
+
   } catch (error) {
     console.error('Error extracting webpage content:', error);
     return {
@@ -757,7 +757,7 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
       // Task complete ho gaya to loop rokein
       if (response.completed || response.action?.type === 'completed') {
         console.log('Task mukammal ho gaya!');
-        
+
         // Extract webpage content before completing
         const currentUrl = page.url();
         const session = activeSessions.get(sessionId);
@@ -769,7 +769,7 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
           currentUrl
         });
         let extractedData = null;
-        
+
         if (session && session.chatId) {
           console.log('Extracting webpage content for chat integration...', {
             chatId: session.chatId,
@@ -777,7 +777,7 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
             task: session.originalTask || task
           });
           extractedData = await extractWebpageContent(page, session.originalTask || task, currentUrl);
-          
+
           if (extractedData.success) {
             // Save extracted information to chat
             try {
@@ -798,21 +798,21 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
             userId: session?.userId
           });
         }
-        
-        const completionMessage = extractedData?.success 
+
+        const completionMessage = extractedData?.success
           ? 'Task completed successfully! Information extracted and saved to chat.'
           : 'Task completed successfully!';
-        
-        broadcastToSession(sessionId, { 
-          type: 'task-completed', 
-          data: { 
+
+        broadcastToSession(sessionId, {
+          type: 'task-completed',
+          data: {
             message: completionMessage,
             extractedData: extractedData,
             finalUrl: currentUrl,
             hasExtraction: extractedData?.success || false
-          } 
+          }
         });
-        
+
         // Broadcast extraction completion to all clients for chat refresh
         if (wss && extractedData?.success) {
           wss.clients.forEach((client) => {
@@ -841,7 +841,7 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
 
       if (stepCount >= maxSteps) {
         console.log('Max steps tak pahunch gaye. Loop rok rahe hain.');
-        
+
         // Extract content even when max steps reached
         const currentUrl = page.url();
         const session = activeSessions.get(sessionId);
@@ -853,7 +853,7 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
           currentUrl
         });
         let extractedData = null;
-        
+
         if (session && session.chatId) {
           console.log('Max steps - extracting content for chat integration...');
           extractedData = await extractWebpageContent(page, session.originalTask || task, currentUrl);
@@ -868,14 +868,14 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
         } else {
           console.log('Max steps - no chat context for extraction');
         }
-        
-        broadcastToSession(sessionId, { 
-          type: 'task-completed', 
-          data: { 
+
+        broadcastToSession(sessionId, {
+          type: 'task-completed',
+          data: {
             message: 'Task stopped after maximum steps.',
             extractedData: extractedData,
             finalUrl: currentUrl
-          } 
+          }
         });
         break;
       }
@@ -893,11 +893,11 @@ async function saveExtractedDataToChat(chatId, originalQuery, extractedData, use
     const chat = await prisma.chat.findUnique({
       where: { id: chatId }
     });
-    
+
     if (!chat) {
       throw new Error(`Chat ${chatId} not found - should have been created before extraction`);
     }
-    
+
     // Create simple response - no content shown in chat, only download option
     let responseContent = `# Computer Use Task Completed ✅
 
@@ -908,7 +908,7 @@ async function saveExtractedDataToChat(chatId, originalQuery, extractedData, use
 📥 **Download HTML Report** to view detailed results with clickable links
 
 *Completed at: ${new Date(extractedData.timestamp).toLocaleString()}*`;
-    
+
     // Prepare file data for download - matching the expected structure
     const fileData = {
       type: 'computer_use_extraction',
@@ -922,7 +922,7 @@ async function saveExtractedDataToChat(chatId, originalQuery, extractedData, use
       success: extractedData.success,
       userQuery: originalQuery
     };
-    
+
     // Save assistant message with extracted data
     await prisma.message.create({
       data: {
@@ -933,15 +933,15 @@ async function saveExtractedDataToChat(chatId, originalQuery, extractedData, use
         tokens: 1000 // Estimated tokens
       }
     });
-    
+
     // Update chat timestamp
     await prisma.chat.update({
       where: { id: chatId },
       data: { updatedAt: new Date() }
     });
-    
+
     console.log(`Extracted data saved to chat ${chatId}`);
-    
+
   } catch (error) {
     console.error('Error saving extracted data to chat:', error);
     throw error;
@@ -974,10 +974,10 @@ TASK DETAILS:
 - Timestamp: ${new Date(extractedData.timestamp).toLocaleString()}
 
 EXTRACTED DATA:
-${extractedData.rawItems && extractedData.rawItems.length > 0 ? 
-  JSON.stringify(extractedData.rawItems.slice(0, 30), null, 2) : 
-  extractedData.extractedInfo || extractedData.rawContent || 'No specific items extracted'
-}
+${extractedData.rawItems && extractedData.rawItems.length > 0 ?
+        JSON.stringify(extractedData.rawItems.slice(0, 30), null, 2) :
+        extractedData.extractedInfo || extractedData.rawContent || 'No specific items extracted'
+      }
 TOTAL ITEMS TO PROCESS: ${extractedData.rawItems ? extractedData.rawItems.length : 0}
 IMPORTANT: Process ALL items provided in the extracted data, not just a sample.
 
@@ -1015,33 +1015,33 @@ Generate ONLY the complete HTML code (no explanations or markdown). The HTML sho
     // Generate HTML using OpenAI
     const response = await openai.chat.completions.create({
       model: 'gpt-4o', // Use the better model for HTML generation
-      messages: [{ 
-        role: 'system', 
-        content: 'You are an expert HTML generator. Create complete, professional HTML reports that include ALL provided data items. Never truncate or limit the number of items processed.' 
+      messages: [{
+        role: 'system',
+        content: 'You are an expert HTML generator. Create complete, professional HTML reports that include ALL provided data items. Never truncate or limit the number of items processed.'
       }, {
-        role: 'user', 
-        content: htmlPrompt 
+        role: 'user',
+        content: htmlPrompt
       }],
       max_tokens: 8000, // Increased for larger datasets
       temperature: 0.1
     });
 
     let generatedHtml = response.choices[0].message.content;
-    
+
     // Clean up the response to ensure it's pure HTML
     generatedHtml = generatedHtml.replace(/^```html\s*/, '').replace(/\s*```$/, '');
     generatedHtml = generatedHtml.replace(/^```\s*/, '').replace(/\s*```$/, '');
-    
+
     // Ensure it starts with DOCTYPE
     if (!generatedHtml.trim().startsWith('<!DOCTYPE')) {
       generatedHtml = `<!DOCTYPE html>\n${generatedHtml}`;
     }
 
     return generatedHtml;
-    
+
   } catch (error) {
     console.error('Error generating AI HTML report:', error);
-    
+
     // Fallback to simple HTML if AI generation fails
     return generateFallbackHtml(extractedData, originalQuery);
   }
@@ -1051,15 +1051,15 @@ Generate ONLY the complete HTML code (no explanations or markdown). The HTML sho
 function generateFallbackHtml(extractedData, originalQuery) {
   // Use actual extracted items if available
   let structuredContent = '';
-  
+
   if (extractedData.rawItems && extractedData.rawItems.length > 0) {
     // Generate content from actual extracted items
     structuredContent = '<div class="content-grid">';
-    
+
     extractedData.rawItems.forEach((item, index) => {
       const itemType = item.type || 'content';
       structuredContent += `<div class="item-card ${itemType}-card">`;
-      
+
       if (item.type === 'product') {
         structuredContent += `<div class="product-header">
           <h3 class="product-title">${item.title}</h3>
@@ -1103,138 +1103,138 @@ function generateFallbackHtml(extractedData, originalQuery) {
           </div>`;
         }
       }
-      
+
       structuredContent += '</div>';
     });
-    
+
     structuredContent += '</div>';
   } else {
     // Fallback to parsing extracted info text
     const content = extractedData.extractedInfo || extractedData.rawContent || 'No content extracted';
-    
+
     // Advanced content detection and structuring
     structuredContent = content;
-    
+
     // Enhanced detection for different content types
-  if (content.includes('Price:') || content.includes('Features:') || content.includes('$') || 
+    if (content.includes('Price:') || content.includes('Features:') || content.includes('$') ||
       content.includes('Job:') || content.includes('Company:') || content.includes('Salary:') ||
       content.includes('Location:') || content.includes('Experience:') || content.includes('LinkedIn')) {
-    
-    const lines = content.split('\n').filter(line => line.trim());
-    let htmlContent = '<div class="content-grid">';
-    let currentItem = '';
-    let itemType = 'product';
-    
-    // Detect content type for appropriate styling
-    if (content.toLowerCase().includes('job') || content.toLowerCase().includes('linkedin') || 
+
+      const lines = content.split('\n').filter(line => line.trim());
+      let htmlContent = '<div class="content-grid">';
+      let currentItem = '';
+      let itemType = 'product';
+
+      // Detect content type for appropriate styling
+      if (content.toLowerCase().includes('job') || content.toLowerCase().includes('linkedin') ||
         content.toLowerCase().includes('career') || content.toLowerCase().includes('developer') ||
         content.toLowerCase().includes('position') || content.toLowerCase().includes('remote')) {
-      itemType = 'job';
-    }
-    
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (trimmedLine && trimmedLine.length > 3) {
-        // Enhanced parsing for different data types
-        if (trimmedLine.includes('Price:') || trimmedLine.includes('$')) {
-          if (currentItem) {
-            htmlContent += `<div class="item-card ${itemType}-card">${currentItem}</div>`;
-            currentItem = '';
+        itemType = 'job';
+      }
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine && trimmedLine.length > 3) {
+          // Enhanced parsing for different data types
+          if (trimmedLine.includes('Price:') || trimmedLine.includes('$')) {
+            if (currentItem) {
+              htmlContent += `<div class="item-card ${itemType}-card">${currentItem}</div>`;
+              currentItem = '';
+            }
+            currentItem += `<div class="price-badge">${trimmedLine.replace('Price:', '').trim()}</div>`;
           }
-          currentItem += `<div class="price-badge">${trimmedLine.replace('Price:', '').trim()}</div>`;
-        } 
-        else if (trimmedLine.includes('Job:') || trimmedLine.includes('Position:') || trimmedLine.includes('Title:')) {
-          if (currentItem) {
-            htmlContent += `<div class="item-card ${itemType}-card">${currentItem}</div>`;
-            currentItem = '';
+          else if (trimmedLine.includes('Job:') || trimmedLine.includes('Position:') || trimmedLine.includes('Title:')) {
+            if (currentItem) {
+              htmlContent += `<div class="item-card ${itemType}-card">${currentItem}</div>`;
+              currentItem = '';
+            }
+            currentItem += `<h3 class="job-title">${trimmedLine.replace(/^(Job:|Position:|Title:)\s*/, '')}</h3>`;
           }
-          currentItem += `<h3 class="job-title">${trimmedLine.replace(/^(Job:|Position:|Title:)\s*/, '')}</h3>`;
-        }
-        else if (trimmedLine.includes('Company:') || trimmedLine.includes('Employer:')) {
-          currentItem += `<div class="company-name">${trimmedLine.replace(/^(Company:|Employer:)\s*/, '')}</div>`;
-        }
-        else if (trimmedLine.includes('Location:') || trimmedLine.includes('Remote') || trimmedLine.includes('Hybrid')) {
-          currentItem += `<div class="location">${trimmedLine.replace(/^Location:\s*/, '')}</div>`;
-        }
-        else if (trimmedLine.includes('Salary:') || trimmedLine.includes('Pay:') || trimmedLine.includes('/year') || 
-                 trimmedLine.includes('/hour') || trimmedLine.includes('compensation')) {
-          currentItem += `<div class="price-badge">${trimmedLine.replace(/^(Salary:|Pay:)\s*/, '')}</div>`;
-        }
-        else if (trimmedLine.includes('Experience:') || trimmedLine.includes('Level:') || 
-                 trimmedLine.includes('years') || trimmedLine.includes('Senior') || trimmedLine.includes('Junior')) {
-          currentItem += `<div class="posted">${trimmedLine.replace(/^Experience:\s*/, '')}</div>`;
-        }
-        else if (trimmedLine.includes('Features:') || trimmedLine.includes('Specifications:') || 
-                 trimmedLine.includes('Requirements:') || trimmedLine.includes('Skills:')) {
-          currentItem += `<div class="item-description">${trimmedLine.replace(/^(Features:|Specifications:|Requirements:|Skills:)\s*/, '')}</div>`;
-        } 
-        else if (trimmedLine.includes('Rating:') || trimmedLine.includes('Reviews:')) {
-          currentItem += `<div class="rating">${trimmedLine.replace(/^Rating:\s*/, '').replace(/⭐/g, '★')}</div>`;
-        } 
-        else if (trimmedLine.startsWith('http') || (trimmedLine.includes('.com') && trimmedLine.includes('/'))) {
-          let cleanUrl = trimmedLine;
-          // Clean up any malformed URLs
-          if (!cleanUrl.startsWith('http')) {
-            if (cleanUrl.includes('amazon.com')) {
-              cleanUrl = 'https://' + cleanUrl;
-            } else if (cleanUrl.includes('linkedin.com')) {
-              cleanUrl = 'https://' + cleanUrl;
+          else if (trimmedLine.includes('Company:') || trimmedLine.includes('Employer:')) {
+            currentItem += `<div class="company-name">${trimmedLine.replace(/^(Company:|Employer:)\s*/, '')}</div>`;
+          }
+          else if (trimmedLine.includes('Location:') || trimmedLine.includes('Remote') || trimmedLine.includes('Hybrid')) {
+            currentItem += `<div class="location">${trimmedLine.replace(/^Location:\s*/, '')}</div>`;
+          }
+          else if (trimmedLine.includes('Salary:') || trimmedLine.includes('Pay:') || trimmedLine.includes('/year') ||
+            trimmedLine.includes('/hour') || trimmedLine.includes('compensation')) {
+            currentItem += `<div class="price-badge">${trimmedLine.replace(/^(Salary:|Pay:)\s*/, '')}</div>`;
+          }
+          else if (trimmedLine.includes('Experience:') || trimmedLine.includes('Level:') ||
+            trimmedLine.includes('years') || trimmedLine.includes('Senior') || trimmedLine.includes('Junior')) {
+            currentItem += `<div class="posted">${trimmedLine.replace(/^Experience:\s*/, '')}</div>`;
+          }
+          else if (trimmedLine.includes('Features:') || trimmedLine.includes('Specifications:') ||
+            trimmedLine.includes('Requirements:') || trimmedLine.includes('Skills:')) {
+            currentItem += `<div class="item-description">${trimmedLine.replace(/^(Features:|Specifications:|Requirements:|Skills:)\s*/, '')}</div>`;
+          }
+          else if (trimmedLine.includes('Rating:') || trimmedLine.includes('Reviews:')) {
+            currentItem += `<div class="rating">${trimmedLine.replace(/^Rating:\s*/, '').replace(/⭐/g, '★')}</div>`;
+          }
+          else if (trimmedLine.startsWith('http') || (trimmedLine.includes('.com') && trimmedLine.includes('/'))) {
+            let cleanUrl = trimmedLine;
+            // Clean up any malformed URLs
+            if (!cleanUrl.startsWith('http')) {
+              if (cleanUrl.includes('amazon.com')) {
+                cleanUrl = 'https://' + cleanUrl;
+              } else if (cleanUrl.includes('linkedin.com')) {
+                cleanUrl = 'https://' + cleanUrl;
+              }
+            }
+            // Remove any "Product Link:" or similar prefixes
+            cleanUrl = cleanUrl.replace(/^.*?https?:\/\//, 'https://').trim();
+
+            if (cleanUrl.startsWith('http')) {
+              const buttonText = cleanUrl.includes('amazon') ? 'View Product' :
+                cleanUrl.includes('linkedin') ? 'View Job' : 'Visit Link';
+              const buttonClass = cleanUrl.includes('linkedin') ? 'view-btn job-btn' : 'view-btn';
+              currentItem += `<a href="${cleanUrl}" target="_blank" class="${buttonClass}">${buttonText}</a>`;
             }
           }
-          // Remove any "Product Link:" or similar prefixes
-          cleanUrl = cleanUrl.replace(/^.*?https?:\/\//, 'https://').trim();
-          
-          if (cleanUrl.startsWith('http')) {
-            const buttonText = cleanUrl.includes('amazon') ? 'View Product' : 
-                             cleanUrl.includes('linkedin') ? 'View Job' : 'Visit Link';
-            const buttonClass = cleanUrl.includes('linkedin') ? 'view-btn job-btn' : 'view-btn';
-            currentItem += `<a href="${cleanUrl}" target="_blank" class="${buttonClass}">${buttonText}</a>`;
+          else if (trimmedLine.length > 5) {
+            currentItem += `<div class="item-description">${trimmedLine}</div>`;
           }
-        } 
-        else if (trimmedLine.length > 5) {
-          currentItem += `<div class="item-description">${trimmedLine}</div>`;
         }
       }
-    }
-    
-    if (currentItem) {
-      htmlContent += `<div class="item-card ${itemType}-card">${currentItem}</div>`;
-    }
-    htmlContent += '</div>';
-    
-    if (htmlContent.includes('<div class="item-card')) {
-      structuredContent = htmlContent;
-    }
-  } else {
-    // Enhanced regular content formatting
-    structuredContent = content
-      .split('\n')
-      .map(line => {
-        const trimmed = line.trim();
-        if (!trimmed) return '<br>';
-        
-        // Enhanced URL handling
-        if (trimmed.startsWith('http') || trimmed.includes('.com')) {
-          const displayUrl = trimmed.length > 80 ? trimmed.substring(0, 80) + '...' : trimmed;
-          return `<div class="action-link">
+
+      if (currentItem) {
+        htmlContent += `<div class="item-card ${itemType}-card">${currentItem}</div>`;
+      }
+      htmlContent += '</div>';
+
+      if (htmlContent.includes('<div class="item-card')) {
+        structuredContent = htmlContent;
+      }
+    } else {
+      // Enhanced regular content formatting
+      structuredContent = content
+        .split('\n')
+        .map(line => {
+          const trimmed = line.trim();
+          if (!trimmed) return '<br>';
+
+          // Enhanced URL handling
+          if (trimmed.startsWith('http') || trimmed.includes('.com')) {
+            const displayUrl = trimmed.length > 80 ? trimmed.substring(0, 80) + '...' : trimmed;
+            return `<div class="action-link">
             <a href="${trimmed}" target="_blank" class="interactive-btn">
               🔗 ${displayUrl}
               <span class="btn-text">Visit Link</span>
             </a>
           </div>`;
-        }
-        
-        // Format section headers
-        if (trimmed.includes(':') && trimmed.length < 100 && !trimmed.includes('http')) {
-          return `<h3 style="color: #1976d2; font-size: 1.3em; margin: 20px 0 15px; border-bottom: 2px solid #e3f2fd; padding-bottom: 8px;">${trimmed}</h3>`;
-        }
-        
-        return `<p style="margin: 12px 0; line-height: 1.6;">${trimmed}</p>`;
-      })
-      .join('');
+          }
+
+          // Format section headers
+          if (trimmed.includes(':') && trimmed.length < 100 && !trimmed.includes('http')) {
+            return `<h3 style="color: #1976d2; font-size: 1.3em; margin: 20px 0 15px; border-bottom: 2px solid #e3f2fd; padding-bottom: 8px;">${trimmed}</h3>`;
+          }
+
+          return `<p style="margin: 12px 0; line-height: 1.6;">${trimmed}</p>`;
+        })
+        .join('');
     }
   }
-  
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1911,7 +1911,7 @@ router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req
       createdAt: existingSession.createdAt || Date.now(),
       lastActivity: Date.now()
     });
-    
+
     console.log('Session stored with context:', {
       sessionId,
       hasChatId: !!existingSession.chatId,
@@ -2131,7 +2131,7 @@ router.post('/chat-integration', async (req, res) => {
     let chat = await prisma.chat.findUnique({
       where: { id: chatId }
     });
-    
+
     if (!chat) {
       console.log(`Creating new chat ${chatId} for computer use...`);
       chat = await prisma.chat.create({
@@ -2143,7 +2143,7 @@ router.post('/chat-integration', async (req, res) => {
         }
       });
     }
-    
+
     // Save the user message first
     await prisma.message.create({
       data: {
@@ -2153,7 +2153,7 @@ router.post('/chat-integration', async (req, res) => {
         tokens: 0
       }
     });
-    
+
     console.log('User message saved to chat:', chatId);
 
     // Generate unique session ID if not provided
@@ -2172,7 +2172,8 @@ router.post('/chat-integration', async (req, res) => {
     console.log('Session stored:', activeSessions.get(computeSessionId));
 
     // Start computer use session
-    const startResponse = await fetch(`http://localhost:5000/api/computer-use/start`, {
+    const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
+    const startResponse = await fetch(`${baseUrl}/api/computer-use/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2180,7 +2181,7 @@ router.post('/chat-integration', async (req, res) => {
         sessionId: computeSessionId
       })
     });
-    
+
     console.log('Start response status:', startResponse.status);
 
     if (!startResponse.ok) {
@@ -2267,7 +2268,7 @@ router.post('/generate-html', async (req, res) => {
 
     console.log('Generating AI-powered HTML report...');
     console.log('Items count to process:', extractedData.rawItems ? extractedData.rawItems.length : 0);
-    
+
     // Use the AI HTML generation function with original query
     const htmlContent = await generateHtmlReport(extractedData, extractedData.userQuery || extractedData.originalQuery);
 
@@ -2278,7 +2279,7 @@ router.post('/generate-html', async (req, res) => {
 
   } catch (error) {
     console.error('Error generating HTML report:', error);
-    
+
     // Fallback to basic HTML generation
     try {
       const fallbackHtml = generateFallbackHtml(extractedData, extractedData.userQuery || extractedData.originalQuery);
