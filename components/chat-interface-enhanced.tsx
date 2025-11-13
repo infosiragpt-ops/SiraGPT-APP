@@ -73,6 +73,7 @@ import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
 import ComputerUseInterface from "./ComputerUseInterface"
 import ComputerUseReasoning from "./ComputerUseReasoning"
+import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
 
 
@@ -1126,6 +1127,8 @@ function ChatInterfaceContent() {
     status: computerUseHookStatus, 
     screenshot: computerUseHookScreenshot, 
     reasoning: computerUseReasoning,
+    extractedData: computerUseExtractedData,
+    finalUrl: computerUseFinalUrl,
     startComputerUse,
     stopComputerUse,
     addReasoningStep,
@@ -1581,6 +1584,49 @@ But first, you need to connect your Spotify account securely using the button be
     }
   }, [currentChat, createNewChat, availableModels, selectedModel, selectChat]);
 
+  // Listen for Computer Use extraction completion to refresh chat
+  React.useEffect(() => {
+    const handleExtractionComplete = (event: CustomEvent) => {
+      console.log('Computer Use extraction completed, refreshing chat...');
+      // Refresh the current chat to show new messages
+      if (currentChat?.id) {
+        setTimeout(() => {
+          selectChat(currentChat.id);
+        }, 500);
+      }
+    };
+
+    const handleWebSocketExtractionComplete = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'extraction-completed' && data.data.chatId === currentChat?.id) {
+          console.log('WebSocket: Computer Use extraction completed, refreshing chat...');
+          setTimeout(() => {
+            if (currentChat?.id) {
+              selectChat(currentChat.id);
+            }
+          }, 1000);
+        }
+      } catch (error) {
+        // Ignore parse errors for non-JSON WebSocket messages
+      }
+    };
+
+    window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
+    
+    // Also listen for WebSocket events if available
+    if (typeof window !== 'undefined' && (window as any).computerUseWebSocket) {
+      (window as any).computerUseWebSocket.addEventListener('message', handleWebSocketExtractionComplete);
+    }
+    
+    return () => {
+      window.removeEventListener('computer-use-extraction-complete', handleExtractionComplete);
+      if (typeof window !== 'undefined' && (window as any).computerUseWebSocket) {
+        (window as any).computerUseWebSocket.removeEventListener('message', handleWebSocketExtractionComplete);
+      }
+    };
+  }, [currentChat?.id, selectChat]);
+
   // File upload logic with instant preview and progress
   const handleAndUploadFiles = async (files: FileList) => {
     if (files.length === 0) return;
@@ -1827,7 +1873,68 @@ But first, you need to connect your Spotify account securely using the button be
       }
       if (isComputerUseActive || chatType === 'computer-use') {
         // Handle Computer Use with the hook
-        await startComputerUse(msg, currentChat?.id);
+        let chatId = currentChat?.id;
+        
+        // If no current chat, create a new one first
+        if (!chatId) {
+          console.log('Creating new chat for computer use...');
+          const newChat = await createNewChat('computer-use', msg);
+          chatId = newChat.id;
+          
+          // Immediately select the new chat to show it in UI and wait for it to load
+          console.log('Selecting newly created chat:', chatId);
+          await selectChat(chatId);
+          
+          // Wait longer for UI to fully update and messages to load
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          
+          // Force a second selection to ensure it's properly displayed
+          setTimeout(() => {
+            selectChat(chatId!);
+          }, 100);
+        }
+        
+        console.log('Starting computer use with:', { 
+          task: msg, 
+          chatId: chatId, 
+          userId: user?.id 
+        });
+        
+        // Set up listener for extraction completion
+        const handleExtractionComplete = (event: any) => {
+          console.log('Computer Use extraction completed, refreshing chat...', event.detail);
+          
+          // Force refresh the chat to show new extracted data
+          if (chatId) {
+            console.log('Refreshing chat with ID:', chatId);
+            
+            // Multiple refresh attempts to ensure UI updates
+            selectChat(chatId);
+            
+            setTimeout(() => {
+              selectChat(chatId);
+            }, 500);
+            
+            setTimeout(() => {
+              selectChat(chatId);
+              window.dispatchEvent(new CustomEvent('chat-messages-refresh', {
+                detail: { chatId: chatId }
+              }));
+            }, 1000);
+            
+            // Show success message
+            toast.success('Computer Use completed - Chat updated!');
+          }
+        };
+        
+        window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
+        
+        await startComputerUse(msg, chatId, user?.id);
+        
+        // Clean up listener
+        setTimeout(() => {
+          window.removeEventListener('computer-use-extraction-complete', handleExtractionComplete);
+        }, 30000); // Remove after 30 seconds
         
         // Add reasoning steps to chat as they come in
         if (computerUseReasoning.length > 0) {

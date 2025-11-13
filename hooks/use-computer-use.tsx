@@ -7,11 +7,25 @@ interface ReasoningStep {
   action?: string
 }
 
+interface ExtractedData {
+  success: boolean
+  url: string
+  title: string
+  extractedInfo: string
+  rawContent: string
+  metaData: any
+  timestamp: string
+  userQuery: string
+  error?: string
+}
+
 interface ComputerUseHookReturn {
   status: 'idle' | 'running' | 'completed' | 'error'
   screenshot: string | null
   reasoning: ReasoningStep[]
-  startComputerUse: (task: string, chatId?: string) => Promise<void>
+  extractedData: ExtractedData | null
+  finalUrl: string | null
+  startComputerUse: (task: string, chatId?: string, userId?: string) => Promise<void>
   stopComputerUse: () => Promise<void>
   addReasoningStep: (text: string, action?: string) => void
   clearReasoning: () => void
@@ -22,6 +36,8 @@ export const useComputerUse = (): ComputerUseHookReturn => {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [screenshot, setScreenshot] = useState<string | null>(null)
   const [reasoning, setReasoning] = useState<ReasoningStep[]>([])
+  const [extractedData, setExtractedData] = useState<ExtractedData | null>(null)
+  const [finalUrl, setFinalUrl] = useState<string | null>(null)
   const [pendingCallId, setPendingCallId] = useState<string | null>(null)
   
   const wsRef = useRef<WebSocket | null>(null)
@@ -44,6 +60,8 @@ export const useComputerUse = (): ComputerUseHookReturn => {
   // Clear reasoning
   const clearReasoning = useCallback(() => {
     setReasoning([])
+    setExtractedData(null)
+    setFinalUrl(null)
   }, [])
 
   // Handle WebSocket messages
@@ -65,8 +83,37 @@ export const useComputerUse = (): ComputerUseHookReturn => {
       case 'task-completed':
         setStatus('completed')
         setScreenshot(data.data.finalScreenshot)
-        addReasoningStep('✅ Task completed successfully!')
+        if (data.data.extractedData) {
+          setExtractedData(data.data.extractedData)
+          console.log('Extracted data received:', data.data.extractedData)
+        }
+        if (data.data.finalUrl) {
+          setFinalUrl(data.data.finalUrl)
+        }
+        const completionMessage = data.data.extractedData?.success 
+          ? '\u2705 Task completed! Relevant information extracted and saved to chat.'
+          : '\u2705 Task completed successfully!'
+        addReasoningStep(completionMessage)
         toast.success('Computer Use task completed!')
+        
+        // If extraction was successful, trigger a chat refresh
+        if (data.data.extractedData?.success) {
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('computer-use-extraction-complete', {
+              detail: { extractedData: data.data.extractedData }
+            }));
+          }, 1000);
+        }
+        break
+        
+      case 'extraction-completed':
+        // Handle extraction completion broadcast from backend
+        console.log('Extraction completed event received');
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('computer-use-extraction-complete', {
+            detail: { chatId: data.data.chatId }
+          }));
+        }, 500);
         break
         
       case 'session-stopped':
@@ -114,6 +161,10 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         opened = true
         connected = true
         wsRef.current = ws
+        // Store WebSocket globally for chat interface to access
+        if (typeof window !== 'undefined') {
+          (window as any).computerUseWebSocket = ws
+        }
         console.log('Computer Use WebSocket connected to', url)
         ws.send(JSON.stringify({ type: 'join-session', sessionId }))
       }
@@ -148,7 +199,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
   }, [handleWebSocketMessage])
 
   // Start Computer Use session
-  const startComputerUse = useCallback(async (task: string, chatId?: string) => {
+  const startComputerUse = useCallback(async (task: string, chatId?: string, userId?: string) => {
     if (!task.trim()) {
       toast.error('Please provide a task description')
       return
@@ -166,7 +217,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         const resp = await fetch(`${baseUrl}/computer-use/chat-integration`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: task, chatId })
+          body: JSON.stringify({ message: task, chatId, userId })
         })
 
         const data = await resp.json()
@@ -226,6 +277,8 @@ export const useComputerUse = (): ComputerUseHookReturn => {
     status,
     screenshot,
     reasoning,
+    extractedData,
+    finalUrl,
     startComputerUse,
     stopComputerUse,
     addReasoningStep,

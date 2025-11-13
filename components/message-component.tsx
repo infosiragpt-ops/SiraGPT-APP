@@ -46,6 +46,7 @@ import ChartComponent from './chart-component';
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import ProcessingGmailCard from "./ProcessingGmailCard"
+import ExtractedDataDownload from "./ExtractedDataDownload"
 import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
@@ -819,6 +820,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/'));
         return hasImageFiles || hasImageUrl;
     };
+
+    // Check if this message contains computer use extracted data
+    const getComputerUseData = () => {
+        if (!parsedFiles || !Array.isArray(parsedFiles)) return null;
+        
+        const computerUseFile = parsedFiles.find((f: any) => f.type === 'computer_use_extraction');
+        return computerUseFile || null;
+    };
     const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename)
 
     const PPTDisplay = () => {
@@ -1569,6 +1578,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <GmailConnectionDisplay />
                                 <GoogleServicesConnectionDisplay />
                                 <SpotifyConnectionDisplay />
+                                {/* Computer Use Extracted Data Display */}
+                                {getComputerUseData() && (
+                                    <ExtractedDataDownload 
+                                        extractedData={getComputerUseData()} 
+                                        finalUrl={getComputerUseData()?.url} 
+                                    />
+                                )}
                                 <SpotifyResultsDisplay />
                                 <ComputerUseReasoningDisplay />
                                 {children}
