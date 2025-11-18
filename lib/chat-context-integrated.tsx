@@ -360,6 +360,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setIsStreaming(false);
           setCurrentStreamId(null);
 
+        } else if (intent === 'figma') {
+          // Handle Figma flowchart generation
+          const figmaResponse = await apiClient.generateFigmaFlowchart({
+            prompt: content,
+            chatId: activeChat.id,
+            conversationHistory: activeChat.messages || [],
+          });
+
+          const { assistantMessage } = figmaResponse;
+
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg) =>
+              msg.id === aiMessagePlaceholder.id ? assistantMessage : msg
+            );
+            return { ...prevChat, messages: newMessages };
+          });
+
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+
         } else {
           // STEP 3: Nayi streaming API call karein
           await apiClient.generateAIStream(

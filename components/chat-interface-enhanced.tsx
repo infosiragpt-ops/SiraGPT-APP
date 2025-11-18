@@ -2001,6 +2001,14 @@ But first, you need to connect your Spotify account securely using the button be
         case 'webdev':
           await handleWebDevGeneration(msg);
           break;
+        case 'figma':
+          // Figma flowchart generation is handled in addMessage function
+          if (isNewChat) {
+            await createNewChat('text', msg, filesToSend);
+          } else {
+            await addMessage(msg, filesToSend, chatToUpdate, true);
+          }
+          break;
         default:
           if (isNewChat) {
             await createNewChat('text', msg, filesToSend);

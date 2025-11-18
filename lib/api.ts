@@ -991,6 +991,13 @@ class ApiClient {
     });
   }
 
+  async generateFigmaFlowchart(data: { prompt: string; chatId?: string; conversationHistory?: any[] }) {
+    return this.request('/figma/generate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   // Web Development Streaming endpoint
   async generateWebDevStream(
     data: {

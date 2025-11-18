@@ -27,6 +27,7 @@ const libraryRoutes = require('./src/routes/library');
 const apiProxyRoutes = require('./src/routes/api');
 const gmailRoutes = require('./src/routes/gmail');
 const spotifyRoutes = require('./src/routes/spotify');
+const figmaRoutes = require('./src/routes/figma');
 const { router: computerUseRoutes, initializeWebSocketServer } = require('./src/routes/computer-use');
 
 const app = express();
@@ -130,6 +131,7 @@ app.use('/api/library', libraryRoutes);
 app.use('/api/proxy', apiProxyRoutes);
 app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
+app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
 
 // Error handling middleware

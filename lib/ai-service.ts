@@ -108,6 +108,7 @@ export class AIService {
     if (/\b(video|clip|animation|movie)\b/i.test(lowerCasePrompt)) return 'video';
     if (/\b(ppt|presentation|slides)\b/i.test(lowerCasePrompt)) return 'ppt';
     if (/\b(chart|graph|diagram)\b/i.test(lowerCasePrompt)) return 'chart';
+    if (/\b(flowchart|flow chart|flow diagram|process flow|workflow|figma|diagram design)\b/i.test(lowerCasePrompt)) return 'figma';
     if (/\b(website|webpage|html|css|javascript)\b/i.test(lowerCasePrompt)) return 'webdev';
     return 'text';
 
@@ -140,6 +141,7 @@ export class AIService {
 * Spanish: "crea una presentación sobre IA", "haz un PPT sobre el clima"
 * French: "crée une présentation sur l'IA", "génère des slides"
 - 'chart': Creating charts or graphs. Examples: "create a bar chart", "make a pie graph".
+- 'figma': Creating flowcharts, process diagrams, or design diagrams. Examples: "create a flowchart of login flow", "make a process diagram", "design a workflow", "create a diagram in figma".
 - 'webdev': Building websites or UI components. Examples: "build a login page", "create a React component".
 - 'text': For all other general conversation, questions, and text generation. 
   This includes structured text outputs such as tables, dummy data, formatted lists, or code-generated textual data.
@@ -201,7 +203,7 @@ Respond with only one word.
       const intent = data.choices[0].message.content.toLowerCase().trim();
       console.log('intent FROM OPEN AI', intent);
 
-      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'webdev', 'text'];
+      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'figma', 'webdev', 'text'];
       if (validIntents.includes(intent)) {
         return intent;
       }

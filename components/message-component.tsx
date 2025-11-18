@@ -43,6 +43,7 @@ import ImageGenerationEffect from './ImageGenerationEffect';
 // import CodePreview from './code-preview';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 import ChartComponent from './chart-component';
+import { FigmaDiagramDisplay } from './figma-diagram-component';
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import ProcessingGmailCard from "./ProcessingGmailCard"
@@ -1575,6 +1576,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <VideoDisplay />
                                 <FileDisplay />
                                 <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} />
+                                <FigmaDiagramDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <GmailConnectionDisplay />
                                 <GoogleServicesConnectionDisplay />
                                 <SpotifyConnectionDisplay />
