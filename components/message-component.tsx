@@ -648,6 +648,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const isPPTMessage = !!pptEntry
 
     const displayedContent = useMemo(() => {
+        let content = message.content;
+
+        // Check if there's a figma file (diagram)
+        const hasFigmaFile = Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f.type === 'figma');
+
         if (isPPTMessage && pptEntry.structure?.slides?.length > 0) {
             const presentationContent = pptEntry.structure.slides.map((slide: any, index: number) => {
                 const title = slide.title || `Slide ${index + 1}`;
@@ -679,15 +684,22 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             if (message.content && typeof message.content === 'string') {
                 const placeholderRegex = /generated presentation.*$/i;
                 if (placeholderRegex.test(message.content)) {
-                    return message.content.replace(placeholderRegex, presentationContent);
+                    content = message.content.replace(placeholderRegex, presentationContent);
                 }
+            } else {
+                // Fallback: append if no placeholder is found
+                content = `${message.content}\n\n${presentationContent}`;
             }
-
-            // Fallback: append if no placeholder is found
-            return `${message.content}\n\n${presentationContent}`;
         }
-        return message.content;
-    }, [message.content, isPPTMessage, pptEntry]);
+
+        // Remove mermaid code blocks if there's a figma diagram file
+        if (hasFigmaFile && content && typeof content === 'string') {
+            // Remove mermaid code blocks using regex
+            content = content.replace(/```mermaid[\s\S]*?```/g, '').trim();
+        }
+
+        return content;
+    }, [message.content, isPPTMessage, pptEntry, parsedFiles]);
 
     // Check for Gmail connection requirement
     const isGmailConnectionRequired = useMemo(() => {

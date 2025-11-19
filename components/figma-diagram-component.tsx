@@ -134,46 +134,47 @@ export function FigmaDiagramComponent({
                             Interactive Diagram
                         </CardDescription>
                     </div>
+                </div>
+            </CardHeader>
+            <CardContent className="p-0 relative group">
+                {/* Hover overlay with buttons */}
+                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all duration-300 z-10 flex items-center justify-center opacity-0 group-hover:opacity-100">
                     <div className="flex gap-2">
-
                         {imageUrl && (
                             <Button
-                                variant="ghost"
+                                variant="secondary"
                                 size="sm"
                                 onClick={handleDownload}
-                                className="gap-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                                className="gap-2 bg-white/90 hover:bg-white text-gray-800 shadow-lg"
                             >
-                                <Download className="h-5 w-5" />
-
+                                <Download className="h-4 w-4" />
+                                <span>Download</span>
                             </Button>
                         )}
                         {embedUrl && (
                             <Button
-                                variant="ghost"
+                                variant="secondary"
                                 size="sm"
                                 onClick={openMermaidEditor}
-                                className="gap-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                                className="gap-2 bg-white/90 hover:bg-white text-gray-800 shadow-lg"
                             >
-                                <Edit className="h-5 w-5" />
+                                <Edit className="h-4 w-4" />
                                 <span>Edit</span>
                             </Button>
                         )}
                         {figmaFile && (
                             <Button
-                                variant="ghost"
+                                variant="secondary"
                                 size="sm"
                                 onClick={openInFigma}
-                                className="gap-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                                className="gap-2 bg-white/90 hover:bg-white text-gray-800 shadow-lg"
                             >
-                                <ExternalLink className="h-5 w-5" />
+                                <ExternalLink className="h-4 w-4" />
                                 <span>Open in Figma</span>
                             </Button>
                         )}
                     </div>
                 </div>
-            </CardHeader>
-            <CardContent className="p-0">
-
 
                 <div className="relative w-full flex justify-center items-center bg-gray-100 dark:bg-gray-900/50">
                     {isLoading ? (
@@ -217,8 +218,6 @@ export function FigmaDiagramComponent({
                         <div className="text-gray-500 dark:text-gray-400">No diagram available</div>
                     )}
                 </div>
-
-
             </CardContent>
         </Card>
     )
