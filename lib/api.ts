@@ -992,7 +992,7 @@ class ApiClient {
   }
 
   async generateFigmaFlowchart(data: { prompt: string; chatId?: string; conversationHistory?: any[] }) {
-    return this.request('/figma/generate', {
+    return this.request('/figma/generate_flowchart', {
       method: 'POST',
       body: JSON.stringify(data),
     });

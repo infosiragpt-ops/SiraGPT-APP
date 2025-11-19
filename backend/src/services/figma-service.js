@@ -17,38 +17,67 @@ class FigmaService {
      */
     async generateMermaidCode(prompt, conversationHistory = []) {
         try {
-            const systemPrompt = `You are an expert at creating Mermaid diagrams. 
-Based on the user's request, generate the appropriate Mermaid syntax.
-You can create:
-- Flowcharts
-- Sequence diagrams
-- Gantt charts
-- Class diagrams
-- Git graphs
-- And more.
+            const systemPrompt = `You are a world-class expert in creating complex and visually appealing Mermaid diagrams.
+Your task is to generate Mermaid syntax based on the user's request. Do not provide any explanations, only the code.
 
-Analyze the user's prompt to determine the best diagram type.
+**Capabilities:**
+- **Flowcharts:** For processes and workflows. Use different shapes for different types of actions (e.g., rectangles for processes, diamonds for decisions, circles for start/end). Use subgraphs for complex sections.
+- **Sequence Diagrams:** For interactions between systems or components.
+- **Gantt Charts:** For project timelines.
+- **Class Diagrams:** For object-oriented programming structures.
+- **State Diagrams:** For object states and transitions.
+- **ER Diagrams:** For database schemas.
+- **User Journey Diagrams:** To map user experiences.
+- **Git Graphs:** To visualize git branching.
 
-**Flowchart Example:**
+**Instructions for Quality:**
+1.  **Analyze the Request:** Carefully understand the user's prompt to select the most appropriate diagram type. For complex requests, break down the problem and represent it logically.
+2.  **Use Advanced Features:** Don't stick to basic syntax. Employ subgraphs, different arrow types, and comments where necessary to improve clarity.
+3.  **Styling:** Apply styling to make the diagrams more readable and professional. Use 'classDef' to define styles for nodes (e.g., colors, borders). Assign classes to nodes using ':::' operator.
+4.  **Complexity:** For complex prompts, generate a detailed and comprehensive diagram. Don't oversimplify.
+
+**Flowchart with Styling Example:**
 \`\`\`mermaid
 flowchart TD
-    A[Start] --> B{Decision}
-    B -->|Yes| C[Action 1]
-    B -->|No| D[Action 2]
-    C --> E[End]
-    D --> E
+    subgraph "User Authentication"
+        A[Start] --> B{User Logged In?};
+        B -- No --> C[Show Login Page];
+        C --> D{Credentials Valid?};
+        D -- Yes --> E[Redirect to Dashboard];
+        D -- No --> C;
+        B -- Yes --> E;
+    end
+    
+    subgraph "Dashboard"
+        E --> F[Load User Data];
+        F --> G[Display Widgets];
+    end
+
+    E --> H[End];
+
+    classDef start-end fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef decision fill:#ccf,stroke:#333,stroke-width:2px;
+    class A,H start-end;
+    class B,D decision;
 \`\`\`
 
 **Sequence Diagram Example:**
 \`\`\`mermaid
 sequenceDiagram
-    participant User
-    participant Server
-    User->>Server: Request Data
-    Server-->>User: Return Data
+    participant U as User
+    participant A as App
+    participant S as Server
+    participant DB as Database
+
+    U->>A: Clicks "Login"
+    A->>S: POST /login (username, password)
+    S->>DB: SELECT user WHERE username = ?
+    DB-->>S: User record
+    S-->>A: { token: "..." }
+    A-->>U: Redirect to Dashboard
 \`\`\`
 
-Generate ONLY the Mermaid code, no explanations.`;
+Generate ONLY the Mermaid code block.`;
 
             const messages = [
                 { role: 'system', content: systemPrompt },
@@ -60,14 +89,14 @@ Generate ONLY the Mermaid code, no explanations.`;
             ];
 
             const response = await this.openai.chat.completions.create({
-                model: 'gpt-4o-mini',
+                model: 'gpt-4o',
                 messages,
-                temperature: 0.3,
-                max_tokens: 1000,
+                temperature: 0.5,
+                max_tokens: 2000,
             });
 
             let mermaidCode = response.choices[0].message.content.trim();
-            
+
             // Extract Mermaid code from markdown code blocks if present
             const mermaidMatch = mermaidCode.match(/```(?:mermaid)?\s*([\s\S]*?)```/);
             if (mermaidMatch) {
@@ -93,10 +122,10 @@ Generate ONLY the Mermaid code, no explanations.`;
         // 1. Use Figma Plugin API
         // 2. Or manually create files and use file keys
         // For now, we'll return null and use Mermaid Live Editor instead
-        
+
         // If user has Figma API key, they can manually create files
         // and we can provide instructions
-        
+
         return null;
     }
 
@@ -108,7 +137,7 @@ Generate ONLY the Mermaid code, no explanations.`;
         try {
             // Generate Mermaid code
             const mermaidCode = await this.generateMermaidCode(prompt, conversationHistory);
-            
+
             // Try to create Figma file (optional)
             let figmaFile = null;
             if (this.figmaApiKey) {
@@ -137,7 +166,7 @@ Generate ONLY the Mermaid code, no explanations.`;
             code: mermaidCode,
             mermaid: { theme: 'default' },
         };
-        
+
         // Encode the JSON payload to Base64
         const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64');
 
@@ -152,7 +181,7 @@ Generate ONLY the Mermaid code, no explanations.`;
             // Using Mermaid.ink API to render Mermaid to image
             const encoded = Buffer.from(mermaidCode).toString('base64url');
             const imageUrl = `https://mermaid.ink/img/${encoded}`;
-            
+
             return imageUrl;
         } catch (error) {
             console.error('Error rendering Mermaid to image:', error);

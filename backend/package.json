@@ -74,11 +74,11 @@
     "ws": "^8.18.3",
     "xlsx": "^0.18.5",
     "xml2js": "^0.6.2",
-    "zod": "^3.24.1"
+    "zod": "^3.24.1",
+    "playwright": "^1.56.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "nodemon": "^3.0.2",
-    "playwright": "^1.56.1"
+    "nodemon": "^3.0.2"
   }
 }

@@ -9,7 +9,7 @@ const router = express.Router();
  * POST /api/figma/generate
  * Generate a flowchart/diagram using Figma/Mermaid
  */
-router.post('/generate', [
+router.post('/generate_flowchart', [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
     body('conversationHistory').optional().isArray()
@@ -34,10 +34,10 @@ router.post('/generate', [
 
         // Render Mermaid to image URL (normal URL, not base64)
         const imageUrl = await figmaService.renderMermaidToImage(flowchartData.mermaidCode);
-        
+
         // Ensure imageUrl is a normal URL string, not base64
-        const finalImageUrl = imageUrl && typeof imageUrl === 'string' && !imageUrl.startsWith('data:') 
-            ? imageUrl 
+        const finalImageUrl = imageUrl && typeof imageUrl === 'string' && !imageUrl.startsWith('data:')
+            ? imageUrl
             : null;
 
         console.log('🖼️ Generated image URL:', finalImageUrl);
