@@ -135,9 +135,24 @@ class AIService {
                         ? lastMessage.content
                         : lastMessage.content.find(item => item.type === 'text')?.text || '';
 
+                    // ✅ NEW: Add LaTeX formatting instruction for math content in images
+                    const mathInstructionText = textContent +
+                        '\n\nIMPORTANT: If the uploaded image(s) contain mathematical equations, formulas, or expressions, ' +
+                        'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
+                        'and double dollar signs ($$...$$) for display math. For example: ' +
+                        'Inline: $E = mc^2$ or Display: $$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$' +
+                        '\n\nExamples of proper LaTeX formatting:' +
+                        '\n- Fractions: $\\frac{a}{b}$' +
+                        '\n- Square roots: $\\sqrt{x}$ or $\\sqrt[n]{x}$' +
+                        '\n- Integrals: $\\int f(x) dx$ or $\\int_{a}^{b} f(x) dx$' +
+                        '\n- Summations: $\\sum_{i=1}^{n} x_i$' +
+                        '\n- Greek letters: $\\alpha, \\beta, \\gamma, \\pi, \\theta$' +
+                        '\n- Subscripts/Superscripts: $x_1, y^2, a_i^j$' +
+                        '\n- Matrix: $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$';
+
                     // Build content array with text and images
                     const contentArray = [
-                        { type: 'text', text: textContent }
+                        { type: 'text', text: mathInstructionText }
                     ];
 
                     // Add all images to the content

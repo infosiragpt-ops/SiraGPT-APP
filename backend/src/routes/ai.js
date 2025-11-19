@@ -345,6 +345,50 @@ router.post(
           customSystemPrompt += `\n\nSuggested conversation topics: ${customGpt.conversationStarters.join(', ')}`;
         }
 
+        // ✅ ADD FILE CREATION CAPABILITIES TO CUSTOM GPTS
+        customSystemPrompt += `
+
+**CRITICAL DOCUMENT CREATION RULES:**
+⚠️ ONLY create downloadable documents when the user EXPLICITLY requests a file format (Word, PDF, DOCX, etc.)
+
+**When to CREATE A DOCUMENT FILE:**
+- User explicitly says: "make a Word document", "create a PDF", "download as DOCX"
+- User says: "convert to Word/PDF", "export as document", "save as file"
+- User references file formats: ".docx", ".pdf", "Word file", "PDF file"
+
+**When to DISPLAY IN CHAT (DO NOT create document):**
+- User says: "show me", "create a table", "generate a list", "make a chart"
+- User asks for: "sales projections", "data table", "comparison", "summary"
+- General content requests WITHOUT mentioning file formats
+
+**Document Creation Process (ONLY when file explicitly requested):**
+1. If user references previous content ("the information you gave me", "above data", etc.), extract that content from conversation history
+2. If user provides content in their current message, use that exact content
+3. Use markdown for structure (# for Heading 1, ## for Heading 2)
+4. Wrap the ENTIRE document content in: [CREATE_DOCUMENT:filename.ext]...content...[/CREATE_DOCUMENT]
+5. Replace 'filename.ext' with appropriate filename (e.g., 'report.docx', 'summary.pdf')
+6. Give brief acknowledgment: "I'll create a Document with the content"
+
+**EXAMPLES:**
+✅ CREATE FILE:
+- "Create a Word document with sales projections" → Generate Word file
+- "Make a PDF from the data above" → Generate PDF file
+- "Download this as a DOCX file" → Generate Word file
+
+❌ DISPLAY IN CHAT:
+- "Create a sales projection table" → Display markdown table in chat
+- "Show me revenue trends" → Display content in chat
+- "Generate a comparison chart" → Display in chat
+
+IMPORTANT: Default to displaying content in chat. Only create downloadable files when user explicitly requests a file format.
+
+Writing math formulas:
+You have a MathJax render environment.
+- Any LaTeX text between single dollar sign ($) will be rendered as a TeX formula;
+- Use $(tex_formula)$ in-line delimiters to display equations instead of backslash;
+- The render environment only uses $ (single dollarsign) as a container delimiter, never output $$.
+Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`;
+
         systemInstruction = {
           role: 'system',
           content: customSystemPrompt
@@ -450,8 +494,17 @@ IMPORTANT: Default to displaying content in chat. Only create downloadable files
 
           if (imageFiles.length > 0) {
             // ✅ Build content array for messages with images
+            let textContent = m.content;
+
+            // ✅ Add LaTeX formatting instruction for historical images with potential math content
+            if (m.role === 'USER' && imageFiles.length > 0) {
+              textContent += '\n\nIMPORTANT: If the uploaded image(s) contain mathematical equations, formulas, or expressions, ' +
+                'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
+                'and double dollar signs ($$...$$) for display math.';
+            }
+
             const contentArray = [
-              { type: 'text', text: m.content }
+              { type: 'text', text: textContent }
             ];
 
             // Add images in proper vision format
@@ -521,6 +574,9 @@ IMPORTANT: Default to displaying content in chat. Only create downloadable files
           return `File: ${f.name}\nContent: ${content}`;
         }).join('\n\n');
 
+        // ✅ Check if there are any image files that might contain math
+        const hasImageFiles = processedFiles.some(f => f.mimeType && f.mimeType.startsWith('image/'));
+
         // finalPrompt = `${prompt}\n\nAttached files:\n${fileContext}`;
         const MAX_CONTEXT_TOKENS = 200000;
         const fileContextTokens = usageService.calculateTextTokens(fileContext, actualModel);
@@ -532,7 +588,24 @@ IMPORTANT: Default to displaying content in chat. Only create downloadable files
           truncatedFileContext = fileContext.substring(0, estimatedCharLimit) + "\n... [CONTENT TRUNCATED DUE TO TOKEN LIMIT] ...";
         }
 
-        finalPrompt = `${prompt}\n\nAttached files:\n${truncatedFileContext}`;
+        // ✅ Add LaTeX instruction for images
+        let mathInstructions = '';
+        if (hasImageFiles) {
+          mathInstructions = '\n\nIMPORTANT: If any uploaded image contains mathematical equations, formulas, or expressions, ' +
+            'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
+            'and double dollar signs ($$...$$) for display math. For example: ' +
+            'Inline: $E = mc^2$ or Display: $$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$' +
+            '\n\nExamples of proper LaTeX formatting:' +
+            '\n- Fractions: $\\frac{a}{b}$' +
+            '\n- Square roots: $\\sqrt{x}$ or $\\sqrt[n]{x}$' +
+            '\n- Integrals: $\\int f(x) dx$ or $\\int_{a}^{b} f(x) dx$' +
+            '\n- Summations: $\\sum_{i=1}^{n} x_i$' +
+            '\n- Greek letters: $\\alpha, \\beta, \\gamma, \\pi, \\theta$' +
+            '\n- Subscripts/Superscripts: $x_1, y^2, a_i^j$' +
+            '\n- Matrix: $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$';
+        }
+
+        finalPrompt = `${prompt}${mathInstructions}\n\nAttached files:\n${truncatedFileContext}`;
       }
 
 
