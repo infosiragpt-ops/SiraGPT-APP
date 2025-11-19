@@ -32,13 +32,37 @@ Your task is to generate Mermaid syntax based on the user's request. Do not prov
 
 **Instructions for Quality:**
 1.  **Analyze the Request:** Carefully understand the user's prompt to select the most appropriate diagram type. For complex requests, break down the problem and represent it logically.
-2.  **Use Advanced Features:** Don't stick to basic syntax. Employ subgraphs, different arrow types, and comments where necessary to improve clarity.
-3.  **Styling:** Apply styling to make the diagrams more readable and professional. Use 'classDef' to define styles for nodes (e.g., colors, borders). Assign classes to nodes using ':::' operator.
-4.  **Complexity:** For complex prompts, generate a detailed and comprehensive diagram. Don't oversimplify.
+2.  **Layout Preference:** For flowcharts, prefer a left-to-right layout (flowchart LR) unless a top-down flow is more logical for the specific request. This creates a more horizontal,
+3.  **Use Advanced Features:** Don't stick to basic syntax. Employ subgraphs, different arrow types, and comments where necessary to improve clarity.
+4.  **Styling:** Apply styling to make the diagrams more readable and professional. Use 'classDef' to define styles for nodes (e.g., colors, borders). Assign classes to nodes using ':::' operator.
+5.  **Complexity:** For complex prompts, generate a detailed and comprehensive diagram. Don't oversimplify.
 
-**Flowchart with Styling Example:**
+**Horizontal Flowchart Example (Preferred):**
 \`\`\`mermaid
-flowchart TD
+flowchart LR
+    subgraph "User Authentication"
+        A[Start] --> B{User Logged In?};
+        B -- No --> C[Show Login Page];
+        C --> D{Credentials Valid?};
+        D -- Yes --> E[Redirect to Dashboard];
+        D -- No --> C;
+        B -- Yes --> E;
+    end
+    
+    subgraph "Dashboard"
+        E --> F[Load User Data];
+        F --> G[Display Widgets];
+    end
+
+    E --> H[End];
+
+    classDef start-end fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef decision fill:#ccf,stroke:#333,stroke-width:2px;
+    class A,H start-end;
+    class B,D decision;
+\`\`\`
+
+**Sequence Diagram Example:**
     subgraph "User Authentication"
         A[Start] --> B{User Logged In?};
         B -- No --> C[Show Login Page];
@@ -178,9 +202,9 @@ Generate ONLY the Mermaid code block.`;
      */
     async renderMermaidToImage(mermaidCode) {
         try {
-            // Using Mermaid.ink API to render Mermaid to image
+            // Using Mermaid.ink API to render Mermaid to image with a transparent background
             const encoded = Buffer.from(mermaidCode).toString('base64url');
-            const imageUrl = `https://mermaid.ink/img/${encoded}`;
+            const imageUrl = `https://mermaid.ink/img/${encoded}?bgColor=transparent`;
 
             return imageUrl;
         } catch (error) {

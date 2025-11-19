@@ -1,11 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { ExternalLink, Edit, Copy, Check } from "lucide-react"
+import { ExternalLink, Edit, Copy, Check, ZoomIn, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { toast } from "sonner"
 import mermaid from "mermaid"
+import { ImageModal } from "@/components/ui/image-modal"
 
 interface FigmaDiagramProps {
     mermaidCode?: string
@@ -25,12 +26,36 @@ export function FigmaDiagramComponent({
     figmaFile,
     embedUrl,
     title = "Flowchart Diagram"
-}: FigmaDiagramProps) { 
+}: FigmaDiagramProps) {
     const [displayMode, setDisplayMode] = React.useState<'image' | 'mermaid'>('image')
     const [mermaidSvg, setMermaidSvg] = React.useState<string | null>(null)
     const [isLoading, setIsLoading] = React.useState(true)
+    const [isModalOpen, setIsModalOpen] = React.useState(false)
     const mermaidContainerRef = React.useRef<HTMLDivElement>(null)
-   
+
+
+    const handleDownload = async () => {
+        if (!imageUrl) {
+            toast.error("No image available to download.")
+            return
+        }
+        try {
+            const response = await fetch(imageUrl)
+            const blob = await response.blob()
+            const url = window.URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            a.download = `${title.replace(/[^a-zA-Z0-9]/g, '_') || 'diagram'}.png`
+            document.body.appendChild(a)
+            a.click()
+            window.URL.revokeObjectURL(url)
+            document.body.removeChild(a)
+            toast.success("Diagram downloaded successfully!")
+        } catch (error) {
+            console.error("Error downloading image:", error)
+            toast.error("Failed to download diagram.")
+        }
+    }
 
     // Initialize Mermaid only once
     React.useEffect(() => {
@@ -77,7 +102,7 @@ export function FigmaDiagramComponent({
         }
     }, [mermaidCode, imageUrl])
 
-    
+
 
     const openInFigma = () => {
         if (figmaFile?.editUrl) {
@@ -110,7 +135,18 @@ export function FigmaDiagramComponent({
                         </CardDescription>
                     </div>
                     <div className="flex gap-2">
-                         
+
+                        {imageUrl && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={handleDownload}
+                                className="gap-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                            >
+                                <Download className="h-5 w-5" />
+
+                            </Button>
+                        )}
                         {embedUrl && (
                             <Button
                                 variant="ghost"
@@ -137,20 +173,24 @@ export function FigmaDiagramComponent({
                 </div>
             </CardHeader>
             <CardContent className="p-0">
-               
-               
-                    <div className="relative w-full flex justify-center items-center min-h-[400px] bg-gray-100 dark:bg-gray-900/50 p-6">
-                        {isLoading ? (
-                            <div className="flex flex-col items-center gap-2 text-gray-500 dark:text-gray-400">
-                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-gray-100"></div>
-                                <span>Rendering diagram...</span>
-                            </div>
-                        ) : displayMode === 'image' && imageUrl ? (
-                            <div className="w-full flex justify-center">
+
+
+                <div className="relative w-full flex justify-center items-center bg-gray-100 dark:bg-gray-900/50">
+                    {isLoading ? (
+                        <div className="flex flex-col items-center gap-2 text-gray-500 dark:text-gray-400 min-h-[400px]">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-gray-100"></div>
+                            <span>Rendering diagram...</span>
+                        </div>
+                    ) : displayMode === 'image' && imageUrl ? (
+                        <>
+                            <button
+                                onClick={() => setIsModalOpen(true)}
+                                className="w-full flex justify-center cursor-zoom-in"
+                            >
                                 <img
                                     src={imageUrl}
                                     alt="Flowchart Diagram"
-                                    className="max-w-full w-auto h-auto rounded-lg object-contain shadow-md"
+                                    className="w-full h-auto rounded-lg object-contain"
                                     style={{ maxHeight: '700px' }}
                                     onError={() => {
                                         if (mermaidCode && displayMode === 'image') {
@@ -158,20 +198,27 @@ export function FigmaDiagramComponent({
                                         }
                                     }}
                                 />
-                            </div>
-                        ) : displayMode === 'mermaid' && mermaidSvg ? (
-                            <div
-                                ref={mermaidContainerRef}
-                                className="mermaid-container w-full"
-                                style={{ display: 'flex', justifyContent: 'center' }}
-                                dangerouslySetInnerHTML={{ __html: mermaidSvg }}
+                            </button>
+                            <ImageModal
+                                isOpen={isModalOpen}
+                                onClose={() => setIsModalOpen(false)}
+                                imageUrl={imageUrl}
+                                altText="Flowchart Diagram"
                             />
-                        ) : (
-                            <div className="text-gray-500 dark:text-gray-400">No diagram available</div>
-                        )}
-                    </div>
-                
-                 
+                        </>
+                    ) : displayMode === 'mermaid' && mermaidSvg ? (
+                        <div
+                            ref={mermaidContainerRef}
+                            className="mermaid-container w-full [&>svg]:w-full"
+                            style={{ maxHeight: '700px' }}
+                            dangerouslySetInnerHTML={{ __html: mermaidSvg }}
+                        />
+                    ) : (
+                        <div className="text-gray-500 dark:text-gray-400">No diagram available</div>
+                    )}
+                </div>
+
+
             </CardContent>
         </Card>
     )
@@ -180,7 +227,7 @@ export function FigmaDiagramComponent({
 // Component to display Figma diagram from message files
 export function FigmaDiagramDisplay({ files }: { files: any[] }) {
     const figmaFile = files.find(f => f.type === 'figma')
-    
+
     if (!figmaFile) return null
 
     return (

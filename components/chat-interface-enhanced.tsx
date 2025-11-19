@@ -27,7 +27,8 @@ import {
   FolderOpen,
   NetworkIcon,
   Network,
-  Monitor
+  Monitor,
+  GitBranch
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -88,6 +89,8 @@ const ActionsDropdown = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  isFlowChartDiagramActive,
+  setIsFlowChartDiagramActive,
   isComputerUseActive,
   setIsComputerUseActive,
   computerUseStatus,
@@ -113,6 +116,7 @@ const ActionsDropdown = ({
   handleGoogleCalendarToggle,
   handleGoogleDriveToggle,
   handleSpotifyToggle,
+  handleFlowChartDiagramToggle,
 
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -138,6 +142,7 @@ const ActionsDropdown = ({
       // Deactivate other options
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsFlowChartDiagramActive(false);
     }
     setIsWebSearchActive(!isWebSearchActive);
 
@@ -150,6 +155,7 @@ const ActionsDropdown = ({
     if (newState) {
       setIsWebSearchActive(false);
       setIsVideoGenerationActive(false);
+      setIsFlowChartDiagramActive(false);
 
       setChatType('image');
     } else {
@@ -166,6 +172,7 @@ const ActionsDropdown = ({
     if (newState) {
       //setIsWebSearchActive(false);
       setIsImageGenerationActive(false);
+      setIsFlowChartDiagramActive(false);
 
 
       setChatType('video');
@@ -448,6 +455,35 @@ const ActionsDropdown = ({
           </div>
         </DropdownMenuItem>
 
+        {/* Flow Chart Diagram */}
+        <DropdownMenuItem
+          onClick={handleFlowChartDiagramToggle}
+          disabled={isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isFlowChartDiagramActive
+              ? 'bg-cyan-100 dark:bg-cyan-900/20'
+              : 'bg-cyan-100 dark:bg-cyan-900/20'
+              }`}>
+              <GitBranch className={`h-4 w-4 ${isFlowChartDiagramActive
+                ? 'text-cyan-600 dark:text-cyan-400'
+                : 'text-cyan-600 dark:text-cyan-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isFlowChartDiagramActive ? 'Flow Chart Diagram Active' : 'Flow Chart Diagram'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Create flowcharts and process diagrams
+              </div>
+            </div>
+            {isFlowChartDiagramActive && (
+              <div className="w-2 h-2 bg-cyan-500 rounded-full" />
+            )}
+          </div>
+        </DropdownMenuItem>
+
         {/* Computer Use Agent */}
         <DropdownMenuItem
           onClick={handleComputerUseToggle}
@@ -662,6 +698,8 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  isFlowChartDiagramActive,
+  setIsFlowChartDiagramActive,
   isComputerUseActive,
   setIsComputerUseActive,
   computerUseStatus,
@@ -679,7 +717,8 @@ const ActiveToolsDisplay = ({
   handleGmailToggle,
   handleGoogleCalendarToggle,
   handleGoogleDriveToggle,
-  handleSpotifyToggle
+  handleSpotifyToggle,
+  handleFlowChartDiagramToggle
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
@@ -687,6 +726,8 @@ const ActiveToolsDisplay = ({
   setIsImageGenerationActive: (value: boolean) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
+  isFlowChartDiagramActive: boolean;
+  setIsFlowChartDiagramActive: (value: boolean) => void;
   isComputerUseActive: boolean;
   setIsComputerUseActive: (value: boolean) => void;
   computerUseStatus: 'idle' | 'running' | 'completed' | 'error';
@@ -705,6 +746,7 @@ const ActiveToolsDisplay = ({
   handleGoogleCalendarToggle: () => void;
   handleGoogleDriveToggle: () => void;
   handleSpotifyToggle: () => void;
+  handleFlowChartDiagramToggle: () => void;
 }) => {
   const activeConnectors = [
     isGmailActive && { id: 'gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
@@ -714,7 +756,7 @@ const ActiveToolsDisplay = ({
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
-  const hasOtherTools = isImageGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
+  const hasOtherTools = isImageGenerationActive || isVideoGenerationActive || isFlowChartDiagramActive || isWebSearchActive || isComputerUseActive;
 
   if (!hasConnectors && !hasOtherTools) return null;
 
@@ -745,6 +787,12 @@ const ActiveToolsDisplay = ({
     setIsComputerUseActive(false);
     setChatType('text');
   };
+
+  const handleFlowChartDiagramClose = () => {
+    setIsFlowChartDiagramActive(false);
+    setChatType('text');
+  };
+
   return (
     <div className="flex items-center gap-2">
       {hasConnectors && (
@@ -881,15 +929,29 @@ const ActiveToolsDisplay = ({
         </div>
       )}
 
+      {isFlowChartDiagramActive && (
+        <div className="flex items-center gap-1.5 bg-cyan-100 dark:bg-cyan-900/20 text-cyan-700 dark:text-cyan-300 px-2 py-1 rounded-full text-xs border border-cyan-200 dark:border-cyan-800">
+          <GitBranch className="h-3 w-3" />
+          <span className="font-medium">Flow Chart Diagram</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-cyan-200 dark:hover:bg-cyan-800/30 rounded-full ml-1"
+            onClick={handleFlowChartDiagramClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+
       {isComputerUseActive && (
         <div className="flex items-center gap-1.5 bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded-full text-xs border border-indigo-200 dark:border-indigo-800">
           <Monitor className="h-3 w-3" />
           <span className="font-medium">Computer Use</span>
-          <div className={`h-2 w-2 rounded-full ml-1 ${
-            computerUseStatus === 'running' ? 'bg-green-500 animate-pulse' :
+          <div className={`h-2 w-2 rounded-full ml-1 ${computerUseStatus === 'running' ? 'bg-green-500 animate-pulse' :
             computerUseStatus === 'completed' ? 'bg-blue-500' :
-            computerUseStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
-          }`} />
+              computerUseStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
+            }`} />
           <Button
             variant="ghost"
             size="sm"
@@ -1118,14 +1180,16 @@ function ChatInterfaceContent() {
   const [isSpotifyActive, setIsSpotifyActive] = React.useState(false);
   const [isProcessingSpotify, setIsProcessingSpotify] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
+  const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
+  const [isFlowChartDiagramActive, setIsFlowChartDiagramActive] = React.useState(false);
   const [isComputerUseActive, setIsComputerUseActive] = React.useState(false);
   const [computerUseStatus, setComputerUseStatus] = React.useState<'idle' | 'running' | 'completed' | 'error'>('idle');
   const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
 
   // Computer Use hook
-  const { 
-    status: computerUseHookStatus, 
-    screenshot: computerUseHookScreenshot, 
+  const {
+    status: computerUseHookStatus,
+    screenshot: computerUseHookScreenshot,
     reasoning: computerUseReasoning,
     extractedData: computerUseExtractedData,
     finalUrl: computerUseFinalUrl,
@@ -1146,7 +1210,7 @@ function ChatInterfaceContent() {
     if (computerUseReasoning.length > 0 && currentChat && isComputerUseActive) {
       // Find the latest reasoning step
       const latestStep = computerUseReasoning[computerUseReasoning.length - 1];
-      
+
       // Add reasoning step as a chat message
       const reasoningMessage = {
         id: `msg-reasoning-${latestStep.timestamp}`,
@@ -1162,7 +1226,7 @@ function ChatInterfaceContent() {
       };
 
       // Only add if this reasoning step isn't already in the chat
-      const existingMessage = currentChat.messages?.find(msg => 
+      const existingMessage = currentChat.messages?.find(msg =>
         msg.id === reasoningMessage.id
       );
 
@@ -1187,6 +1251,7 @@ function ChatInterfaceContent() {
       setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsFlowChartDiagramActive(false);
     }
   };
 
@@ -1200,6 +1265,7 @@ function ChatInterfaceContent() {
       setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsFlowChartDiagramActive(false);
     }
   };
 
@@ -1213,6 +1279,7 @@ function ChatInterfaceContent() {
       setIsGoogleCalendarActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsFlowChartDiagramActive(false);
     }
   };
 
@@ -1227,13 +1294,14 @@ function ChatInterfaceContent() {
       setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsFlowChartDiagramActive(false);
       setIsComputerUseActive(false);
     }
   };
 
   const handleComputerUseToggle = () => {
     const newState = !isComputerUseActive;
-    
+
     if (newState) {
       // Disable other modes
       setIsWebSearchActive(false);
@@ -1242,13 +1310,33 @@ function ChatInterfaceContent() {
       setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsFlowChartDiagramActive(false);
       setIsSpotifyActive(false);
       setChatType('computer-use');
     } else {
       setChatType('text');
     }
-    
+
     setIsComputerUseActive(newState);
+  };
+
+  const handleFlowChartDiagramToggle = () => {
+    const newState = !isFlowChartDiagramActive;
+
+    if (newState) {
+      // Disable other modes
+      setIsWebSearchActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+      setIsComputerUseActive(false);
+      setIsSpotifyActive(false);
+      setChatType('text');
+    }
+
+    setIsFlowChartDiagramActive(newState);
   };
 
   const handleSpotifyCommand = async (prompt: string) => {
@@ -1351,7 +1439,6 @@ But first, you need to connect your Spotify account securely using the button be
       setIsProcessingSpotify(false);
     }
   }
-  const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
@@ -1559,7 +1646,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsVideoGenerationActive(false);
       setIsComputerUseActive(false);
       setChatType('text'); // Always default to text when switching chats
-      
+
       // Clear Computer Use reasoning when switching chats
       clearReasoning();
     }
@@ -1586,7 +1673,8 @@ But first, you need to connect your Spotify account securely using the button be
 
   // Listen for Computer Use extraction completion to refresh chat
   React.useEffect(() => {
-    const handleExtractionComplete = (event: CustomEvent) => {
+    const handleExtractionComplete = (event: Event) => {
+      const customEvent = event as CustomEvent;
       console.log('Computer Use extraction completed, refreshing chat...');
       // Refresh the current chat to show new messages
       if (currentChat?.id) {
@@ -1613,12 +1701,12 @@ But first, you need to connect your Spotify account securely using the button be
     };
 
     window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
-    
+
     // Also listen for WebSocket events if available
     if (typeof window !== 'undefined' && (window as any).computerUseWebSocket) {
       (window as any).computerUseWebSocket.addEventListener('message', handleWebSocketExtractionComplete);
     }
-    
+
     return () => {
       window.removeEventListener('computer-use-extraction-complete', handleExtractionComplete);
       if (typeof window !== 'undefined' && (window as any).computerUseWebSocket) {
@@ -1874,68 +1962,69 @@ But first, you need to connect your Spotify account securely using the button be
       if (isComputerUseActive || chatType === 'computer-use') {
         // Handle Computer Use with the hook
         let chatId = currentChat?.id;
-        
+
         // If no current chat, create a new one first
         if (!chatId) {
           console.log('Creating new chat for computer use...');
           const newChat = await createNewChat('computer-use', msg);
           chatId = newChat.id;
-          
+
           // Immediately select the new chat to show it in UI and wait for it to load
           console.log('Selecting newly created chat:', chatId);
-          await selectChat(chatId);
-          
+          await selectChat(chatId ?? '');
+
           // Wait longer for UI to fully update and messages to load
           await new Promise(resolve => setTimeout(resolve, 1200));
-          
+
           // Force a second selection to ensure it's properly displayed
           setTimeout(() => {
             selectChat(chatId!);
           }, 100);
         }
-        
-        console.log('Starting computer use with:', { 
-          task: msg, 
-          chatId: chatId, 
-          userId: user?.id 
+
+        console.log('Starting computer use with:', {
+          task: msg,
+          chatId: chatId,
+          userId: user?.id
         });
-        
+
         // Set up listener for extraction completion
-        const handleExtractionComplete = (event: any) => {
-          console.log('Computer Use extraction completed, refreshing chat...', event.detail);
-          
+        const handleExtractionComplete = (event: Event) => {
+          const customEvent = event as CustomEvent;
+          console.log('Computer Use extraction completed, refreshing chat...', customEvent.detail);
+
           // Force refresh the chat to show new extracted data
           if (chatId) {
             console.log('Refreshing chat with ID:', chatId);
-            
+
             // Multiple refresh attempts to ensure UI updates
             selectChat(chatId);
-            
+
             setTimeout(() => {
               selectChat(chatId);
             }, 500);
-            
+
             setTimeout(() => {
               selectChat(chatId);
               window.dispatchEvent(new CustomEvent('chat-messages-refresh', {
                 detail: { chatId: chatId }
               }));
             }, 1000);
-            
+
             // Show success message
             toast.success('Computer Use completed - Chat updated!');
           }
         };
-        
+
         window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
-        
+
         await startComputerUse(msg, chatId, user?.id);
-        
+
         // Clean up listener
         setTimeout(() => {
           window.removeEventListener('computer-use-extraction-complete', handleExtractionComplete);
         }, 30000); // Remove after 30 seconds
-        
+
         // Add reasoning steps to chat as they come in
         if (computerUseReasoning.length > 0) {
           const reasoningMessage = {
@@ -1955,6 +2044,16 @@ But first, you need to connect your Spotify account securely using the button be
             const updatedMessages = [...(prevChat.messages || []), reasoningMessage];
             return { ...prevChat, messages: updatedMessages };
           });
+        }
+        return;
+      }
+
+      // Check if Flow Chart Diagram tool is active - if so, skip intent detection and go directly to flow chart
+      if (isFlowChartDiagramActive) {
+        if (isNewChat) {
+          await createNewChat('figma', msg, filesToSend);
+        } else {
+          await addMessage(msg, filesToSend, chatToUpdate, true, true); // Pass true for forceFlowChartDiagram
         }
         return;
       }
@@ -2919,6 +3018,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isFlowChartDiagramActive={isFlowChartDiagramActive}
+                          setIsFlowChartDiagramActive={setIsFlowChartDiagramActive}
                           isComputerUseActive={isComputerUseActive}
                           setIsComputerUseActive={setIsComputerUseActive}
                           computerUseStatus={computerUseStatus}
@@ -2933,6 +3034,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                           handleGoogleDriveToggle={handleGoogleDriveToggle}
                           handleSpotifyToggle={handleSpotifyToggle}
+                          handleFlowChartDiagramToggle={handleFlowChartDiagramToggle}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
@@ -2950,6 +3052,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isFlowChartDiagramActive={isFlowChartDiagramActive}
+                          setIsFlowChartDiagramActive={setIsFlowChartDiagramActive}
                           isComputerUseActive={isComputerUseActive}
                           setIsComputerUseActive={setIsComputerUseActive}
                           computerUseStatus={computerUseStatus}
@@ -2968,6 +3072,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                           handleGoogleDriveToggle={handleGoogleDriveToggle}
                           handleSpotifyToggle={handleSpotifyToggle}
+                          handleFlowChartDiagramToggle={handleFlowChartDiagramToggle}
                         />
                         <div className="flex-grow" />
                         {!(isLoading && isStreaming) && (
@@ -3228,6 +3333,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsImageGenerationActive={setIsImageGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              isFlowChartDiagramActive={isFlowChartDiagramActive}
+                              setIsFlowChartDiagramActive={setIsFlowChartDiagramActive}
                               isComputerUseActive={isComputerUseActive}
                               setIsComputerUseActive={setIsComputerUseActive}
                               computerUseStatus={computerUseStatus}
@@ -3242,6 +3349,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                               handleGoogleDriveToggle={handleGoogleDriveToggle}
                               handleSpotifyToggle={handleSpotifyToggle}
+                              handleFlowChartDiagramToggle={handleFlowChartDiagramToggle}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
@@ -3259,6 +3367,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsImageGenerationActive={setIsImageGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              isFlowChartDiagramActive={isFlowChartDiagramActive}
+                              setIsFlowChartDiagramActive={setIsFlowChartDiagramActive}
                               isComputerUseActive={isComputerUseActive}
                               setIsComputerUseActive={setIsComputerUseActive}
                               computerUseStatus={computerUseStatus}
@@ -3277,6 +3387,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                               handleGoogleDriveToggle={handleGoogleDriveToggle}
                               handleSpotifyToggle={handleSpotifyToggle}
+                              handleFlowChartDiagramToggle={handleFlowChartDiagramToggle}
                             />
                             <div className="flex-grow" />
                             {!(isLoading && isStreaming) && (
