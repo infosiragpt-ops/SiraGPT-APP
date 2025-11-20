@@ -155,6 +155,7 @@ class ApiClient {
     });
   }
 
+  // Share complete chat
   async handleShare(chatId: String) {
     return this.request(`/chats/${chatId}/share`, {
       method: 'POST',
@@ -162,6 +163,15 @@ class ApiClient {
     });
   }
 
+  // Share individual message with its context
+  async shareMessage(messageId: String, chatId: String) {
+    return this.request(`/chats/${chatId}/messages/${messageId}/share`, {
+      method: 'POST',
+      // body: JSON.stringify({}),
+    });
+  }
+
+  // Get shared chat content
   async shareChatIdLink(shareId: String) {
     return this.request(`/public/share/${shareId}`, {
       method: 'GET',
@@ -169,6 +179,25 @@ class ApiClient {
     });
   }
 
+  // Get shared message content
+  async shareMessageIdLink(shareId: String) {
+    return this.request(`/public/share/message/${shareId}`, {
+      method: 'GET',
+      // body: JSON.stringify({}),
+    });
+  }
+
+  // Save shared content to user's account
+  async saveSharedContent(shareType: 'message' | 'complete', shareData: any, title?: string) {
+    return this.request('/chats/save-shared', {
+      method: 'POST',
+      body: JSON.stringify({
+        shareType,
+        shareData,
+        title
+      }),
+    });
+  }
 
   async editUserMessage(messageId: String, data: any) {
     return this.request(`/chats/messages/${messageId}`, {

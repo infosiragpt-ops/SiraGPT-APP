@@ -518,13 +518,78 @@ router.post('/:chatId/share', authenticateToken, async (req, res) => {
       });
     }
 
-    // Aapko .env file mein BASE_URL set karna hoga (e.g., BASE_URL=http://localhost:3000)
-    const shareableLink = `/share/${shareId}`;
+    // Return just the shareId, let frontend construct the full URL
+    const shareableLink = shareId;
     res.json({ shareableLink });
 
   } catch (error) {
     console.error('Share chat error:', error);
     res.status(500).json({ error: 'Failed to create share link' });
+  }
+});
+
+// Share individual message with context
+router.post('/:chatId/messages/:messageId/share', authenticateToken, async (req, res) => {
+  try {
+    const { chatId, messageId } = req.params;
+
+    // Check if chat belongs to user
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, userId: req.user.id },
+      include: { messages: true }
+    });
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    // Find the message and get its context (user message + assistant response)
+    const messageIndex = chat.messages.findIndex(msg => msg.id === messageId);
+    if (messageIndex === -1) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    const targetMessage = chat.messages[messageIndex];
+    let userMessage, assistantMessage;
+
+    if (targetMessage.role === 'ASSISTANT') {
+      // If sharing an assistant message, find the preceding user message
+      assistantMessage = targetMessage;
+      userMessage = messageIndex > 0 ? chat.messages[messageIndex - 1] : null;
+    } else if (targetMessage.role === 'USER') {
+      // If sharing a user message, find the following assistant message
+      userMessage = targetMessage;
+      assistantMessage = messageIndex < chat.messages.length - 1 ? chat.messages[messageIndex + 1] : null;
+    }
+
+    if (!userMessage || !assistantMessage) {
+      return res.status(400).json({ error: 'Cannot share incomplete message pair' });
+    }
+
+    // Create or get existing share record for this message
+    let messageShare = await prisma.messageShare.findFirst({
+      where: { messageId: targetMessage.id }
+    });
+
+    if (!messageShare) {
+      const shareId = uuidv4();
+      messageShare = await prisma.messageShare.create({
+        data: {
+          id: shareId,
+          messageId: targetMessage.id,
+          chatId: chatId,
+          userMessageId: userMessage.id,
+          assistantMessageId: assistantMessage.id,
+          sharedAt: new Date()
+        }
+      });
+    }
+
+    const shareableLink = messageShare.id;
+    res.json({ shareableLink });
+
+  } catch (error) {
+    console.error('Share message error:', error);
+    res.status(500).json({ error: 'Failed to create message share link' });
   }
 });
 
@@ -592,5 +657,99 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
   }
 });
 
+// Save shared content to user's account
+router.post('/save-shared', authenticateToken, async (req, res) => {
+  try {
+    const { shareType, shareData, title } = req.body;
+    const userId = req.user.id;
+
+    if (!shareType || !shareData) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Create a new chat for the user
+    const chatTitle = title || (shareType === 'message' ? 'Shared Message' : 'Shared Conversation');
+    const model = shareData.chatModel || shareData.chat?.model || 'gpt-3.5-turbo';
+
+    const newChat = await prisma.chat.create({
+      data: {
+        userId: userId,
+        title: chatTitle,
+        model: model,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    });
+
+    // Add messages to the chat based on share type
+    let messages = [];
+    if (shareType === 'message') {
+      // For shared messages, add both user and assistant message
+      if (shareData.userMessage) {
+        const userMsg = await prisma.message.create({
+          data: {
+            chatId: newChat.id,
+            role: shareData.userMessage.role,
+            content: shareData.userMessage.content,
+            files: shareData.userMessage.files,
+            metadata: shareData.userMessage.metadata,
+            timestamp: new Date()
+          }
+        });
+        messages.push(userMsg);
+      }
+
+      if (shareData.assistantMessage) {
+        const assistantMsg = await prisma.message.create({
+          data: {
+            chatId: newChat.id,
+            role: shareData.assistantMessage.role,
+            content: shareData.assistantMessage.content,
+            files: shareData.assistantMessage.files,
+            metadata: shareData.assistantMessage.metadata,
+            timestamp: new Date()
+          }
+        });
+        messages.push(assistantMsg);
+      }
+    } else if (shareType === 'complete' && shareData.chat?.messages) {
+      // For complete chat sharing, add all messages
+      for (const msgData of shareData.chat.messages) {
+        const message = await prisma.message.create({
+          data: {
+            chatId: newChat.id,
+            role: msgData.role,
+            content: msgData.content,
+            files: msgData.files,
+            metadata: msgData.metadata,
+            timestamp: new Date()
+          }
+        });
+        messages.push(message);
+      }
+    }
+
+    // Return the new chat with its messages
+    const chatWithMessages = await prisma.chat.findUnique({
+      where: { id: newChat.id },
+      include: {
+        messages: {
+          orderBy: { timestamp: 'asc' }
+        }
+      }
+    });
+
+    res.json({
+      success: true,
+      chat: chatWithMessages,
+      chatId: newChat.id,
+      message: `Shared ${shareType === 'message' ? 'message' : 'conversation'} saved to your account successfully!`
+    });
+
+  } catch (error) {
+    console.error('Save shared content error:', error);
+    res.status(500).json({ error: 'Failed to save shared content' });
+  }
+});
 
 module.exports = router;

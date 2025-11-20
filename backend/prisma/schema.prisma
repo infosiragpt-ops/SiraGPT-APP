@@ -104,6 +104,7 @@ model Chat {
   // Relations
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages Message[]
+  sharedMessages MessageShare[] @relation("SharedMessages")
 
   @@map("chats")
 }
@@ -123,6 +124,20 @@ model Message {
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
   @@map("messages")
+}
+
+model MessageShare {
+  id                  String   @id @default(cuid())
+  messageId           String   // The original message that was shared
+  chatId              String   // The chat this message belongs to
+  userMessageId       String   // The user message in the pair
+  assistantMessageId  String   // The assistant message in the pair
+  sharedAt            DateTime @default(now())
+
+  // Relations
+  chat Chat @relation("SharedMessages", fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@map("message_shares")
 }
 
 model File {

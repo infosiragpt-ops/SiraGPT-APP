@@ -28,7 +28,8 @@ import {
   NetworkIcon,
   Network,
   Monitor,
-  GitBranch
+  GitBranch,
+  Share2
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -1553,6 +1554,24 @@ But first, you need to connect your Spotify account securely using the button be
     setDocumentPreviewUrl(url);
   };
 
+  // Complete chat share functionality
+  const handleCompleteShare = async () => {
+    if (!currentChat?.id) {
+      toast.error("No chat to share");
+      return;
+    }
+    
+    try {
+      const response = await apiClient.handleShare(currentChat.id);
+      const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
+      let url = `${baseUrl}/share/${response.shareableLink}`;
+      navigator.clipboard.writeText(url);
+      toast.success("Complete chat link copied to clipboard!");
+    } catch (error) {
+      toast.error(`Failed to create chat share link. ${error}`);
+    }
+  };
+
   React.useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -1670,6 +1689,202 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
   }, [currentChat, createNewChat, availableModels, selectedModel, selectChat]);
+
+  // Handle shared chat data from session storage
+  React.useEffect(() => {
+    const handleSharedChat = async () => {
+      // Check if we came from a share link
+      const urlParams = new URLSearchParams(window.location.search);
+      const fromShare = urlParams.get('from') === 'share';
+      const viewOnly = urlParams.get('view') === 'true';
+      
+      if (!fromShare) return;
+      
+      const sharedData = sessionStorage.getItem('sharedChatData');
+      if (sharedData) {
+        try {
+          const data = JSON.parse(sharedData);
+          console.log('Processing shared chat data:', data, 'viewOnly:', viewOnly);
+          
+          // Clear the session storage and URL parameter immediately
+          sessionStorage.removeItem('sharedChatData');
+          window.history.replaceState({}, '', '/chat');
+          
+          // Ensure we have a user session first
+          if (!user) {
+            console.log('No user session, waiting...');
+            setTimeout(() => handleSharedChat(), 1000);
+            return;
+          }
+
+          if (viewOnly || data.viewOnly) {
+            // For view-only mode, create a temporary chat that won't be saved
+            console.log('Creating view-only temporary chat...');
+            
+            const tempChat = {
+              id: 'temp-' + Date.now(),
+              title: data.title || 'Shared Content',
+              model: data.chatModel || selectedModel || 'gpt-3.5-turbo',
+              messages: data.messages || [],
+              userId: user.id,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              isTemporary: true
+            };
+
+            setCurrentChat(tempChat);
+            
+            toast.success(
+              data.type === 'message' 
+                ? 'Viewing shared message (temporary - not saved to your account)' 
+                : 'Viewing shared conversation (temporary - not saved to your account)'
+            );
+            
+            return;
+          }
+
+          // If we get here, it's legacy code that should redirect to the proper share pages
+          console.log('Redirecting to proper share interface...');
+          window.location.href = '/chat';
+          
+        } catch (error) {
+          console.error('Error processing shared chat data:', error);
+          toast.error('Error loading shared content');
+        }
+      }
+    };
+
+    handleSharedChat();
+  }, [user, selectedModel, availableModels, currentChat, createNewChat, selectChat]);
+
+  // Legacy shared chat handling - keeping for backward compatibility
+  React.useEffect(() => {
+    const handleLegacySharedChat = async () => {
+      // Check if we came from a share link
+      const urlParams = new URLSearchParams(window.location.search);
+      const fromShare = urlParams.get('from') === 'share';
+      const viewOnly = urlParams.get('view') === 'true';
+      
+      if (!fromShare || viewOnly) return;
+      
+      const sharedData = sessionStorage.getItem('sharedChatData');
+      if (sharedData) {
+        try {
+          const data = JSON.parse(sharedData);
+          console.log('Processing legacy shared chat data:', data);
+          
+          // Only handle if it's not view-only mode
+          if (!data.viewOnly) {
+            // Clear the session storage and URL parameter immediately
+            sessionStorage.removeItem('sharedChatData');
+            window.history.replaceState({}, '', '/chat');
+            
+            // Ensure we have a user session first
+            if (!user) {
+              console.log('No user session, waiting...');
+              setTimeout(() => handleLegacySharedChat(), 1000);
+              return;
+            }
+            
+            // Wait for models to be available before proceeding
+            if (!selectedModel || !availableModels || availableModels.length === 0) {
+              console.log('Models not ready yet, waiting...', {
+                selectedModel: !!selectedModel,
+                availableModels: availableModels?.length || 0
+              });
+              setTimeout(() => handleLegacySharedChat(), 1000);
+              return;
+            }
+            
+            console.log('User authenticated and models ready, creating shared chat...');
+            
+            // Create new chat for legacy shared content
+            setTimeout(async () => {
+              try {
+                console.log('Creating new chat for legacy shared content...');
+                console.log('Checking prerequisites - User:', !!user, 'selectedModel:', selectedModel);
+                
+                // Ensure we have the required dependencies
+                if (!user) {
+                  console.error('No user available for chat creation');
+                  toast.error('Please log in to view shared content');
+                  return;
+                }
+                
+                if (!selectedModel) {
+                  console.error('No model selected');
+                  toast.error('No AI model available. Please refresh the page.');
+                  return;
+                }
+                
+                // Create a new chat with proper parameters
+                const firstMessage = data.messages?.[0];
+                const initialContent = firstMessage?.role === 'USER' ? firstMessage.content : 'Shared conversation';
+                console.log('Creating chat with initialContent:', initialContent?.substring(0, 50) + '...');
+                
+                const newChatResult = await createNewChat('text', initialContent);
+                console.log('New chat creation result:', newChatResult);
+                
+                if (newChatResult) {
+                  console.log('Successfully created chat:', newChatResult.id);
+                  // Wait for chat to be properly established
+                  setTimeout(async () => {
+                    console.log('Adding messages to new chat...', 'Current chat:', currentChat?.id);
+                    
+                    // Skip the first message if we already used it to create the chat
+                    const messagesToAdd = firstMessage?.role === 'USER' ? data.messages.slice(1) : data.messages;
+                    
+                    // Add each message with proper delay
+                    for (let i = 0; i < messagesToAdd.length; i++) {
+                      const message = messagesToAdd[i];
+                      try {
+                        console.log(`Adding message ${i + 1}/${messagesToAdd.length}:`, {
+                          role: message.role,
+                          preview: message.content?.substring(0, 50) + '...'
+                        });
+                        
+                        await addMessage(
+                          message.role, 
+                          message.content || '', 
+                          message.files || null, 
+                          message.metadata || null
+                        );
+                        
+                        // Delay between messages
+                        if (i < messagesToAdd.length - 1) {
+                          await new Promise(resolve => setTimeout(resolve, 200));
+                        }
+                      } catch (error) {
+                        console.error(`Error adding message ${i + 1}:`, error);
+                      }
+                    }
+                    
+                    console.log('All messages added successfully');
+                    toast.success(
+                      data.type === 'message' 
+                        ? 'Shared message loaded! This is a new conversation with just that message.' 
+                        : 'Shared chat loaded! You can continue the conversation.'
+                    );
+                  }, 1200);
+                } else {
+                  console.error('Failed to create new chat for shared content');
+                  toast.error('Failed to create new chat for shared content');
+                }
+              } catch (error) {
+                console.error('Error creating chat for shared content:', error);
+                toast.error('Error creating chat for shared content');
+              }
+            }, 500);
+          }
+        } catch (error) {
+          console.error('Error processing legacy shared chat data:', error);
+          toast.error('Error loading shared content');
+        }
+      }
+    };
+
+    handleLegacySharedChat();
+  }, [user, selectedModel, availableModels, currentChat, createNewChat, selectChat]);
 
   // Listen for Computer Use extraction completion to refresh chat
   React.useEffect(() => {
@@ -2861,6 +3076,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {/* Complete Chat Share Button - only show if there's a chat with messages */}
+                {currentChat?.id && currentChat?.messages && currentChat.messages.length > 0 && !showAudioPanel && (
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={handleCompleteShare}
+                    title="Share complete chat"
+                    className="h-9 w-9"
+                  >
+                    <Share2 className="h-4 w-4" />
+                  </Button>
+                )}
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 <ThemeToggle />
                 <Button variant="ghost" size={currentPlan === 'FREE' ? 'sm' : 'icon'} onClick={() => setSubscribeOpen(true)} className={currentPlan !== 'FREE' ? 'h-9 w-9' : ''}>

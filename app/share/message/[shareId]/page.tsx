@@ -6,7 +6,7 @@ import { apiClient } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
-export default function SharedChatPage() {
+export default function SharedMessagePage() {
     const params = useParams();
     const router = useRouter();
     const shareId = params?.shareId;
@@ -14,7 +14,7 @@ export default function SharedChatPage() {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        const loadAndSaveSharedChat = async () => {
+        const loadAndSaveSharedMessage = async () => {
             if (!shareId) {
                 setError('Invalid share link');
                 setLoading(false);
@@ -22,29 +22,29 @@ export default function SharedChatPage() {
             }
 
             try {
-                // Get shared chat data
-                const data = await apiClient.shareChatIdLink(shareId as string);
-                console.log('Shared chat data:', data);
+                // Get shared message data
+                const data = await apiClient.shareMessageIdLink(shareId as string);
+                console.log('Shared message data:', data);
                 
                 // Automatically save to user's account
-                const response = await apiClient.saveSharedContent('complete', data, data.chat?.title);
+                const response = await apiClient.saveSharedContent('message', data, data.chatTitle || 'Shared Message');
                 if (response.success) {
-                    console.log('Shared conversation automatically saved to account');
-                    toast.success('Shared conversation saved to your account!');
+                    console.log('Shared message automatically saved to account');
+                    toast.success('Shared message saved to your account!');
                     // Redirect to chat immediately
                     router.push('/chat');
                 } else {
-                    setError('Failed to save shared conversation');
+                    setError('Failed to save shared message');
                     setLoading(false);
                 }
             } catch (err: any) {
-                console.error('Error loading or saving shared chat:', err);
-                setError(err.message || 'Failed to load shared chat');
+                console.error('Error loading or saving shared message:', err);
+                setError(err.message || 'Failed to load shared message');
                 setLoading(false);
             }
         };
 
-        loadAndSaveSharedChat();
+        loadAndSaveSharedMessage();
     }, [shareId, router]);
 
 
@@ -54,7 +54,7 @@ export default function SharedChatPage() {
             <div className="flex items-center justify-center min-h-screen">
                 <div className="text-center space-y-4">
                     <Loader2 className="h-8 w-8 animate-spin mx-auto" />
-                    <p className="text-muted-foreground">Loading shared conversation...</p>
+                    <p className="text-muted-foreground">Loading shared message...</p>
                 </div>
             </div>
         );
@@ -80,8 +80,8 @@ export default function SharedChatPage() {
         <div className="flex items-center justify-center min-h-screen">
             <div className="text-center space-y-4">
                 <Loader2 className="h-8 w-8 animate-spin mx-auto" />
-                <p className="text-muted-foreground">Saving shared conversation to your account...</p>
+                <p className="text-muted-foreground">Saving shared message to your account...</p>
             </div>
         </div>
     );
-} 
+}

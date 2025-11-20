@@ -311,16 +311,16 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const isThinking = isAssistant && !message.content && !message.error;
     // const isThinking = isAssistant && message.content === null;
 
-    // For Share Functioanlity
+    // For Share Functionality - Individual Message
     const handleShare = async () => {
         try {
-            const response = await apiClient.handleShare(message.chatId);
+            const response = await apiClient.shareMessage(message.id, message.chatId);
             const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
-            let url = `${baseUrl}/${response.shareableLink}`;
+            let url = `${baseUrl}/share/message/${response.shareableLink}`;
             navigator.clipboard.writeText(url);
-            toast.success("Shareable link copied to clipboard!");
+            toast.success("Message link copied to clipboard!");
         } catch (error) {
-            toast.error(`Failed to create share link. ${error}`);
+            toast.error(`Failed to create message share link. ${error}`);
         }
     };
 
