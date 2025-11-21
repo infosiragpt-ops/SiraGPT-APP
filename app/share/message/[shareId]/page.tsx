@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
@@ -12,44 +12,73 @@ export default function SharedMessagePage() {
     const shareId = params?.shareId;
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [saved, setSaved] = useState(false);
+    const saveInProgress = useRef(false);
 
     useEffect(() => {
         const loadAndSaveSharedMessage = async () => {
+            console.log('SharedMessagePage useEffect triggered, shareId:', shareId);
+
             if (!shareId) {
+                console.log('No shareId provided');
                 setError('Invalid share link');
                 setLoading(false);
                 return;
             }
 
+            // Prevent duplicate save operations
+            if (saveInProgress.current || saved) {
+                console.log('Save operation already in progress or completed', {
+                    saveInProgress: saveInProgress.current,
+                    saved: saved
+                });
+                return;
+            }
+
+            console.log('Starting save operation...');
+            saveInProgress.current = true;
+
             try {
+                console.log('Starting shared message save process for shareId:', shareId);
                 // Get shared message data
                 const data = await apiClient.shareMessageIdLink(shareId as string);
-                console.log('Shared message data:', data);
-                
+                console.log('Shared message data received:', data);
+
                 // Automatically save to user's account
+                console.log('Calling saveSharedContent...');
                 const response = await apiClient.saveSharedContent('message', data, data.chatTitle || 'Shared Message');
+                console.log('saveSharedContent response:', response);
+
                 if (response.success) {
-                    console.log('Shared message automatically saved to account');
+                    console.log('Shared message automatically saved to account, chatId:', response.chatId);
+                    setSaved(true);
                     toast.success('Shared message saved to your account!');
-                    // Redirect to chat immediately
-                    router.push('/chat');
+                    // Small delay to ensure toast is shown before redirect
+                    setTimeout(() => {
+                        console.log('Redirecting to /chat...');
+                        router.push('/chat');
+                        localStorage.setItem('currentChatId', response.chatId);
+                    }, 500);
                 } else {
+                    console.error('Failed to save shared message:', response);
                     setError('Failed to save shared message');
                     setLoading(false);
+                    saveInProgress.current = false;
                 }
             } catch (err: any) {
                 console.error('Error loading or saving shared message:', err);
                 setError(err.message || 'Failed to load shared message');
                 setLoading(false);
+                saveInProgress.current = false;
             }
         };
 
         loadAndSaveSharedMessage();
-    }, [shareId, router]);
+    }, []); // Remove shareId and router from dependencies to prevent re-runs
 
 
 
-    if (loading) {
+    if (loading && !saved) {
         return (
             <div className="flex items-center justify-center min-h-screen">
                 <div className="text-center space-y-4">
@@ -65,7 +94,7 @@ export default function SharedMessagePage() {
             <div className="flex items-center justify-center min-h-screen">
                 <div className="text-center space-y-4">
                     <p className="text-red-500 text-lg">Error: {error}</p>
-                    <button 
+                    <button
                         onClick={() => router.push('/chat')}
                         className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90"
                     >

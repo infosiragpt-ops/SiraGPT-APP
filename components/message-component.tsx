@@ -837,7 +837,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     // Check if this message contains computer use extracted data
     const getComputerUseData = () => {
         if (!parsedFiles || !Array.isArray(parsedFiles)) return null;
-        
+
         const computerUseFile = parsedFiles.find((f: any) => f.type === 'computer_use_extraction');
         return computerUseFile || null;
     };
@@ -1521,14 +1521,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
 
     return (
-        <div className="flex gap-4 my-2">
+        <div className="flex  ">
             {/* {message.role === "ASSISTANT" && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
                     <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>
                 </Avatar>
             )} */}
 
-            <div className={`flex flex-col w-full ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
+            <div className={`group flex flex-col flex-1 ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
                     <>
                         {hasFiles && (
@@ -1537,7 +1537,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             </div>
                         )}
                         {hasContent && (
-                            <Card className={`group relative p-3 w-auto max-w-[85%] md:max-w-2xl bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white`}>
+                            <Card className="relative px-4 pt-3 w-auto max-w-[85%] md:max-w-2xl rounded-2xl  bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white shadow-sm">
                                 {isEditing ? (
                                     <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
                                         <Textarea
@@ -1551,19 +1551,34 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                         </div>
                                     </div>
                                 ) : (
-                                    <>
-                                        <div className="absolute bottom-1 right-1 hidden group-hover:flex items-center gap-1 bg-background/80 backdrop-blur-sm p-1 rounded-md border">
-                                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { navigator.clipboard.writeText(message.content); toast.success("Copied!"); }} title="Copy">
-                                                <Copy size={14} />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsEditing(true)} title="Edit">
-                                                <Pencil size={14} />
-                                            </Button>
-                                        </div>
-                                        <MessageContent content={message.content} />
-                                    </>
+                                    <MessageContent content={message.content} />
                                 )}
                             </Card>
+                        )}
+                        {hasContent && !isEditing && (
+                            <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(message.content)
+                                        toast.success("Copied!")
+                                    }}
+                                    title="Copy"
+                                >
+                                    <Copy size={14} />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={() => setIsEditing(true)}
+                                    title="Edit"
+                                >
+                                    <Pencil size={14} />
+                                </Button>
+                            </div>
                         )}
                     </>
                 )}
@@ -1594,9 +1609,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <SpotifyConnectionDisplay />
                                 {/* Computer Use Extracted Data Display */}
                                 {getComputerUseData() && (
-                                    <ExtractedDataDownload 
-                                        extractedData={getComputerUseData()} 
-                                        finalUrl={getComputerUseData()?.url} 
+                                    <ExtractedDataDownload
+                                        extractedData={getComputerUseData()}
+                                        finalUrl={getComputerUseData()?.url}
                                     />
                                 )}
                                 <SpotifyResultsDisplay />

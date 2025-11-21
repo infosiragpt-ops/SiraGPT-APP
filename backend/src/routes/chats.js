@@ -34,7 +34,7 @@ router.get('/', authenticateToken, async (req, res) => {
 
     // Serialize BigInt fields before sending response
     const serializedChats = chats.map(chat => serializeChat(chat));
-    
+
     res.json({
       chats: serializedChats,
       pagination: {
@@ -532,6 +532,7 @@ router.post('/:chatId/share', authenticateToken, async (req, res) => {
 router.post('/:chatId/messages/:messageId/share', authenticateToken, async (req, res) => {
   try {
     const { chatId, messageId } = req.params;
+    console.log('messageId', messageId, chatId);
 
     // Check if chat belongs to user
     const chat = await prisma.chat.findFirst({
@@ -657,6 +658,9 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
   }
 });
 
+// In-memory cache for deduplication (consider using Redis in production)
+const saveOperationCache = new Map();
+
 // Save shared content to user's account
 router.post('/save-shared', authenticateToken, async (req, res) => {
   try {
@@ -665,6 +669,22 @@ router.post('/save-shared', authenticateToken, async (req, res) => {
 
     if (!shareType || !shareData) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Create a deduplication key based on user, share type, and content hash
+    const contentHash = shareType === 'message'
+      ? `${shareData.userMessage?.content || ''}${shareData.assistantMessage?.content || ''}`
+      : `${shareData.chat?.messages?.map(m => m.content).join('') || ''}`;
+
+    const deduplicationKey = `${userId}-${shareType}-${contentHash.substring(0, 100)}`;
+
+    // Check if this operation was performed recently (within 10 seconds)
+    const now = Date.now();
+    const recentOperation = saveOperationCache.get(deduplicationKey);
+
+    if (recentOperation && (now - recentOperation.timestamp) < 10000) {
+      console.log('Duplicate save operation detected, returning existing result');
+      return res.json(recentOperation.result);
     }
 
     // Create a new chat for the user
@@ -739,12 +759,30 @@ router.post('/save-shared', authenticateToken, async (req, res) => {
       }
     });
 
-    res.json({
+    const result = {
       success: true,
       chat: chatWithMessages,
       chatId: newChat.id,
       message: `Shared ${shareType === 'message' ? 'message' : 'conversation'} saved to your account successfully!`
+    };
+
+    // Cache the result for deduplication
+    saveOperationCache.set(deduplicationKey, {
+      timestamp: now,
+      result: result
     });
+
+    // Clean up old cache entries (keep only last 100 entries and remove entries older than 1 minute)
+    if (saveOperationCache.size > 100) {
+      const cutoffTime = now - 60000; // 1 minute ago
+      for (const [key, value] of saveOperationCache.entries()) {
+        if (value.timestamp < cutoffTime) {
+          saveOperationCache.delete(key);
+        }
+      }
+    }
+
+    res.json(result);
 
   } catch (error) {
     console.error('Save shared content error:', error);

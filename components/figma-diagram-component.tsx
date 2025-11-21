@@ -136,47 +136,54 @@ export function FigmaDiagramComponent({
                     </div>
                 </div>
             </CardHeader>
-            <CardContent className="p-0 relative group">
-                {/* Hover overlay with buttons */}
-                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-20 transition-all duration-300 z-10 flex items-center justify-center opacity-0 group-hover:opacity-100">
-                    <div className="flex gap-2">
-                        {imageUrl && (
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={handleDownload}
-                                className="gap-2 bg-white/90 hover:bg-white text-gray-800 shadow-lg"
-                            >
-                                <Download className="h-4 w-4" />
-                                <span>Download</span>
-                            </Button>
-                        )}
-                        {embedUrl && (
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={openMermaidEditor}
-                                className="gap-2 bg-white/90 hover:bg-white text-gray-800 shadow-lg"
-                            >
-                                <Edit className="h-4 w-4" />
-                                <span>Edit</span>
-                            </Button>
-                        )}
-                        {figmaFile && (
-                            <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={openInFigma}
-                                className="gap-2 bg-white/90 hover:bg-white text-gray-800 shadow-lg"
-                            >
-                                <ExternalLink className="h-4 w-4" />
-                                <span>Open in Figma</span>
-                            </Button>
-                        )}
-                    </div>
+            <CardContent className="p-0 relative group bg-gray-50 dark:bg-gray-900/30">
+                {/* Hover buttons - positioned top right */}
+                <div className="absolute top-3 right-3 z-20 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 pointer-events-none">
+                    {imageUrl && (
+                        <Button
+                            variant="secondary"
+                            size="icon"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                handleDownload()
+                            }}
+                            className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
+                            title="Download Diagram"
+                        >
+                            <Download className="h-4 w-4" />
+                        </Button>
+                    )}
+                    {embedUrl && (
+                        <Button
+                            variant="secondary"
+                            size="icon"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                openMermaidEditor()
+                            }}
+                            className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
+                            title="Edit Diagram"
+                        >
+                            <Edit className="h-4 w-4" />
+                        </Button>
+                    )}
+                    {figmaFile && (
+                        <Button
+                            variant="secondary"
+                            size="icon"
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                openInFigma()
+                            }}
+                            className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
+                            title="Open in Figma"
+                        >
+                            <ExternalLink className="h-4 w-4" />
+                        </Button>
+                    )}
                 </div>
 
-                <div className="relative w-full flex justify-center items-center bg-gray-100 dark:bg-gray-900/50">
+                <div className="relative w-full flex justify-center items-center min-h-[200px] bg-white dark:bg-gray-800/50 p-4">
                     {isLoading ? (
                         <div className="flex flex-col items-center gap-2 text-gray-500 dark:text-gray-400 min-h-[400px]">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 dark:border-gray-100"></div>
@@ -186,13 +193,13 @@ export function FigmaDiagramComponent({
                         <>
                             <button
                                 onClick={() => setIsModalOpen(true)}
-                                className="w-full flex justify-center cursor-zoom-in"
+                                className="w-full flex justify-center cursor-zoom-in hover:opacity-95 transition-opacity"
                             >
                                 <img
                                     src={imageUrl}
                                     alt="Flowchart Diagram"
                                     className="w-full h-auto rounded-lg object-contain"
-                                    style={{ maxHeight: '700px' }}
+                                    style={{ minHeight: '300px', maxHeight: '800px' }}
                                     onError={() => {
                                         if (mermaidCode && displayMode === 'image') {
                                             setDisplayMode('mermaid')

@@ -700,6 +700,21 @@ class ApiClient {
     return response.blob();
   }
 
+  async exportUsersCsv() {
+    const response = await fetch(`${this.baseURL}/admin/users/export/csv`, {
+      headers: {
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text().catch(() => 'Failed to export users');
+      throw new Error(error || `HTTP ${response.status}`);
+    }
+
+    return response.text();
+  }
+
   // Download endpoints
   async downloadExcel(messageId: string, filename?: string) {
     const url = `${this.baseURL}/download/excel`;

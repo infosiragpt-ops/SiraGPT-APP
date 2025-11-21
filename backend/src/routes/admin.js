@@ -155,7 +155,7 @@ router.get('/users', async (req, res) => {
     ]);
 
     const serializedUsers = users.map(user => serializeUser(user));
-    
+
     res.json({
       users: serializedUsers,
       pagination: {
@@ -543,3 +543,43 @@ router.get('/stripe/invoice/:invoiceId', async (req, res) => {
     res.status(500).json({ error: 'Failed to download invoice' });
   }
 });
+
+// Export all user emails to CSV
+router.get('/users/export/csv', async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        email: true,
+        name: true,
+        createdAt: true,
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+
+    if (!users.length) {
+      return res.status(404).send('No users found to export.');
+    }
+
+    // CSV header
+    let csv = 'Email,Name,Registration Date\n';
+
+    // CSV rows
+    users.forEach(user => {
+      const email = user.email || '';
+      const name = user.name || '';
+      const date = user.createdAt ? user.createdAt.toISOString().split('T')[0] : '';
+      csv += `"${email}","${name}","${date}"\n`;
+    });
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=user-emails.csv');
+    res.status(200).send(csv);
+
+  } catch (error) {
+    console.error('Export users error:', error);
+    res.status(500).json({ error: 'Failed to export users' });
+  }
+});
+

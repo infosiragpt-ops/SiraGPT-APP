@@ -15,23 +15,23 @@ export function ImageModal({ isOpen, onClose, imageUrl, altText }: ImageModalPro
 
     return (
         <div
-            className="fixed inset-0 z-50 flex justify-center bg-black bg-opacity-75 overflow-y-auto"
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 md:p-8 transition-all animate-in fade-in duration-200"
             onClick={onClose}
         >
             <div
-                className="relative max-w-4xl w-full p-4"
-                onClick={(e) => e.stopPropagation()} // Prevent closing when clicking on the image
+                className="relative max-w-full max-h-full flex items-center justify-center outline-none"
+                onClick={(e) => e.stopPropagation()}
             >
                 <img
                     src={imageUrl}
                     alt={altText}
-                    className="w-full h-auto object-contain"
+                    className="max-w-[95vw] max-h-[90vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
                 />
                 <button
                     onClick={onClose}
-                    className="absolute top-4 right-4 text-white bg-gray-800 rounded-full p-2 hover:bg-gray-700"
+                    className="absolute -top-2 -right-2 md:-top-4 md:-right-4 text-white bg-black/50 hover:bg-black/70 rounded-full p-2 transition-colors border border-white/20 backdrop-blur-md z-10"
                 >
-                    <X className="h-6 w-6" />
+                    <X className="h-5 w-5" />
                 </button>
             </div>
         </div>

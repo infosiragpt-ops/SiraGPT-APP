@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
-import { 
+import {
   Shield,
   Eye,
   EyeOff,
@@ -53,14 +53,14 @@ export default function UserSettings() {
         currentPassword: passwordData.currentPassword,
         newPassword: passwordData.newPassword
       })
-      
+
       if (response.success) {
         setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' })
         toast.success('Password updated successfully!')
       } else {
         toast.error(response.message || 'Failed to update password')
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Password update error:', error)
       toast.error(error.message || 'Failed to update password. Please try again.')
     } finally {
@@ -152,7 +152,7 @@ export default function UserSettings() {
             </Button>
           </div>
 
-          
+
         </CardContent>
       </Card>
 

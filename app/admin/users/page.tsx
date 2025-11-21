@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Search, MoreHorizontal, UserPlus } from "lucide-react"
+import { Search, MoreHorizontal, UserPlus, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -88,6 +88,7 @@ export default function UsersPage() {
   // Per-form field errors (inline)
   const [addFormErrors, setAddFormErrors] = useState<FormErrors>({})
   const [editFormErrors, setEditFormErrors] = useState<FormErrors>({})
+  const [isExporting, setIsExporting] = useState(false)
 
   // Load users from API
   // NOTE: this now returns the API response so callers can inspect the returned users immediately
@@ -156,163 +157,163 @@ export default function UsersPage() {
       monthlyLimit: u.monthlyLimit ?? 0,
     })
     setEditFormErrors({})
-     setTimeout(() => setShowEditModal(true), 0)
+    setTimeout(() => setShowEditModal(true), 0)
   }
 
-// 2) Replace your existing handleAddUser function with this improved version:
+  // 2) Replace your existing handleAddUser function with this improved version:
 
-const handleAddUser = async () => {
-  // clear previous errors
-  setAddFormErrors({})
+  const handleAddUser = async () => {
+    // clear previous errors
+    setAddFormErrors({})
 
-  // basic client-side validation
-  const errs: FormErrors = {}
-  if (!form.name) errs.name = "Name is required"
-  if (!form.email) errs.email = "Email is required"
-  if (!form.password) errs.password = "Password is required"
-  else if (String(form.password).length < 6) errs.password = "Password must be at least 6 characters"
+    // basic client-side validation
+    const errs: FormErrors = {}
+    if (!form.name) errs.name = "Name is required"
+    if (!form.email) errs.email = "Email is required"
+    if (!form.password) errs.password = "Password is required"
+    else if (String(form.password).length < 6) errs.password = "Password must be at least 6 characters"
 
-  if (Object.keys(errs).length) {
-    setAddFormErrors(errs)
-    toast.error("Please fix the highlighted fields")
-    return
-  }
-
-  setIsSaving(true)
-  try {
-    const payload = {
-      name: form.name,
-      email: form.email,
-      password: form.password,
-      plan: form.plan,
-      isAdmin: !!form.isAdmin,
-      monthlyLimit: Number(form.monthlyLimit ?? 0),
+    if (Object.keys(errs).length) {
+      setAddFormErrors(errs)
+      toast.error("Please fix the highlighted fields")
+      return
     }
 
-    const res = await apiClient.createUserAdmin(payload)
+    setIsSaving(true)
+    try {
+      const payload = {
+        name: form.name,
+        email: form.email,
+        password: form.password,
+        plan: form.plan,
+        isAdmin: !!form.isAdmin,
+        monthlyLimit: Number(form.monthlyLimit ?? 0),
+      }
 
-    if (res && res.user) {
-      toast.success("User created")
+      const res = await apiClient.createUserAdmin(payload)
+
+      if (res && res.user) {
+        toast.success("User created")
+        setShowAddModal(false)
+        setAddFormErrors({})
+        await loadUsers({ page: 1 })
+        setIsSaving(false)
+        return
+      }
+
+      // fallback success-ish behavior
+      toast.success("User registered (fallback). Refreshing list...")
       setShowAddModal(false)
       setAddFormErrors({})
       await loadUsers({ page: 1 })
+    } catch (err: any) {
+      console.error("Add user error", err)
+
+      // Try to extract server validation errors robustly
+      const serverErrors = extractServerErrors(err)
+      if (serverErrors) {
+        const mapped = mapValidationErrors(serverErrors)
+        setAddFormErrors(mapped)
+        // keep modal open for fixes
+        toast.error("Validation error — please fix the highlighted fields")
+      } else if (err?.details && (err.details.error || err.details.message)) {
+        const msg = err.details.error || err.details.message
+        setAddFormErrors({ general: msg })
+        toast.error(msg)
+      } else if (err?.error) {
+        setAddFormErrors({ general: err.error })
+        toast.error(err.error)
+      } else {
+        const msg = err?.message || "Failed to create user"
+        setAddFormErrors({ general: msg })
+        toast.error(msg)
+      }
+    } finally {
       setIsSaving(false)
+    }
+  }
+
+  // 3) Replace your existing handleEditUser with this version (supports optional password and inline errors):
+
+  const handleEditUser = async () => {
+    if (!editingUser) return
+
+    // clear previous errors
+    setEditFormErrors({})
+
+    // client-side checks: if admin entered a password ensure min length, otherwise skip
+    if (form.password && String(form.password).length > 0 && String(form.password).length < 6) {
+      setEditFormErrors({ password: "Password must be at least 6 characters" })
+      toast.error("Please fix the highlighted fields")
       return
     }
 
-    // fallback success-ish behavior
-    toast.success("User registered (fallback). Refreshing list...")
-    setShowAddModal(false)
-    setAddFormErrors({})
-    await loadUsers({ page: 1 })
-  } catch (err: any) {
-    console.error("Add user error", err)
+    setIsSaving(true)
+    try {
+      // Build payload only with fields that changed to avoid accidental overwrites
+      const payload: any = {}
+      console.log(form)
+      if (String(form.name ?? "") !== String(editingUser.name ?? "")) {
+        payload.name = form.name
+      }
 
-    // Try to extract server validation errors robustly
-    const serverErrors = extractServerErrors(err)
-    if (serverErrors) {
-      const mapped = mapValidationErrors(serverErrors)
-      setAddFormErrors(mapped)
-      // keep modal open for fixes
-      toast.error("Validation error — please fix the highlighted fields")
-    } else if (err?.details && (err.details.error || err.details.message)) {
-      const msg = err.details.error || err.details.message
-      setAddFormErrors({ general: msg })
-      toast.error(msg)
-    } else if (err?.error) {
-      setAddFormErrors({ general: err.error })
-      toast.error(err.error)
-    } else {
-      const msg = err?.message || "Failed to create user"
-      setAddFormErrors({ general: msg })
-      toast.error(msg)
-    }
-  } finally {
-    setIsSaving(false)
-  }
-}
+      if (String(form.plan ?? "") !== String(editingUser.plan ?? "")) {
+        payload.plan = form.plan
+      }
 
-// 3) Replace your existing handleEditUser with this version (supports optional password and inline errors):
+      if (Boolean(form.isAdmin) !== Boolean(editingUser.isAdmin)) {
+        payload.isAdmin = form.isAdmin
+      }
 
-const handleEditUser = async () => {
-  if (!editingUser) return
+      // monthlyLimit — allow 0 and only send if it's different
+      const currentMl = Number(editingUser.monthlyLimit ?? 0)
+      const newMl = Number(form.monthlyLimit ?? 0)
+      if (!Number.isNaN(newMl) && newMl !== currentMl) {
+        payload.monthlyLimit = newMl
+      }
 
-  // clear previous errors
-  setEditFormErrors({})
+      // include password only when admin typed one (for reset)
+      if (form.password && String(form.password).length >= 6) {
+        payload.password = form.password
+      }
 
-  // client-side checks: if admin entered a password ensure min length, otherwise skip
-  if (form.password && String(form.password).length > 0 && String(form.password).length < 6) {
-    setEditFormErrors({ password: "Password must be at least 6 characters" })
-    toast.error("Please fix the highlighted fields")
-    return
-  }
+      if (Object.keys(payload).length === 0) {
+        toast.info("No changes to save")
+        setIsSaving(false)
+        setShowEditModal(false)
+        setEditingUser(null)
+        return
+      }
 
-  setIsSaving(true)
-  try {
-    // Build payload only with fields that changed to avoid accidental overwrites
-    const payload: any = {}
-    console.log(form)
-    if (String(form.name ?? "") !== String(editingUser.name ?? "")) {
-      payload.name = form.name
-    }
+      await apiClient.updateUser(editingUser.id, payload)
 
-    if (String(form.plan ?? "") !== String(editingUser.plan ?? "")) {
-      payload.plan = form.plan
-    }
-
-    if (Boolean(form.isAdmin) !== Boolean(editingUser.isAdmin)) {
-      payload.isAdmin = form.isAdmin
-    }
-
-    // monthlyLimit — allow 0 and only send if it's different
-    const currentMl = Number(editingUser.monthlyLimit ?? 0)
-    const newMl = Number(form.monthlyLimit ?? 0)
-    if (!Number.isNaN(newMl) && newMl !== currentMl) {
-      payload.monthlyLimit = newMl
-    }
-
-    // include password only when admin typed one (for reset)
-    if (form.password && String(form.password).length >= 6) {
-      payload.password = form.password
-    }
-
-    if (Object.keys(payload).length === 0) {
-      toast.info("No changes to save")
-      setIsSaving(false)
+      toast.success("User updated")
       setShowEditModal(false)
       setEditingUser(null)
-      return
+      setEditFormErrors({})
+      await loadUsers({ page })
+    } catch (err: any) {
+      console.error("Update user error", err)
+
+      const serverErrors = extractServerErrors(err)
+      if (serverErrors) {
+        const mapped = mapValidationErrors(serverErrors)
+        setEditFormErrors(mapped)
+        toast.error("Validation error — please fix the highlighted fields")
+      } else if (err?.details && (err.details.error || err.details.message)) {
+        const msg = err.details.error || err.details.message
+        setEditFormErrors({ general: msg })
+        toast.error(msg)
+      } else if (err?.error) {
+        setEditFormErrors({ general: err.error })
+        toast.error(err.error)
+      } else {
+        toast.error(err?.message || "Failed to update user")
+      }
+    } finally {
+      setIsSaving(false)
     }
-
-    await apiClient.updateUser(editingUser.id, payload)
-
-    toast.success("User updated")
-    setShowEditModal(false)
-    setEditingUser(null)
-    setEditFormErrors({})
-    await loadUsers({ page })
-  } catch (err: any) {
-    console.error("Update user error", err)
-
-    const serverErrors = extractServerErrors(err)
-    if (serverErrors) {
-      const mapped = mapValidationErrors(serverErrors)
-      setEditFormErrors(mapped)
-      toast.error("Validation error — please fix the highlighted fields")
-    } else if (err?.details && (err.details.error || err.details.message)) {
-      const msg = err.details.error || err.details.message
-      setEditFormErrors({ general: msg })
-      toast.error(msg)
-    } else if (err?.error) {
-      setEditFormErrors({ general: err.error })
-      toast.error(err.error)
-    } else {
-      toast.error(err?.message || "Failed to update user")
-    }
-  } finally {
-    setIsSaving(false)
   }
-}
 
   // Start deletion flow by showing confirmation dialog
   const confirmDeleteUser = (id: string, name?: string) => {
@@ -338,6 +339,29 @@ const handleEditUser = async () => {
 
   const plans = useMemo(() => ["All", "FREE", "PRO", "PRO_MAX", "ENTERPRISE"], [])
 
+  const handleExport = async () => {
+    setIsExporting(true)
+    try {
+      const data = await apiClient.exportUsersCsv()
+
+      // Create a Blob from the CSV data
+      const blob = new Blob([data], { type: "text/csv;charset=utf-8;" })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.setAttribute("href", url)
+      link.setAttribute("download", "user-emails.csv")
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      toast.success("Emails exported successfully")
+    } catch (err: any) {
+      console.error("Export error", err)
+      toast.error(err?.message || "Failed to export emails")
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
   return (
     <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
@@ -355,6 +379,11 @@ const handleEditUser = async () => {
             <UserPlus className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
             <span className="hidden sm:inline">Add User</span>
             <span className="sm:hidden">Add</span>
+          </Button>
+          <Button onClick={handleExport} size="sm" variant="outline" className="text-sm" disabled={isExporting}>
+            <Download className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
+            <span className="hidden sm:inline">{isExporting ? "Exporting..." : "Export Emails"}</span>
+            <span className="sm:hidden">Export</span>
           </Button>
         </div>
       </div>
@@ -494,260 +523,260 @@ const handleEditUser = async () => {
       </Card>
 
       {/* Add User Modal */}
-<Dialog
-  open={showAddModal}
-  onOpenChange={(open) => {
-    // clear errors when the modal is closed
-    if (!open) setAddFormErrors({})
-    setShowAddModal(open)
-  }}
->
-  <DialogContent className="max-w-lg">
-    <DialogHeader>
-      <DialogTitle>Create User</DialogTitle>
-      <CardDescription>Fill in the details below to add a new user.</CardDescription>
-    </DialogHeader>
+      <Dialog
+        open={showAddModal}
+        onOpenChange={(open) => {
+          // clear errors when the modal is closed
+          if (!open) setAddFormErrors({})
+          setShowAddModal(open)
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create User</DialogTitle>
+            <CardDescription>Fill in the details below to add a new user.</CardDescription>
+          </DialogHeader>
 
-    {/* Use a form so Enter submits naturally */}
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        handleAddUser()
-      }}
-      className="space-y-6 mt-4"
-    >
-      {/* Basic Info */}
-      <div className="space-y-4">
-        <div>
-          <Label>Name</Label>
-          <Input
-            autoFocus
-            aria-invalid={!!addFormErrors.name}
-            className={addFormErrors.name ? "border-red-600" : ""}
-            placeholder="John Doe"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          {addFormErrors.name && <p className="text-sm text-red-600 mt-1">{addFormErrors.name}</p>}
-        </div>
-
-        <div>
-          <Label>Email</Label>
-          <Input
-            type="email"
-            aria-invalid={!!addFormErrors.email}
-            className={addFormErrors.email ? "border-red-600" : ""}
-            placeholder="john@example.com"
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-          />
-          {addFormErrors.email && <p className="text-sm text-red-600 mt-1">{addFormErrors.email}</p>}
-        </div>
-
-        <div>
-          <Label>Password</Label>
-          <Input
-            type="password"
-            aria-invalid={!!addFormErrors.password}
-            className={addFormErrors.password ? "border-red-600" : ""}
-            placeholder="••••••••"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-          />
-          {addFormErrors.password ? (
-            <p className="text-sm text-red-600 mt-1">{addFormErrors.password}</p>
-          ) : (
-            <p className="text-xs text-muted-foreground mt-1">Min 6 characters.</p>
-          )}
-        </div>
-      </div>
-
-      <hr />
-
-      {/* Permissions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <Label>Plan</Label>
-          <Select value={form.plan} onValueChange={(v) => setForm({ ...form, plan: v })}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select a plan" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="FREE">Free</SelectItem>
-              <SelectItem value="PRO">Pro</SelectItem>
-              <SelectItem value="PRO_MAX">Pro Max</SelectItem>
-              <SelectItem value="ENTERPRISE">Enterprise</SelectItem>
-            </SelectContent>
-          </Select>
-          {addFormErrors.plan && <p className="text-sm text-red-600 mt-1">{addFormErrors.plan}</p>}
-        </div>
-
-        <div>
-          <Label>Monthly Limit</Label>
-          <Input
-            type="number"
-            min={0}
-            step={1}
-            aria-invalid={!!addFormErrors.monthlyLimit}
-            className={addFormErrors.monthlyLimit ? "border-red-600" : ""}
-            placeholder="1000"
-            value={String(form.monthlyLimit ?? 0)}
-            onChange={(e) => setForm({ ...form, monthlyLimit: parseMonthlyLimit(e.target.value) })}
-          />
-          {addFormErrors.monthlyLimit ? (
-            <p className="text-sm text-red-600 mt-1">{addFormErrors.monthlyLimit}</p>
-          ) : (
-            <p className="text-xs text-muted-foreground mt-1">Number of credits per month.</p>
-          )}
-        </div>
-      </div>
-
-      {/* Admin toggle */}
-      <div className="flex items-center gap-3 bg-muted/30 p-3 rounded-lg">
-        <Checkbox id="isAdmin" checked={form.isAdmin} onCheckedChange={(v) => setForm({ ...form, isAdmin: !!v })} />
-        <Label htmlFor="isAdmin">Grant Admin Access</Label>
-      </div>
-
-      {/* General/server error */}
-      {addFormErrors.general && <div className="text-sm text-red-600">{addFormErrors.general}</div>}
-
-      <DialogFooter className="mt-2">
-        <div className="flex gap-2 w-full justify-end">
-          <Button
-            variant="outline"
-            type="button"
-            onClick={() => {
-              setShowAddModal(false)
-              setAddFormErrors({})
+          {/* Use a form so Enter submits naturally */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleAddUser()
             }}
-            disabled={isSaving}
+            className="space-y-6 mt-4"
           >
-            Cancel
-          </Button>
+            {/* Basic Info */}
+            <div className="space-y-4">
+              <div>
+                <Label>Name</Label>
+                <Input
+                  autoFocus
+                  aria-invalid={!!addFormErrors.name}
+                  className={addFormErrors.name ? "border-red-600" : ""}
+                  placeholder="John Doe"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+                {addFormErrors.name && <p className="text-sm text-red-600 mt-1">{addFormErrors.name}</p>}
+              </div>
 
-          <Button type="submit" disabled={isSaving}>
-            {isSaving ? "Saving..." : "Create User"}
-          </Button>
-        </div>
-      </DialogFooter>
-    </form>
-  </DialogContent>
-</Dialog>
+              <div>
+                <Label>Email</Label>
+                <Input
+                  type="email"
+                  aria-invalid={!!addFormErrors.email}
+                  className={addFormErrors.email ? "border-red-600" : ""}
+                  placeholder="john@example.com"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                />
+                {addFormErrors.email && <p className="text-sm text-red-600 mt-1">{addFormErrors.email}</p>}
+              </div>
+
+              <div>
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  aria-invalid={!!addFormErrors.password}
+                  className={addFormErrors.password ? "border-red-600" : ""}
+                  placeholder="••••••••"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                />
+                {addFormErrors.password ? (
+                  <p className="text-sm text-red-600 mt-1">{addFormErrors.password}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-1">Min 6 characters.</p>
+                )}
+              </div>
+            </div>
+
+            <hr />
+
+            {/* Permissions */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>Plan</Label>
+                <Select value={form.plan} onValueChange={(v) => setForm({ ...form, plan: v })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a plan" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="FREE">Free</SelectItem>
+                    <SelectItem value="PRO">Pro</SelectItem>
+                    <SelectItem value="PRO_MAX">Pro Max</SelectItem>
+                    <SelectItem value="ENTERPRISE">Enterprise</SelectItem>
+                  </SelectContent>
+                </Select>
+                {addFormErrors.plan && <p className="text-sm text-red-600 mt-1">{addFormErrors.plan}</p>}
+              </div>
+
+              <div>
+                <Label>Monthly Limit</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step={1}
+                  aria-invalid={!!addFormErrors.monthlyLimit}
+                  className={addFormErrors.monthlyLimit ? "border-red-600" : ""}
+                  placeholder="1000"
+                  value={String(form.monthlyLimit ?? 0)}
+                  onChange={(e) => setForm({ ...form, monthlyLimit: parseMonthlyLimit(e.target.value) })}
+                />
+                {addFormErrors.monthlyLimit ? (
+                  <p className="text-sm text-red-600 mt-1">{addFormErrors.monthlyLimit}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-1">Number of credits per month.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Admin toggle */}
+            <div className="flex items-center gap-3 bg-muted/30 p-3 rounded-lg">
+              <Checkbox id="isAdmin" checked={form.isAdmin} onCheckedChange={(v) => setForm({ ...form, isAdmin: !!v })} />
+              <Label htmlFor="isAdmin">Grant Admin Access</Label>
+            </div>
+
+            {/* General/server error */}
+            {addFormErrors.general && <div className="text-sm text-red-600">{addFormErrors.general}</div>}
+
+            <DialogFooter className="mt-2">
+              <div className="flex gap-2 w-full justify-end">
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => {
+                    setShowAddModal(false)
+                    setAddFormErrors({})
+                  }}
+                  disabled={isSaving}
+                >
+                  Cancel
+                </Button>
+
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? "Saving..." : "Create User"}
+                </Button>
+              </div>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit User Modal */}
 
-<Dialog
-  open={showEditModal}
-  onOpenChange={(open) => {
-    if (!open) {
-      setEditingUser(null)
-      setEditFormErrors({})
-      // keep form password cleared when closing
-      setForm(f => ({ ...f, password: "" }))
-      
-    }
-    setShowEditModal(open)
-  }}
->
-  <DialogContent className="max-w-lg">
-    <DialogHeader>
-      <DialogTitle>Edit User</DialogTitle>
-      <CardDescription>Update user details.</CardDescription>
-    </DialogHeader>
+      <Dialog
+        open={showEditModal}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingUser(null)
+            setEditFormErrors({})
+            // keep form password cleared when closing
+            setForm(f => ({ ...f, password: "" }))
 
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        handleEditUser()
-      }}
-      className="space-y-6 mt-4"
-    >
-      <div className="space-y-4">
-        <div>
-          <Label>Name</Label>
-          <Input
-            className={editFormErrors.name ? "border-red-600" : ""}
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          {editFormErrors.name && <p className="text-sm text-red-600 mt-1">{editFormErrors.name}</p>}
-        </div>
+          }
+          setShowEditModal(open)
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit User</DialogTitle>
+            <CardDescription>Update user details.</CardDescription>
+          </DialogHeader>
 
-        <div>
-          <Label>Email</Label>
-          <Input
-            className={editFormErrors.email ? "border-red-600" : ""}
-            value={form.email}
-            disabled
-          />
-          {editFormErrors.email && <p className="text-sm text-red-600 mt-1">{editFormErrors.email}</p>}
-        </div>
-
-      </div>
-
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <Label>Plan</Label>
-          <Select value={form.plan} onValueChange={(v) => setForm({ ...form, plan: v })}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="FREE">FREE</SelectItem>
-              <SelectItem value="PRO">PRO</SelectItem>
-              <SelectItem value="PRO_MAX">PRO MAX</SelectItem>
-              <SelectItem value="ENTERPRISE">ENTERPRISE</SelectItem>
-            </SelectContent>
-          </Select>
-          {editFormErrors.plan && <p className="text-sm text-red-600 mt-1">{editFormErrors.plan}</p>}
-        </div>
-
-        <div>
-          <Label>Monthly limit</Label>
-          <Input
-            className={editFormErrors.monthlyLimit ? "border-red-600" : ""}
-            type="number"
-            min={0}
-            step={1}
-            value={form.monthlyLimit === null ? "" : String(form.monthlyLimit)}
-            onChange={(e) => setForm({ ...form, monthlyLimit: parseMonthlyLimit(e.target.value) })}
-          />
-          {editFormErrors.monthlyLimit && <p className="text-sm text-red-600 mt-1">{editFormErrors.monthlyLimit}</p>}
-        </div>
-      </div>
-   {/* Grant admin access (same UI as Add modal) */}
-      <div className="flex items-center gap-3 bg-muted/30 p-3 rounded-lg">
-        <Checkbox
-          id="isAdminEdit"
-          checked={form.isAdmin}
-          onCheckedChange={(v) => setForm({ ...form, isAdmin: !!v })}
-        />
-        <Label htmlFor="isAdminEdit">Grant Admin Access</Label>
-      </div>
-      {editFormErrors.general && <div className="text-sm text-red-600 mt-1">{editFormErrors.general}</div>}
-
-      <DialogFooter className="mt-2">
-        <div className="flex gap-2 w-full justify-end">
-          <Button
-            variant="outline"
-            type="button"
-            onClick={() => {
-              setShowEditModal(false)
-              setEditFormErrors({})
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleEditUser()
             }}
-            disabled={isSaving}
+            className="space-y-6 mt-4"
           >
-            Cancel
-          </Button>
-          <Button type="submit" disabled={isSaving}>
-            {isSaving ? "Saving..." : "Save"}
-          </Button>
-        </div>
-      </DialogFooter>
-    </form>
-  </DialogContent>
-</Dialog>
+            <div className="space-y-4">
+              <div>
+                <Label>Name</Label>
+                <Input
+                  className={editFormErrors.name ? "border-red-600" : ""}
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+                {editFormErrors.name && <p className="text-sm text-red-600 mt-1">{editFormErrors.name}</p>}
+              </div>
+
+              <div>
+                <Label>Email</Label>
+                <Input
+                  className={editFormErrors.email ? "border-red-600" : ""}
+                  value={form.email}
+                  disabled
+                />
+                {editFormErrors.email && <p className="text-sm text-red-600 mt-1">{editFormErrors.email}</p>}
+              </div>
+
+            </div>
+
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>Plan</Label>
+                <Select value={form.plan} onValueChange={(v) => setForm({ ...form, plan: v })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="FREE">FREE</SelectItem>
+                    <SelectItem value="PRO">PRO</SelectItem>
+                    <SelectItem value="PRO_MAX">PRO MAX</SelectItem>
+                    <SelectItem value="ENTERPRISE">ENTERPRISE</SelectItem>
+                  </SelectContent>
+                </Select>
+                {editFormErrors.plan && <p className="text-sm text-red-600 mt-1">{editFormErrors.plan}</p>}
+              </div>
+
+              <div>
+                <Label>Monthly limit</Label>
+                <Input
+                  className={editFormErrors.monthlyLimit ? "border-red-600" : ""}
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={form.monthlyLimit === null ? "" : String(form.monthlyLimit)}
+                  onChange={(e) => setForm({ ...form, monthlyLimit: parseMonthlyLimit(e.target.value) })}
+                />
+                {editFormErrors.monthlyLimit && <p className="text-sm text-red-600 mt-1">{editFormErrors.monthlyLimit}</p>}
+              </div>
+            </div>
+            {/* Grant admin access (same UI as Add modal) */}
+            <div className="flex items-center gap-3 bg-muted/30 p-3 rounded-lg">
+              <Checkbox
+                id="isAdminEdit"
+                checked={form.isAdmin}
+                onCheckedChange={(v) => setForm({ ...form, isAdmin: !!v })}
+              />
+              <Label htmlFor="isAdminEdit">Grant Admin Access</Label>
+            </div>
+            {editFormErrors.general && <div className="text-sm text-red-600 mt-1">{editFormErrors.general}</div>}
+
+            <DialogFooter className="mt-2">
+              <div className="flex gap-2 w-full justify-end">
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => {
+                    setShowEditModal(false)
+                    setEditFormErrors({})
+                  }}
+                  disabled={isSaving}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       {/* Delete confirmation dialog (replaces browser confirm) */}
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <DialogContent>

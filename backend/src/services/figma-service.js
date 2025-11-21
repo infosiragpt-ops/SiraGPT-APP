@@ -32,14 +32,14 @@ Your task is to generate Mermaid syntax based on the user's request. Do not prov
 
 **Instructions for Quality:**
 1.  **Analyze the Request:** Carefully understand the user's prompt to select the most appropriate diagram type. For complex requests, break down the problem and represent it logically.
-2.  **Layout Preference:** For flowcharts, prefer a left-to-right layout (flowchart LR) unless a top-down flow is more logical for the specific request. This creates a more horizontal,
+2.  **Layout Preference:** For flowcharts, prefer a top-down layout (flowchart TD) as the default. Only use left-to-right (LR) if specifically requested or if the diagram is extremely wide. This is crucial for readability on standard screens.
 3.  **Use Advanced Features:** Don't stick to basic syntax. Employ subgraphs, different arrow types, and comments where necessary to improve clarity.
 4.  **Styling:** Apply styling to make the diagrams more readable and professional. Use 'classDef' to define styles for nodes (e.g., colors, borders). Assign classes to nodes using ':::' operator.
 5.  **Complexity:** For complex prompts, generate a detailed and comprehensive diagram. Don't oversimplify.
 
-**Horizontal Flowchart Example (Preferred):**
+**Vertical Flowchart Example (Preferred):**
 \`\`\`mermaid
-flowchart LR
+flowchart TD
     subgraph "User Authentication"
         A[Start] --> B{User Logged In?};
         B -- No --> C[Show Login Page];
