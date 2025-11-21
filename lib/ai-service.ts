@@ -114,7 +114,11 @@ export class AIService {
 
   }
 
-  async classifyIntent(prompt: string, conversationHistory: any[] = []): Promise<string> {
+  async classifyIntent(
+    prompt: string,
+    conversationHistory: any[] = [],
+    signal?: AbortSignal
+  ): Promise<string> {
 
     // const intent = await this.analyzeIntent(prompt);
     // if (intent) {
@@ -151,10 +155,11 @@ IMPORTANT:
 - Only classify as 'webdev' if the user is **creating** or **building** a UI or web page. If the request involves **debugging**, **explaining**, or **reviewing code**, classify it as 'text'.
 - If the user asks for **specific languages** (e.g., "HTML", "React", "CSS"), check if the request is related to **building** a UI. If yes, classify as 'webdev'.
 - If the user is asking for a general explanation of something (e.g., "What is React?"), classify as 'text'.
+- one more if user ask for website so create carefully detect what user want not give any developing or code detect as webdev first analyze what user want sometime they want another language code for example they want a python code so give them that code that not a webssdev.
 
 Examples:
 - "Design a dark mode developer portfolio" → 'webdev' (web development)
-- "Create a React component" → 'webdev' (web development) 
+ 
 - "Build a landing page" → 'webdev' (web development)
 - "Make me a website for my business" → 'webdev' (web development)
 - "Create HTML/CSS for a login form" → 'webdev' (web development)
@@ -186,17 +191,21 @@ Respond with only one word.
       messages.push({ role: "user", content: prompt });
 
       // const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/proxy/chat/completions`, {
-
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-3.5-turbo",
-          messages,
-        }),
-      });
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/proxy/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "gpt-3.5-turbo",
+            messages,
+          }),
+          // Allow caller to abort the request (used by Stop button)
+          signal,
+        }
+      );
 
       if (!response.ok) throw new Error(`API error: ${response.statusText}`);
       const data = await response.json();
@@ -208,7 +217,13 @@ Respond with only one word.
         return intent;
       }
       return 'text'; // Default fallback
-    } catch (error) {
+    } catch (error: any) {
+      // If this was explicitly aborted (e.g. user pressed Stop), don't try to
+      // recover or return any fallback intent. Let caller decide what to do.
+      if (error?.name === 'AbortError') {
+        throw error;
+      }
+
       console.error("Intent classification failed:", error);
       const fallbackIntent = await this.analyzeIntent(prompt);
       return fallbackIntent || 'text';

@@ -1164,6 +1164,10 @@ function ChatInterfaceContent() {
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
 
+  // Local sending / intent state so Stop button appears immediately on Enter
+  const [isSending, setIsSending] = React.useState(false);
+  const intentAbortControllerRef = React.useRef<AbortController | null>(null);
+
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
@@ -1954,6 +1958,7 @@ But first, you need to connect your Spotify account securely using the button be
       });
     }
 
+ 
     try {
       // After optimistic update, run the logic.
       // For existing chats, we pass `true` to `addMessage` to skip re-adding the user message.
@@ -2071,6 +2076,7 @@ But first, you need to connect your Spotify account securely using the button be
         }
         return;
       }
+   
 
       // Check if Flow Chart Diagram tool is active - if so, skip intent detection and go directly to flow chart
       if (isFlowChartDiagramActive) {
@@ -2081,8 +2087,20 @@ But first, you need to connect your Spotify account securely using the button be
         }
         return;
       }
+      // Mark that we started handling the message so Stop button can appear immediately
+      setIsSending(true);
+      // Classify intent (can be aborted via Stop button)
+      const intentController = new AbortController();
+      intentAbortControllerRef.current = intentController;
 
-      const intent = await aiService.classifyIntent(msg, chatToUpdate?.messages || []);
+      const intent = await aiService.classifyIntent(
+        msg,
+        chatToUpdate?.messages || [],
+        intentController.signal
+      );
+
+      // Clear controller once done
+      intentAbortControllerRef.current = null;
 
       if (intent === 'image' || intent === 'video') {
         const hasNonImageFiles = filesToSend.some(
@@ -2142,6 +2160,12 @@ But first, you need to connect your Spotify account securely using the button be
       }
     } catch (err: any) {
       console.error('Send error', err);
+
+      // If intent / send was aborted by user (via Stop), just exit silently.
+      if (err?.name === 'AbortError') {
+        return;
+      }
+
       const message = (err && (err.message || '')) as string;
       const status = err?.status || err?.statusCode || (err?.response && err.response.status);
       if (status === 429 || message.toLowerCase().includes('monthly') || message.toLowerCase().includes('limit')) {
@@ -2166,6 +2190,9 @@ But first, you need to connect your Spotify account securely using the button be
         const updatedMessages = [...(prevChat.messages || []), errorMessage];
         return { ...prevChat, messages: updatedMessages };
       });
+    } finally {
+      setIsSending(false);
+      intentAbortControllerRef.current = null;
     }
   }
   const handleGmailCommand = async (prompt: string) => {
@@ -3132,10 +3159,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </>
                         )}
 
-                        {/* Stop Button - Show during loading OR streaming OR when stop is pending */}
-                        {(isLoading || isStreaming || pendingStop) && (
+                        {/* Stop Button - Show during loading, streaming, sending intent, or when stop is pending */}
+                        {(isLoading || isStreaming || pendingStop || isSending) && (
                           <Button
-                            onClick={stopStreaming}
+                            onClick={() => {
+                              // Abort intent classification if running
+                              if (intentAbortControllerRef.current) {
+                                intentAbortControllerRef.current.abort();
+                                intentAbortControllerRef.current = null;
+                              }
+                              // Always trigger stream stop as well (no-op if not streaming)
+                              stopStreaming();
+                              setIsSending(false);
+                            }}
                             size="icon"
                             className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
                             title="Stop Generating"
@@ -3252,7 +3288,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <>
                   {/* Messages */}
                   <ScrollArea className="flex-1 px-0 md:px-4 pb-2 mb-6" ref={scrollAreaRef}>
-                    <div className="space-y-6 max-w-3xl mx-auto w-full px-4 md:px-0 pt-24 pb-40">
+                    <div className="space-y-2 max-w-3xl mx-auto w-full px-4 md:px-0 pt-24 pb-40">
                       {(() => {
                         const messages = currentChat?.messages || [];
                         const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
@@ -3414,7 +3450,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleFlowChartDiagramToggle={handleFlowChartDiagramToggle}
                             />
                             <div className="flex-grow" />
-                            {!(isLoading || isStreaming || pendingStop) && (
+                            {!(isLoading || isStreaming || pendingStop || isSending) && (
                               <>
                                 <VoiceControls
                                   onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
@@ -3435,10 +3471,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               </>
                             )}
 
-                            {/* Stop Button - Show during loading OR streaming OR when stop is pending */}
-                            {(isLoading || isStreaming || pendingStop) && (
+                            {/* Stop Button - Show during loading, streaming, sending intent, or when stop is pending */}
+                            {(isLoading || isStreaming || pendingStop || isSending) && (
                               <Button
-                                onClick={stopStreaming}
+                                onClick={() => {
+                                  // Abort intent classification if running
+                                  if (intentAbortControllerRef.current) {
+                                    intentAbortControllerRef.current.abort();
+                                    intentAbortControllerRef.current = null;
+                                  }
+                                  // Always trigger stream stop as well (no-op if not streaming)
+                                  stopStreaming();
+                                  setIsSending(false);
+                                }}
                                 size="icon"
                                 className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
                                 title="Stop Generating"
