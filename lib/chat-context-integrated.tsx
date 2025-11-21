@@ -65,9 +65,9 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
-  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'figma', initialContent?: string, initialFiles?: string[]) => Promise<any>
+  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' , initialContent?: string, initialFiles?: string[]) => Promise<any>
   selectChat: (chatId: string) => void
-  addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean, forceFlowChartDiagram?: boolean) => Promise<void>
+  addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => void
@@ -77,9 +77,9 @@ interface ChatContextType {
   setSelectedProivder: (model: string) => void
   isLoading: boolean
   availableModels: any[]
-  chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'figma'
+  chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'  
   uploadedFiles: any[]
-  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'figma'>>
+  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' >>
   setUploadedFiles: (files: any[]) => void
   regenerateLastMessage: () => void
   regenerateMessage: (messageId?: string) => void
@@ -109,7 +109,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [hasInitialized, setHasInitialized] = useState(false)
-  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'figma'>('text')
+  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' >('text')
   const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
   const [pagination, setPagination] = useState<PaginationInfo | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
@@ -327,7 +327,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentStreamId, isStreaming, isLoading]);
   const addMessage = useCallback(
-    async (content: string, fileIds?: string[], chat?: any, skipUserMessage?: boolean, forceFlowChartDiagram?: boolean) => { // Added skipUserMessage and forceFlowChartDiagram parameters
+    async (content: string, fileIds?: string[], chat?: any, skipUserMessage?: boolean ) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !token) return;
 
@@ -373,35 +373,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setIsStreaming(true); // Immediately set streaming to true so stop button appears
       const streamId = crypto.randomUUID();
       setCurrentStreamId(streamId);
-
       // Reset pending stop state
       setPendingStop(false);
       try {
-        // Check if flow chart diagram tool is active first (before intent detection)
-        if (forceFlowChartDiagram) {
-          // Handle Figma flowchart generation directly
-          const figmaResponse = await apiClient.generateFigmaFlowchart({
-            prompt: content,
-            chatId: activeChat.id,
-            conversationHistory: activeChat.messages || [],
-          });
-
-          const { assistantMessage } = figmaResponse;
-
-          setCurrentChat((prevChat) => {
-            if (!prevChat) return prevChat;
-            const newMessages = prevChat.messages.map((msg) =>
-              msg.id === aiMessagePlaceholder.id ? assistantMessage : msg
-            );
-            return { ...prevChat, messages: newMessages };
-          });
-
-          setIsLoading(false);
-          setIsStreaming(false);
-          setCurrentStreamId(null);
-          return;
-        }
-
         const intent = await aiService.classifyIntent(content, currentChat?.messages || []);
         console.log('intent', intent);
 
@@ -570,7 +544,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'figma' = 'text', initialContent?: string, initialFiles?: string[]) => {
+  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'  = 'text', initialContent?: string, initialFiles?: string[]) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
@@ -636,31 +610,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 chatId: newChat.id,
               });
               break;
-            case 'figma':
-              await handleNewChatWithPlaceholder(newChat, initialContent, '', uploadedFiles);
-              await apiClient.generateFigmaFlowchart({
-                prompt: initialContent,
-                chatId: newChat.id,
-                conversationHistory: newChat.messages || [],
-              });
-              break;
             case 'computer-use':
               await handleNewChatWithPlaceholder(newChat, initialContent, '[STARTING_COMPUTER_USE]', uploadedFiles);
 
               // Start Computer Use session
               try {
-                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/computer-use/chat-integration`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    ...(token && { Authorization: `Bearer ${token}` }),
-                  },
-                  credentials: 'include',
-                  body: JSON.stringify({
-                    message: initialContent,
-                    chatId: newChat.id,
-                    sessionId: `chat-${newChat.id}-${Date.now()}`
-                  })
+                const response = await apiClient.startComputerUseChatIntegration({
+                  message: initialContent,
+                  chatId: newChat.id,
+                  sessionId: `chat-${newChat.id}-${Date.now()}`
                 });
 
                 if (response.ok) {

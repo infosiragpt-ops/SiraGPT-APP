@@ -1307,6 +1307,13 @@ class ApiClient {
   async getSpotifyStatus() {
     return this.request('/spotify/status');
   }
+
+  async startComputerUseChatIntegration(data: { message: string; chatId: string; sessionId?: string }) {
+    return this.request('/computer-use/chat-integration', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);
