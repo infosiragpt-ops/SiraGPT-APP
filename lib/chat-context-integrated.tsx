@@ -82,11 +82,13 @@ interface ChatContextType {
   setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'figma'>>
   setUploadedFiles: (files: any[]) => void
   regenerateLastMessage: () => void
+  regenerateMessage: (messageId?: string) => void
   editAndRegenerate: (messageId: string, newContent: string, files?: any[]) => void
   updateMessageInChat: (messageId: string, newContent: string) => void
   pollVideoStatus: (operationId: string, messageId: string) => void,
 
   isStreaming: boolean;
+  pendingStop: boolean;
   stopStreaming: () => void;
   pagination: PaginationInfo | null
   isLoadingMore: boolean
@@ -114,8 +116,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [hasMoreChats, setHasMoreChats] = useState(true)
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
-
-
+  const [pendingStop, setPendingStop] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null); // ✅ AbortController ref
 
@@ -268,25 +269,63 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   //   }
   // }, [setCurrentChat]);
 
-  const stopStreaming = useCallback(async () => {
-    console.log("Working Stop Streaming", currentStreamId);
+  const stopStreaming = useCallback(() => {
+    console.log("Stop Streaming triggered", { currentStreamId, isStreaming, isLoading });
 
-    if (currentStreamId) {
-      console.log(`Frontend se stop signal bhej raha hoon: ${currentStreamId}`);
-      try {
-        await apiClient.stopAIStream(currentStreamId);
+    // IMMEDIATE UI State Reset - no waiting for API
+    setPendingStop(true);
+    setIsStreaming(false);
+    setIsLoading(false);
 
-
-        // States ko foran reset karein takay UI update ho
-        setIsStreaming(false);
-        setIsLoading(false);
-        setCurrentStreamId(null);
-      } catch (error) {
-
-        console.error("Failed to send stop signal:", error);
-      }
+    // Abort local fetch request immediately
+    if (abortControllerRef.current) {
+      console.log("Aborting local fetch request");
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
-  }, [currentStreamId]);
+
+    // Update the last AI message to show it was stopped
+    setCurrentChat(prevChat => {
+      if (!prevChat) return prevChat;
+      const lastMessageIndex = prevChat.messages.length - 1;
+      if (lastMessageIndex >= 0 && prevChat.messages[lastMessageIndex].role === 'ASSISTANT') {
+        const lastMessage = prevChat.messages[lastMessageIndex];
+        // Only update if content exists and doesn't already have stopped text
+        if (lastMessage.content !== undefined && !lastMessage.content.includes('(Generation stopped')) {
+          const updatedMessages = [...prevChat.messages];
+          const stoppedContent = lastMessage.content.trim() === '' 
+            ? "(Generation stopped by user)" 
+            : lastMessage.content + "\n\n(Generation stopped by user)";
+          
+          updatedMessages[lastMessageIndex] = {
+            ...lastMessage,
+            content: stoppedContent
+          };
+          return { ...prevChat, messages: updatedMessages };
+        }
+      }
+      return prevChat;
+    });
+
+    // Send stop signal to backend (non-blocking)
+    if (currentStreamId) {
+      console.log(`Sending stop signal to backend: ${currentStreamId}`);
+      apiClient.stopAIStream(currentStreamId)
+        .then(() => {
+          console.log("Backend stop signal sent successfully");
+        })
+        .catch((error) => {
+          console.error("Failed to send stop signal to backend:", error);
+        })
+        .finally(() => {
+          setCurrentStreamId(null);
+          setPendingStop(false);
+        });
+    } else {
+      setCurrentStreamId(null);
+      setPendingStop(false);
+    }
+  }, [currentStreamId, isStreaming, isLoading]);
   const addMessage = useCallback(
     async (content: string, fileIds?: string[], chat?: any, skipUserMessage?: boolean, forceFlowChartDiagram?: boolean) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
@@ -331,9 +370,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       setUploadedFiles([]); // Uploaded files clear kar dein
       setIsLoading(true); // Loading state start karein
-      setIsStreaming(true);
+      setIsStreaming(true); // Immediately set streaming to true so stop button appears
       const streamId = crypto.randomUUID();
       setCurrentStreamId(streamId);
+
+      // Reset pending stop state
+      setPendingStop(false);
       try {
         // Check if flow chart diagram tool is active first (before intent detection)
         if (forceFlowChartDiagram) {
@@ -408,6 +450,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setCurrentStreamId(null);
 
         } else {
+          // Create new AbortController for this request
+          const controller = new AbortController();
+          abortControllerRef.current = controller;
+
           // STEP 3: Nayi streaming API call karein
           await apiClient.generateAIStream(
             {
@@ -419,8 +465,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               streamId: streamId,
             },
             (chunk) => {
+              // Check if we should stop processing chunks
+              if (controller.signal.aborted || pendingStop) {
+                return;
+              }
+              
               // onData: Jab bhi backend se naya text aaye
-              // Hum state mein AI message ke content ko update karte rahenge
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
 
@@ -436,32 +486,39 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             async () => {
               // onClose: Jab stream khatam ho jaye
-              setIsLoading(false);
-              setIsStreaming(false);
-              setCurrentStreamId(null);
-              await selectChat(activeChat.id); // Refetch chat to get permanent IDs
+              if (!controller.signal.aborted && !pendingStop) {
+                setIsLoading(false);
+                setIsStreaming(false);
+                setCurrentStreamId(null);
+                abortControllerRef.current = null;
+                await selectChat(activeChat.id); // Refetch chat to get permanent IDs
+              }
             },
             (error) => {
               console.error("Streaming failed:", error);
-              setIsLoading(false);
-              setIsStreaming(false);
-              setCurrentStreamId(null);
-              abortControllerRef.current = null;
+              
+              // Only update UI if not manually stopped
+              if (!controller.signal.aborted && !pendingStop) {
+                setIsLoading(false);
+                setIsStreaming(false);
+                setCurrentStreamId(null);
+                abortControllerRef.current = null;
 
-              if (error.name !== 'AbortError') {
-                setCurrentChat((prevChat) => {
-                  if (!prevChat) return prevChat;
-                  const newMessages = prevChat.messages.map((msg) => {
-                    if (msg.id === aiMessagePlaceholder.id) {
-                      return { ...msg, content: "", error: error.message || "An error occurred." };
-                    }
-                    return msg;
+                if (error.name !== 'AbortError') {
+                  setCurrentChat((prevChat) => {
+                    if (!prevChat) return prevChat;
+                    const newMessages = prevChat.messages.map((msg) => {
+                      if (msg.id === aiMessagePlaceholder.id) {
+                        return { ...msg, content: "", error: error.message || "An error occurred." };
+                      }
+                      return msg;
+                    });
+                    return { ...prevChat, messages: newMessages };
                   });
-                  return { ...prevChat, messages: newMessages };
-                });
+                }
               }
             },
-
+            controller.signal // Pass the abort signal
           );
         }
       } catch (error: any) {
@@ -592,16 +649,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
               // Start Computer Use session
               try {
-                const response = await apiClient.request('/computer-use/chat-integration', {
+                const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/computer-use/chat-integration`, {
                   method: 'POST',
-                  data: {
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(token && { Authorization: `Bearer ${token}` }),
+                  },
+                  credentials: 'include',
+                  body: JSON.stringify({
                     message: initialContent,
                     chatId: newChat.id,
                     sessionId: `chat-${newChat.id}-${Date.now()}`
-                  }
+                  })
                 });
 
-                console.log('Computer Use session started:', response);
+                if (response.ok) {
+                  const result = await response.json();
+                  console.log('Computer Use session started:', result);
+                } else {
+                  console.error('Failed to start Computer Use session:', response.statusText);
+                  await handleNewChatWithPlaceholder(newChat, initialContent, '[COMPUTER_USE_ERROR]', uploadedFiles);
+                }
               } catch (cuError) {
                 console.error('Failed to start Computer Use session:', cuError);
                 // Update the message to show error
@@ -707,41 +775,67 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   )
 
 
-  const regenerateLastMessage = async () => {
+  const regenerateMessage = async (messageId?: string) => {
     if (!currentChat || isLoading) return;
 
-    // Aakhri AI message aur usse pehle wala User message dhoondein
-    let lastAiMessageIndex = -1;
-    // let lastAu=
-    for (let i = currentChat.messages.length - 1; i >= 0; i--) {
-      if (currentChat.messages[i].role === 'ASSISTANT') {
-        lastAiMessageIndex = i;
-        break; // Jaise hi mil jaye, loop rok dein
+    let targetAiMessageIndex = -1;
+    
+    if (messageId) {
+      // Find the specific message to regenerate
+      targetAiMessageIndex = currentChat.messages.findIndex(m => m.id === messageId && m.role === 'ASSISTANT');
+    } else {
+      // Find the last AI message if no messageId provided (for backward compatibility)
+      for (let i = currentChat.messages.length - 1; i >= 0; i--) {
+        if (currentChat.messages[i].role === 'ASSISTANT') {
+          targetAiMessageIndex = i;
+          break;
+        }
       }
     }
-    if (lastAiMessageIndex === -1) {
-      //toast.info("No AI message to regenerate.");
+    
+    if (targetAiMessageIndex === -1) {
+      console.warn("No AI message found to regenerate.");
       return;
     }
 
-    const lastUserMessage = currentChat.messages[lastAiMessageIndex - 1];
-    const lastAiMessage = currentChat.messages[lastAiMessageIndex];
-    if (!lastUserMessage || lastUserMessage.role !== 'USER') {
-      // toast.error("Could not find the original prompt.");
+    const targetUserMessageIndex = targetAiMessageIndex - 1;
+    if (targetUserMessageIndex < 0 || currentChat.messages[targetUserMessageIndex].role !== 'USER') {
+      console.error("Could not find the corresponding user message.");
       return;
     }
 
-    const originalUserMessage = currentChat.messages[lastAiMessageIndex - 1];
-    if (!originalUserMessage || originalUserMessage.role !== 'USER') {
-      return;
-    }
+    const originalUserMessage = currentChat.messages[targetUserMessageIndex];
+    
+    // Keep only messages up to (and including) the user message we want to regenerate from
+    const messagesBeforeRegeneration = currentChat.messages.slice(0, targetAiMessageIndex);
+    
+    // Get messages that need to be deleted from backend (AI message + all subsequent messages)
+    const messagesToDelete = currentChat.messages.slice(targetAiMessageIndex);
+    
+    console.log('Regenerating message at index:', targetAiMessageIndex);
+    console.log('Messages before regeneration:', messagesBeforeRegeneration.length);
+    console.log('Messages to delete from backend:', messagesToDelete.length);
+    console.log('Original total messages:', currentChat.messages.length);
 
-
-    const messagesBeforeRegeneration = currentChat.messages.slice(0, lastAiMessageIndex);
-    console.log('messagesBeforeRegeneration.content ', messagesBeforeRegeneration);
-
-    setCurrentChat(prev => prev ? { ...prev, messages: messagesBeforeRegeneration } : null);
     setIsLoading(true);
+
+    // STEP 1: Delete messages from backend first
+    try {
+      console.log('Deleting messages from backend:', messagesToDelete.map(m => m.id));
+      for (const msg of messagesToDelete) {
+        if (msg.id && !msg.id.includes('temp-') && !msg.id.includes('ai-regen-')) {
+          await apiClient.clearMessageById(msg.id);
+          console.log('Deleted message from backend:', msg.id);
+        }
+      }
+    } catch (error) {
+      console.error('Error deleting messages from backend:', error);
+      setIsLoading(false);
+      toast.error('Failed to delete previous messages. Please try again.');
+      return;
+    }
+
+    // STEP 2: Update UI state and start regeneration
 
     const aiMessagePlaceholder: Message = {
       id: `ai-regen-${Date.now()}`,
@@ -750,23 +844,31 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       content: "",
       tokens: 0,
       timestamp: new Date().toISOString(),
-
       files: undefined,
     };
 
-    // Ab yeh `setCurrentChat` error nahi dega
+    // Update chat to include messages before regeneration + new placeholder
     setCurrentChat(prev => {
       if (!prev) return null;
-      return {
+      const newState = {
         ...prev,
-        messages: [...prev.messages, aiMessagePlaceholder]
+        messages: [...messagesBeforeRegeneration, aiMessagePlaceholder]
       };
+      console.log('Setting chat state with messages:', newState.messages.length);
+      return newState;
     });
 
     const streamId = crypto.randomUUID();
     setCurrentStreamId(streamId);
+    setIsStreaming(true);
+    setPendingStop(false);
+
+    // Create new AbortController for regeneration
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
-      // Step 4: Call your streaming function
+      // Call the streaming function with the original user message
       await apiClient.generateAIStream(
         {
           provider: selectProvider,
@@ -775,8 +877,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           chatId: currentChat.id,
           files: (originalUserMessage.files?.map((f: any) => f.id) as string[]) || [],
           streamId: streamId,
+          regenerate: true,
         },
         (chunk) => {
+          // Check if we should stop processing chunks
+          if (controller.signal.aborted || pendingStop) {
+            return;
+          }
+          
           // onData: Fill the placeholder
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
@@ -786,54 +894,76 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
               return msg;
             });
+            console.log('Processing chunk, total messages:', updatedMessages.length);
             return { ...prevChat, messages: updatedMessages };
           });
         },
         async () => {
-          // onClose: Stop loading
-          setIsLoading(false);
-          await selectChat(currentChat.id);
+          // onClose: Stop loading only if not manually stopped
+          if (!controller.signal.aborted && !pendingStop) {
+            console.log('Regeneration completed successfully');
+            setIsLoading(false);
+            setIsStreaming(false);
+            setCurrentStreamId(null);
+            abortControllerRef.current = null;
+            
+            // Save the updated chat state to ensure persistence
+            try {
+              console.log('Saving regenerated chat state to backend');
+              // The backend streaming endpoint should have already saved the new message
+              // Refresh immediately to ensure we have the latest state
+              if (currentChat?.id) {
+                const freshChat = await apiClient.getChat(currentChat.id);
+                setCurrentChat(freshChat.chat);
+                
+                // Also update the chat in the chats list to keep sidebar in sync
+                setChats(prevChats => 
+                  prevChats.map(chat => 
+                    chat.id === currentChat.id ? freshChat.chat : chat
+                  )
+                );
+                
+                console.log('Chat refreshed after regeneration, total messages:', freshChat.chat.messages.length);
+              }
+            } catch (error) {
+              console.error('Failed to refresh chat after regeneration:', error);
+            }
+          }
         },
         (error) => {
-          // onError: Handle error
-          console.error("Streaming failed during regeneration:", error);
-          setIsLoading(false);
-          setCurrentChat((prevChat) => {
-            if (!prevChat) return prevChat;
-            const errorMessages = prevChat.messages.map((msg) => {
-              if (msg.id === aiMessagePlaceholder.id) {
-                return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
-              }
-              return msg;
+          // onError: Handle error only if not manually stopped
+          if (!controller.signal.aborted && !pendingStop) {
+            console.error("Streaming failed during regeneration:", error);
+            setIsLoading(false);
+            setIsStreaming(false);
+            setCurrentStreamId(null);
+            abortControllerRef.current = null;
+            setCurrentChat((prevChat) => {
+              if (!prevChat) return prevChat;
+              const errorMessages = prevChat.messages.map((msg) => {
+                if (msg.id === aiMessagePlaceholder.id) {
+                  return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
+                }
+                return msg;
+              });
+              return { ...prevChat, messages: errorMessages };
             });
-            return { ...prevChat, messages: errorMessages };
-          });
-        }
+          }
+        },
+        controller.signal // Pass the abort signal
       );
 
-      apiClient.clearMessageById(lastUserMessage.id);
-      apiClient.clearMessageById(lastAiMessage.id);
-
     } catch (error) {
+      console.error("Regeneration failed:", error);
       setIsLoading(false);
+      setIsStreaming(false);
+      setCurrentStreamId(null);
+      abortControllerRef.current = null;
     }
-
-
-    const updateMessageInChat = (messageId: string, newContent: string) => {
-      setCurrentChat(prevChat => {
-        if (!prevChat) return null;
-
-        const updatedMessages = prevChat.messages.map(msg => {
-          if (msg.id === messageId) {
-            return { ...msg, content: newContent };
-          }
-          return msg;
-        });
-
-        return { ...prevChat, messages: updatedMessages };
-      });
-    };
   };
+
+  // Backward compatibility wrapper
+  const regenerateLastMessage = () => regenerateMessage();
 
   const editAndRegenerate = useCallback(async (messageId: string, newContent: string, files?: any[]) => {
     if (!currentChat || isLoading) return;
@@ -863,8 +993,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setCurrentChat(prev => prev ? { ...prev, messages: [...messagesUpToEdit, updatedUserMessage, aiMessagePlaceholder] } : null);
     setIsLoading(true);
     setIsStreaming(true);
+    setPendingStop(false);
     const streamId = crypto.randomUUID();
     setCurrentStreamId(streamId);
+
+    // Create new AbortController for edit and regeneration
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       // Update the message in the backend. This should also handle deleting subsequent messages.
@@ -886,6 +1021,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           regenerate: true,
         },
         (chunk) => {
+          // Check if we should stop processing chunks
+          if (controller.signal.aborted || pendingStop) {
+            return;
+          }
+          
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
             const updatedMessages = prevChat.messages.map((msg) => {
@@ -898,33 +1038,43 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           });
         },
         async () => {
-          setIsLoading(false);
-          setIsStreaming(false);
-          setCurrentStreamId(null);
-          await selectChat(currentChat.id); // Refresh chat from DB
+          // Only complete if not manually stopped
+          if (!controller.signal.aborted && !pendingStop) {
+            setIsLoading(false);
+            setIsStreaming(false);
+            setCurrentStreamId(null);
+            abortControllerRef.current = null;
+            await selectChat(currentChat.id); // Refresh chat from DB
+          }
         },
         (error) => {
-          console.error("Streaming failed during regeneration:", error);
-          setIsLoading(false);
-          setIsStreaming(false);
-          setCurrentStreamId(null);
-          setCurrentChat((prevChat) => {
-            if (!prevChat) return prevChat;
-            const errorMessages = prevChat.messages.map((msg) => {
-              if (msg.id === aiMessagePlaceholder.id) {
-                return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
-              }
-              return msg;
+          // Only handle error if not manually stopped
+          if (!controller.signal.aborted && !pendingStop) {
+            console.error("Streaming failed during regeneration:", error);
+            setIsLoading(false);
+            setIsStreaming(false);
+            setCurrentStreamId(null);
+            abortControllerRef.current = null;
+            setCurrentChat((prevChat) => {
+              if (!prevChat) return prevChat;
+              const errorMessages = prevChat.messages.map((msg) => {
+                if (msg.id === aiMessagePlaceholder.id) {
+                  return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
+                }
+                return msg;
+              });
+              return { ...prevChat, messages: errorMessages };
             });
-            return { ...prevChat, messages: errorMessages };
-          });
-        }
+          }
+        },
+        controller.signal // Pass the abort signal
       );
     } catch (error) {
       console.error("Failed to edit and regenerate:", error);
       setIsLoading(false);
       setIsStreaming(false);
       setCurrentStreamId(null);
+      abortControllerRef.current = null;
       // Revert UI state on failure
       setCurrentChat(prev => prev ? { ...prev, messages: currentChat.messages } : null);
       toast.error("Failed to regenerate response.");
@@ -1218,9 +1368,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     uploadedFiles,
     setUploadedFiles,
     regenerateLastMessage,
+    regenerateMessage,
     editAndRegenerate,
     updateMessageInChat,
-    pollVideoStatus, isStreaming, stopStreaming,
+    pollVideoStatus, isStreaming, pendingStop, stopStreaming,
     pagination,
     isLoadingMore,
     hasMoreChats,

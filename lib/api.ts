@@ -307,7 +307,7 @@ class ApiClient {
     onData: (chunk: string) => void, // Jab data ka naya tukra aaye
     onClose: () => void, // Jab stream band ho jaye
     onError: (error: Error) => void, // Jab koi error aaye
-
+    signal?: AbortSignal // Add AbortSignal support
   ) {
 
     const url = `${this.baseURL}/ai/generate`;
@@ -318,7 +318,7 @@ class ApiClient {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
       body: JSON.stringify(data),
-
+      ...(signal && { signal }) // Include signal if provided
     };
 
     try {
@@ -343,6 +343,10 @@ class ApiClient {
         throw error;
       }
 
+      // Check if request was aborted before processing
+      if (signal?.aborted) {
+        throw new Error('Request aborted');
+      }
 
       // response.body ek ReadableStream hai, hum isko padhenge
       const reader = response.body?.getReader();
@@ -359,6 +363,12 @@ class ApiClient {
       let lastProcessTime = Date.now();
 
       while (true) {
+        // Check if request was aborted during streaming
+        if (signal?.aborted) {
+          reader.cancel();
+          throw new Error('Request aborted');
+        }
+
         const { done, value } = await reader.read();
 
         if (done) {

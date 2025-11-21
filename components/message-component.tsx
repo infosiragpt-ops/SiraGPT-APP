@@ -116,7 +116,7 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, children }: {
     message: any;
     user: any;
-    onRegenerate: () => void;
+    onRegenerate: (messageId: string) => void;
     updateMessageInChat: (messageId: string, newContent: string, files?: any[]) => void;
     isStreaming?: boolean;
     onToggleSplitView?: (content: any) => void;
@@ -292,11 +292,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     };
 
-    const ErrorMessage = ({ onRegenerate }: { onRegenerate: () => void }) => (
+    const ErrorMessage = ({ onRegenerate }: { onRegenerate: (messageId: string) => void }) => (
         <div className="flex items-center gap-2 text-red-500 py-2 px-4 bg-red-500/10 rounded-md">
             <AlertCircle className="h-4 w-4" />
             <p className="text-sm font-medium">An error occurred.</p>
-            <Button onClick={onRegenerate} variant="ghost" size="sm" className="ml-auto">
+            <Button onClick={() => onRegenerate(message.id)} variant="ghost" size="sm" className="ml-auto">
                 <RefreshCw className="h-4 w-4 mr-1" />
                 Try again
             </Button>
@@ -1671,7 +1671,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     size="sm"
                                     className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
                                     title="Regenerate"
-                                    onClick={onRegenerate}
+                                    onClick={() => onRegenerate(message.id)}
                                 >
                                     <RefreshCw size={16} />
                                 </Button>

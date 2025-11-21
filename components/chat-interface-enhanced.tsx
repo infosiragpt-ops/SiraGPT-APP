@@ -1121,10 +1121,11 @@ function ChatInterfaceContent() {
     selectChat,
     setUploadedFiles,
     chatType, setChatType,
-    availableModels, regenerateLastMessage,
+    availableModels, regenerateLastMessage, regenerateMessage,
     editAndRegenerate,
     updateMessageInChat,
     isStreaming, // ✅ isStreaming ko yahan se fetch karein
+    pendingStop, // Add pendingStop state
     stopStreaming,
 
   } = useChat()
@@ -3131,32 +3132,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           </>
                         )}
 
-                        {/* Stop Button when streaming */}
-                        {/* {isLoading && isStreaming && (
-                    <Button
-                      onClick={stopStreaming}
-                      size="icon"
-                      // variant="ghost" 
-                      className="h-8 w-8  rounded-full text-muted-foreground "
-                      title="Stop Generating"
-                    >
-                      <Square className="h-4 w-4" />
-                    </Button>
-                  )} */}
-
-                        {isLoading && isStreaming && (
+                        {/* Stop Button - Show during loading OR streaming OR when stop is pending */}
+                        {(isLoading || isStreaming || pendingStop) && (
                           <Button
                             onClick={stopStreaming}
                             size="icon"
-                            // className={cn(
-                            //   "h-8 w-8 rounded-full",
-                            //   "text-gray-800 hover:text-black",            // Always dark icon
-                            //   "hover:bg-gray-200 dark:hover:bg-gray-300", // Optional hover bg
-                            //   "transition-colors"
-                            // )}
+                            className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
                             title="Stop Generating"
+                            disabled={pendingStop}
                           >
-                            <Square className="h-4 w-4" />
+                            {pendingStop ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Square className="h-4 w-4" />
+                            )}
                           </Button>
                         )}
 
@@ -3277,7 +3266,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 key={message.id}
                                 message={message}
                                 user={user}
-                                onRegenerate={regenerateLastMessage}
+                                onRegenerate={regenerateMessage}
                                 updateMessageInChat={editAndRegenerate}
                                 isStreaming={false}
                                 onToggleSplitView={handleToggleSplitView}
@@ -3289,7 +3278,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 key={streamingMessage.id}
                                 message={streamingMessage}
                                 user={user}
-                                onRegenerate={regenerateLastMessage}
+                                onRegenerate={regenerateMessage}
                                 updateMessageInChat={editAndRegenerate}
                                 isStreaming={true}
                                 onToggleSplitView={handleToggleSplitView}
@@ -3425,7 +3414,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleFlowChartDiagramToggle={handleFlowChartDiagramToggle}
                             />
                             <div className="flex-grow" />
-                            {!(isLoading && isStreaming) && (
+                            {!(isLoading || isStreaming || pendingStop) && (
                               <>
                                 <VoiceControls
                                   onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
@@ -3446,16 +3435,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               </>
                             )}
 
-                            {/* Stop Button when streaming */}
-                            {isLoading && isStreaming && (
+                            {/* Stop Button - Show during loading OR streaming OR when stop is pending */}
+                            {(isLoading || isStreaming || pendingStop) && (
                               <Button
                                 onClick={stopStreaming}
                                 size="icon"
-                                // variant="ghost" 
-                                className="h-8 w-8  rounded-full text-muted-foreground hover:text-foreground"
+                                className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
                                 title="Stop Generating"
+                                disabled={pendingStop}
                               >
-                                <Square className="h-4 w-4" />
+                                {pendingStop ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Square className="h-4 w-4" />
+                                )}
                               </Button>
                             )}
                           </div>
