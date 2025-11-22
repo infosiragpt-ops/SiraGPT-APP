@@ -70,21 +70,54 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
 
     const { imageUrl, pythonCode } = chartFile;
 
-    // If there's an image, show the chart.
+    const handleDownloadChart = async () => {
+        if (!imageUrl) return;
+        try {
+            const response = await fetch(imageUrl);
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'chart.png';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            toast.success('Chart downloaded successfully!');
+        } catch (error) {
+            console.error('Error downloading chart:', error);
+            toast.error('Failed to download chart.');
+        }
+    };
+
+    // If there's an image, show only the chart with hover download/edit controls
     if (imageUrl) {
         return (
-            <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
-                <div className="flex items-center gap-2 text-sm mb-2">
-                    <Wand2 className="h-4 w-4" />
-                    <span className="font-medium">Generated Chart</span>
-                </div>
+            <div className="mt-3 relative inline-block w-full group">
                 <img
                     src={imageUrl}
                     alt="Generated chart"
-                    className="max-w-full h-auto rounded-lg mb-2"
+                    className="max-w-full h-auto rounded-lg"
                 />
+
+                {/* Hover controls */}
+                <div className="absolute top-3 right-3 z-20 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 pointer-events-none">
+                    <Button
+                        variant="secondary"
+                        size="icon"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleDownloadChart();
+                        }}
+                        className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
+                        title="Download Chart"
+                    >
+                        <Download className="h-4 w-4" />
+                    </Button>
+                </div>
+
                 {pythonCode && (
-                    <details>
+                    <details className="mt-2">
                         <summary className="text-xs text-muted-foreground cursor-pointer">View Python Code</summary>
                         <pre className="text-xs bg-gray-800 text-white p-2 rounded-md mt-1 overflow-x-auto">
                             <code>{pythonCode}</code>
@@ -700,6 +733,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
         return content;
     }, [message.content, isPPTMessage, pptEntry, parsedFiles]);
+
+    const hasFigmaDiagram = useMemo(() => {
+        return Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f.type === 'figma');
+    }, [parsedFiles]);
 
     // Check for Gmail connection requirement
     const isGmailConnectionRequired = useMemo(() => {
@@ -1393,40 +1430,71 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     (message.role === "ASSISTANT" && message.content.startsWith('http') &&
                         (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
                         <div className="space-y-2 mt-4">
-                            {Array.isArray(parsedFiles) && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => (
-                                <div key={index} className="relative">
+                            {Array.isArray(parsedFiles) && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => {
+                                const src =
+                                    file.url.startsWith('data:image') || file.url.startsWith('http')
+                                        ? file.url
+                                        : `data:image/jpeg;base64,${file.url}`;
 
-                                    {imageLoading[`file-${index}`] && (
-                                        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                                        </div>
-                                    )}
-                                    {imageError[`file-${index}`] ? (
-                                        <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 text-center">
-                                            <p className="text-sm text-gray-500">Failed to load image</p>
-                                        </div>
-                                    ) : (
+                                const handleDownloadImage = () => {
+                                    try {
+                                        const a = document.createElement('a');
+                                        a.href = src;
+                                        a.download = file.name || `image-${index}.png`;
+                                        document.body.appendChild(a);
+                                        a.click();
+                                        document.body.removeChild(a);
+                                        toast.success('Image downloaded successfully!');
+                                    } catch (error) {
+                                        console.error('Image download failed:', error);
+                                        toast.error('Failed to download image');
+                                    }
+                                };
 
-                                        <img
-                                            src={
-                                                file.url.startsWith('data:image') || file.url.startsWith('http')
-                                                    ? file.url
-                                                    : `data:image/jpeg;base64,${file.url}`
-                                            }
-                                            alt="Generated image"
-                                            className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain"
-                                            loading="lazy"
-                                            onLoad={() => {
-                                                setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
-                                            }}
-                                            onError={() => {
-                                                setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
-                                                setImageError(prev => ({ ...prev, [`file-${index}`]: true }));
-                                            }}
-                                        />
-                                    )}
-                                </div>
-                            ))}
+                                return (
+                                    <div key={index} className="relative inline-block group">
+                                        {imageLoading[`file-${index}`] && (
+                                            <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+                                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                                            </div>
+                                        )}
+                                        {imageError[`file-${index}`] ? (
+                                            <div className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 text-center">
+                                                <p className="text-sm text-gray-500">Failed to load image</p>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <img
+                                                    src={src}
+                                                    alt="Generated image"
+                                                    className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain"
+                                                    loading="lazy"
+                                                    onLoad={() => {
+                                                        setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
+                                                    }}
+                                                    onError={() => {
+                                                        setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
+                                                        setImageError(prev => ({ ...prev, [`file-${index}`]: true }));
+                                                    }}
+                                                />
+
+                                                {/* Hover download button */}
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleDownloadImage();
+                                                    }}
+                                                    className="absolute top-3 right-3 z-20 h-9 w-9 rounded-full bg-white/90 text-gray-800 shadow-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 hover:bg-white hover:scale-105"
+                                                    title="Download image"
+                                                >
+                                                    <Download className="h-4 w-4" />
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                );
+                            })}
                             {/* Handle direct image URLs in content - don't show base64 or long URLs */}
                             {message.role === "ASSISTANT" && message.content.startsWith('http') &&
                                 (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')) && (
@@ -1597,7 +1665,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                         <GmailEmailsDisplay />
                                     </>
                                 ) : (
-                                    <MessageContent content={displayedContent} />
+                                    // For diagram (figma) responses, only show the diagram block, no text
+                                    !hasFigmaDiagram && <MessageContent content={displayedContent} />
                                 )}
                                 <PPTDisplay />
                                 <VideoDisplay />

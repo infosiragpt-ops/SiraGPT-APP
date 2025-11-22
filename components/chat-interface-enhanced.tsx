@@ -28,7 +28,7 @@ import {
   NetworkIcon,
   Network,
   Monitor,
-  Share2,
+  Share,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -52,6 +52,15 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
 import MessageComponent from "./message-component"
 import VoiceControls from "./voice-controls"
@@ -1363,6 +1372,8 @@ But first, you need to connect your Spotify account securely using the button be
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<string | null>(null);
+  const [shareModalOpen, setShareModalOpen] = React.useState(false);
+  const [shareUrl, setShareUrl] = React.useState<string | null>(null);
 
 
   // Search sources state - all enabled by default
@@ -1484,7 +1495,9 @@ But first, you need to connect your Spotify account securely using the button be
       const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
       let url = `${baseUrl}/share/${response.shareableLink}`;
       navigator.clipboard.writeText(url);
-      toast.success("Complete chat link copied to clipboard!");
+      toast.success("Shareable chat link copied!");
+      setShareUrl(url);
+      setShareModalOpen(true);
     } catch (error) {
       toast.error(`Failed to create chat share link. ${error}`);
     }
@@ -2827,7 +2840,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     title="Share complete chat"
                     className="h-9 w-9"
                   >
-                    <Share2 className="h-4 w-4" />
+                    <Share className="h-4 w-4" />
                   </Button>
                 )}
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
@@ -2840,6 +2853,59 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onOpenChange={setSubscribeOpen}
                   user={currentUserInfo || user}
                 />
+                {/* Share conversation modal (ChatGPT-style) */}
+                <Dialog open={shareModalOpen} onOpenChange={setShareModalOpen}>
+                  <DialogContent className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle>Share conversation</DialogTitle>
+                      <DialogDescription>
+                        Anyone with this link can view the conversation. You can copy or open it to share wherever you like.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="mt-4 space-y-3">
+                      <div className="text-xs font-medium text-muted-foreground">Shareable link</div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          readOnly
+                          value={shareUrl || ''}
+                          className="flex-1 px-2 py-1 rounded-md border bg-muted text-xs overflow-hidden text-ellipsis"
+                          onFocus={(e) => e.target.select()}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (!shareUrl) return;
+                            navigator.clipboard.writeText(shareUrl);
+                            toast.success('Link copied to clipboard');
+                          }}
+                        >
+                          Copy link
+                        </Button>
+                      </div>
+                    </div>
+                    <DialogFooter className="mt-4 flex justify-end gap-2">
+                      {shareUrl && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (shareUrl && typeof window !== 'undefined') {
+                              window.open(shareUrl, '_blank', 'noopener,noreferrer');
+                            }
+                          }}
+                        >
+                          Open link
+                        </Button>
+                      )}
+                      <DialogClose asChild>
+                        <Button size="sm" variant="default">
+                          Done
+                        </Button>
+                      </DialogClose>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               </div>
             </div>
           </div>
