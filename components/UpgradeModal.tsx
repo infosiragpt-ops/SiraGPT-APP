@@ -133,6 +133,59 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
               <div className="text-xs">Token usage: {apiUsage}</div>
             </div>
           </div>
+          
+         {/* Usage warning message */}
+{monthlyLimit > 0 && (
+  <>
+    {/* Limit exceeded */}
+    {apiUsage >= monthlyLimit ? (
+      <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+          <div className="text-sm font-medium text-red-700 dark:text-red-400">
+            Monthly limit exceeded
+          </div>
+        </div>
+        <p className="text-sm text-red-600 dark:text-red-300 mt-1">
+          You've used all of your monthly API limit. 
+          Upgrade your plan to continue using all features.
+        </p>
+      </div>
+
+    ) : (apiUsage / monthlyLimit) >= 0.9 ? (
+      /* 90% Warning */
+      <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+          <div className="text-sm font-medium text-red-700 dark:text-red-400">
+            Almost at limit
+          </div>
+        </div>
+        <p className="text-sm text-red-600 dark:text-red-300 mt-1">
+          You've used {Math.round((apiUsage / monthlyLimit) * 100)}% of your monthly API limit.
+          Upgrade your plan to continue using all features.
+        </p>
+      </div>
+
+    ) : (apiUsage / monthlyLimit) >= 0.7 ? (
+      /* 70% Warning */
+      <div className="p-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+          <div className="text-sm font-medium text-orange-700 dark:text-orange-400">
+            Approaching limit
+          </div>
+        </div>
+        <p className="text-sm text-orange-600 dark:text-orange-300 mt-1">
+          You've used {Math.round((apiUsage / monthlyLimit) * 100)}% of your monthly API limit.
+          Consider upgrading to avoid interruptions.
+        </p>
+      </div>
+
+    ) : null}
+  </>
+)}
+
 
           {/* Grid of plan cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

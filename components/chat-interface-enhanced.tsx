@@ -1346,6 +1346,35 @@ But first, you need to connect your Spotify account securely using the button be
     } catch (error: any) {
       console.error('Spotify error:', error);
       const errorMessage = error.message || 'Spotify request failed. Please try again.';
+      
+      // Check for monthly API limit exceeded error
+      if (isMonthlyLimitError(errorMessage)) {
+        
+        // Show upgrade modal for API limit errors
+        setSubscribeOpen(true);
+        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        
+        const updateChatWithLimitError = (prevChat: any) => {
+          if (!prevChat) return prevChat;
+          const newMessages = prevChat.messages.map((msg: any) => {
+            if (msg.content === '[PROCESSING_SPOTIFY]') {
+              return { 
+                ...msg, 
+                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Spotify features.",
+                error: "Monthly API limit exceeded" 
+              };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: newMessages };
+        };
+
+        if (currentChat) {
+          setCurrentChat(updateChatWithLimitError);
+        }
+        return;
+      }
+      
       toast.error(errorMessage);
 
       const updateChatWithError = (prevChat: any) => {
@@ -1374,6 +1403,16 @@ But first, you need to connect your Spotify account securely using the button be
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<string | null>(null);
   const [shareModalOpen, setShareModalOpen] = React.useState(false);
   const [shareUrl, setShareUrl] = React.useState<string | null>(null);
+
+  // Helper function to check if error is related to monthly API limit
+  const isMonthlyLimitError = (errorMessage: string) => {
+    const lowerMessage = errorMessage.toLowerCase();
+    return lowerMessage.includes('monthly api limit exceeded') ||
+           lowerMessage.includes('monthly limit exceeded') ||
+           lowerMessage.includes('monthly video generation limit exceeded') ||
+           lowerMessage.includes('free monthly queries exhausted') ||
+           (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
+  };
 
 
   // Search sources state - all enabled by default
@@ -1463,15 +1502,29 @@ But first, you need to connect your Spotify account securely using the button be
     function handleOpenUpgrade(e: any) {
       setSubscribeOpen(true);
     }
+    
+    // Global error handler for API limit exceeded errors
+    function handleApiLimitError(e: Event) {
+      const customEvent = e as CustomEvent;
+      const errorMessage = customEvent.detail?.message || customEvent.detail?.error || '';
+      if (isMonthlyLimitError(errorMessage)) {
+        setSubscribeOpen(true);
+        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+      }
+    }
+    
     if (typeof window !== 'undefined') {
       window.addEventListener('open-upgrade-modal', handleOpenUpgrade);
+      window.addEventListener('api-limit-error', handleApiLimitError);
     }
+    
     return () => {
       if (typeof window !== 'undefined') {
         window.removeEventListener('open-upgrade-modal', handleOpenUpgrade);
+        window.removeEventListener('api-limit-error', handleApiLimitError);
       }
     };
-  }, [setSubscribeOpen]);
+  }, [setSubscribeOpen, isMonthlyLimitError]);
 
   const handleToggleSplitView = (content: any) => {
     setDocumentPreviewUrl(null)
@@ -2079,6 +2132,13 @@ But first, you need to connect your Spotify account securely using the button be
       }
     } catch (err: any) {
       console.error('Send error', err);
+      console.log('Error details:', {
+        message: err?.message,
+        status: err?.status,
+        statusCode: err?.statusCode,
+        errorData: err?.errorData,
+        fullError: err
+      });
 
       // If intent / send was aborted by user (via Stop), just exit silently.
       if (err?.name === 'AbortError') {
@@ -2087,12 +2147,56 @@ But first, you need to connect your Spotify account securely using the button be
 
       const message = (err && (err.message || '')) as string;
       const status = err?.status || err?.statusCode || (err?.response && err.response.status);
-      if (status === 429 || message.toLowerCase().includes('monthly') || message.toLowerCase().includes('limit')) {
+      const errorData = err?.errorData;
+      
+      console.log('Checking error conditions:', {
+        status,
+        message,
+        errorData,
+        is429: status === 429,
+        isMonthlyLimit: isMonthlyLimitError(message),
+        isErrorDataMonthlyLimit: errorData && isMonthlyLimitError(errorData.error || '')
+      });
+      
+      // Check for monthly API limit exceeded error - handle specific API format
+      if (status === 429 || 
+          isMonthlyLimitError(message) ||
+          (errorData && isMonthlyLimitError(errorData.error || ''))) {
+        
+        console.log('API limit error detected, opening upgrade modal', { status, message, errorData });
+        
+        // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        toast.error('You reached your free quota — subscribe to continue.');
+        
+        // Extract usage information if available
+        let usageInfo = '';
+        if (errorData && errorData.usage) {
+          const { current, limit } = errorData.usage;
+          usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
+        }
+        
+        // Show proper error message in UI
+        const errorMessage = {
+          id: `msg-error-${Date.now()}`,
+          chatId: chatToUpdate?.id || 'unknown',
+          role: 'ASSISTANT' as const,
+          content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+          timestamp: new Date().toISOString(),
+          error: 'Monthly API limit exceeded',
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = [...(prevChat.messages || []), errorMessage];
+          return { ...prevChat, messages: updatedMessages };
+        });
+        
+        toast.error(`Monthly API limit exceeded.${usageInfo ? ' ' + usageInfo : ''} Please upgrade to continue.`);
         return;
       }
-      toast.error(err?.message || 'Send failed');
+      
+      // For other errors, show generic error message
+      toast.error(err?.message || 'An error occurred. Please try again.');
 
       // Add error message to chat
       const errorMessage = {
@@ -2101,7 +2205,7 @@ But first, you need to connect your Spotify account securely using the button be
         role: 'ASSISTANT' as const,
         content: '',
         timestamp: new Date().toISOString(),
-        error: err.message || 'An unknown error occurred',
+        error: err.message || 'An error occurred. Please try again.',
       };
 
       setCurrentChat(prevChat => {
@@ -2195,6 +2299,40 @@ But first, you need to connect your Gmail account securely using the button belo
     } catch (error: any) {
       console.error('Gmail error:', error);
       const errorMessage = error.message || 'Gmail request failed. Please try again.';
+      const status = error?.status || error?.statusCode;
+      const errorData = error?.errorData;
+      
+      // Check for monthly API limit exceeded error
+      if (status === 429 || 
+          isMonthlyLimitError(errorMessage) ||
+          (errorData && isMonthlyLimitError(errorData.error || ''))) {
+        
+        // Show upgrade modal for API limit errors
+        setSubscribeOpen(true);
+        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        
+        // Update placeholder with limit error
+        const updateChatWithLimitError = (prevChat: any) => {
+          if (!prevChat) return prevChat;
+          const newMessages = prevChat.messages.map((msg: any) => {
+            if (msg.content === '[PROCESSING_GMAIL]') {
+              return { 
+                ...msg, 
+                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Gmail features.",
+                error: "Monthly API limit exceeded" 
+              };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: newMessages };
+        };
+
+        if (currentChat) {
+          setCurrentChat(updateChatWithLimitError);
+        }
+        return;
+      }
+      
       toast.error(errorMessage);
 
       // Update placeholder with error
@@ -2280,6 +2418,35 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error: any) {
       console.error('Google Services error:', error);
       const errorMessage = error.message || 'Google Services request failed. Please try again.';
+      
+      // Check for monthly API limit exceeded error
+      if (isMonthlyLimitError(errorMessage)) {
+        
+        // Show upgrade modal for API limit errors
+        setSubscribeOpen(true);
+        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        
+        const updateChatWithLimitError = (prevChat: any) => {
+          if (!prevChat) return prevChat;
+          const newMessages = prevChat.messages.map((msg: any) => {
+            if (msg.content === '[PROCESSING_CALENDAR_ACTION]' || msg.content === '[PROCESSING_DRIVE_ACTION]') {
+              return { 
+                ...msg, 
+                content: "Monthly API limit exceeded. Please upgrade your plan to continue using Google Services.",
+                error: "Monthly API limit exceeded" 
+              };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: newMessages };
+        };
+
+        if (currentChat) {
+          setCurrentChat(updateChatWithLimitError);
+        }
+        return;
+      }
+      
       toast.error(errorMessage);
 
       const updateChatWithError = (prevChat: any) => {
@@ -2343,8 +2510,40 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error: any) {
       console.error('Image generation failed:', error)
       const errorMessage = error.message || 'Image generation failed. Please try again.';
-      toast.error(errorMessage);
+      const status = error?.status || error?.statusCode;
+      const errorData = error?.errorData;
+      
+      // Check for monthly API limit exceeded error
+      if (status === 429 || 
+          isMonthlyLimitError(errorMessage) ||
+          (errorData && isMonthlyLimitError(errorData.error || ''))) {
+        
+        // Show upgrade modal for API limit errors
+        setSubscribeOpen(true);
+        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        
+        const updateChatWithLimitError = (prevChat: any) => {
+          if (!prevChat) return prevChat;
+          const newMessages = prevChat.messages.map((msg: any) => {
+            if (msg.content === '[GENERATING_IMAGE]') {
+              return { 
+                ...msg, 
+                content: 'Monthly API limit exceeded. Please upgrade your plan to continue using image generation.',
+                error: 'Monthly API limit exceeded' 
+              };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: newMessages };
+        };
 
+        if (currentChat) {
+          setCurrentChat(updateChatWithLimitError);
+        }
+        return;
+      }
+      
+      toast.error(errorMessage);
 
       const updateChatWithError = (prevChat: any) => {
         if (!prevChat) return prevChat;
@@ -2378,6 +2577,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error: any) {
       console.error('Video generation failed:', error)
       const errorMessage = error.message || 'Video generation failed. Please try again.';
+      const status = error?.status || error?.statusCode;
+      const errorData = error?.errorData;
+      
+      // Check for monthly API limit exceeded error
+      if (status === 429 || 
+          isMonthlyLimitError(errorMessage) ||
+          (errorData && isMonthlyLimitError(errorData.error || ''))) {
+        
+        // Show upgrade modal for API limit errors
+        setSubscribeOpen(true);
+        toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+        return;
+      }
+      
       toast.error(errorMessage)
     } finally {
       setIsGeneratingVideo(false)
@@ -2742,14 +2955,38 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         },
         (error: Error) => {
           console.error('Web search failed:', error);
-          toast.error(error.message || 'Web search failed');
+          
+          const errorMessage = error.message || 'Web search failed';
+          
+          // Check for monthly API limit exceeded error
+          if (isMonthlyLimitError(errorMessage)) {
+            
+            // Show upgrade modal for API limit errors
+            setSubscribeOpen(true);
+            toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+            
+            // Update the AI message to reflect the limit error
+            setCurrentChat(prev => {
+              if (!prev) return prev;
+              const newMessages = prev.messages.map(msg =>
+                msg.id === aiMessage.id
+                  ? { ...msg, content: `Monthly API limit exceeded. Please upgrade your plan to continue using web search.` }
+                  : msg
+              );
+              return { ...prev, messages: newMessages };
+            });
+            setIsWebSearching(false);
+            return;
+          }
+          
+          toast.error(errorMessage);
           setIsWebSearching(false);
           // If search fails, update the AI message to reflect the error
           setCurrentChat(prev => {
             if (!prev) return prev;
             const newMessages = prev.messages.map(msg =>
               msg.id === aiMessage.id
-                ? { ...msg, content: `Web search failed: ${error.message}` }
+                ? { ...msg, content: `Web search failed: ${errorMessage}` }
                 : msg
             );
             return { ...prev, messages: newMessages };
@@ -2845,8 +3082,25 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 )}
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 <ThemeToggle />
-                <Button variant="ghost" size={currentPlan === 'FREE' ? 'sm' : 'icon'} onClick={() => setSubscribeOpen(true)} className={currentPlan !== 'FREE' ? 'h-9 w-9' : ''}>
-                  {currentPlan === 'FREE' ? 'Upgrade Plan' : <span role="img" aria-label="Manage Plan" className="text-xl">💰</span>}
+                <Button 
+                  variant="ghost" 
+                  size={currentPlan === 'FREE' ? 'sm' : 'icon'} 
+                  onClick={() => setSubscribeOpen(true)} 
+                  className={`${currentPlan !== 'FREE' ? 'h-9 w-9' : ''} ${
+                    currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit 
+                    ? (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.9 
+                      ? 'border-red-500 text-red-600 hover:bg-red-50' 
+                      : (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.7 
+                        ? 'border-orange-500 text-orange-600 hover:bg-orange-50' 
+                        : ''
+                    : ''
+                  }`}
+                >
+                  {currentPlan === 'FREE' ? 'Upgrade Plan' : 
+                   currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit && 
+                   (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.7 ? 
+                   'Upgrade Now' : 
+                   <span role="img" aria-label="Manage Plan" className="text-xl">💰</span>}
                 </Button>
                 <UpgradeModal
                   open={subscribeOpen}

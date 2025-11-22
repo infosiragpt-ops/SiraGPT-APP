@@ -161,6 +161,12 @@ export function AppSidebar() {
 
   const isAnon = !user
   const isFreeUser = user?.plan?.toLowerCase() === "free"
+  
+  // Show upgrade button for free users OR users approaching their monthly limit (70% or more)
+  const currentUsage = user?.apiUsage || 0
+  const monthlyLimit = user?.monthlyLimit || 0
+  const usagePercentage = monthlyLimit > 0 ? (currentUsage / monthlyLimit) * 100 : 0
+  const shouldShowUpgrade = isFreeUser || usagePercentage >= 70
 
   const handleUpgradeClick = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -490,16 +496,20 @@ export function AppSidebar() {
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {/* Upgrade button for FREE users - only visible when sidebar is open */}
-              {isFreeUser && state === "open" && (
+              {/* Upgrade button for FREE users or users approaching limit - only visible when sidebar is open */}
+              {shouldShowUpgrade && state === "open" && (
                 <Button
                   onClick={handleUpgradeClick}
                   size="sm"
-                  variant="outline"
-                  className="ml-2 h-7 px-2 text-xs border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+                  variant={usagePercentage >= 90 ? "destructive" : "outline"}
+                  className={`ml-2 h-7 px-2 text-xs ${
+                    usagePercentage >= 90 
+                      ? "" 
+                      : "border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+                  }`}
                 >
                   <Crown className="h-3 w-3 mr-1" />
-                  Upgrade
+                  {usagePercentage >= 90 ? 'Upgrade Now' : 'Upgrade'}
                 </Button>
               )}
             </div>

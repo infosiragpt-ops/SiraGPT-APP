@@ -7,6 +7,32 @@ import { apiClient } from "./api"
 import { aiService } from "./ai-service"
 import { toast } from "sonner"
 
+// Helper function to check if error is related to monthly API limit
+const isMonthlyLimitError = (errorMessage: string) => {
+  const lowerMessage = errorMessage.toLowerCase();
+  return lowerMessage.includes('monthly api limit exceeded') ||
+         lowerMessage.includes('monthly limit exceeded') ||
+         lowerMessage.includes('monthly video generation limit exceeded') ||
+         lowerMessage.includes('free monthly queries exhausted') ||
+         (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
+};
+
+// Helper function to trigger upgrade modal
+const triggerUpgradeModal = (errorMessage: string, errorData?: any) => {
+  if (typeof window !== 'undefined') {
+    // Trigger upgrade modal
+    window.dispatchEvent(new CustomEvent('open-upgrade-modal'));
+    
+    // Show toast with usage info if available
+    let usageInfo = '';
+    if (errorData && errorData.usage) {
+      const { current, limit } = errorData.usage;
+      usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
+    }
+    toast.error(`Monthly API limit exceeded.${usageInfo ? ' ' + usageInfo : ''} Please upgrade to continue.`);
+  }
+};
+
 interface Message {
   id: string
   chatId: string
@@ -471,6 +497,48 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             (error) => {
               console.error("Streaming failed:", error);
               
+              // Check for monthly API limit errors
+              const errorMessage = error?.message || '';
+              const status = (error as any)?.status || (error as any)?.statusCode;
+              const errorData = (error as any)?.errorData;
+              
+              if (status === 429 || 
+                  isMonthlyLimitError(errorMessage) ||
+                  (errorData && isMonthlyLimitError(errorData.error || ''))) {
+                
+                console.log('Monthly limit error detected in streaming');
+                triggerUpgradeModal(errorMessage, errorData);
+                
+                // Update message with monthly limit error
+                if (!controller.signal.aborted && !pendingStop && error.name !== 'AbortError') {
+                  setCurrentChat((prevChat) => {
+                    if (!prevChat) return prevChat;
+                    const newMessages = prevChat.messages.map((msg) => {
+                      if (msg.id === aiMessagePlaceholder.id) {
+                        let usageInfo = '';
+                        if (errorData && errorData.usage) {
+                          const { current, limit } = errorData.usage;
+                          usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
+                        }
+                        return { 
+                          ...msg, 
+                          content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+                          error: "Monthly API limit exceeded" 
+                        };
+                      }
+                      return msg;
+                    });
+                    return { ...prevChat, messages: newMessages };
+                  });
+                }
+                
+                setIsLoading(false);
+                setIsStreaming(false);
+                setCurrentStreamId(null);
+                abortControllerRef.current = null;
+                return;
+              }
+              
               // Only update UI if not manually stopped
               if (!controller.signal.aborted && !pendingStop) {
                 setIsLoading(false);
@@ -497,20 +565,56 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error: any) {
         console.error("Failed to start AI stream:", error);
+        
+        // Check for monthly API limit errors
+        const errorMessage = error?.message || '';
+        const status = (error as any)?.status || (error as any)?.statusCode;
+        const errorData = (error as any)?.errorData;
+        
+        if (status === 429 || 
+            isMonthlyLimitError(errorMessage) ||
+            (errorData && isMonthlyLimitError(errorData.error || ''))) {
+          
+          console.log('Monthly limit error detected in catch block');
+          triggerUpgradeModal(errorMessage, errorData);
+          
+          // Update message with monthly limit error
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                let usageInfo = '';
+                if (errorData && errorData.usage) {
+                  const { current, limit } = errorData.usage;
+                  usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
+                }
+                return { 
+                  ...msg, 
+                  content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+                  error: "Monthly API limit exceeded" 
+                };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          });
+        } else {
+          // Handle other errors normally
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                return { ...msg, content: "", error: error.message || "An error occurred." };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          });
+        }
+        
         setIsLoading(false);
         setIsStreaming(false);
         setCurrentStreamId(null);
-
-        setCurrentChat((prevChat) => {
-          if (!prevChat) return prevChat;
-          const newMessages = prevChat.messages.map((msg) => {
-            if (msg.id === aiMessagePlaceholder.id) {
-              return { ...msg, content: "", error: error.message || "An error occurred." };
-            }
-            return msg;
-          });
-          return { ...prevChat, messages: newMessages };
-        });
       } finally {
         setIsLoading(false);
         setIsStreaming(false);
@@ -892,20 +996,55 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // onError: Handle error only if not manually stopped
           if (!controller.signal.aborted && !pendingStop) {
             console.error("Streaming failed during regeneration:", error);
+            
+            // Check for monthly API limit errors
+            const errorMessage = error?.message || '';
+            const status = error?.status || error?.statusCode;
+            const errorData = error?.errorData;
+            
+            if (status === 429 || 
+                isMonthlyLimitError(errorMessage) ||
+                (errorData && isMonthlyLimitError(errorData.error || ''))) {
+              
+              console.log('Monthly limit error detected during regeneration');
+              triggerUpgradeModal(errorMessage, errorData);
+              
+              setCurrentChat((prevChat) => {
+                if (!prevChat) return prevChat;
+                const errorMessages = prevChat.messages.map((msg) => {
+                  if (msg.id === aiMessagePlaceholder.id) {
+                    let usageInfo = '';
+                    if (errorData && errorData.usage) {
+                      const { current, limit } = errorData.usage;
+                      usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
+                    }
+                    return { 
+                      ...msg, 
+                      content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+                      error: "Monthly API limit exceeded" 
+                    };
+                  }
+                  return msg;
+                });
+                return { ...prevChat, messages: errorMessages };
+              });
+            } else {
+              setCurrentChat((prevChat) => {
+                if (!prevChat) return prevChat;
+                const errorMessages = prevChat.messages.map((msg) => {
+                  if (msg.id === aiMessagePlaceholder.id) {
+                    return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
+                  }
+                  return msg;
+                });
+                return { ...prevChat, messages: errorMessages };
+              });
+            }
+            
             setIsLoading(false);
             setIsStreaming(false);
             setCurrentStreamId(null);
             abortControllerRef.current = null;
-            setCurrentChat((prevChat) => {
-              if (!prevChat) return prevChat;
-              const errorMessages = prevChat.messages.map((msg) => {
-                if (msg.id === aiMessagePlaceholder.id) {
-                  return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
-                }
-                return msg;
-              });
-              return { ...prevChat, messages: errorMessages };
-            });
           }
         },
         controller.signal // Pass the abort signal
@@ -1009,20 +1148,55 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // Only handle error if not manually stopped
           if (!controller.signal.aborted && !pendingStop) {
             console.error("Streaming failed during regeneration:", error);
+            
+            // Check for monthly API limit errors
+            const errorMessage = error?.message || '';
+            const status = error?.status || error?.statusCode;
+            const errorData = error?.errorData;
+            
+            if (status === 429 || 
+                isMonthlyLimitError(errorMessage) ||
+                (errorData && isMonthlyLimitError(errorData.error || ''))) {
+              
+              console.log('Monthly limit error detected during edit and regeneration');
+              triggerUpgradeModal(errorMessage, errorData);
+              
+              setCurrentChat((prevChat) => {
+                if (!prevChat) return prevChat;
+                const errorMessages = prevChat.messages.map((msg) => {
+                  if (msg.id === aiMessagePlaceholder.id) {
+                    let usageInfo = '';
+                    if (errorData && errorData.usage) {
+                      const { current, limit } = errorData.usage;
+                      usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
+                    }
+                    return { 
+                      ...msg, 
+                      content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
+                      error: "Monthly API limit exceeded" 
+                    };
+                  }
+                  return msg;
+                });
+                return { ...prevChat, messages: errorMessages };
+              });
+            } else {
+              setCurrentChat((prevChat) => {
+                if (!prevChat) return prevChat;
+                const errorMessages = prevChat.messages.map((msg) => {
+                  if (msg.id === aiMessagePlaceholder.id) {
+                    return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
+                  }
+                  return msg;
+                });
+                return { ...prevChat, messages: errorMessages };
+              });
+            }
+            
             setIsLoading(false);
             setIsStreaming(false);
             setCurrentStreamId(null);
             abortControllerRef.current = null;
-            setCurrentChat((prevChat) => {
-              if (!prevChat) return prevChat;
-              const errorMessages = prevChat.messages.map((msg) => {
-                if (msg.id === aiMessagePlaceholder.id) {
-                  return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
-                }
-                return msg;
-              });
-              return { ...prevChat, messages: errorMessages };
-            });
           }
         },
         controller.signal // Pass the abort signal

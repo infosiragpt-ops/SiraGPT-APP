@@ -38,8 +38,13 @@ class ApiClient {
       const response = await fetch(url, config);
 
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Network error' }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+        const errorData = await response.json().catch(() => ({ error: 'Network error' }));
+        const error = new Error(errorData.error || `HTTP ${response.status}`);
+        // Preserve status code and full error data for proper handling
+        (error as any).status = response.status;
+        (error as any).statusCode = response.status;
+        (error as any).errorData = errorData;
+        throw error;
       }
 
       return await response.json();
