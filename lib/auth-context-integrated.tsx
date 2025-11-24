@@ -11,6 +11,7 @@ interface User {
   avatar?: string
   plan: string
   isAdmin: boolean
+  isSuperAdmin?: boolean
   apiUsage: number
   monthlyLimit: number
   createdAt: string

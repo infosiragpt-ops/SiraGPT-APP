@@ -102,6 +102,15 @@ class ApiClient {
     this.setToken(null);
   }
 
+  // Super Admin Impersonation
+  async impersonateUser(userId: string) {
+    return this.request(`/auth/impersonate/${userId}`, { method: 'POST' });
+  }
+
+  async endImpersonation() {
+    return this.request('/auth/end-impersonation', { method: 'POST' });
+  }
+
   async getCurrentUser() {
     return this.request('/auth/me');
   }

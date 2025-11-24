@@ -24,7 +24,11 @@ export default function LoginPage() {
   // Redirect if already logged in
   React.useEffect(() => {
     if (user) {
-      router.push("/chat")
+      if (user.isSuperAdmin) {
+        router.push("/super-admin")
+      } else {
+        router.push("/chat")
+      }
     }
   }, [user, router])
 
@@ -34,9 +38,10 @@ export default function LoginPage() {
 
     try {
       const success = await login(email, password)
+      console.log("Login success:", success);
       if (success) {
         toast.success("Login successful!")
-        router.push("/chat")
+        // router.push("/chat")
       } else {
         toast.error("Invalid credentials.")
       }

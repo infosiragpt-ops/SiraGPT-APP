@@ -1,5 +1,5 @@
 const express = require('express');
-const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireSuperAdmin } = require('../middleware/auth');
 const prisma = require('../config/database');
 const { body, validationResult } = require('express-validator');
 const { ProviderType, ModelType } = require('@prisma/client'); // Enums ko import karein
@@ -129,7 +129,9 @@ router.get('/users', async (req, res) => {
             { email: { contains: search, mode: 'insensitive' } }
           ]
         } : {},
-        plan ? { plan } : {}
+        plan ? { plan } : {},
+        // Exclude super admin users from the list
+        { isSuperAdmin: false }
       ]
     };
 
@@ -142,6 +144,7 @@ router.get('/users', async (req, res) => {
           email: true,
           plan: true,
           isAdmin: true,
+          isSuperAdmin: true,
           apiUsage: true,
           monthlyLimit: true,
           createdAt: true,
@@ -182,18 +185,19 @@ router.get('/analytics', async (req, res) => {
       totalPayments,
       totalApiUsage
     ] = await Promise.all([
-      prisma.user.count(),
+      prisma.user.count({ where: { isSuperAdmin: false } }), // Exclude super admins
       prisma.chat.count(),
       prisma.message.count(),
       prisma.payment.count(),
       prisma.apiUsage.count()
     ]);
 
-    // Get active users (last 7 days)
+    // Get active users (last 7 days) - exclude super admins
     const lastWeek = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const activeUsers = await prisma.user.count({
       where: {
-        updatedAt: { gte: lastWeek }
+        updatedAt: { gte: lastWeek },
+        isSuperAdmin: false
       }
     });
 
@@ -203,9 +207,10 @@ router.get('/analytics', async (req, res) => {
       _sum: { amount: true }
     });
 
-    // Get users by plan
+    // Get users by plan - exclude super admins
     const usersByPlan = await prisma.user.groupBy({
       by: ['plan'],
+      where: { isSuperAdmin: false },
       _count: { plan: true }
     });
 
