@@ -152,6 +152,7 @@ export class AIService {
   If the user asks to create a "table", "list", "dataset", or "dummy data" without explicitly mentioning charts, slides, or presentations, classify as 'text'.
 
 IMPORTANT: 
+- One thing make suer if user say or question about something code and according to user message that doesnot mean to create a website just like this intent so deal as text. basically that was a queston that user ask about code so deal as text.
 - Only classify as 'webdev' if the user is **creating** or **building** a UI or web page. If the request involves **debugging**, **explaining**, or **reviewing code**, classify it as 'text'.
 - If the user asks for **specific languages** (e.g., "HTML", "React", "CSS"), check if the request is related to **building** a UI. If yes, classify as 'webdev'.
 - If the user is asking for a general explanation of something (e.g., "What is React?"), classify as 'text'.
