@@ -65,6 +65,14 @@ model AiModel {
   type        ModelType    @default(TEXT) // <-- NAYA: Model ki type (TEXT/IMAGE)
   icon        String? 
   isActive    Boolean  @default(true)
+  
+  // Auto-sync tracking fields
+  lastSynced   DateTime?
+  syncSource   String?   @default("manual") // "api", "manual", "scheduled"
+  contextLength Int?     // Model's context window size
+  pricing      Json?     // Provider pricing information
+  tags         String[]  // Model tags/categories
+  
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

@@ -8,6 +8,8 @@ const router = express.Router();
 const stripeService = require('../services/stripe');
 const axios = require('axios');
 const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serializer');
+const modelSyncService = require('../services/model-sync-service');
+const modelSyncScheduler = require('../services/model-sync-scheduler');
 
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
@@ -112,6 +114,205 @@ router.delete('/models/:id', async (req, res) => {
   } catch (error) {
     console.error('Delete model error:', error);
     res.status(500).json({ error: 'Failed to delete model' });
+  }
+});
+
+// ✨ NEW: Model synchronization endpoints
+// Fetch models from all providers without saving to DB
+router.get('/models/fetch', async (req, res) => {
+  try {
+    console.log('📡 Admin requested model fetch from all providers');
+    const models = await modelSyncService.fetchAllModels();
+    res.json({ 
+      success: true, 
+      models,
+      count: models.length,
+      providers: {
+        openai: models.filter(m => m.provider === 'OpenAI').length,
+        gemini: models.filter(m => m.provider === 'Gemini').length,
+        openrouter: models.filter(m => m.provider === 'OpenRouter').length
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching models:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch models from providers',
+      message: error.message 
+    });
+  }
+});
+
+// Sync models to database
+router.post('/models/sync', async (req, res) => {
+  try {
+    console.log('🔄 Admin requested model sync to database');
+    const result = await modelSyncService.syncModelsToDatabase();
+    res.json({ 
+      success: true, 
+      message: 'Models synchronized successfully',
+      result
+    });
+  } catch (error) {
+    console.error('❌ Error syncing models:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to sync models to database',
+      message: error.message 
+    });
+  }
+});
+
+// Get provider statistics
+router.get('/models/stats', async (req, res) => {
+  try {
+    const stats = await modelSyncService.getProviderStats();
+    const total = await prisma.aiModel.count();
+    const active = await prisma.aiModel.count({ where: { isActive: true } });
+    
+    res.json({
+      success: true,
+      stats: {
+        total,
+        active,
+        inactive: total - active,
+        byProvider: stats
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error getting model stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get model statistics' 
+    });
+  }
+});
+
+// Clear model cache
+router.post('/models/clear-cache', async (req, res) => {
+  try {
+    const { provider } = req.body;
+    modelSyncService.clearCache(provider);
+    res.json({ 
+      success: true, 
+      message: provider ? `${provider} cache cleared` : 'All caches cleared' 
+    });
+  } catch (error) {
+    console.error('❌ Error clearing cache:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to clear cache' 
+    });
+  }
+});
+
+// Bulk enable/disable models
+router.put('/models/bulk', async (req, res) => {
+  try {
+    const { action, modelIds, provider } = req.body;
+    
+    if (!action || !['enable', 'disable'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid action. Use enable or disable.' });
+    }
+
+    const isActive = action === 'enable';
+    let whereClause = {};
+
+    if (modelIds && Array.isArray(modelIds)) {
+      whereClause.id = { in: modelIds };
+    } else if (provider) {
+      whereClause.provider = provider;
+    } else {
+      return res.status(400).json({ error: 'Either modelIds or provider must be specified' });
+    }
+
+    const result = await prisma.aiModel.updateMany({
+      where: whereClause,
+      data: { isActive }
+    });
+
+    res.json({ 
+      success: true, 
+      message: `Successfully ${action}d ${result.count} models`,
+      count: result.count 
+    });
+  } catch (error) {
+    console.error('❌ Error in bulk update:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to update models' 
+    });
+  }
+});
+
+// ✨ Model sync scheduler endpoints
+// Get scheduler status and sync history
+router.get('/models/sync/status', async (req, res) => {
+  try {
+    const history = await modelSyncScheduler.getSyncHistory();
+    res.json({ 
+      success: true, 
+      ...history 
+    });
+  } catch (error) {
+    console.error('❌ Error getting sync status:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get sync status' 
+    });
+  }
+});
+
+// Start/stop scheduler
+router.post('/models/sync/scheduler', async (req, res) => {
+  try {
+    const { action, schedule } = req.body;
+    
+    if (action === 'start') {
+      modelSyncScheduler.start(schedule);
+      res.json({ 
+        success: true, 
+        message: 'Model sync scheduler started',
+        status: modelSyncScheduler.getStatus() 
+      });
+    } else if (action === 'stop') {
+      modelSyncScheduler.stop();
+      res.json({ 
+        success: true, 
+        message: 'Model sync scheduler stopped',
+        status: modelSyncScheduler.getStatus() 
+      });
+    } else {
+      res.status(400).json({ 
+        success: false, 
+        error: 'Invalid action. Use start or stop.' 
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error managing scheduler:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to manage scheduler' 
+    });
+  }
+});
+
+// Run sync immediately
+router.post('/models/sync/run', async (req, res) => {
+  try {
+    const result = await modelSyncScheduler.runImmediately();
+    res.json({ 
+      success: true, 
+      message: 'Model sync completed successfully',
+      result 
+    });
+  } catch (error) {
+    console.error('❌ Error running immediate sync:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to run model sync',
+      message: error.message 
+    });
   }
 });
 
