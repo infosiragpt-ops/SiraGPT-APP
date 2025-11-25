@@ -15,7 +15,7 @@ import {
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
     Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
     Sparkles, Eye,
-    ExternalLink, Mail
+    ExternalLink, Mail, X
 } from "lucide-react"
 import {
     Dialog,
@@ -64,7 +64,7 @@ const truncateUrl = (url: string, maxLength: number = 30) => {
 };
 
 // Chart Display Component
-const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: any[] }) => {
+const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], fullResponse?: any[], onImageClick?: (imageUrl: string) => void }) => {
     const chartFile = files.find(f => f.type === 'chart');
     if (!chartFile) return null;
 
@@ -97,7 +97,8 @@ const ChartDisplay = ({ files, fullResponse }: { files: any[], fullResponse?: an
                 <img
                     src={imageUrl}
                     alt="Generated chart"
-                    className="max-w-full h-auto rounded-lg"
+                    className="max-w-full h-auto rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+                    onClick={() => onImageClick?.(imageUrl)}
                 />
 
                 {/* Hover controls */}
@@ -172,6 +173,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const [editedContent, setEditedContent] = useState(message.content);
     const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>({});
     const [imageError, setImageError] = useState<{ [key: string]: boolean }>({});
+    const [selectedImage, setSelectedImage] = useState<string | null>(null);
+    const imageLoadedRef = React.useRef<Set<string>>(new Set());
     const [selectedFile, setSelectedFile] = useState<any>(null);
     const [fileContent, setFileContent] = useState<string>("");
     const [isContentLoading, setIsContentLoading] = useState(false);
@@ -229,6 +232,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     useEffect(() => {
         setEditedContent(message.content);
     }, [message.content]);
+
+    // Handle ESC key to close image modal
+    useEffect(() => {
+        const handleEscape = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' && selectedImage) {
+                setSelectedImage(null);
+            }
+        };
+        window.addEventListener('keydown', handleEscape);
+        return () => window.removeEventListener('keydown', handleEscape);
+    }, [selectedImage]);
 
     // Optimized code detection with memoization to prevent repeated parsing
     const parsedCode = useMemo(() => {
@@ -1467,14 +1481,29 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                 <img
                                                     src={src}
                                                     alt="Generated image"
-                                                    className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain"
+                                                    className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain cursor-pointer hover:opacity-90 transition-opacity"
                                                     loading="lazy"
-                                                    onLoad={() => {
-                                                        setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
+                                                    onClick={() => setSelectedImage(src)}
+                                                    onLoad={(e) => {
+                                                        console.log('onLoad');
+                                                        const imgKey = `file-${index}`;
+                                                        // Only update state if image wasn't already loaded
+                                                        if (!imageLoadedRef.current.has(imgKey)) {
+                                                            imageLoadedRef.current.add(imgKey);
+                                                            setImageLoading(prev => {
+                                                                // Only update if state actually changed
+                                                                if (prev[imgKey] !== false) {
+                                                                    return { ...prev, [imgKey]: false };
+                                                                }
+                                                                return prev;
+                                                            });
+                                                        }
                                                     }}
                                                     onError={() => {
-                                                        setImageLoading(prev => ({ ...prev, [`file-${index}`]: false }));
-                                                        setImageError(prev => ({ ...prev, [`file-${index}`]: true }));
+                                                        console.log('onError');
+                                                        const imgKey = `file-${index}`;
+                                                        setImageLoading(prev => ({ ...prev, [imgKey]: false }));
+                                                        setImageError(prev => ({ ...prev, [imgKey]: true }));
                                                     }}
                                                 />
 
@@ -1498,7 +1527,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             {/* Handle direct image URLs in content - don't show base64 or long URLs */}
                             {message.role === "ASSISTANT" && message.content.startsWith('http') &&
                                 (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')) && (
-                                    <div className="relative">
+                                    <div className="relative inline-block group">
                                         {imageLoading['content-image'] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
                                                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
@@ -1509,7 +1538,31 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                 <p className="text-sm text-gray-500">Failed to load image</p>
                                             </div>
                                         ) : (
-                                            <></>
+                                            <img
+                                                src={message.content}
+                                                alt="Generated image"
+                                                className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                                                loading="lazy"
+                                                onClick={() => setSelectedImage(message.content)}
+                                                onLoad={(e) => {
+                                                    const imgKey = 'content-image';
+                                                    // Only update state if image wasn't already loaded
+                                                    if (!imageLoadedRef.current.has(imgKey)) {
+                                                        imageLoadedRef.current.add(imgKey);
+                                                        setImageLoading(prev => {
+                                                            // Only update if state actually changed
+                                                            if (prev[imgKey] !== false) {
+                                                                return { ...prev, [imgKey]: false };
+                                                            }
+                                                            return prev;
+                                                        });
+                                                    }
+                                                }}
+                                                onError={() => {
+                                                    setImageLoading(prev => ({ ...prev, 'content-image': false }));
+                                                    setImageError(prev => ({ ...prev, 'content-image': true }));
+                                                }}
+                                            />
                                         )}
                                     </div>
                                 )}
@@ -1539,7 +1592,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             key={`img-${index}`}
                                             src={imageUrl}
                                             alt={file.name || file.originalName || "Image"}
-                                            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover"
+                                            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                            onClick={() => setSelectedImage(imageUrl)}
                                         />
                                     );
                                 })}
@@ -1671,7 +1725,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <PPTDisplay />
                                 <VideoDisplay />
                                 <FileDisplay />
-                                <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} />
+                                <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} onImageClick={(url) => setSelectedImage(url)} />
                                 <FigmaDiagramDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <GmailConnectionDisplay />
                                 <GoogleServicesConnectionDisplay />
@@ -1849,6 +1903,38 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 </tbody>
                             </table>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Image Lightbox Modal - ChatGPT style */}
+            {selectedImage && (
+                <div 
+                    className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
+                    onClick={() => setSelectedImage(null)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                            setSelectedImage(null);
+                        }
+                    }}
+                >
+                    <button
+                        onClick={() => setSelectedImage(null)}
+                        className="absolute top-4 right-4 z-10 text-white hover:text-gray-300 transition-colors bg-black/50 rounded-full p-2 hover:bg-black/70"
+                        aria-label="Close image viewer"
+                    >
+                        <X className="h-6 w-6" />
+                    </button>
+                    <div 
+                        className="max-w-[90vw] max-h-[90vh] flex items-center justify-center"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <img
+                            src={selectedImage}
+                            alt="Full size image"
+                            className="max-w-full max-h-[90vh] object-contain rounded-lg"
+                            onClick={(e) => e.stopPropagation()}
+                        />
                     </div>
                 </div>
             )}
