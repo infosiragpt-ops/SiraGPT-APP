@@ -1485,12 +1485,43 @@ But first, you need to connect your Spotify account securely using the button be
   // No longer need dynamic padding, handled by layout
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
+  // Handle textarea input change with smooth scrolling
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+
+    // Use requestAnimationFrame to ensure DOM is updated before scrolling
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        const textarea = textareaRef.current;
+        const maxHeight = 350;
+
+        // Reset height to recalculate
+        textarea.style.height = 'auto';
+        const scrollHeight = textarea.scrollHeight;
+
+        if (scrollHeight > maxHeight) {
+          textarea.style.height = `${maxHeight}px`;
+          textarea.style.overflowY = 'auto';
+          // Auto-scroll to bottom to keep cursor visible when typing
+          setTimeout(() => {
+            textarea.scrollTop = textarea.scrollHeight;
+          }, 0);
+        } else {
+          textarea.style.height = `${scrollHeight}px`;
+          textarea.style.overflowY = 'hidden';
+        }
+      }
+    });
+  };
+
   React.useEffect(() => {
     if (textareaRef.current) {
       const textarea = textareaRef.current;
-      textarea.style.height = 'auto'; // Reset height to recalculate
+      const maxHeight = 350;
+
+      // Reset height to recalculate
+      textarea.style.height = 'auto';
       const scrollHeight = textarea.scrollHeight;
-      const maxHeight = 350; // As defined in style
 
       if (scrollHeight > maxHeight) {
         textarea.style.height = `${maxHeight}px`;
@@ -3322,9 +3353,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       <Textarea
                         ref={textareaRef}
                         value={input}
-                        onChange={(e) => {
-                          setInput(e.target.value);
-                        }}
+                        onChange={handleTextareaChange}
                         onKeyDown={handleKeyDown}
                         onKeyPress={handleKeyPress}
                         placeholder={
@@ -3347,6 +3376,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           minHeight: "60px",
                           maxHeight: "350px",
                           overflowY: "auto",
+                          overflowX: "hidden",
+                          wordWrap: "break-word",
                           border: "none",           // Inline style border remove
                           outline: "none",          // Inline style outline remove
                           boxShadow: "none",        // Remove focus shadow if any
@@ -3628,9 +3659,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           <Textarea
                             ref={textareaRef}
                             value={input}
-                            onChange={(e) => {
-                              setInput(e.target.value);
-                            }}
+                            onChange={handleTextareaChange}
                             onKeyDown={handleKeyDown}
                             onKeyPress={handleKeyPress}
                             placeholder={
@@ -3654,6 +3683,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               minHeight: "60px",
                               maxHeight: "350px",
                               overflowY: "auto",
+                              overflowX: "hidden",
+                              wordWrap: "break-word",
                               border: "none",           // Inline style border remove
                               outline: "none",          // Inline style outline remove
                               boxShadow: "none",        // Remove focus shadow if any
