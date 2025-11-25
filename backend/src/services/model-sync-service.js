@@ -17,7 +17,7 @@ class ModelSyncService {
     try {
       const now = Date.now();
       const cache = this.cache.openai;
-      
+
       if (cache.data && (now - cache.lastFetch) < cache.ttl) {
         console.log('📦 Using cached OpenAI models');
         return cache.data;
@@ -41,11 +41,11 @@ class ModelSyncService {
       const models = response.data.data
         .filter(model => {
           // Filter for chat completion models
-          return model.id.includes('gpt') || 
-                 model.id.includes('o1') ||
-                 model.id.includes('dall-e') ||
-                 model.id === 'text-davinci-003' ||
-                 model.id === 'text-davinci-002';
+          return model.id.includes('gpt') ||
+            model.id.includes('o1') ||
+            model.id.includes('dall-e') ||
+            model.id === 'text-davinci-003' ||
+            model.id === 'text-davinci-002';
         })
         .map(model => ({
           id: model.id,
@@ -60,7 +60,7 @@ class ModelSyncService {
 
       cache.data = models;
       cache.lastFetch = now;
-      
+
       console.log(`✅ Fetched ${models.length} OpenAI models`);
       return models;
     } catch (error) {
@@ -76,7 +76,7 @@ class ModelSyncService {
     try {
       const now = Date.now();
       const cache = this.cache.gemini;
-      
+
       if (cache.data && (now - cache.lastFetch) < cache.ttl) {
         console.log('📦 Using cached Gemini models');
         return cache.data;
@@ -89,29 +89,43 @@ class ModelSyncService {
       }
 
       console.log('🔄 Fetching Gemini models...');
-      const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/models', {
+      const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/openai/models', {
         headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey
+          // 'Content-Type': 'application/json',
+          // 'x-goog-api-key': apiKey
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
         },
         timeout: 10000
       });
 
-      const models = response.data.models
+      const models = response.data.data
+
         .filter(model => {
-          // Filter for generation-capable models
-          return model.supportedGenerationMethods?.includes('generateContent') ||
-                 model.supportedGenerationMethods?.includes('generateMessage');
+          const id = model.id.toLowerCase();
+
+          const blocked = [
+            'imagen',
+            'image',
+            'computer',
+            'robot',
+            'veo',
+            'generate',
+            'vision',
+            'live',
+            'audio'
+          ];
+
+          return !blocked.some(b => id.includes(b));
         })
         .map(model => {
-          const modelId = model.name.replace('models/', '');
           return {
-            id: modelId,
-            name: modelId,
-            displayName: this.formatModelName(modelId),
+            id: model.id,
+            name: model.id,
+            displayName: this.formatModelName(model.id),
             provider: 'Gemini',
             type: 'TEXT',
-            description: model.description || this.generateModelDescription(modelId, 'Gemini'),
+            description: model.description || this.generateModelDescription(model.id, 'Gemini'),
             isActive: true,
             apiData: model
           };
@@ -119,7 +133,7 @@ class ModelSyncService {
 
       cache.data = models;
       cache.lastFetch = now;
-      
+
       console.log(`✅ Fetched ${models.length} Gemini models`);
       return models;
     } catch (error) {
@@ -135,7 +149,7 @@ class ModelSyncService {
     try {
       const now = Date.now();
       const cache = this.cache.openrouter;
-      
+
       if (cache.data && (now - cache.lastFetch) < cache.ttl) {
         console.log('📦 Using cached OpenRouter models');
         return cache.data;
@@ -153,9 +167,9 @@ class ModelSyncService {
       const models = response.data.data
         .filter(model => {
           // Filter out deprecated or beta models, focus on stable ones
-          return !model.id.includes('beta') && 
-                 !model.id.includes('deprecated') &&
-                 model.context_length > 1000; // Filter out very limited models
+          return !model.id.includes('beta') &&
+            !model.id.includes('deprecated') &&
+            model.context_length > 1000; // Filter out very limited models
         })
         .map(model => ({
           id: model.id,
@@ -172,7 +186,7 @@ class ModelSyncService {
 
       cache.data = models;
       cache.lastFetch = now;
-      
+
       console.log(`✅ Fetched ${models.length} OpenRouter models`);
       return models;
     } catch (error) {
@@ -186,7 +200,7 @@ class ModelSyncService {
    */
   async fetchAllModels() {
     console.log('🚀 Starting to fetch models from all providers...');
-    
+
     const [openaiModels, geminiModels, openrouterModels] = await Promise.allSettled([
       this.fetchOpenAIModels(),
       this.fetchGeminiModels(),
@@ -194,15 +208,15 @@ class ModelSyncService {
     ]);
 
     const allModels = [];
-    
+
     if (openaiModels.status === 'fulfilled') {
       allModels.push(...openaiModels.value);
     }
-    
+
     if (geminiModels.status === 'fulfilled') {
       allModels.push(...geminiModels.value);
     }
-    
+
     if (openrouterModels.status === 'fulfilled') {
       allModels.push(...openrouterModels.value);
     }
@@ -218,7 +232,7 @@ class ModelSyncService {
     try {
       console.log('🔄 Starting model sync to database...');
       const fetchedModels = await this.fetchAllModels();
-      
+
       if (fetchedModels.length === 0) {
         console.log('⚠️ No models fetched, skipping database sync');
         return { updated: 0, created: 0, errors: 0 };
@@ -387,16 +401,16 @@ class ModelSyncService {
    */
   generateTags(model) {
     const tags = [];
-    
+
     // Add provider as tag
     tags.push(model.provider.toLowerCase());
-    
+
     // Add type as tag
     tags.push(model.type.toLowerCase());
-    
+
     // Add specific tags based on model name patterns
     const modelId = model.name.toLowerCase();
-    
+
     if (modelId.includes('gpt-4')) tags.push('gpt-4', 'advanced');
     if (modelId.includes('gpt-3.5')) tags.push('gpt-3.5', 'efficient');
     if (modelId.includes('turbo')) tags.push('fast');
@@ -408,7 +422,7 @@ class ModelSyncService {
     if (modelId.includes('pro')) tags.push('professional');
     if (modelId.includes('mini') || modelId.includes('small')) tags.push('lightweight');
     if (modelId.includes('flash')) tags.push('fast', 'efficient');
-    
+
     return [...new Set(tags)]; // Remove duplicates
   }
 }

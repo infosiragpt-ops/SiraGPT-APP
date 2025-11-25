@@ -29,10 +29,12 @@ import {
   Network,
   Monitor,
   Share,
+  Search,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Input } from "@/components/ui/input"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -895,11 +897,10 @@ const ActiveToolsDisplay = ({
         <div className="flex items-center gap-1.5 bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded-full text-xs border border-indigo-200 dark:border-indigo-800">
           <Monitor className="h-3 w-3" />
           <span className="font-medium">Computer Use</span>
-          <div className={`h-2 w-2 rounded-full ml-1 ${
-            computerUseStatus === 'running' ? 'bg-green-500 animate-pulse' :
+          <div className={`h-2 w-2 rounded-full ml-1 ${computerUseStatus === 'running' ? 'bg-green-500 animate-pulse' :
             computerUseStatus === 'completed' ? 'bg-blue-500' :
-            computerUseStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
-          }`} />
+              computerUseStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
+            }`} />
           <Button
             variant="ghost"
             size="sm"
@@ -925,6 +926,7 @@ const NavbarModelSelector = ({
   currentChat
 }: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
+  const [searchQuery, setSearchQuery] = React.useState("");
 
 
   // If this is a video chat type, show video model
@@ -935,9 +937,17 @@ const NavbarModelSelector = ({
       { name: 'kling-2-master', displayName: 'Kling 2 Master (10s)' }
     ];
     selectedVideoModelData = videoModels.find(m => m.name === selectedModel);
-    // setSelectedModel('veo-fast');
+
+    // Filter video models based on search
+    const filteredVideoModels = videoModels.filter((model) =>
+      model.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      model.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
     return (
-      <DropdownMenu>
+      <DropdownMenu onOpenChange={(open) => {
+        if (!open) setSearchQuery("");
+      }}>
         <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
           <Video className="h-4 w-4" />
           <span className="text-sm font-medium">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
@@ -946,21 +956,45 @@ const NavbarModelSelector = ({
             <ChevronDown className="h-4 w-4 opacity-70" />
           </div>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          {videoModels.map((model) => (
-            <DropdownMenuItem
-              key={model.name}
-              onSelect={() => {
-                setSelectedModel(model.name);
-              }}
-              className="flex items-center gap-2 py-2"
-            >
-              <Video className="h-5 w-5 flex-shrink-0" />
-              <div className="flex flex-col flex-1">
-                <span className="text-sm">{model.displayName}</span>
-              </div>
-            </DropdownMenuItem>
-          ))}
+        <DropdownMenuContent align="end" className="w-56 p-0">
+          <div className="p-2 border-b">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search models..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 h-8 text-sm"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              />
+            </div>
+          </div>
+          <ScrollArea className="h-[250px]">
+            <div className="p-1">
+              {filteredVideoModels.length > 0 ? (
+                filteredVideoModels.map((model) => (
+                  <DropdownMenuItem
+                    key={model.name}
+                    onSelect={() => {
+                      setSelectedModel(model.name);
+                      setSearchQuery("");
+                    }}
+                    className="flex items-center gap-2 py-2"
+                  >
+                    <Video className="h-5 w-5 flex-shrink-0" />
+                    <div className="flex flex-col flex-1">
+                      <span className="text-sm">{model.displayName}</span>
+                    </div>
+                  </DropdownMenuItem>
+                ))
+              ) : (
+                <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+                  No models found
+                </div>
+              )}
+            </div>
+          </ScrollArea>
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -999,9 +1033,18 @@ const NavbarModelSelector = ({
     );
   }
 
+  // Filter models based on search query
+  const filteredModels = availableModels.filter((model: any) =>
+    model.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    model.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    model.provider?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   // Default model selector for regular chats
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={(open) => {
+      if (!open) setSearchQuery("");
+    }}>
       <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
         {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4" />}
         <span className="text-sm font-medium">{selectedModelData?.displayName || selectedModel}</span>
@@ -1013,28 +1056,50 @@ const NavbarModelSelector = ({
         </div>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-56">
-        <ScrollArea style={{ height: '300px' }}>
-          {availableModels.map((model: any) => (
-            <DropdownMenuItem
-              key={model.name}
-              onSelect={() => {
-                setSelectedModel(model.name);
-                console.log("model", model);
-                setSelectedProvider(model.provider)
-              }}
-              className="flex items-center gap-2 py-2"
-            >
-              <IconProvider name={model.icon} className="h-5 w-5 flex-shrink-0" />
-              <div className="flex flex-col flex-1">
-                <span className="text-sm">{model.displayName}</span>
-                {/* <span className="text-xs text-muted-foreground">{model.name}</span> */}
+      <DropdownMenuContent align="end" className="w-56 p-0">
+        <div className="p-2 border-b">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search models..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-8 h-8 text-sm"
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            />
+          </div>
+        </div>
+        <ScrollArea className="h-[300px]">
+          <div className="p-1">
+            {filteredModels.length > 0 ? (
+              filteredModels.map((model: any) => (
+                <DropdownMenuItem
+                  key={model.name}
+                  onSelect={() => {
+                    setSelectedModel(model.name);
+                    console.log("model", model);
+                    setSelectedProvider(model.provider);
+                    setSearchQuery("");
+                  }}
+                  className="flex items-center gap-2 py-2"
+                >
+                  <IconProvider name={model.icon} className="h-5 w-5 flex-shrink-0" />
+                  <div className="flex flex-col flex-1">
+                    <span className="text-sm">{model.displayName}</span>
+                    {/* <span className="text-xs text-muted-foreground">{model.name}</span> */}
+                  </div>
+                  {(
+                    <div className="w-2 h-2 bg-red-500 rounded-full" />
+                  )}
+                </DropdownMenuItem>
+              ))
+            ) : (
+              <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+                No models found
               </div>
-              {(
-                <div className="w-2 h-2 bg-red-500 rounded-full" />
-              )}
-            </DropdownMenuItem>
-          ))}
+            )}
+          </div>
         </ScrollArea>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -1138,9 +1203,9 @@ function ChatInterfaceContent() {
   const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
 
   // Computer Use hook
-  const { 
-    status: computerUseHookStatus, 
-    screenshot: computerUseHookScreenshot, 
+  const {
+    status: computerUseHookStatus,
+    screenshot: computerUseHookScreenshot,
     reasoning: computerUseReasoning,
     extractedData: computerUseExtractedData,
     finalUrl: computerUseFinalUrl,
@@ -1161,7 +1226,7 @@ function ChatInterfaceContent() {
     if (computerUseReasoning.length > 0 && currentChat && isComputerUseActive) {
       // Find the latest reasoning step
       const latestStep = computerUseReasoning[computerUseReasoning.length - 1];
-      
+
       // Add reasoning step as a chat message
       const reasoningMessage = {
         id: `msg-reasoning-${latestStep.timestamp}`,
@@ -1177,7 +1242,7 @@ function ChatInterfaceContent() {
       };
 
       // Only add if this reasoning step isn't already in the chat
-      const existingMessage = currentChat.messages?.find(msg => 
+      const existingMessage = currentChat.messages?.find(msg =>
         msg.id === reasoningMessage.id
       );
 
@@ -1248,7 +1313,7 @@ function ChatInterfaceContent() {
 
   const handleComputerUseToggle = () => {
     const newState = !isComputerUseActive;
-    
+
     if (newState) {
       // Disable other modes
       setIsWebSearchActive(false);
@@ -1262,7 +1327,7 @@ function ChatInterfaceContent() {
     } else {
       setChatType('text');
     }
-    
+
     setIsComputerUseActive(newState);
   };
 
@@ -1346,22 +1411,22 @@ But first, you need to connect your Spotify account securely using the button be
     } catch (error: any) {
       console.error('Spotify error:', error);
       const errorMessage = error.message || 'Spotify request failed. Please try again.';
-      
+
       // Check for monthly API limit exceeded error
       if (isMonthlyLimitError(errorMessage)) {
-        
+
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
         toast.error('Monthly API limit exceeded. Please upgrade to continue.');
-        
+
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
           const newMessages = prevChat.messages.map((msg: any) => {
             if (msg.content === '[PROCESSING_SPOTIFY]') {
-              return { 
-                ...msg, 
+              return {
+                ...msg,
                 content: "Monthly API limit exceeded. Please upgrade your plan to continue using Spotify features.",
-                error: "Monthly API limit exceeded" 
+                error: "Monthly API limit exceeded"
               };
             }
             return msg;
@@ -1374,7 +1439,7 @@ But first, you need to connect your Spotify account securely using the button be
         }
         return;
       }
-      
+
       toast.error(errorMessage);
 
       const updateChatWithError = (prevChat: any) => {
@@ -1408,10 +1473,10 @@ But first, you need to connect your Spotify account securely using the button be
   const isMonthlyLimitError = (errorMessage: string) => {
     const lowerMessage = errorMessage.toLowerCase();
     return lowerMessage.includes('monthly api limit exceeded') ||
-           lowerMessage.includes('monthly limit exceeded') ||
-           lowerMessage.includes('monthly video generation limit exceeded') ||
-           lowerMessage.includes('free monthly queries exhausted') ||
-           (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
+      lowerMessage.includes('monthly limit exceeded') ||
+      lowerMessage.includes('monthly video generation limit exceeded') ||
+      lowerMessage.includes('free monthly queries exhausted') ||
+      (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
   };
 
 
@@ -1502,7 +1567,7 @@ But first, you need to connect your Spotify account securely using the button be
     function handleOpenUpgrade(e: any) {
       setSubscribeOpen(true);
     }
-    
+
     // Global error handler for API limit exceeded errors
     function handleApiLimitError(e: Event) {
       const customEvent = e as CustomEvent;
@@ -1512,12 +1577,12 @@ But first, you need to connect your Spotify account securely using the button be
         toast.error('Monthly API limit exceeded. Please upgrade to continue.');
       }
     }
-    
+
     if (typeof window !== 'undefined') {
       window.addEventListener('open-upgrade-modal', handleOpenUpgrade);
       window.addEventListener('api-limit-error', handleApiLimitError);
     }
-    
+
     return () => {
       if (typeof window !== 'undefined') {
         window.removeEventListener('open-upgrade-modal', handleOpenUpgrade);
@@ -1649,7 +1714,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsVideoGenerationActive(false);
       setIsComputerUseActive(false);
       setChatType('text'); // Always default to text when switching chats
-      
+
       // Clear Computer Use reasoning when switching chats
       clearReasoning();
     }
@@ -1680,7 +1745,7 @@ But first, you need to connect your Spotify account securely using the button be
   // duplicate chat creation that was occurring with the old dual-system approach.
   // Listen for Computer Use extraction completion to refresh chat
   React.useEffect(() => {
-   
+
     const handleExtractionComplete = (event: Event) => {
       const customEvent = event as CustomEvent;
       console.log('Computer Use extraction completed, refreshing chat...');
@@ -1709,12 +1774,12 @@ But first, you need to connect your Spotify account securely using the button be
     };
 
     window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
-    
+
     // Also listen for WebSocket events if available
     if (typeof window !== 'undefined' && (window as any).computerUseWebSocket) {
       (window as any).computerUseWebSocket.addEventListener('message', handleWebSocketExtractionComplete);
     }
-    
+
     return () => {
       window.removeEventListener('computer-use-extraction-complete', handleExtractionComplete);
       if (typeof window !== 'undefined' && (window as any).computerUseWebSocket) {
@@ -1938,7 +2003,7 @@ But first, you need to connect your Spotify account securely using the button be
       });
     }
 
- 
+
     try {
       // After optimistic update, run the logic.
       // For existing chats, we pass `true` to `addMessage` to skip re-adding the user message.
@@ -1971,69 +2036,69 @@ But first, you need to connect your Spotify account securely using the button be
       if (isComputerUseActive || chatType === 'computer-use') {
         // Handle Computer Use with the hook
         let chatId = currentChat?.id;
-        
+
         // If no current chat, create a new one first
         if (!chatId) {
           console.log('Creating new chat for computer use...');
           const newChat = await createNewChat('computer-use', msg);
           chatId = newChat.id;
-          
+
           // Immediately select the new chat to show it in UI and wait for it to load
           console.log('Selecting newly created chat:', chatId);
-          await selectChat(chatId??'');
-          
+          await selectChat(chatId ?? '');
+
           // Wait longer for UI to fully update and messages to load
           await new Promise(resolve => setTimeout(resolve, 1200));
-          
+
           // Force a second selection to ensure it's properly displayed
           setTimeout(() => {
             selectChat(chatId!);
           }, 100);
         }
-        
-        console.log('Starting computer use with:', { 
-          task: msg, 
-          chatId: chatId, 
-          userId: user?.id 
+
+        console.log('Starting computer use with:', {
+          task: msg,
+          chatId: chatId,
+          userId: user?.id
         });
-        
+
         // Set up listener for extraction completion
         const handleExtractionComplete = (event: Event) => {
           const customEvent = event as CustomEvent;
           console.log('Computer Use extraction completed, refreshing chat...', customEvent.detail);
-          
+
           // Force refresh the chat to show new extracted data
           if (chatId) {
             console.log('Refreshing chat with ID:', chatId);
-            
+
             // Multiple refresh attempts to ensure UI updates
             selectChat(chatId);
-            
+
             setTimeout(() => {
               selectChat(chatId);
             }, 500);
-            
+
             setTimeout(() => {
               selectChat(chatId);
               window.dispatchEvent(new CustomEvent('chat-messages-refresh', {
                 detail: { chatId: chatId }
               }));
             }, 1000);
-            
+
             // Show success message
             toast.success('Computer Use completed - Chat updated!');
           }
         };
-        
+
         window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
-        
+
         await startComputerUse(msg, chatId, user?.id);
-        
+
         // Clean up listener
         setTimeout(() => {
           window.removeEventListener('computer-use-extraction-complete', handleExtractionComplete);
         }, 30000); // Remove after 30 seconds
-        
+
         // Add reasoning steps to chat as they come in
         if (computerUseReasoning.length > 0) {
           const reasoningMessage = {
@@ -2056,9 +2121,9 @@ But first, you need to connect your Spotify account securely using the button be
         }
         return;
       }
-   
 
-      
+
+
       // Mark that we started handling the message so Stop button can appear immediately
       setIsSending(true);
       // Classify intent (can be aborted via Stop button)
@@ -2148,7 +2213,7 @@ But first, you need to connect your Spotify account securely using the button be
       const message = (err && (err.message || '')) as string;
       const status = err?.status || err?.statusCode || (err?.response && err.response.status);
       const errorData = err?.errorData;
-      
+
       console.log('Checking error conditions:', {
         status,
         message,
@@ -2157,24 +2222,24 @@ But first, you need to connect your Spotify account securely using the button be
         isMonthlyLimit: isMonthlyLimitError(message),
         isErrorDataMonthlyLimit: errorData && isMonthlyLimitError(errorData.error || '')
       });
-      
+
       // Check for monthly API limit exceeded error - handle specific API format
-      if (status === 429 || 
-          isMonthlyLimitError(message) ||
-          (errorData && isMonthlyLimitError(errorData.error || ''))) {
-        
+      if (status === 429 ||
+        isMonthlyLimitError(message) ||
+        (errorData && isMonthlyLimitError(errorData.error || ''))) {
+
         console.log('API limit error detected, opening upgrade modal', { status, message, errorData });
-        
+
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
-        
+
         // Extract usage information if available
         let usageInfo = '';
         if (errorData && errorData.usage) {
           const { current, limit } = errorData.usage;
           usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
         }
-        
+
         // Show proper error message in UI
         const errorMessage = {
           id: `msg-error-${Date.now()}`,
@@ -2190,11 +2255,11 @@ But first, you need to connect your Spotify account securely using the button be
           const updatedMessages = [...(prevChat.messages || []), errorMessage];
           return { ...prevChat, messages: updatedMessages };
         });
-        
+
         toast.error(`Monthly API limit exceeded.${usageInfo ? ' ' + usageInfo : ''} Please upgrade to continue.`);
         return;
       }
-      
+
       // For other errors, show generic error message
       toast.error(err?.message || 'An error occurred. Please try again.');
 
@@ -2301,25 +2366,25 @@ But first, you need to connect your Gmail account securely using the button belo
       const errorMessage = error.message || 'Gmail request failed. Please try again.';
       const status = error?.status || error?.statusCode;
       const errorData = error?.errorData;
-      
+
       // Check for monthly API limit exceeded error
-      if (status === 429 || 
-          isMonthlyLimitError(errorMessage) ||
-          (errorData && isMonthlyLimitError(errorData.error || ''))) {
-        
+      if (status === 429 ||
+        isMonthlyLimitError(errorMessage) ||
+        (errorData && isMonthlyLimitError(errorData.error || ''))) {
+
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
         toast.error('Monthly API limit exceeded. Please upgrade to continue.');
-        
+
         // Update placeholder with limit error
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
           const newMessages = prevChat.messages.map((msg: any) => {
             if (msg.content === '[PROCESSING_GMAIL]') {
-              return { 
-                ...msg, 
+              return {
+                ...msg,
                 content: "Monthly API limit exceeded. Please upgrade your plan to continue using Gmail features.",
-                error: "Monthly API limit exceeded" 
+                error: "Monthly API limit exceeded"
               };
             }
             return msg;
@@ -2332,7 +2397,7 @@ But first, you need to connect your Gmail account securely using the button belo
         }
         return;
       }
-      
+
       toast.error(errorMessage);
 
       // Update placeholder with error
@@ -2418,22 +2483,22 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error: any) {
       console.error('Google Services error:', error);
       const errorMessage = error.message || 'Google Services request failed. Please try again.';
-      
+
       // Check for monthly API limit exceeded error
       if (isMonthlyLimitError(errorMessage)) {
-        
+
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
         toast.error('Monthly API limit exceeded. Please upgrade to continue.');
-        
+
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
           const newMessages = prevChat.messages.map((msg: any) => {
             if (msg.content === '[PROCESSING_CALENDAR_ACTION]' || msg.content === '[PROCESSING_DRIVE_ACTION]') {
-              return { 
-                ...msg, 
+              return {
+                ...msg,
                 content: "Monthly API limit exceeded. Please upgrade your plan to continue using Google Services.",
-                error: "Monthly API limit exceeded" 
+                error: "Monthly API limit exceeded"
               };
             }
             return msg;
@@ -2446,7 +2511,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         }
         return;
       }
-      
+
       toast.error(errorMessage);
 
       const updateChatWithError = (prevChat: any) => {
@@ -2512,24 +2577,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const errorMessage = error.message || 'Image generation failed. Please try again.';
       const status = error?.status || error?.statusCode;
       const errorData = error?.errorData;
-      
+
       // Check for monthly API limit exceeded error
-      if (status === 429 || 
-          isMonthlyLimitError(errorMessage) ||
-          (errorData && isMonthlyLimitError(errorData.error || ''))) {
-        
+      if (status === 429 ||
+        isMonthlyLimitError(errorMessage) ||
+        (errorData && isMonthlyLimitError(errorData.error || ''))) {
+
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
         toast.error('Monthly API limit exceeded. Please upgrade to continue.');
-        
+
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
           const newMessages = prevChat.messages.map((msg: any) => {
             if (msg.content === '[GENERATING_IMAGE]') {
-              return { 
-                ...msg, 
+              return {
+                ...msg,
                 content: 'Monthly API limit exceeded. Please upgrade your plan to continue using image generation.',
-                error: 'Monthly API limit exceeded' 
+                error: 'Monthly API limit exceeded'
               };
             }
             return msg;
@@ -2542,7 +2607,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         }
         return;
       }
-      
+
       toast.error(errorMessage);
 
       const updateChatWithError = (prevChat: any) => {
@@ -2579,18 +2644,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const errorMessage = error.message || 'Video generation failed. Please try again.';
       const status = error?.status || error?.statusCode;
       const errorData = error?.errorData;
-      
+
       // Check for monthly API limit exceeded error
-      if (status === 429 || 
-          isMonthlyLimitError(errorMessage) ||
-          (errorData && isMonthlyLimitError(errorData.error || ''))) {
-        
+      if (status === 429 ||
+        isMonthlyLimitError(errorMessage) ||
+        (errorData && isMonthlyLimitError(errorData.error || ''))) {
+
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
         toast.error('Monthly API limit exceeded. Please upgrade to continue.');
         return;
       }
-      
+
       toast.error(errorMessage)
     } finally {
       setIsGeneratingVideo(false)
@@ -2955,16 +3020,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         },
         (error: Error) => {
           console.error('Web search failed:', error);
-          
+
           const errorMessage = error.message || 'Web search failed';
-          
+
           // Check for monthly API limit exceeded error
           if (isMonthlyLimitError(errorMessage)) {
-            
+
             // Show upgrade modal for API limit errors
             setSubscribeOpen(true);
             toast.error('Monthly API limit exceeded. Please upgrade to continue.');
-            
+
             // Update the AI message to reflect the limit error
             setCurrentChat(prev => {
               if (!prev) return prev;
@@ -2978,7 +3043,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             setIsWebSearching(false);
             return;
           }
-          
+
           toast.error(errorMessage);
           setIsWebSearching(false);
           // If search fails, update the AI message to reflect the error
@@ -3082,25 +3147,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 )}
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 <ThemeToggle />
-                <Button 
-                  variant="ghost" 
-                  size={currentPlan === 'FREE' ? 'sm' : 'icon'} 
-                  onClick={() => setSubscribeOpen(true)} 
-                  className={`${currentPlan !== 'FREE' ? 'h-9 w-9' : ''} ${
-                    currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit 
-                    ? (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.9 
-                      ? 'border-red-500 text-red-600 hover:bg-red-50' 
-                      : (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.7 
-                        ? 'border-orange-500 text-orange-600 hover:bg-orange-50' 
+                <Button
+                  variant="ghost"
+                  size={currentPlan === 'FREE' ? 'sm' : 'icon'}
+                  onClick={() => setSubscribeOpen(true)}
+                  className={`${currentPlan !== 'FREE' ? 'h-9 w-9' : ''} ${currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit
+                    ? (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.9
+                      ? 'border-red-500 text-red-600 hover:bg-red-50'
+                      : (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.7
+                        ? 'border-orange-500 text-orange-600 hover:bg-orange-50'
                         : ''
                     : ''
-                  }`}
+                    }`}
                 >
-                  {currentPlan === 'FREE' ? 'Upgrade Plan' : 
-                   currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit && 
-                   (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.7 ? 
-                   'Upgrade Now' : 
-                   <span role="img" aria-label="Manage Plan" className="text-xl">💰</span>}
+                  {currentPlan === 'FREE' ? 'Upgrade Plan' :
+                    currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit &&
+                      (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.7 ?
+                      'Upgrade Now' :
+                      <span role="img" aria-label="Manage Plan" className="text-xl">💰</span>}
                 </Button>
                 <UpgradeModal
                   open={subscribeOpen}

@@ -11,10 +11,10 @@ import { toast } from "sonner"
 const isMonthlyLimitError = (errorMessage: string) => {
   const lowerMessage = errorMessage.toLowerCase();
   return lowerMessage.includes('monthly api limit exceeded') ||
-         lowerMessage.includes('monthly limit exceeded') ||
-         lowerMessage.includes('monthly video generation limit exceeded') ||
-         lowerMessage.includes('free monthly queries exhausted') ||
-         (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
+    lowerMessage.includes('monthly limit exceeded') ||
+    lowerMessage.includes('monthly video generation limit exceeded') ||
+    lowerMessage.includes('free monthly queries exhausted') ||
+    (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
 };
 
 // Helper function to trigger upgrade modal
@@ -22,7 +22,7 @@ const triggerUpgradeModal = (errorMessage: string, errorData?: any) => {
   if (typeof window !== 'undefined') {
     // Trigger upgrade modal
     window.dispatchEvent(new CustomEvent('open-upgrade-modal'));
-    
+
     // Show toast with usage info if available
     let usageInfo = '';
     if (errorData && errorData.usage) {
@@ -91,7 +91,7 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
-  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' , initialContent?: string, initialFiles?: string[]) => Promise<any>
+  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use', initialContent?: string, initialFiles?: string[]) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
@@ -103,9 +103,9 @@ interface ChatContextType {
   setSelectedProivder: (model: string) => void
   isLoading: boolean
   availableModels: any[]
-  chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'  
+  chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'
   uploadedFiles: any[]
-  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' >>
+  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'>>
   setUploadedFiles: (files: any[]) => void
   regenerateLastMessage: () => void
   regenerateMessage: (messageId?: string) => void
@@ -135,7 +135,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [hasInitialized, setHasInitialized] = useState(false)
-  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' >('text')
+  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'>('text')
   const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
   const [pagination, setPagination] = useState<PaginationInfo | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
@@ -319,10 +319,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         // Only update if content exists and doesn't already have stopped text
         if (lastMessage.content !== undefined && !lastMessage.content.includes('(Generation stopped')) {
           const updatedMessages = [...prevChat.messages];
-          const stoppedContent = lastMessage.content.trim() === '' 
-            ? "(Generation stopped by user)" 
+          const stoppedContent = lastMessage.content.trim() === ''
+            ? "(Generation stopped by user)"
             : lastMessage.content + "\n\n(Generation stopped by user)";
-          
+
           updatedMessages[lastMessageIndex] = {
             ...lastMessage,
             content: stoppedContent
@@ -353,7 +353,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentStreamId, isStreaming, isLoading]);
   const addMessage = useCallback(
-    async (content: string, fileIds?: string[], chat?: any, skipUserMessage?: boolean ) => { // Added skipUserMessage and forceFlowChartDiagram parameters
+    async (content: string, fileIds?: string[], chat?: any, skipUserMessage?: boolean) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !token) return;
 
@@ -469,7 +469,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               if (controller.signal.aborted || pendingStop) {
                 return;
               }
-              
+
               // onData: Jab bhi backend se naya text aaye
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
@@ -496,19 +496,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             (error) => {
               console.error("Streaming failed:", error);
-              
+
               // Check for monthly API limit errors
               const errorMessage = error?.message || '';
               const status = (error as any)?.status || (error as any)?.statusCode;
               const errorData = (error as any)?.errorData;
-              
-              if (status === 429 || 
-                  isMonthlyLimitError(errorMessage) ||
-                  (errorData && isMonthlyLimitError(errorData.error || ''))) {
-                
+
+              if (status === 429 ||
+                isMonthlyLimitError(errorMessage) ||
+                (errorData && isMonthlyLimitError(errorData.error || ''))) {
+
                 console.log('Monthly limit error detected in streaming');
                 triggerUpgradeModal(errorMessage, errorData);
-                
+
                 // Update message with monthly limit error
                 if (!controller.signal.aborted && !pendingStop && error.name !== 'AbortError') {
                   setCurrentChat((prevChat) => {
@@ -520,10 +520,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                           const { current, limit } = errorData.usage;
                           usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
                         }
-                        return { 
-                          ...msg, 
+                        return {
+                          ...msg,
                           content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
-                          error: "Monthly API limit exceeded" 
+                          error: "Monthly API limit exceeded"
                         };
                       }
                       return msg;
@@ -531,14 +531,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     return { ...prevChat, messages: newMessages };
                   });
                 }
-                
+
                 setIsLoading(false);
                 setIsStreaming(false);
                 setCurrentStreamId(null);
                 abortControllerRef.current = null;
                 return;
               }
-              
+
               // Only update UI if not manually stopped
               if (!controller.signal.aborted && !pendingStop) {
                 setIsLoading(false);
@@ -565,19 +565,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error: any) {
         console.error("Failed to start AI stream:", error);
-        
+
         // Check for monthly API limit errors
         const errorMessage = error?.message || '';
         const status = (error as any)?.status || (error as any)?.statusCode;
         const errorData = (error as any)?.errorData;
-        
-        if (status === 429 || 
-            isMonthlyLimitError(errorMessage) ||
-            (errorData && isMonthlyLimitError(errorData.error || ''))) {
-          
+
+        if (status === 429 ||
+          isMonthlyLimitError(errorMessage) ||
+          (errorData && isMonthlyLimitError(errorData.error || ''))) {
+
           console.log('Monthly limit error detected in catch block');
           triggerUpgradeModal(errorMessage, errorData);
-          
+
           // Update message with monthly limit error
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
@@ -588,10 +588,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   const { current, limit } = errorData.usage;
                   usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
                 }
-                return { 
-                  ...msg, 
+                return {
+                  ...msg,
                   content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
-                  error: "Monthly API limit exceeded" 
+                  error: "Monthly API limit exceeded"
                 };
               }
               return msg;
@@ -611,7 +611,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             return { ...prevChat, messages: newMessages };
           });
         }
-        
+
         setIsLoading(false);
         setIsStreaming(false);
         setCurrentStreamId(null);
@@ -648,7 +648,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'  = 'text', initialContent?: string, initialFiles?: string[]) => {
+  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' = 'text', initialContent?: string, initialFiles?: string[]) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
@@ -841,7 +841,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (!currentChat || isLoading) return;
 
     let targetAiMessageIndex = -1;
-    
+
     if (messageId) {
       // Find the specific message to regenerate
       targetAiMessageIndex = currentChat.messages.findIndex(m => m.id === messageId && m.role === 'ASSISTANT');
@@ -854,7 +854,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       }
     }
-    
+
     if (targetAiMessageIndex === -1) {
       console.warn("No AI message found to regenerate.");
       return;
@@ -867,13 +867,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
 
     const originalUserMessage = currentChat.messages[targetUserMessageIndex];
-    
+
     // Keep only messages up to (and including) the user message we want to regenerate from
     const messagesBeforeRegeneration = currentChat.messages.slice(0, targetAiMessageIndex);
-    
+
     // Get messages that need to be deleted from backend (AI message + all subsequent messages)
     const messagesToDelete = currentChat.messages.slice(targetAiMessageIndex);
-    
+
     console.log('Regenerating message at index:', targetAiMessageIndex);
     console.log('Messages before regeneration:', messagesBeforeRegeneration.length);
     console.log('Messages to delete from backend:', messagesToDelete.length);
@@ -946,7 +946,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           if (controller.signal.aborted || pendingStop) {
             return;
           }
-          
+
           // onData: Fill the placeholder
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
@@ -968,7 +968,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setIsStreaming(false);
             setCurrentStreamId(null);
             abortControllerRef.current = null;
-            
+
             // Save the updated chat state to ensure persistence
             try {
               console.log('Saving regenerated chat state to backend');
@@ -977,14 +977,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               if (currentChat?.id) {
                 const freshChat = await apiClient.getChat(currentChat.id);
                 setCurrentChat(freshChat.chat);
-                
+
                 // Also update the chat in the chats list to keep sidebar in sync
-                setChats(prevChats => 
-                  prevChats.map(chat => 
+                setChats(prevChats =>
+                  prevChats.map(chat =>
                     chat.id === currentChat.id ? freshChat.chat : chat
                   )
                 );
-                
+
                 console.log('Chat refreshed after regeneration, total messages:', freshChat.chat.messages.length);
               }
             } catch (error) {
@@ -992,23 +992,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             }
           }
         },
-        (error) => {
+        (error: any) => {
           // onError: Handle error only if not manually stopped
           if (!controller.signal.aborted && !pendingStop) {
             console.error("Streaming failed during regeneration:", error);
-            
+
             // Check for monthly API limit errors
             const errorMessage = error?.message || '';
             const status = error?.status || error?.statusCode;
             const errorData = error?.errorData;
-            
-            if (status === 429 || 
-                isMonthlyLimitError(errorMessage) ||
-                (errorData && isMonthlyLimitError(errorData.error || ''))) {
-              
+
+            if (status === 429 ||
+              isMonthlyLimitError(errorMessage) ||
+              (errorData && isMonthlyLimitError(errorData.error || ''))) {
+
               console.log('Monthly limit error detected during regeneration');
               triggerUpgradeModal(errorMessage, errorData);
-              
+
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
@@ -1018,10 +1018,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                       const { current, limit } = errorData.usage;
                       usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
                     }
-                    return { 
-                      ...msg, 
+                    return {
+                      ...msg,
                       content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
-                      error: "Monthly API limit exceeded" 
+                      error: "Monthly API limit exceeded"
                     };
                   }
                   return msg;
@@ -1040,7 +1040,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 return { ...prevChat, messages: errorMessages };
               });
             }
-            
+
             setIsLoading(false);
             setIsStreaming(false);
             setCurrentStreamId(null);
@@ -1122,7 +1122,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           if (controller.signal.aborted || pendingStop) {
             return;
           }
-          
+
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
             const updatedMessages = prevChat.messages.map((msg) => {
@@ -1144,23 +1144,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             await selectChat(currentChat.id); // Refresh chat from DB
           }
         },
-        (error) => {
+        (error: any) => {
           // Only handle error if not manually stopped
           if (!controller.signal.aborted && !pendingStop) {
             console.error("Streaming failed during regeneration:", error);
-            
+
             // Check for monthly API limit errors
             const errorMessage = error?.message || '';
             const status = error?.status || error?.statusCode;
             const errorData = error?.errorData;
-            
-            if (status === 429 || 
-                isMonthlyLimitError(errorMessage) ||
-                (errorData && isMonthlyLimitError(errorData.error || ''))) {
-              
+
+            if (status === 429 ||
+              isMonthlyLimitError(errorMessage) ||
+              (errorData && isMonthlyLimitError(errorData.error || ''))) {
+
               console.log('Monthly limit error detected during edit and regeneration');
               triggerUpgradeModal(errorMessage, errorData);
-              
+
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
@@ -1170,10 +1170,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                       const { current, limit } = errorData.usage;
                       usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
                     }
-                    return { 
-                      ...msg, 
+                    return {
+                      ...msg,
                       content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
-                      error: "Monthly API limit exceeded" 
+                      error: "Monthly API limit exceeded"
                     };
                   }
                   return msg;
@@ -1192,7 +1192,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 return { ...prevChat, messages: errorMessages };
               });
             }
-            
+
             setIsLoading(false);
             setIsStreaming(false);
             setCurrentStreamId(null);
