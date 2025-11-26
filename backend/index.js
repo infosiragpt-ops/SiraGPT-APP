@@ -29,6 +29,7 @@ const gmailRoutes = require('./src/routes/gmail');
 const spotifyRoutes = require('./src/routes/spotify');
 const figmaRoutes = require('./src/routes/figma');
 const { router: computerUseRoutes, initializeWebSocketServer } = require('./src/routes/computer-use');
+const thesisRoutes = require('./src/routes/thesis');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -133,6 +134,7 @@ app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
+app.use('/api/thesis', thesisRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

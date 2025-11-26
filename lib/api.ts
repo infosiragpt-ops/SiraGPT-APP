@@ -1319,6 +1319,46 @@ class ApiClient {
       body: JSON.stringify(data),
     });
   }
+
+  // Thesis Generation endpoints
+  async generateThesis(data: { topics: string[]; chatId?: string }) {
+    return this.request('/thesis/generate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getThesisStatus(sessionId: string) {
+    return this.request(`/thesis/status/${sessionId}`);
+  }
+
+  async downloadThesis(sessionId: string) {
+    const url = `${this.baseURL}/thesis/download/${sessionId}`;
+    const headers = new Headers();
+    if (this.token) {
+      headers.set('Authorization', `Bearer ${this.token}`);
+    }
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to download thesis');
+    }
+
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = `thesis-${sessionId}.docx`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(downloadUrl);
+    document.body.removeChild(a);
+  }
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);
