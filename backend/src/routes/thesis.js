@@ -12,6 +12,88 @@ const router = express.Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
+ * Get max_tokens limit for a model
+ * Different models have different token limits
+ */
+function getMaxTokensForModel(model) {
+  const modelLimits = {
+    'gpt-3.5-turbo': 4096,
+    'gpt-3.5-turbo-16k': 16384,
+    'gpt-4': 8192,
+    'gpt-4-turbo': 128000,
+    'gpt-4-turbo-preview': 128000,
+    'gpt-4-1106-preview': 128000,
+    'gpt-4o': 128000,
+    'gpt-4o-mini': 16384,
+    'gpt-4o-mini-search-preview-2025-03-11': 16384,
+  };
+
+  // Find matching model (handles partial matches)
+  for (const [key, limit] of Object.entries(modelLimits)) {
+    if (model.includes(key) || model === key) {
+      return Math.min(limit - 1000, 4000); // Reserve 1000 tokens for safety, max 4000 for completion
+    }
+  }
+
+  // Default safe limit
+  return 4000;
+}
+
+/**
+ * Chunk large text content into manageable pieces
+ * Similar to how Cursor handles large files
+ */
+function chunkContent(content, maxChunkSize = 50000) {
+  if (content.length <= maxChunkSize) {
+    return [content];
+  }
+
+  const chunks = [];
+  let currentChunk = '';
+  const lines = content.split('\n');
+
+  for (const line of lines) {
+    if ((currentChunk + line + '\n').length > maxChunkSize && currentChunk.length > 0) {
+      chunks.push(currentChunk.trim());
+      currentChunk = line + '\n';
+    } else {
+      currentChunk += line + '\n';
+    }
+  }
+
+  if (currentChunk.trim().length > 0) {
+    chunks.push(currentChunk.trim());
+  }
+
+  return chunks;
+}
+
+/**
+ * Chunk research results intelligently
+ * Groups by topic and source to maintain context
+ */
+function chunkResearchResults(allSearchResults, topics, maxResultsPerChunk = 10) {
+  const chunks = [];
+  
+  for (const topic of topics) {
+    const topicResults = allSearchResults.filter(r => r.topic === topic);
+    
+    // Split topic results into chunks
+    for (let i = 0; i < topicResults.length; i += maxResultsPerChunk) {
+      const chunk = topicResults.slice(i, i + maxResultsPerChunk);
+      chunks.push({
+        topic: topic,
+        results: chunk,
+        chunkIndex: Math.floor(i / maxResultsPerChunk) + 1,
+        totalChunks: Math.ceil(topicResults.length / maxResultsPerChunk)
+      });
+    }
+  }
+  
+  return chunks;
+}
+
+/**
  * Thesis Generation System
  * 
  * Steps:
@@ -156,29 +238,47 @@ async function extractContentFromUrl(url, topic) {
 }
 
 /**
- * Generate thesis from collected research
+ * Generate thesis from collected research using chunking approach
+ * Similar to how Cursor handles large files - divides content into manageable chunks
  */
 async function generateThesis(topics, allSearchResults, userId, sessionId) {
   try {
-    // Compile all research content
-    let researchContent = `# Research Material for Thesis Generation\n\n`;
-    researchContent += `## Topics to Cover:\n${topics.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n`;
-    researchContent += `## Collected Research:\n\n`;
+    // Update progress
+    const existingSession = thesisSessions.get(sessionId);
+    if (existingSession) {
+      existingSession.status = 'generating_thesis';
+      existingSession.progress = 70;
+      existingSession.message = 'Preparing research materials and generating thesis...';
+    }
 
-    // Group results by topic
-    topics.forEach(topic => {
-      researchContent += `### Topic: ${topic}\n\n`;
-      const topicResults = allSearchResults.filter(r => r.topic === topic);
-      
-      topicResults.forEach((result, idx) => {
-        researchContent += `#### Source ${idx + 1}: ${result.source}\n`;
-        researchContent += `**URL:** ${result.url}\n\n`;
-        researchContent += `**Content:**\n${result.content.substring(0, 3000)}\n\n`;
-        researchContent += `---\n\n`;
+    // Use a model with large context window - prefer newer models
+    const availableModels = [
+      'gpt-4-turbo-preview',
+      'gpt-4-1106-preview',
+      'gpt-4-turbo',
+      'gpt-4o',
+      'gpt-4'
+    ];
+    
+    // Try to use the best available model
+    let model = availableModels[0];
+    let maxTokens = getMaxTokensForModel(model);
+    
+    // Test model availability and adjust if needed
+    try {
+      // Test with a small request to verify model
+      await openai.chat.completions.create({
+        model: model,
+        messages: [{ role: 'user', content: 'test' }],
+        max_tokens: 10
       });
-    });
+    } catch (error) {
+      console.error('Error with primary model, trying fallback:', error);
+      model = availableModels[1] || 'gpt-4';
+      maxTokens = getMaxTokensForModel(model);
+    }
 
-    // Generate comprehensive thesis using large context model
+    // System prompt for thesis generation
     const systemPrompt = `You are an expert academic writer and researcher. Your task is to create a comprehensive, well-structured thesis document based on the provided research materials.
 
 **Requirements:**
@@ -209,95 +309,168 @@ async function generateThesis(topics, allSearchResults, userId, sessionId) {
 
 Write the complete thesis in Markdown format with proper formatting.`;
 
-    const userPrompt = `${researchContent}\n\nBased on the above research materials and topics, generate a comprehensive thesis document that is at least 50 pages long when formatted. Ensure all content is derived from the provided research materials.`;
-
-    // Update progress - get existing session and update it
-    const existingSession = thesisSessions.get(sessionId);
-    if (existingSession) {
-      existingSession.status = 'generating_thesis';
-      existingSession.progress = 70;
-      existingSession.message = 'Generating comprehensive thesis using AI...';
-    }
-
-    // Use a model with large context window - prefer newer models
-    const availableModels = [
-      'gpt-4-turbo-preview',
-      'gpt-4-1106-preview',
-      'gpt-4-turbo',
-      'gpt-4'
-    ];
+    // Chunk research results intelligently
+    const researchChunks = chunkResearchResults(allSearchResults, topics, 8);
     
-    // Try to use the best available model
-    let model = availableModels[0];
+    // Build thesis iteratively using chunks
     let thesisContent = '';
-    
-    // First generation - generate comprehensive thesis
-    try {
-      const response = await openai.chat.completions.create({
-        model: model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 16000
-      });
+    const sections = [
+      { name: 'Title Page and Abstract', prompt: 'Generate the title page and abstract (250-300 words) for the thesis.' },
+      { name: 'Introduction', prompt: 'Write Chapter 1: Introduction (5-8 pages). Include background, problem statement, objectives, and significance.' },
+      { name: 'Literature Review', prompt: 'Write Chapter 2: Literature Review (10-15 pages). Synthesize the research materials provided, cite sources properly, and organize by themes.' },
+      { name: 'Methodology', prompt: 'Write Chapter 3: Methodology (5-8 pages). Describe the research approach, data collection methods, and analysis techniques.' },
+      { name: 'Findings', prompt: 'Write Chapter 4: Findings/Results (10-15 pages). Present the key findings from the research materials with proper analysis.' },
+      { name: 'Discussion', prompt: 'Write Chapter 5: Discussion (8-10 pages). Interpret the findings, discuss implications, and relate to existing literature.' },
+      { name: 'Conclusion', prompt: 'Write Chapter 6: Conclusion (3-5 pages). Summarize key points, limitations, and future research directions.' },
+      { name: 'References', prompt: 'Generate a comprehensive References/Bibliography section with all cited sources in proper APA or MLA format.' }
+    ];
 
-      thesisContent = response.choices[0].message.content;
-    } catch (error) {
-      console.error('Error with primary model, trying fallback:', error);
-      // Try fallback model
-      model = availableModels[1] || 'gpt-4';
-      const response = await openai.chat.completions.create({
-        model: model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 16000
-      });
-      thesisContent = response.choices[0].message.content;
+    // Generate each section using relevant research chunks
+    for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
+      const section = sections[sectionIndex];
+      
+      // Update progress
+      const session = thesisSessions.get(sessionId);
+      if (session) {
+        session.progress = 70 + (sectionIndex / sections.length) * 25;
+        session.message = `Generating ${section.name}... (${sectionIndex + 1}/${sections.length})`;
+      }
+
+      // Select relevant research chunks for this section
+      let relevantChunks = researchChunks;
+      if (section.name === 'Literature Review' || section.name === 'Findings') {
+        // Use all chunks for these sections
+        relevantChunks = researchChunks;
+      } else {
+        // Use fewer chunks for other sections
+        relevantChunks = researchChunks.slice(0, Math.min(3, researchChunks.length));
+      }
+
+      // Build research content for this section
+      let sectionResearchContent = `# Research Materials for ${section.name}\n\n`;
+      sectionResearchContent += `## Topics to Cover:\n${topics.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n`;
+      
+      // Add relevant research chunks (limit content size)
+      for (const chunk of relevantChunks) {
+        sectionResearchContent += `### Topic: ${chunk.topic} (Chunk ${chunk.chunkIndex}/${chunk.totalChunks})\n\n`;
+        chunk.results.forEach((result, idx) => {
+          sectionResearchContent += `#### Source ${idx + 1}: ${result.source}\n`;
+          sectionResearchContent += `**URL:** ${result.url}\n\n`;
+          // Limit content per source to avoid token overflow
+          const contentLimit = section.name === 'Literature Review' ? 2000 : 1500;
+          sectionResearchContent += `**Content:**\n${result.content.substring(0, contentLimit)}\n\n`;
+          sectionResearchContent += `---\n\n`;
+        });
+      }
+
+      // If research content is too large, chunk it further
+      const researchChunksForSection = chunkContent(sectionResearchContent, 40000);
+      
+      let sectionContent = '';
+      
+      // Process each research chunk
+      for (let chunkIdx = 0; chunkIdx < researchChunksForSection.length; chunkIdx++) {
+        const researchChunk = researchChunksForSection[chunkIdx];
+        
+        const userPrompt = chunkIdx === 0
+          ? `${researchChunk}\n\n${section.prompt}\n\nBased on the above research materials, ${section.prompt.toLowerCase()}`
+          : `${researchChunk}\n\nContinue and expand the ${section.name} section using this additional research material.`;
+
+        try {
+          const response = await openai.chat.completions.create({
+            model: model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              ...(thesisContent ? [{ role: 'assistant', content: `Previous thesis content:\n${thesisContent.substring(0, 5000)}...` }] : []),
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: 0.7,
+            max_tokens: maxTokens
+          });
+
+          const chunkContent = response.choices[0].message.content;
+          
+          if (chunkIdx === 0) {
+            sectionContent = chunkContent;
+          } else {
+            // Merge chunk content intelligently
+            sectionContent += '\n\n' + chunkContent;
+          }
+
+        } catch (error) {
+          console.error(`Error generating ${section.name} chunk ${chunkIdx + 1}:`, error);
+          
+          // If token limit error, reduce max_tokens and retry
+          if (error.message && error.message.includes('max_tokens')) {
+            maxTokens = Math.max(2000, maxTokens - 1000);
+            console.log(`Reducing max_tokens to ${maxTokens} and retrying...`);
+            
+            try {
+              const retryResponse = await openai.chat.completions.create({
+                model: model,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userPrompt }
+                ],
+                temperature: 0.7,
+                max_tokens: maxTokens
+              });
+              
+              if (chunkIdx === 0) {
+                sectionContent = retryResponse.choices[0].message.content;
+              } else {
+                sectionContent += '\n\n' + retryResponse.choices[0].message.content;
+              }
+            } catch (retryError) {
+              console.error(`Retry failed for ${section.name}:`, retryError);
+              // Continue with next section
+              break;
+            }
+          } else {
+            // For other errors, continue with next chunk
+            break;
+          }
+        }
+      }
+
+      // Add section to thesis
+      if (sectionContent) {
+        thesisContent += (thesisContent ? '\n\n' : '') + `# ${section.name}\n\n${sectionContent}`;
+      }
     }
 
-    // Update session progress
-    const session = thesisSessions.get(sessionId);
-    if (session) {
-      session.progress = 75;
-      session.message = 'Expanding thesis content...';
-    }
-
-    // Continue generation to ensure 50+ pages
-    let continuationCount = 0;
-    const maxContinuations = 3;
-    
-    while (thesisContent.length < 80000 && continuationCount < maxContinuations) {
-      continuationCount++;
-      const continuationPrompt = `Continue writing the thesis. Add more detailed content, expand sections, add more examples, data, analysis, case studies, and ensure it reaches at least 50 pages. Continue from where you left off and maintain academic quality.`;
+    // Final expansion pass if thesis is still too short
+    if (thesisContent.length < 50000) {
+      const session = thesisSessions.get(sessionId);
+      if (session) {
+        session.progress = 95;
+        session.message = 'Expanding thesis to meet length requirements...';
+      }
 
       try {
-        const continuationResponse = await openai.chat.completions.create({
+        const expansionPrompt = `The thesis currently has ${(thesisContent.length / 1000).toFixed(1)}K characters. Expand it to at least 80K characters (approximately 50 pages) by:
+1. Adding more detailed analysis in each section
+2. Including more examples and case studies
+3. Expanding the literature review with additional synthesis
+4. Adding more depth to findings and discussion
+5. Including more citations and references
+
+Continue from the current thesis and maintain academic quality.`;
+
+        const expansionResponse = await openai.chat.completions.create({
           model: model,
           messages: [
             { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-            { role: 'assistant', content: thesisContent },
-            { role: 'user', content: continuationPrompt }
+            { role: 'user', content: `Current thesis:\n\n${thesisContent.substring(0, 10000)}...\n\n${expansionPrompt}` }
           ],
           temperature: 0.7,
-          max_tokens: 16000
+          max_tokens: maxTokens
         });
 
-        thesisContent += '\n\n' + continuationResponse.choices[0].message.content;
-        
-        // Update session progress
-        if (session) {
-          session.progress = 75 + (continuationCount / maxContinuations) * 15;
-          session.message = `Expanding thesis... (${continuationCount}/${maxContinuations})`;
-        }
+        thesisContent += '\n\n' + expansionResponse.choices[0].message.content;
       } catch (error) {
-        console.error(`Error in continuation ${continuationCount}:`, error);
-        break; // Stop if continuation fails
+        console.error('Error in final expansion:', error);
+        // Continue with existing content
       }
     }
 
