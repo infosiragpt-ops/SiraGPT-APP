@@ -20,7 +20,7 @@
     "seed": "js-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.js"
   },
   "dependencies": {
-    "@elevenlabs/elevenlabs-js": "^2.13.0",
+    "@elevenlabs/elevenlabs-js": "^2.25.1",
     "@fal-ai/client": "^1.6.2",
     "@google/genai": "^1.20.0",
     "@google/generative-ai": "^0.24.1",
@@ -62,6 +62,7 @@
     "pdf-to-img": "^5.0.0",
     "pdfkit": "^0.17.2",
     "pizzip": "^3.2.0",
+    "playwright": "^1.56.1",
     "pptxgenjs": "^4.0.1",
     "prisma": "^6.11.1",
     "puppeteer": "^24.27.0",
@@ -74,8 +75,7 @@
     "ws": "^8.18.3",
     "xlsx": "^0.18.5",
     "xml2js": "^0.6.2",
-    "zod": "^3.24.1",
-    "playwright": "^1.56.1"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
