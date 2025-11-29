@@ -30,6 +30,8 @@ import {
   Monitor,
   Share,
   Search,
+  BookOpen,
+  Download,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -86,6 +88,7 @@ import SpotifyResults from "./spotify-results"
 import ComputerUseInterface from "./ComputerUseInterface"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import ExtractedDataDownload from "./ExtractedDataDownload"
+import ThesisChatConnector from "./ThesisChatConnector"
 import { useComputerUse } from "@/hooks/use-computer-use"
 
 
@@ -486,6 +489,30 @@ const ActionsDropdown = ({
             {isComputerUseActive && (
               <div className="w-2 h-2 bg-indigo-500 rounded-full" />
             )}
+            {currentPlan === "FREE" && (
+              <Badge variant="secondary" className="text-xs">Pro</Badge>
+            )}
+          </div>
+        </DropdownMenuItem>
+
+        {/* Thesis Generation */}
+        <DropdownMenuItem
+          onClick={() => {
+            setChatType('thesis');
+            setIsOpen(false);
+          }}
+          disabled={currentPlan === "FREE" || isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-purple-100 dark:bg-purple-900/20">
+              <BookOpen className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">Thesis Generator</div>
+              <div className="text-xs text-muted-foreground">
+                Generate comprehensive academic theses
+              </div>
+            </div>
             {currentPlan === "FREE" && (
               <Badge variant="secondary" className="text-xs">Pro</Badge>
             )}
@@ -1122,6 +1149,7 @@ function ChatInterfaceContent() {
     setCurrentChat,
     addMessage,
     addVideoMessage,
+    addThesisMessage,
     clearCurrentChat,
     selectedModel,
     createNewChat,
@@ -2062,6 +2090,30 @@ But first, you need to connect your Spotify account securely using the button be
       }
       if (isVideoGenerationActive || chatType === 'video') {
         await handleVideoGeneration(msg);
+        return;
+      }
+      if (chatType === 'thesis') {
+        // Handle thesis generation - parse topics from input
+        const topics = msg.split(',').map(t => t.trim()).filter(t => t.length > 0);
+        if (topics.length >= 1) {
+          if (isNewChat) {
+            await createNewChat('thesis', msg);
+          } else {
+            await addThesisMessage(topics);
+          }
+        } else {
+          // Remove the optimistic messages since validation failed
+          setCurrentChat(prevChat => {
+            if (!prevChat) return prevChat;
+            return {
+              ...prevChat,
+              messages: prevChat.messages.filter(msg => 
+                msg.id !== userMessage.id && msg.id !== assistantPlaceholder.id
+              )
+            };
+          });
+          toast.error('Please provide at least 1 research topic for thesis generation.\n\nExample: "Artificial Intelligence in Healthcare" or "AI in Healthcare, Machine Learning Ethics"');
+        }
         return;
       }
       if (isComputerUseActive || chatType === 'computer-use') {
@@ -3342,6 +3394,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   </div>
                 )}
 
+                {/* Thesis generation interface */}
+                {chatType === 'thesis' && (
+                  <div className="max-w-3xl mx-auto">
+                    <ThesisChatConnector 
+                      onComplete={() => {
+                        // Scroll to bottom after thesis generation starts
+                        setTimeout(() => {
+                          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+                        }, 100)
+                      }}
+                    />
+                  </div>
+                )}
+
                 <div className="space-y-3">
                   <div className="border-wrapper">
                     <div className="relative rounded-3xl   focus-within:ring-1 focus-within:ring-ring overflow-hidden  ">
@@ -3369,7 +3435,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
                                     : isSpotifyActive
                                       ? "Enter Spotify command (e.g., 'search for a song by Queen')..."
-                                      : "Type your message here..."
+                                      : chatType === 'thesis'
+                                        ? "Enter research topic(s) (e.g., 'AI in Healthcare' or multiple topics: 'AI in Healthcare, ML Ethics')..."
+                                        : "Type your message here..."
                         }
                         className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
                         style={{

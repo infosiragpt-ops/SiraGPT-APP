@@ -572,16 +572,8 @@ async function processThesisGeneration(sessionId, topics, userId, chatId) {
       const searchResults = await searchMultipleSources(topic);
       allSearchResults = allSearchResults.concat(searchResults);
 
-      // Save search results to database
-      if (chatId) {
-        await prisma.message.create({
-          data: {
-            chatId: chatId,
-            role: 'ASSISTANT',
-            content: `✅ Found ${searchResults.length} sources for topic: "${topic}"\n\n${searchResults.map(r => `- ${r.source}: ${r.url}`).join('\n')}`
-          }
-        });
-      }
+      // Don't create separate messages - let frontend polling handle updates
+      console.log(`✅ Found ${searchResults.length} sources for topic: ${topic}`);
     }
 
     const sessionUpdate1 = thesisSessions.get(sessionId);
@@ -640,18 +632,8 @@ async function processThesisGeneration(sessionId, topics, userId, chatId) {
       timestamp: new Date().toISOString()
     };
 
-    if (chatId) {
-      await prisma.message.create({
-        data: {
-          chatId: chatId,
-          role: 'ASSISTANT',
-          content: `📚 Research Materials Saved\n\n**Total Sources Found:** ${allSearchResults.length}\n**Topics Covered:** ${topics.length}\n\n**Sources by Topic:**\n${topics.map(topic => {
-            const count = allSearchResults.filter(r => r.topic === topic).length;
-            return `- ${topic}: ${count} sources`;
-          }).join('\n')}`
-        }
-      });
-    }
+    // Don't create separate messages - let frontend polling handle updates
+    console.log(`📚 Research Materials Saved: ${allSearchResults.length} sources found`);
 
     // Step 4: Generate thesis
     const sessionUpdate4 = thesisSessions.get(sessionId);
@@ -685,7 +667,7 @@ async function processThesisGeneration(sessionId, topics, userId, chatId) {
       finalSession.documentFilename = safeFilename;
     }
 
-    // Save thesis message to chat
+    // Save thesis message to chat - ONLY create the final completion message
     if (chatId) {
       await prisma.message.create({
         data: {
@@ -741,7 +723,11 @@ router.get('/status/:sessionId', authenticateToken, async (req, res) => {
       documentPath: session.documentPath,
       documentFilename: session.documentFilename,
       topics: session.topics,
-      sourcesCount: session.searchResults?.length || 0
+      sourcesCount: session.searchResults?.length || 0,
+      // Provide detailed search results for frontend to build links
+      searchResults: session.status === 'searching' || session.status === 'completed' 
+        ? session.searchResults?.slice(0, 6).map(r => ({ source: r.source, url: r.url, topic: r.topic })) 
+        : undefined
     });
 
   } catch (error) {

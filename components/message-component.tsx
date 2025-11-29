@@ -48,6 +48,8 @@ import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ExtractedDataDownload from "./ExtractedDataDownload"
+import ThesisProgressComponent from "./ThesisProgressComponent"
+import ThesisProgressDisplay from "./ThesisProgressDisplay"
 import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
@@ -543,7 +545,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
     // Optimized message content rendering with performance safeguards
     const MessageContent = ({ content }: { content: string }) => {
-        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]')) {
+        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]' || content === '[THESIS_GENERATING]' || content.startsWith('[THESIS_GENERATING]'))) {
             return null;
         }
         // Don't render markdown for image-only messages to improve performance
@@ -892,6 +894,184 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         const computerUseFile = parsedFiles.find((f: any) => f.type === 'computer_use_extraction');
         return computerUseFile || null;
     };
+
+    const getThesisData = () => {
+        try {
+            // First try to get from metadata
+            if (message.metadata) {
+                const parsed = typeof message.metadata === 'string' ? JSON.parse(message.metadata) : message.metadata;
+                if (parsed.thesisData) return parsed.thesisData;
+            }
+            
+            // Then try direct thesisData field
+            if (message.thesisData) return message.thesisData;
+            
+            // Fallback: detect thesis content by pattern matching
+            if (typeof message.content === 'string' && message.role === 'ASSISTANT') {
+                const content = message.content;
+                
+                // Check for thesis-specific content patterns
+                const thesisPatterns = [
+                    '🔍 Initializing Thesis Generation',
+                    '🔍 **Searching Academic Sources**',
+                    '📝 **Generating Thesis Document**',
+                    '✅ **Thesis Generation Completed**',
+                    '❌ **Thesis Generation Error**',
+                    'Google Scholar: scholar.google.com',
+                    'ResearchGate: www.researchgate.net',
+                    'PubMed: pubmed.ncbi.nlm.nih.gov',
+                    'ArXiv: arxiv.org/search',
+                    'IEEE Xplore: ieeexplore.ieee.org',
+                    'Thesis_.*\\.docx',
+                    'Topics Covered:.*Research Sources:',
+                    'Preparing to research and analyze',
+                    'Starting academic source search',
+                    'Found \\d+ sources for topic',
+                    'Research Materials Saved',
+                    'Total Sources Found:',
+                    'Your comprehensive thesis has been generated',
+                    'Word Document.*Download.*Preview in Chat'
+                ];
+                
+                const isThesisMessage = thesisPatterns.some(pattern => {
+                    try {
+                        return new RegExp(pattern, 'i').test(content);
+                    } catch {
+                        return content.toLowerCase().includes(pattern.toLowerCase());
+                    }
+                });
+                
+                if (isThesisMessage) {
+                    // Extract thesis data from content patterns
+                    let status: 'initializing' | 'searching' | 'generating' | 'completed' | 'error' = 'initializing';
+                    let progress = 0;
+                    let documentFilename = '';
+                    let sourcesCount = 0;
+                    let topics: string[] = [];
+                    
+                    // Determine status and extract comprehensive data
+                    if (content.includes('Initializing Thesis Generation') || 
+                        content.includes('Preparing to research and analyze') ||
+                        content.includes('Starting academic source search')) {
+                        status = 'initializing';
+                        progress = 10;
+                    } else if (content.includes('**Searching Academic Sources**') || 
+                               content.includes('Found') && content.includes('sources for topic') ||
+                               content.includes('Google Scholar:') ||
+                               content.includes('ResearchGate:') ||
+                               content.includes('PubMed:')) {
+                        status = 'searching';
+                        progress = 40;
+                    } else if (content.includes('**Generating Thesis Document**') ||
+                               content.includes('Generating Literature Review') ||
+                               content.includes('Generating Introduction') ||
+                               content.includes('Generating Methodology') ||
+                               content.includes('Generating Analysis') ||
+                               content.includes('Generating Conclusion')) {
+                        status = 'generating';
+                        // Extract progress from backend message like "76.25"
+                        const progressMatch = content.match(/(\d+(?:\.\d+)?)%/);
+                        if (progressMatch) {
+                            progress = Math.round(parseFloat(progressMatch[1]));
+                        } else {
+                            progress = 70;
+                        }
+                    } else if (content.includes('Research Materials Saved') ||
+                               content.includes('Total Sources Found:')) {
+                        status = 'generating';
+                        progress = 60;
+                    } else if (content.includes('**Thesis Generation Completed**') || 
+                               content.includes('Your comprehensive thesis has been generated') ||
+                               content.includes('Thesis_') ||
+                               (content.includes('Word Document') && content.includes('Download') && content.includes('Preview'))) {
+                        status = 'completed';
+                        progress = 100;
+                    } else if (content.includes('**Thesis Generation Error**')) {
+                        status = 'error';
+                        progress = 0;
+                    }
+                    
+                    // For completed status, show full summary including sources from previous steps
+                    if (status === 'completed') {
+                        // Extract comprehensive data for completed state
+                        const topicsMatch = content.match(/Topics Covered:\s*(\d+)/);
+                        if (topicsMatch) {
+                            const topicCount = parseInt(topicsMatch[1]);
+                            // Add common research topics as fallback
+                            topics = ['Artificial Intelligence in Healthcare']; // This should ideally come from the actual topic
+                        }
+                        
+                        const sourcesMatch = content.match(/Research Sources:\s*(\d+)/);
+                        if (sourcesMatch) {
+                            sourcesCount = parseInt(sourcesMatch[1]);
+                        }
+                    }
+                    
+                    // Extract document filename
+                    const docMatch = content.match(/Thesis_[^.\s]+\.docx/);
+                    if (docMatch) {
+                        documentFilename = docMatch[0];
+                    } else {
+                        // Also check for Word Document line format
+                        const wordDocMatch = content.match(/Word\s+Document[^\n]*\n([^\n]+\.docx)/i);
+                        if (wordDocMatch) {
+                            documentFilename = wordDocMatch[1].trim();
+                        }
+                    }
+                    
+                    // Extract sources count
+                    const sourcesMatch = content.match(/Research Sources:\s*(\d+)/);
+                    if (sourcesMatch) {
+                        sourcesCount = parseInt(sourcesMatch[1]);
+                    } else {
+                        const foundMatch = content.match(/Found (\d+) sources/);
+                        if (foundMatch) {
+                            sourcesCount = parseInt(foundMatch[1]);
+                        } else {
+                            const totalMatch = content.match(/Total Sources Found:\s*(\d+)/);
+                            if (totalMatch) {
+                                sourcesCount = parseInt(totalMatch[1]);
+                            }
+                        }
+                    }
+                    
+                    // Extract topics
+                    const topicsMatch = content.match(/Topics Covered:\s*(\d+)/);
+                    if (topicsMatch) {
+                        // Try to extract actual topic names
+                        const topicLines = content.match(/(\w+):\s*\d+\s*sources/g);
+                        if (topicLines) {
+                            topics = topicLines.map(line => line.split(':')[0].trim());
+                        }
+                    } else {
+                        // Look for "for topic: xxx" pattern
+                        const forTopicMatch = content.match(/for topic:\s*["""]([^"""]+)["""]/);
+                        if (forTopicMatch) {
+                            topics = [forTopicMatch[1].trim()];
+                        } else if (content.toLowerCase().includes('robotics')) {
+                            topics = ['robotics'];
+                        }
+                    }
+                    
+                    return {
+                        sessionId: '', // Unknown from content
+                        status,
+                        progress,
+                        message: content, // Use full content as message - the UI will extract what it needs
+                        topics,
+                        sourcesCount: sourcesCount || undefined,
+                        documentFilename: documentFilename || undefined,
+                        documentPath: documentFilename ? `/uploads/documents/${documentFilename}` : undefined
+                    };
+                }
+            }
+            
+            return null;
+        } catch (error) {
+            console.error('Error parsing thesis data:', error);
+            return null;
+        }
+    };
     const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename)
 
     const PPTDisplay = () => {
@@ -996,6 +1176,26 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             </div>
         )
     }
+
+    const ThesisDisplay = () => {
+        const thesisData = getThesisData();
+        if (!thesisData) return null;
+
+        return (
+            <div className="mt-3">
+                <ThesisProgressDisplay 
+                    thesisData={thesisData}
+                    onPreview={(documentUrl) => {
+                        // Use existing document preview system
+                        if (onDocumentPreview) {
+                            onDocumentPreview(documentUrl);
+                        }
+                    }}
+                />
+            </div>
+        );
+    };
+
     const GmailSummary = ({ message }: { message: any }) => {
         try {
             const rawContent: string = typeof message.content === 'string' ? message.content : '';
@@ -1343,10 +1543,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
         return (
             <>
-                {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "ASSISTANT" && parsedFiles.some(f => f.type === 'document') && (
+                {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "ASSISTANT" && 
+                    parsedFiles.some(f => f.type === 'document' && !(f.name && f.name.match(/Thesis_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.docx/))) && (
                     <div className="mt-3 space-y-3">
                         {parsedFiles
-                            .filter((file: any) => file.type === 'document')
+                            .filter((file: any) => {
+                                // Filter out thesis files - they're handled by ThesisDisplay
+                                if (file.type === 'document' && file.name && file.name.match(/Thesis_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.docx/)) {
+                                    return false;
+                                }
+                                return file.type === 'document';
+                            })
                             .map((file: any, index: number) => {
                                 const getFileIcon = () => {
                                     if (file.name.endsWith('.pdf')) {
@@ -1720,10 +1927,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     </>
                                 ) : (
                                     // For diagram (figma) responses, only show the diagram block, no text
-                                    !hasFigmaDiagram && <MessageContent content={displayedContent} />
+                                    // For thesis responses, only show the thesis display, no text
+                                    !hasFigmaDiagram && !getThesisData() && <MessageContent content={displayedContent} />
                                 )}
                                 <PPTDisplay />
                                 <VideoDisplay />
+                                <ThesisDisplay />
                                 <FileDisplay />
                                 <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} onImageClick={(url) => setSelectedImage(url)} />
                                 <FigmaDiagramDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />

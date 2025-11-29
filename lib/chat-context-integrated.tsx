@@ -1,6 +1,6 @@
 "use client"
 
-import type React from "react"
+import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
@@ -48,6 +48,17 @@ interface Message {
     prompt?: string
     error?: string
   }
+  thesisData?: {
+    sessionId: string
+    status: 'initializing' | 'searching' | 'generating' | 'completed' | 'error'
+    progress: number
+    message: string
+    topics: string[]
+    sourcesCount?: number
+    documentPath?: string
+    documentFilename?: string
+    error?: string
+  }
   presentation?: string // Add this line
   error?: any
   metadata?: string
@@ -91,10 +102,11 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
-  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use', initialContent?: string, initialFiles?: string[]) => Promise<any>
+  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis', initialContent?: string, initialFiles?: string[]) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
+  addThesisMessage: (topics: string[]) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => void
   selectedModel: string
@@ -103,9 +115,9 @@ interface ChatContextType {
   setSelectedProivder: (model: string) => void
   isLoading: boolean
   availableModels: any[]
-  chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'
+  chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis'
   uploadedFiles: any[]
-  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'>>
+  setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis'>>
   setUploadedFiles: (files: any[]) => void
   regenerateLastMessage: () => void
   regenerateMessage: (messageId?: string) => void
@@ -135,7 +147,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
   const [hasInitialized, setHasInitialized] = useState(false)
-  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use'>('text')
+  const [chatType, setChatType] = useState<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis'>('text')
   const [pollingIntervals, setPollingIntervals] = useState<Map<string, NodeJS.Timeout>>(new Map())
   const [pagination, setPagination] = useState<PaginationInfo | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
@@ -648,7 +660,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' = 'text', initialContent?: string, initialFiles?: string[]) => {
+  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text', initialContent?: string, initialFiles?: string[]) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
@@ -736,6 +748,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 console.error('Failed to start Computer Use session:', cuError);
                 // Update the message to show error
                 await handleNewChatWithPlaceholder(newChat, initialContent, '[COMPUTER_USE_ERROR]', uploadedFiles);
+              }
+              break;
+            case 'thesis':
+              // Handle thesis generation with topics (comma-separated)
+              const topics = initialContent ? initialContent.split(',').map(t => t.trim()).filter(t => t.length > 0) : []
+              if (topics.length >= 2) {
+                await addThesisMessage(topics, newChat)
+              } else {
+                await handleNewChatWithPlaceholder(newChat, initialContent || '', '[THESIS_ERROR: Need at least 2 topics]', uploadedFiles);
               }
               break;
             default:
@@ -1388,7 +1409,179 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setUploadedFiles([]); // Clear uploaded files after processing
     }
   }, [currentChat, user, token, selectedModel, uploadedFiles, selectChat, pollVideoStatus]);
-  // ...later...
+
+  const addThesisMessage = useCallback(async (topics: string[], chat?: any) => {
+    const activeChat = chat || currentChat;
+    if (!activeChat || !user) return;
+
+    setIsLoading(true);
+    try {
+      // Create user message first
+      await apiClient.addMessage(activeChat.id, {
+        role: 'USER',
+        content: `Generate thesis on topics: ${topics.join(', ')}`
+      });
+
+      // Start thesis generation
+      const response = await apiClient.generateThesis({
+        topics: topics,
+        chatId: activeChat.id
+      });
+
+      // Create assistant message with thesis data
+      const assistantMessage = await apiClient.addMessage(activeChat.id, {
+        role: 'ASSISTANT',
+        content: '🔍 **Initializing Thesis Generation**\n\nPreparing to research and analyze your topics...\n\n*Starting academic source search*',
+        metadata: JSON.stringify({
+          thesisData: {
+            sessionId: response.sessionId,
+            status: 'initializing',
+            progress: 5,
+            message: 'Starting thesis generation...',
+            topics: topics
+          }
+        })
+      });
+
+      // Refresh chat to get the updated messages
+      await selectChat(activeChat.id);
+
+      // Start polling for thesis status
+      pollThesisStatus(response.sessionId, assistantMessage.message.id);
+
+      toast.success('Thesis generation started!');
+    } catch (error: any) {
+      console.error("Failed to start thesis generation:", error);
+      toast.error(error.message || 'Failed to start thesis generation');
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentChat, user, token, selectChat]);
+
+  const pollThesisStatus = useCallback((sessionId: string, messageId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const statusResponse = await apiClient.getThesisStatus(sessionId);
+
+        // Update message in current chat with detailed progress
+        if (currentChat) {
+          setCurrentChat(prevChat => {
+            if (!prevChat) return prevChat;
+
+            const updatedMessages = prevChat.messages.map(msg => {
+              if (msg.id === messageId) {
+                let progressContent = '';
+                
+                // Generate detailed progress content based on status and message
+                if (statusResponse.status === 'searching') {
+                  progressContent = `🔍 **Searching Academic Sources**\n\n`;
+                  
+                  // Show specific search progress
+                  if (statusResponse.message) {
+                    if (statusResponse.message.includes('Google Scholar')) {
+                      progressContent += `🔍 Searching Google Scholar...\n`;
+                    }
+                    if (statusResponse.message.includes('ResearchGate')) {
+                      progressContent += `✅ Google Scholar completed\n🔍 Searching ResearchGate...\n`;
+                    }
+                    if (statusResponse.message.includes('PubMed')) {
+                      progressContent += `✅ ResearchGate completed\n🔍 Searching PubMed database...\n`;
+                    }
+                    if (statusResponse.message.includes('ArXiv')) {
+                      progressContent += `✅ PubMed completed\n🔍 Searching ArXiv preprints...\n`;
+                    }
+                    if (statusResponse.message.includes('IEEE')) {
+                      progressContent += `✅ ArXiv completed\n🔍 Searching IEEE Xplore...\n`;
+                    }
+                    if (statusResponse.message.includes('Wikipedia')) {
+                      progressContent += `✅ IEEE completed\n� Searching Wikipedia...\n`;
+                    }
+                    if (statusResponse.message.includes('Google Search')) {
+                      progressContent += `✅ Sources gathered\n🔍 Final web search...\n`;
+                    }
+                    progressContent += `\n*Progress: ${statusResponse.progress || 30}%*`;
+                  } else {
+                    progressContent += `Scanning academic databases and research repositories...\n\n*Progress: ${statusResponse.progress || 20}%*`;
+                  }
+                } else if (statusResponse.status === 'generating') {
+                  progressContent = `📝 **Generating Thesis Document**\n\n`;
+                  progressContent += `Analyzing collected sources and writing comprehensive thesis...\n`;
+                  progressContent += `Creating structured academic document with citations.\n\n`;
+                  progressContent += `*Progress: ${statusResponse.progress || 70}%*`;
+                } else if (statusResponse.status === 'completed') {
+                  progressContent = `✅ **Thesis Generation Completed!**\n\n`;
+                  progressContent += `Your comprehensive academic thesis is ready.\n`;
+                  if (statusResponse.documentFilename) {
+                    progressContent += `**Document:** ${statusResponse.documentFilename}\n`;
+                  }
+                  if (statusResponse.sourcesCount) {
+                    progressContent += `**Sources:** ${statusResponse.sourcesCount} academic references\n`;
+                  }
+                  progressContent += `\nClick Preview to view or Download to save the document.`;
+                } else if (statusResponse.status === 'error') {
+                  progressContent = `❌ **Thesis Generation Error**\n\n${statusResponse.error || 'An unexpected error occurred.'}`;
+                } else {
+                  progressContent = `⏳ **Processing...**\n\n${statusResponse.message || 'Working on your thesis generation...'}`;
+                }
+
+                return {
+                  ...msg,
+                  content: progressContent,
+                  thesisData: {
+                    sessionId,
+                    status: statusResponse.status,
+                    progress: statusResponse.progress || 0,
+                    message: statusResponse.message,
+                    topics: statusResponse.topics || [],
+                    sourcesCount: statusResponse.sourcesCount,
+                    documentPath: statusResponse.documentPath,
+                    documentFilename: statusResponse.documentFilename,
+                    error: statusResponse.error
+                  }
+                };
+              }
+              return msg;
+            });
+
+            return { ...prevChat, messages: updatedMessages };
+          });
+        }
+
+        // Stop polling when completed or error
+        if (statusResponse.status === 'completed' || statusResponse.status === 'error') {
+          clearInterval(interval);
+          setPollingIntervals(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(sessionId);
+            return newMap;
+          });
+        }
+      } catch (error) {
+        console.error('Error polling thesis status:', error);
+      }
+    }, 2000); // Poll every 2 seconds for more frequent updates
+
+    // Store interval for cleanup
+    setPollingIntervals(prev => {
+      const newMap = new Map(prev);
+      newMap.set(sessionId, interval);
+      return newMap;
+    });
+  }, [currentChat]);
+
+  // Cleanup function for polling intervals
+  React.useEffect(() => {
+    return () => {
+      // Cleanup all polling intervals when component unmounts
+      pollingIntervals.forEach((interval) => {
+        clearInterval(interval);
+      });
+      setPollingIntervals(new Map());
+    };
+  }, []);
+
+  // Video polling function
 
 
   // const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
@@ -1487,6 +1680,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     selectChat,
     addMessage,
     addVideoMessage,
+    addThesisMessage,
     clearCurrentChat,
     deleteChat,
     selectedModel,
