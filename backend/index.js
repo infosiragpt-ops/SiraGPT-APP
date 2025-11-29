@@ -19,7 +19,7 @@ const adminRoutes = require('./src/routes/admin');
 const userRoutes = require('./src/routes/users');
 const publicRoutes = require('./src/routes/public');
 const downloadRoutes = require('./src/routes/download');
-const elevenlabsRoutes = require('./src/routes/elevenlabs');
+// const elevenlabsRoutes = require('./src/routes/elevenlabs'); // Commented out due to module error
 const searchRoutes = require('./src/routes/search');
 const videoRoutes = require('./src/routes/video');
 const gptsRoutes = require('./src/routes/gpts');
@@ -124,7 +124,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/download', downloadRoutes);
-app.use('/api/elevenlabs', elevenlabsRoutes);
+// app.use('/api/elevenlabs', elevenlabsRoutes); // Commented out due to module error
 app.use('/api/video', videoRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/gpts', gptsRoutes); // Add GPTs API routes

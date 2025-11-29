@@ -463,7 +463,8 @@ const ActionsDropdown = ({
           </div>
         </DropdownMenuItem>
 
-        {/* Computer Use Agent */}
+        {/* Computer Use Agent - Temporarily disabled */}
+        {/*
         <DropdownMenuItem
           onClick={handleComputerUseToggle}
           disabled={currentPlan === "FREE" || isDisabled}
@@ -494,6 +495,7 @@ const ActionsDropdown = ({
             )}
           </div>
         </DropdownMenuItem>
+        */}
 
         {/* Thesis Generation */}
         <DropdownMenuItem
@@ -504,15 +506,26 @@ const ActionsDropdown = ({
           disabled={currentPlan === "FREE" || isDisabled}
         >
           <div className="flex items-center gap-3 w-full">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-purple-100 dark:bg-purple-900/20">
-              <BookOpen className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
+              ? 'bg-purple-100 dark:bg-purple-900/20'
+              : 'bg-purple-100 dark:bg-purple-900/20'
+              }`}>
+              <BookOpen className={`h-4 w-4 ${chatType === 'thesis'
+                ? 'text-purple-600 dark:text-purple-400'
+                : 'text-purple-600 dark:text-purple-400'
+                }`} />
             </div>
             <div className="flex-1">
-              <div className="font-medium text-sm">Thesis Generator</div>
+              <div className="font-medium text-sm">
+                {chatType === 'thesis' ? 'Thesis Generator Active' : 'Thesis Generator'}
+              </div>
               <div className="text-xs text-muted-foreground">
                 Generate comprehensive academic theses
               </div>
             </div>
+            {chatType === 'thesis' && (
+              <div className="w-2 h-2 bg-purple-500 rounded-full" />
+            )}
             {currentPlan === "FREE" && (
               <Badge variant="secondary" className="text-xs">Pro</Badge>
             )}

@@ -107,10 +107,29 @@ function chunkResearchResults(allSearchResults, topics, maxResultsPerChunk = 10)
 // Store for thesis generation sessions
 const thesisSessions = new Map();
 
+// Endpoint to serve screenshots
+router.get('/screenshots/:sessionId/:filename', (req, res) => {
+  const { sessionId, filename } = req.params;
+  const screenshotPath = path.join(__dirname, '../../uploads/screenshots', sessionId, filename);
+  
+  console.log(`📷 Screenshot requested: ${screenshotPath}`);
+  
+  // Check if file exists before sending
+  fs.access(screenshotPath)
+    .then(() => {
+      console.log(`✅ Screenshot file found, serving: ${filename}`);
+      res.sendFile(screenshotPath);
+    })
+    .catch((err) => {
+      console.error(`❌ Screenshot not found: ${screenshotPath}`, err.message);
+      res.status(404).json({ error: 'Screenshot not found', path: screenshotPath });
+    });
+});
+
 /**
- * Search multiple websites for a topic
+ * Search multiple websites for a topic with real-time screenshots
  */
-async function searchMultipleSources(topic) {
+async function searchMultipleSources(topic, sessionId) {
   const searchResults = [];
   const sources = [
     { name: 'Google Scholar', url: `https://scholar.google.com/scholar?q=${encodeURIComponent(topic)}` },
@@ -122,17 +141,70 @@ async function searchMultipleSources(topic) {
     { name: 'Google Search', url: `https://www.google.com/search?q=${encodeURIComponent(topic)}` }
   ];
 
-  const browser = await chromium.launch({ headless: true });
+  // Create screenshots directory
+  const screenshotsDir = path.join(__dirname, '../../uploads/screenshots', sessionId);
+  try {
+    await fs.mkdir(screenshotsDir, { recursive: true });
+    console.log(`📁 Created screenshots directory: ${screenshotsDir}`);
+  } catch (error) {
+    console.log('Screenshots directory already exists or could not be created:', error.message);
+  }
+
+  const browser = await chromium.launch({ headless: true }); // Set to true for production
   const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    viewport: { width: 1280, height: 720 } // Set consistent viewport for screenshots
   });
   const page = await context.newPage();
 
   for (const source of sources) {
     try {
       console.log(`🔍 Searching ${source.name} for: ${topic}`);
+      
+      // Update session with current source being searched
+      const session = thesisSessions.get(sessionId);
+      if (session) {
+        session.currentSource = source.name;
+        session.currentUrl = source.url;
+      }
+
       await page.goto(source.url, { waitUntil: 'networkidle', timeout: 15000 });
       await page.waitForTimeout(2000);
+
+      // Take screenshot of the page
+      const screenshotFilename = `${source.name.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}.png`;
+      const screenshotPath = path.join(screenshotsDir, screenshotFilename);
+      
+      try {
+        await page.screenshot({ 
+          path: screenshotPath, 
+          fullPage: false, // Just visible area for faster capture
+          type: 'png'
+        });
+        console.log(`📸 Screenshot saved: ${screenshotFilename} at ${screenshotPath}`);
+        
+        // Verify file was created
+        try {
+          const stats = await fs.stat(screenshotPath);
+          console.log(`📊 Screenshot file size: ${stats.size} bytes`);
+        } catch (statError) {
+          console.error(`❌ Failed to verify screenshot file: ${statError.message}`);
+        }
+        
+        // Update session with screenshot info
+        if (session) {
+          session.currentScreenshot = screenshotFilename;
+          session.screenshots = session.screenshots || [];
+          session.screenshots.push({
+            source: source.name,
+            filename: screenshotFilename,
+            url: source.url,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (screenshotError) {
+        console.error(`Error taking screenshot for ${source.name}:`, screenshotError);
+      }
 
       // Extract content based on source type
       const content = await page.evaluate((sourceName) => {
@@ -569,7 +641,7 @@ async function processThesisGeneration(sessionId, topics, userId, chatId) {
         sessionUpdate.progress = 10 + (i / topics.length) * 30;
       }
 
-      const searchResults = await searchMultipleSources(topic);
+      const searchResults = await searchMultipleSources(topic, sessionId);
       allSearchResults = allSearchResults.concat(searchResults);
 
       // Don't create separate messages - let frontend polling handle updates
@@ -724,6 +796,12 @@ router.get('/status/:sessionId', authenticateToken, async (req, res) => {
       documentFilename: session.documentFilename,
       topics: session.topics,
       sourcesCount: session.searchResults?.length || 0,
+      // Current browser activity
+      currentSource: session.currentSource,
+      currentUrl: session.currentUrl,
+      currentScreenshot: session.currentScreenshot,
+      // Screenshot history
+      screenshots: session.screenshots || [],
       // Provide detailed search results for frontend to build links
       searchResults: session.status === 'searching' || session.status === 'completed' 
         ? session.searchResults?.slice(0, 6).map(r => ({ source: r.source, url: r.url, topic: r.topic })) 
@@ -762,6 +840,88 @@ router.get('/download/:sessionId', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Download error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Download Thesis Document by Filename
+ */
+router.get('/files/:filename', async (req, res) => {
+  try {
+    const { filename } = req.params;
+    let userId = null;
+
+    // Check authentication - either from header or query parameter
+    const authHeader = req.headers.authorization;
+    const tokenFromQuery = req.query.token;
+    
+    let token = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    } else if (tokenFromQuery) {
+      token = tokenFromQuery;
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    // Verify token (simplified - you may want to use your actual auth verification)
+    try {
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+      userId = decoded.id;
+    } catch (error) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    // First, try to find the file in the user's documents directory
+    // We need to search through the user's chat directories
+    const uploadsDir = path.join(__dirname, '../../uploads/documents');
+    
+    let filePath = null;
+    
+    // Search through user's chat directories for the file
+    try {
+      const chatDirs = await fs.readdir(uploadsDir);
+      for (const chatDir of chatDirs) {
+        const chatDirPath = path.join(uploadsDir, chatDir);
+        const stat = await fs.stat(chatDirPath);
+        if (stat.isDirectory()) {
+          const potentialFilePath = path.join(chatDirPath, filename);
+          try {
+            await fs.access(potentialFilePath);
+            filePath = potentialFilePath;
+            break;
+          } catch (err) {
+            // File not in this directory, continue searching
+            continue;
+          }
+        }
+      }
+    } catch (searchError) {
+      console.error('Error searching for file:', searchError);
+    }
+
+    // If not found in documents, try uploads root directory (fallback)
+    if (!filePath) {
+      const rootPath = path.join(__dirname, '../../uploads', filename);
+      try {
+        await fs.access(rootPath);
+        filePath = rootPath;
+      } catch (error) {
+        return res.status(404).json({ error: 'File not found', filename });
+      }
+    }
+
+    console.log(`📁 Serving thesis file: ${filename} from ${filePath}`);
+    
+    // Send the file
+    res.download(filePath, filename);
+
+  } catch (error) {
+    console.error('Download file error:', error);
     res.status(500).json({ error: error.message });
   }
 });

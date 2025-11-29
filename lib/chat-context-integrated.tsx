@@ -1419,7 +1419,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Create user message first
       await apiClient.addMessage(activeChat.id, {
         role: 'USER',
-        content: `Generate thesis on topics: ${topics.join(', ')}`
+        content: topics.join(', ')
       });
 
       // Start thesis generation
@@ -1477,33 +1477,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 if (statusResponse.status === 'searching') {
                   progressContent = `🔍 **Searching Academic Sources**\n\n`;
                   
-                  // Show specific search progress
-                  if (statusResponse.message) {
-                    if (statusResponse.message.includes('Google Scholar')) {
-                      progressContent += `🔍 Searching Google Scholar...\n`;
+                  // Show cumulative search progress based on screenshots
+                  const searchSteps = [
+                    'Google Scholar', 'ResearchGate', 'PubMed', 'ArXiv', 'IEEE Xplore', 'Wikipedia', 'Google Search'
+                  ];
+                  
+                  const completedSources = statusResponse.screenshots?.map(s => s.source) || [];
+                  
+                  searchSteps.forEach(step => {
+                    if (completedSources.includes(step)) {
+                      progressContent += `✅ ${step} - Completed\n`;
+                    } else if (statusResponse.currentSource === step) {
+                      progressContent += `🔍 ${step} - Searching...\n`;
+                    } else {
+                      progressContent += `⏳ ${step} - Pending\n`;
                     }
-                    if (statusResponse.message.includes('ResearchGate')) {
-                      progressContent += `✅ Google Scholar completed\n🔍 Searching ResearchGate...\n`;
-                    }
-                    if (statusResponse.message.includes('PubMed')) {
-                      progressContent += `✅ ResearchGate completed\n🔍 Searching PubMed database...\n`;
-                    }
-                    if (statusResponse.message.includes('ArXiv')) {
-                      progressContent += `✅ PubMed completed\n🔍 Searching ArXiv preprints...\n`;
-                    }
-                    if (statusResponse.message.includes('IEEE')) {
-                      progressContent += `✅ ArXiv completed\n🔍 Searching IEEE Xplore...\n`;
-                    }
-                    if (statusResponse.message.includes('Wikipedia')) {
-                      progressContent += `✅ IEEE completed\n� Searching Wikipedia...\n`;
-                    }
-                    if (statusResponse.message.includes('Google Search')) {
-                      progressContent += `✅ Sources gathered\n🔍 Final web search...\n`;
-                    }
-                    progressContent += `\n*Progress: ${statusResponse.progress || 30}%*`;
-                  } else {
-                    progressContent += `Scanning academic databases and research repositories...\n\n*Progress: ${statusResponse.progress || 20}%*`;
-                  }
+                  });
+                  
+                  progressContent += `\n*Progress: ${statusResponse.progress || 30}%*`;
                 } else if (statusResponse.status === 'generating') {
                   progressContent = `📝 **Generating Thesis Document**\n\n`;
                   progressContent += `Analyzing collected sources and writing comprehensive thesis...\n`;
@@ -1537,7 +1528,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     sourcesCount: statusResponse.sourcesCount,
                     documentPath: statusResponse.documentPath,
                     documentFilename: statusResponse.documentFilename,
-                    error: statusResponse.error
+                    error: statusResponse.error,
+                    currentSource: statusResponse.currentSource,
+                    currentUrl: statusResponse.currentUrl,
+                    currentScreenshot: statusResponse.currentScreenshot,
+                    screenshots: statusResponse.screenshots || []
                   }
                 };
               }

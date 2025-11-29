@@ -4,6 +4,7 @@ import React from 'react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import BrowserPreview from '@/components/BrowserPreview'
 import { 
   CheckCircle, 
   AlertCircle, 
@@ -31,6 +32,15 @@ interface ThesisProgressDisplayProps {
     error?: string
     sourcesCount?: number
     topics?: string[]
+    currentSource?: string
+    currentUrl?: string
+    currentScreenshot?: string
+    screenshots?: Array<{
+      source: string
+      filename: string
+      url: string
+      timestamp: string
+    }>
   }
   onPreview?: (documentPath: string) => void
 }
@@ -121,9 +131,23 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
       if (thesisData.sessionId) {
         await apiClient.downloadThesis(thesisData.sessionId)
       } else if (thesisData.documentFilename) {
-        // Direct download using filename
-        const downloadUrl = `/api/thesis/files/${thesisData.documentFilename}`;
-        const response = await fetch(downloadUrl);
+        // Direct download using filename with authentication
+        const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+        const downloadUrl = `${backendUrl}/thesis/files/${thesisData.documentFilename}`;
+        
+        // Get token from localStorage for authentication
+        const token = localStorage.getItem('auth-token');
+        const headers = new Headers();
+        if (token) {
+          headers.set('Authorization', `Bearer ${token}`);
+        }
+        
+        const response = await fetch(downloadUrl, {
+          method: 'GET',
+          headers,
+          credentials: 'include',
+        });
+        
         if (!response.ok) throw new Error('Download failed');
         
         const blob = await response.blob();
@@ -148,7 +172,8 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
   const handlePreview = () => {
     if (thesisData.sessionId && onPreview) {
       // Use the download URL for preview (same as existing documents)
-      const documentUrl = `/api/thesis/download/${thesisData.sessionId}`;
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+      const documentUrl = `${backendUrl}/thesis/download/${thesisData.sessionId}`;
       onPreview(documentUrl);
     } else if (thesisData.documentFilename && onPreview) {
       // Use filename-based URL for preview
@@ -200,6 +225,17 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
               </p>
             </div>
           </div>
+
+          {/* Browser Preview for searching status */}
+          {thesisData.status === 'searching' && thesisData.sessionId && (
+            <BrowserPreview
+              sessionId={thesisData.sessionId}
+              currentSource={thesisData.currentSource}
+              currentUrl={thesisData.currentUrl}
+              currentScreenshot={thesisData.currentScreenshot}
+              screenshots={thesisData.screenshots || []}
+            />
+          )}
 
           {/* Modern Sources Display - Like Claude's web search */}
           {thesisData.status === 'searching' && thesisData.sourcesCount && (
