@@ -725,6 +725,7 @@ const ActiveToolsDisplay = ({
   setIsGoogleDriveActive,
   isSpotifyActive,
   setIsSpotifyActive,
+  chatType,
   setChatType,
 
   handleComputerUseToggle,
@@ -750,6 +751,7 @@ const ActiveToolsDisplay = ({
   setIsGoogleDriveActive: (value: boolean) => void;
   isSpotifyActive: boolean;
   setIsSpotifyActive: (value: boolean) => void;
+  chatType: string;
   setChatType: (type: any) => void;
 
   handleComputerUseToggle: () => void;
@@ -767,8 +769,9 @@ const ActiveToolsDisplay = ({
 
   const hasConnectors = activeConnectors.length > 0;
   const hasOtherTools = isImageGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
+  const hasThesis = chatType === 'thesis';
 
-  if (!hasConnectors && !hasOtherTools) return null;
+  if (!hasConnectors && !hasOtherTools && !hasThesis) return null;
 
   const handleCloseAllConnectors = () => {
     setIsGmailActive(false);
@@ -797,6 +800,11 @@ const ActiveToolsDisplay = ({
     setIsComputerUseActive(false);
     setChatType('text');
   };
+
+  const handleThesisClose = () => {
+    setChatType('text');
+  };
+
   return (
     <div className="flex items-center gap-2">
       {hasConnectors && (
@@ -946,6 +954,22 @@ const ActiveToolsDisplay = ({
             size="sm"
             className="h-4 w-4 p-0 hover:bg-indigo-200 dark:hover:bg-indigo-800/30 rounded-full ml-1"
             onClick={handleComputerUseClose}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+
+      {chatType === 'thesis' && (
+        <div className="flex items-center gap-1.5 bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300 px-2 py-1 rounded-full text-xs border border-purple-200 dark:border-purple-800">
+          <BookOpen className="h-3 w-3" />
+          <span className="font-medium">Thesis Generator</span>
+          <div className="w-2 h-2 bg-purple-500 rounded-full ml-1" />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-4 w-4 p-0 hover:bg-purple-200 dark:hover:bg-purple-800/30 rounded-full ml-1"
+            onClick={handleThesisClose}
           >
             <X className="h-3 w-3" />
           </Button>
@@ -2120,7 +2144,7 @@ But first, you need to connect your Spotify account securely using the button be
             if (!prevChat) return prevChat;
             return {
               ...prevChat,
-              messages: prevChat.messages.filter(msg => 
+              messages: prevChat.messages.filter(msg =>
                 msg.id !== userMessage.id && msg.id !== assistantPlaceholder.id
               )
             };
@@ -3410,11 +3434,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 {/* Thesis generation interface */}
                 {chatType === 'thesis' && (
                   <div className="max-w-3xl mx-auto">
-                    <ThesisChatConnector 
+                    <ThesisChatConnector
                       onComplete={() => {
                         // Scroll to bottom after thesis generation starts
                         setTimeout(() => {
-                          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+                          if (scrollAreaRef.current) {
+                            const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
+                            if (scrollContainer) {
+                              scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                            }
+                          }
                         }, 100)
                       }}
                     />
@@ -3525,6 +3554,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsGoogleDriveActive={setIsGoogleDriveActive}
                           isSpotifyActive={isSpotifyActive}
                           setIsSpotifyActive={setIsSpotifyActive}
+                          chatType={chatType}
                           setChatType={setChatType}
 
                           handleComputerUseToggle={handleComputerUseToggle}
@@ -3757,7 +3787,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                         ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
                                         : isSpotifyActive
                                           ? "Enter Spotify command (e.g., 'search for a song by Queen')..."
-                                          : "Type your message here..."
+                                          : chatType === 'thesis'
+                                            ? "Enter research topic(s) (e.g., 'AI in Healthcare' or multiple topics: 'AI in Healthcare, ML Ethics')..."
+                                            : "Type your message here..."
                             }
                             className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
                             style={{
@@ -3831,6 +3863,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsGoogleDriveActive={setIsGoogleDriveActive}
                               isSpotifyActive={isSpotifyActive}
                               setIsSpotifyActive={setIsSpotifyActive}
+                              chatType={chatType}
                               setChatType={setChatType}
 
                               handleComputerUseToggle={handleComputerUseToggle}
@@ -3898,7 +3931,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             ? 'Press Enter to generate video, Shift+Enter for new line'
                             : isWebSearchActive
                               ? 'Press Enter to search the web, Shift+Enter for new line'
-                              : 'Press Enter to send, Shift+Enter for new line'
+                              : chatType === 'thesis'
+                                ? 'Press Enter to generate thesis, Shift+Enter for new line'
+                                : 'Press Enter to send, Shift+Enter for new line'
                         }
                       </p>
                     </div>

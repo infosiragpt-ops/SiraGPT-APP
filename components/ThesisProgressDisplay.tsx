@@ -4,7 +4,7 @@ import React from 'react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import BrowserPreview from '@/components/BrowserPreview'
+import BrowserActivityViewer from '@/components/BrowserActivityViewer'
 import { 
   CheckCircle, 
   AlertCircle, 
@@ -226,14 +226,10 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
             </div>
           </div>
 
-          {/* Browser Preview for searching status */}
+          {/* Browser Activity Viewer for searching status */}
           {thesisData.status === 'searching' && thesisData.sessionId && (
-            <BrowserPreview
+            <BrowserActivityViewer
               sessionId={thesisData.sessionId}
-              currentSource={thesisData.currentSource}
-              currentUrl={thesisData.currentUrl}
-              currentScreenshot={thesisData.currentScreenshot}
-              screenshots={thesisData.screenshots || []}
             />
           )}
 
