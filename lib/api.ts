@@ -136,7 +136,7 @@ class ApiClient {
     return this.request(`/chats/${id}`, { method: 'DELETE' });
   }
 
-  async addMessage(chatId: string, data: { role: string; content: string; files?: string[] }) {
+  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string }) {
     return this.request(`/chats/${chatId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),

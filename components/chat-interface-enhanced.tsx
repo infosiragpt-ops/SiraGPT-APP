@@ -2063,6 +2063,32 @@ But first, you need to connect your Spotify account securely using the button be
     let chatToUpdate = currentChat;
     let duumychatId = `temp-chat-${Date.now()}`
 
+    // Handle thesis type early - before adding optimistic messages
+    // This ensures proper chat creation and message sync for new thesis chats
+    if (chatType === 'thesis' && isNewChat) {
+      try {
+        const topics = msg.split(',').map(t => t.trim()).filter(t => t.length > 0);
+        if (topics.length >= 1) {
+          // For new thesis chats, create directly without optimistic messages
+          // createNewChat will handle chat creation and message setup properly
+          const newChat = await createNewChat('thesis', msg);
+          if (newChat?.id) {
+            // Select the newly created chat to show messages properly
+            setTimeout(async () => {
+              await selectChat(newChat.id);
+            }, 300);
+          }
+        } else {
+          toast.error('Please provide at least 1 research topic for thesis generation.\n\nExample: "Artificial Intelligence in Healthcare" or "AI in Healthcare, ML Ethics"');
+        }
+        return;
+      } catch (error: any) {
+        console.error('Thesis generation error:', error);
+        toast.error(error?.message || 'Thesis generation failed. Please try again.');
+        return;
+      }
+    }
+
     // Optimistically add the user message to the UI immediately.
     const userMessage = {
       id: `msg-user-${Date.now()}`,
@@ -2128,15 +2154,12 @@ But first, you need to connect your Spotify account securely using the button be
         await handleVideoGeneration(msg);
         return;
       }
-      if (chatType === 'thesis') {
-        // Handle thesis generation - parse topics from input
+      if (chatType === 'thesis' && !isNewChat) {
+        // Handle thesis generation for existing chats only
+        // New thesis chats are handled earlier in the function
         const topics = msg.split(',').map(t => t.trim()).filter(t => t.length > 0);
         if (topics.length >= 1) {
-          if (isNewChat) {
-            await createNewChat('thesis', msg);
-          } else {
-            await addThesisMessage(topics);
-          }
+          await addThesisMessage(topics);
         } else {
           // Remove the optimistic messages since validation failed
           setCurrentChat(prevChat => {

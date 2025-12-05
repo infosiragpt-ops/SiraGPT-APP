@@ -1053,7 +1053,7 @@ async function searchMultipleSources(topic, sessionId) {
     //   viewport: { width: 1280, height: 720 } // Set consistent viewport for screenshots
     // });
     browser = await chromium.launch({
-      headless: false, // Keep headless for better performance and CAPTCHA avoidance
+      headless: true, // Keep headless for better performance and CAPTCHA avoidance
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -1084,16 +1084,16 @@ async function searchMultipleSources(topic, sessionId) {
 
     const page = await context.newPage();
 
-    try {
-      // Enhanced ResearchGate search - clicks through multiple results
-      console.log(`  🔬 Starting ResearchGate search for: "${topic}"`);
-      const researchGateResults = await searchResearchGate(topic, sessionId, page, screenshotsDir);
-      console.log(`  ✅ ResearchGate returned ${researchGateResults.length} results`);
-      searchResults.push(...researchGateResults);
-    } catch (error) {
-      console.error(`  ❌ Error in ResearchGate search for topic "${topic}":`, error.message);
-      // Continue with other sources even if ResearchGate fails
-    }
+    // try {
+    //   // Enhanced ResearchGate search - clicks through multiple results
+    //   console.log(`  🔬 Starting ResearchGate search for: "${topic}"`);
+    //   const researchGateResults = await searchResearchGate(topic, sessionId, page, screenshotsDir);
+    //   console.log(`  ✅ ResearchGate returned ${researchGateResults.length} results`);
+    //   searchResults.push(...researchGateResults);
+    // } catch (error) {
+    //   console.error(`  ❌ Error in ResearchGate search for topic "${topic}":`, error.message);
+    //   // Continue with other sources even if ResearchGate fails
+    // }
 
     try {
       // Enhanced DuckDuckGo search with pagination (increased pages for more results)

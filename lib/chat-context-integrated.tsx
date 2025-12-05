@@ -753,10 +753,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             case 'thesis':
               // Handle thesis generation with topics (comma-separated)
               const topics = initialContent ? initialContent.split(',').map(t => t.trim()).filter(t => t.length > 0) : []
-              if (topics.length >= 2) {
-                await addThesisMessage(topics, newChat)
+              if (topics.length >= 1) {
+                // Call addThesisMessage directly - it should be available from context
+                // If it's not available, the error will be caught in the outer try-catch
+                await addThesisMessage(topics, newChat);
               } else {
-                await handleNewChatWithPlaceholder(newChat, initialContent || '', '[THESIS_ERROR: Need at least 2 topics]', uploadedFiles);
+                await handleNewChatWithPlaceholder(newChat, initialContent || '', '[THESIS_ERROR: Need at least 1 topic]', uploadedFiles);
               }
               break;
             default:
@@ -770,10 +772,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
         return newChat;
       }
+      // Return newChat even if no initialContent
+      return newChat;
     } catch (error) {
       console.error("Failed to create chat:", error);
+      throw error; // Re-throw to allow error handling in caller
     }
-  }, [user, token, selectedModel, availableModels, setChatType, addMessage, handleNewChatWithPlaceholder]);
+  }, [user, token, selectedModel, availableModels, setChatType, addMessage, handleNewChatWithPlaceholder, selectProvider, uploadedFiles]);
 
   const selectChat = useCallback(
     async (chatId: string) => {
@@ -1446,8 +1451,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Refresh chat to get the updated messages
       await selectChat(activeChat.id);
 
-      // Start polling for thesis status
-      pollThesisStatus(response.sessionId, assistantMessage.message.id);
+      // Start polling for thesis status - pass chatId to ensure correct chat is updated
+      pollThesisStatus(response.sessionId, assistantMessage.message.id, activeChat.id);
 
       toast.success('Thesis generation started!');
     } catch (error: any) {
@@ -1459,18 +1464,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentChat, user, token, selectChat]);
 
-  const pollThesisStatus = useCallback((sessionId: string, messageId: string) => {
+  const pollThesisStatus = useCallback((sessionId: string, messageId: string, chatId: string) => {
     const interval = setInterval(async () => {
       try {
         const statusResponse = await apiClient.getThesisStatus(sessionId);
 
-        // Update message in current chat with detailed progress
-        if (currentChat) {
-          setCurrentChat(prevChat => {
-            if (!prevChat) return prevChat;
-
-            const updatedMessages = prevChat.messages.map(msg => {
-              if (msg.id === messageId) {
+        // Update message in the specific chat (works for both new and existing chats)
+        setChats(prevChats => {
+          return prevChats.map(chat => {
+            if (chat.id === chatId) {
+              const updatedMessages = chat.messages.map(msg => {
+                if (msg.id === messageId) {
                 let progressContent = '';
                 
                 // Generate detailed progress content based on status and message
@@ -1482,7 +1486,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     'Google Scholar', 'ResearchGate', 'PubMed', 'ArXiv', 'IEEE Xplore', 'Wikipedia', 'Google Search'
                   ];
                   
-                  const completedSources = statusResponse.screenshots?.map(s => s.source) || [];
+                  const completedSources = statusResponse.screenshots?.map((s: any) => s.source) || [];
                   
                   searchSteps.forEach(step => {
                     if (completedSources.includes(step)) {
@@ -1516,32 +1520,104 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   progressContent = `⏳ **Processing...**\n\n${statusResponse.message || 'Working on your thesis generation...'}`;
                 }
 
-                return {
-                  ...msg,
-                  content: progressContent,
-                  thesisData: {
-                    sessionId,
-                    status: statusResponse.status,
-                    progress: statusResponse.progress || 0,
-                    message: statusResponse.message,
-                    topics: statusResponse.topics || [],
-                    sourcesCount: statusResponse.sourcesCount,
-                    documentPath: statusResponse.documentPath,
-                    documentFilename: statusResponse.documentFilename,
-                    error: statusResponse.error,
-                    currentSource: statusResponse.currentSource,
-                    currentUrl: statusResponse.currentUrl,
-                    currentScreenshot: statusResponse.currentScreenshot,
-                    screenshots: statusResponse.screenshots || []
-                  }
-                };
-              }
-              return msg;
-            });
-
-            return { ...prevChat, messages: updatedMessages };
+                  return {
+                    ...msg,
+                    content: progressContent,
+                    thesisData: {
+                      sessionId,
+                      status: statusResponse.status,
+                      progress: statusResponse.progress || 0,
+                      message: statusResponse.message,
+                      topics: statusResponse.topics || [],
+                      sourcesCount: statusResponse.sourcesCount,
+                      documentPath: statusResponse.documentPath,
+                      documentFilename: statusResponse.documentFilename,
+                      error: statusResponse.error,
+                      currentSource: statusResponse.currentSource,
+                      currentUrl: statusResponse.currentUrl,
+                      currentScreenshot: statusResponse.currentScreenshot,
+                      screenshots: statusResponse.screenshots || []
+                    }
+                  };
+                }
+                return msg;
+              });
+              return { ...chat, messages: updatedMessages };
+            }
+            return chat;
           });
-        }
+        });
+
+        // Also update currentChat if it matches the chatId (for immediate UI update)
+        setCurrentChat(prevChat => {
+          if (!prevChat || prevChat.id !== chatId) return prevChat;
+          
+          // Use the same update logic to keep them in sync
+          const updatedMessages = prevChat.messages.map(msg => {
+            if (msg.id === messageId) {
+              let progressContent = '';
+              
+              if (statusResponse.status === 'searching') {
+                progressContent = `🔍 **Searching Academic Sources**\n\n`;
+                const searchSteps = [
+                  'Google Scholar', 'ResearchGate', 'PubMed', 'ArXiv', 'IEEE Xplore', 'Wikipedia', 'Google Search'
+                ];
+                const completedSources = statusResponse.screenshots?.map((s: any) => s.source) || [];
+                searchSteps.forEach(step => {
+                  if (completedSources.includes(step)) {
+                    progressContent += `✅ ${step} - Completed\n`;
+                  } else if (statusResponse.currentSource === step) {
+                    progressContent += `🔍 ${step} - Searching...\n`;
+                  } else {
+                    progressContent += `⏳ ${step} - Pending\n`;
+                  }
+                });
+                progressContent += `\n*Progress: ${statusResponse.progress || 30}%*`;
+              } else if (statusResponse.status === 'generating') {
+                progressContent = `📝 **Generating Thesis Document**\n\n`;
+                progressContent += `Analyzing collected sources and writing comprehensive thesis...\n`;
+                progressContent += `Creating structured academic document with citations.\n\n`;
+                progressContent += `*Progress: ${statusResponse.progress || 70}%*`;
+              } else if (statusResponse.status === 'completed') {
+                progressContent = `✅ **Thesis Generation Completed!**\n\n`;
+                progressContent += `Your comprehensive academic thesis is ready.\n`;
+                if (statusResponse.documentFilename) {
+                  progressContent += `**Document:** ${statusResponse.documentFilename}\n`;
+                }
+                if (statusResponse.sourcesCount) {
+                  progressContent += `**Sources:** ${statusResponse.sourcesCount} academic references\n`;
+                }
+                progressContent += `\nClick Preview to view or Download to save the document.`;
+              } else if (statusResponse.status === 'error') {
+                progressContent = `❌ **Thesis Generation Error**\n\n${statusResponse.error || 'An unexpected error occurred.'}`;
+              } else {
+                progressContent = `⏳ **Processing...**\n\n${statusResponse.message || 'Working on your thesis generation...'}`;
+              }
+
+              return {
+                ...msg,
+                content: progressContent,
+                thesisData: {
+                  sessionId,
+                  status: statusResponse.status,
+                  progress: statusResponse.progress || 0,
+                  message: statusResponse.message,
+                  topics: statusResponse.topics || [],
+                  sourcesCount: statusResponse.sourcesCount,
+                  documentPath: statusResponse.documentPath,
+                  documentFilename: statusResponse.documentFilename,
+                  error: statusResponse.error,
+                  currentSource: statusResponse.currentSource,
+                  currentUrl: statusResponse.currentUrl,
+                  currentScreenshot: statusResponse.currentScreenshot,
+                  screenshots: statusResponse.screenshots || []
+                }
+              };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: updatedMessages };
+        });
 
         // Stop polling when completed or error
         if (statusResponse.status === 'completed' || statusResponse.status === 'error') {
@@ -1563,7 +1639,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       newMap.set(sessionId, interval);
       return newMap;
     });
-  }, [currentChat]);
+  }, []);
 
   // Cleanup function for polling intervals
   React.useEffect(() => {
