@@ -20,7 +20,6 @@ import {
 } from 'lucide-react'
 import { apiClient } from '@/lib/api'
 import { toast } from 'sonner'
-import { useAuth } from '@/lib/auth-context-integrated'
 
 interface ThesisProgressDisplayProps {
   thesisData: {
@@ -51,7 +50,6 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
   onPreview 
 }) => {
   const [isDownloading, setIsDownloading] = React.useState(false)
-  const { user } = useAuth()
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -175,55 +173,19 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
     if (thesisData.sessionId && onPreview) {
       // Use the download URL for preview (same as existing documents)
       const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
-      const documentUrl = `${backendUrl}/thesis/download/${thesisData.sessionId}`;
+      const documentUrl = `${backendUrl}/thesis/download/${thesisData.sessionId}?preview=true`;
       onPreview(documentUrl);
     } else if (thesisData.documentFilename && onPreview) {
-      // Use actual upload path for preview - need full URL for Office viewer
-      // Get base URL (without /api suffix)
-      let baseUrl: string;
-      if (typeof window !== 'undefined') {
-        // Use current origin in browser
-        baseUrl = window.location.origin;
-      } else {
-        // Fallback for SSR - extract base from NEXT_PUBLIC_API_URL
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
-        baseUrl = apiUrl.replace(/\/api\/?$/, '') || 'http://localhost:5000';
-      }
+      // Use filename-based URL for preview with full absolute URL
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
       
-      // Get userId from auth context or token
-      let userId: string | null = null;
-      console.log("user", user);
+      // Get token from localStorage for authentication
+      const token = localStorage.getItem('auth-token');
       
-      // First try to get from auth context
-      if (user?.id) {
-        userId = user.id;
-      } else {
-        // Fallback: try to get from localStorage userId
-        userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
-        
-        // If still not found, try to decode from token
-        if (!userId && typeof window !== 'undefined') {
-          const token = localStorage.getItem('auth-token');
-          if (token) {
-            try {
-              // Decode JWT token to get userId
-              const payload = JSON.parse(atob(token.split('.')[1]));
-              userId = payload.userId || payload.id || payload.sub || null;
-            } catch (e) {
-              console.error('Failed to decode token:', e);
-            }
-          }
-        }
-      }
-      
-      // Use actual upload path: /uploads/documents/{userId}/{filename}
-      // This is the direct file path, not an API endpoint
-      let documentUrl: string;
-      if (userId) {
-        documentUrl = `${baseUrl}/uploads/documents/${userId}/${thesisData.documentFilename}`;
-      } else {
-        // Fallback: if userId not available, try without userId (might be in root uploads)
-        documentUrl = `${baseUrl}/uploads/documents/${thesisData.documentFilename}`;
+      // Build full URL with token and preview as query parameters
+      let documentUrl = `${backendUrl}/thesis/files/${thesisData.documentFilename}?preview=true`;
+      if (token) {
+        documentUrl += `&token=${encodeURIComponent(token)}`;
       }
       
       onPreview(documentUrl);
