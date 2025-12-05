@@ -129,14 +129,14 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button
+            {/* <Button
               variant="ghost"
               size="sm"
               onClick={handleMinimize}
               className="h-7 px-2"
             >
               <Maximize2 className="h-3 w-3" />
-            </Button>
+            </Button> */}
             {onClose && (
               <Button
                 variant="ghost"
@@ -180,7 +180,7 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
           >
             <Monitor className="h-3 w-3" />
           </Button>
-          <Button
+          {/* <Button
             variant="ghost"
             size="sm"
             onClick={handleMinimize}
@@ -188,7 +188,7 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
             title="Minimize"
           >
             <Minimize2 className="h-3 w-3" />
-          </Button>
+          </Button> */}
           {onClose && (
             <Button
               variant="ghost"
