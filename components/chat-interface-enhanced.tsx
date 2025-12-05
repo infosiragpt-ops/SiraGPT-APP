@@ -88,7 +88,6 @@ import SpotifyResults from "./spotify-results"
 import ComputerUseInterface from "./ComputerUseInterface"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import ExtractedDataDownload from "./ExtractedDataDownload"
-import ThesisChatConnector from "./ThesisChatConnector"
 import { useComputerUse } from "@/hooks/use-computer-use"
 
 
@@ -3428,25 +3427,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         <div className="text-xs text-muted-foreground">Calm and peaceful environments</div>
                       </div>
                     </Button>
-                  </div>
-                )}
-
-                {/* Thesis generation interface */}
-                {chatType === 'thesis' && (
-                  <div className="max-w-3xl mx-auto">
-                    <ThesisChatConnector
-                      onComplete={() => {
-                        // Scroll to bottom after thesis generation starts
-                        setTimeout(() => {
-                          if (scrollAreaRef.current) {
-                            const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
-                            if (scrollContainer) {
-                              scrollContainer.scrollTop = scrollContainer.scrollHeight;
-                            }
-                          }
-                        }, 100)
-                      }}
-                    />
                   </div>
                 )}
 
