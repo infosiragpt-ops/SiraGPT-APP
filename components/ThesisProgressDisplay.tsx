@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import { apiClient } from '@/lib/api'
 import { toast } from 'sonner'
+import { useAuth } from '@/lib/auth-context-integrated'
 
 interface ThesisProgressDisplayProps {
   thesisData: {
@@ -50,6 +51,7 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
   onPreview 
 }) => {
   const [isDownloading, setIsDownloading] = React.useState(false)
+  const { user } = useAuth()
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -188,8 +190,31 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
         baseUrl = apiUrl.replace(/\/api\/?$/, '') || 'http://localhost:5000';
       }
       
-      // Get userId from localStorage to construct the upload path
-      const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+      // Get userId from auth context or token
+      let userId: string | null = null;
+      console.log("user", user);
+      
+      // First try to get from auth context
+      if (user?.id) {
+        userId = user.id;
+      } else {
+        // Fallback: try to get from localStorage userId
+        userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+        
+        // If still not found, try to decode from token
+        if (!userId && typeof window !== 'undefined') {
+          const token = localStorage.getItem('auth-token');
+          if (token) {
+            try {
+              // Decode JWT token to get userId
+              const payload = JSON.parse(atob(token.split('.')[1]));
+              userId = payload.userId || payload.id || payload.sub || null;
+            } catch (e) {
+              console.error('Failed to decode token:', e);
+            }
+          }
+        }
+      }
       
       // Use actual upload path: /uploads/documents/{userId}/{filename}
       // This is the direct file path, not an API endpoint
