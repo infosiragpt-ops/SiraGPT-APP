@@ -176,8 +176,31 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
       const documentUrl = `${backendUrl}/thesis/download/${thesisData.sessionId}`;
       onPreview(documentUrl);
     } else if (thesisData.documentFilename && onPreview) {
-      // Use filename-based URL for preview
-      const documentUrl = `/api/thesis/files/${thesisData.documentFilename}`;
+      // Use actual upload path for preview - need full URL for Office viewer
+      // Get base URL (without /api suffix)
+      let baseUrl: string;
+      if (typeof window !== 'undefined') {
+        // Use current origin in browser
+        baseUrl = window.location.origin;
+      } else {
+        // Fallback for SSR - extract base from NEXT_PUBLIC_API_URL
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+        baseUrl = apiUrl.replace(/\/api\/?$/, '') || 'http://localhost:5000';
+      }
+      
+      // Get userId from localStorage to construct the upload path
+      const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+      
+      // Use actual upload path: /uploads/documents/{userId}/{filename}
+      // This is the direct file path, not an API endpoint
+      let documentUrl: string;
+      if (userId) {
+        documentUrl = `${baseUrl}/uploads/documents/${userId}/${thesisData.documentFilename}`;
+      } else {
+        // Fallback: if userId not available, try without userId (might be in root uploads)
+        documentUrl = `${baseUrl}/uploads/documents/${thesisData.documentFilename}`;
+      }
+      
       onPreview(documentUrl);
     }
   }
