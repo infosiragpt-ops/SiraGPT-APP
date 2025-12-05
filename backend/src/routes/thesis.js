@@ -6,6 +6,7 @@ const OpenAI = require('openai');
 const { createDocument } = require('../services/document-service');
 const { chromium } = require('playwright');
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const path = require('path');
 
 const router = express.Router();
@@ -2147,7 +2148,35 @@ router.get('/download/:sessionId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Document not ready yet' });
     }
 
-    res.download(session.documentPath, session.documentFilename);
+    // Check if this is a preview request (for viewing in browser)
+    const isPreview = req.query.preview === 'true';
+    
+    if (isPreview) {
+      // For preview, serve with inline content disposition and proper headers
+      const fileExtension = path.extname(session.documentFilename).toLowerCase();
+      let contentType = 'application/octet-stream';
+      
+      // Set appropriate content type
+      if (fileExtension === '.docx' || fileExtension === '.doc') {
+        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (fileExtension === '.pdf') {
+        contentType = 'application/pdf';
+      }
+      
+      // Set headers for preview (inline viewing)
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${session.documentFilename}"`);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization');
+      
+      // Send file for preview
+      const fileStream = fsSync.createReadStream(session.documentPath);
+      fileStream.pipe(res);
+    } else {
+      // For download, use res.download
+      res.download(session.documentPath, session.documentFilename);
+    }
 
   } catch (error) {
     console.error('Download error:', error);
@@ -2228,8 +2257,35 @@ router.get('/files/:filename', async (req, res) => {
 
     console.log(`📁 Serving thesis file: ${filename} from ${filePath}`);
 
-    // Send the file
-    res.download(filePath, filename);
+    // Check if this is a preview request (for viewing in browser)
+    const isPreview = req.query.preview === 'true';
+    
+    if (isPreview) {
+      // For preview, serve with inline content disposition and proper headers
+      const fileExtension = path.extname(filename).toLowerCase();
+      let contentType = 'application/octet-stream';
+      
+      // Set appropriate content type
+      if (fileExtension === '.docx' || fileExtension === '.doc') {
+        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (fileExtension === '.pdf') {
+        contentType = 'application/pdf';
+      }
+      
+      // Set headers for preview (inline viewing)
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization');
+      
+      // Send file for preview
+      const fileStream = fsSync.createReadStream(filePath);
+      fileStream.pipe(res);
+    } else {
+      // For download, use res.download
+      res.download(filePath, filename);
+    }
 
   } catch (error) {
     console.error('Download file error:', error);
