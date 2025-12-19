@@ -89,6 +89,7 @@ import ComputerUseInterface from "./ComputerUseInterface"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
+import { WordConnector } from "./WordConnector"
 
 
 // Enhanced Actions Dropdown Component
@@ -109,6 +110,8 @@ const ActionsDropdown = ({
   isGoogleCalendarActive,
   isGoogleDriveActive,
   isSpotifyActive,
+  isWordConnectorActive,
+  setIsWordConnectorActive,
   setShowAudioPanel,
   setAudioTab,
   handleAndUploadFiles,
@@ -127,6 +130,7 @@ const ActionsDropdown = ({
   handleGoogleCalendarToggle,
   handleGoogleDriveToggle,
   handleSpotifyToggle,
+  handleWordConnectorToggle,
 
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -495,6 +499,40 @@ const ActionsDropdown = ({
           </div>
         </DropdownMenuItem>
         */}
+
+        {/* Word Connector */}
+        <DropdownMenuItem
+          onClick={() => {
+            if (handleWordConnectorToggle) {
+              handleWordConnectorToggle();
+            }
+            setIsOpen(false);
+          }}
+          disabled={isDisabled}
+        >
+          <div className="flex items-center gap-3 w-full">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
+              ? 'bg-blue-100 dark:bg-blue-900/20'
+              : 'bg-blue-100 dark:bg-blue-900/20'
+              }`}>
+              <FileText className={`h-4 w-4 ${isWordConnectorActive
+                ? 'text-blue-600 dark:text-blue-400'
+                : 'text-blue-600 dark:text-blue-400'
+                }`} />
+            </div>
+            <div className="flex-1">
+              <div className="font-medium text-sm">
+                {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Rich text editor with AI generation
+              </div>
+            </div>
+            {isWordConnectorActive && (
+              <div className="w-2 h-2 bg-blue-500 rounded-full" />
+            )}
+          </div>
+        </DropdownMenuItem>
 
         {/* Thesis Generation */}
         <DropdownMenuItem
@@ -1265,6 +1303,9 @@ function ChatInterfaceContent() {
   const [isComputerUseActive, setIsComputerUseActive] = React.useState(false);
   const [computerUseStatus, setComputerUseStatus] = React.useState<'idle' | 'running' | 'completed' | 'error'>('idle');
   const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
+  const [isWordConnectorActive, setIsWordConnectorActive] = React.useState(false);
+  const [isGeneratingWord, setIsGeneratingWord] = React.useState(false);
+  const wordConnectorRef = React.useRef<{ updateContent: (content: string) => void } | null>(null);
 
   // Computer Use hook
   const {
@@ -1387,12 +1428,34 @@ function ChatInterfaceContent() {
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
       setIsSpotifyActive(false);
+      setIsWordConnectorActive(false);
       setChatType('computer-use');
     } else {
       setChatType('text');
     }
 
     setIsComputerUseActive(newState);
+  };
+
+  const handleWordConnectorToggle = () => {
+    const newState = !isWordConnectorActive;
+
+    if (newState) {
+      // Disable other modes
+      setIsWebSearchActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+      setIsSpotifyActive(false);
+      setIsComputerUseActive(false);
+      setChatType('text');
+    } else {
+      setChatType('text');
+    }
+
+    setIsWordConnectorActive(newState);
   };
 
   const handleSpotifyCommand = async (prompt: string) => {
@@ -2052,7 +2115,7 @@ But first, you need to connect your Spotify account securely using the button be
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices) return;
+    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord) return;
 
     const msg = input.trim();
     const filesToSend = [...uploadedFiles];
@@ -2062,6 +2125,107 @@ But first, you need to connect your Spotify account securely using the button be
     let isNewChat = !currentChat;
     let chatToUpdate = currentChat;
     let duumychatId = `temp-chat-${Date.now()}`
+
+    // Handle Word Connector - generate content directly to editor
+    if (isWordConnectorActive) {
+      try {
+        setIsGeneratingWord(true);
+
+        // Create or get chat
+        let activeChat = currentChat;
+        if (!activeChat) {
+          const response = await createNewChat('text', msg);
+          activeChat = response.chat;
+          await selectChat(activeChat?.id ?? "");
+          // Wait a bit for chat to be set
+          await new Promise(resolve => setTimeout(resolve, 100));
+          // Re-fetch to get updated chat
+          activeChat = currentChat || activeChat;
+        }
+
+        // Add user message to chat for display
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: activeChat?.id || '',
+          role: 'USER' as const,
+          content: msg,
+          timestamp: new Date().toISOString(),
+          files: filesToSend,
+        };
+
+        // Update chat with user message
+        setCurrentChat(prevChat => {
+          if (!prevChat && activeChat) {
+            return { ...activeChat, messages: [userMessage] };
+          }
+          if (prevChat) {
+            const updatedMessages = [...(prevChat.messages || []), userMessage];
+            return { ...prevChat, messages: updatedMessages };
+          }
+          return prevChat;
+        });
+
+        const streamId = crypto.randomUUID();
+        let accumulatedContent = '';
+
+        // Stream AI response for Word document using dedicated endpoint
+        await apiClient.generateWordStream(
+          {
+            provider: selectProvider,
+            model: selectedModel,
+            prompt: msg,
+            chatId: activeChat?.id,
+            files: filesToSend?.map(f => f.id) || [],
+            streamId,
+          },
+          (chunk) => {
+            accumulatedContent += chunk;
+            // Update Word editor in real-time
+            if (wordConnectorRef.current) {
+              wordConnectorRef.current.updateContent(accumulatedContent);
+            }
+          },
+          () => {
+            setIsGeneratingWord(false);
+            toast.success('Documento generado exitosamente');
+            // Final update
+            if (wordConnectorRef.current && accumulatedContent) {
+              wordConnectorRef.current.updateContent(accumulatedContent);
+            }
+            // Add AI response message to chat for display
+            const aiMessage = {
+              id: `msg-ai-${Date.now()}`,
+              chatId: activeChat?.id || '',
+              role: 'ASSISTANT' as const,
+              content: 'Documento generado en el editor de Word',
+              timestamp: new Date().toISOString(),
+            };
+            setCurrentChat(prevChat => {
+              if (!prevChat) return prevChat;
+              const updatedMessages = [...(prevChat.messages || []), aiMessage];
+              return { ...prevChat, messages: updatedMessages };
+            });
+            // Refresh chat to get updated messages from database
+            if (activeChat?.id) {
+              setTimeout(() => {
+                selectChat(activeChat.id);
+              }, 500);
+            }
+          },
+          (error) => {
+            setIsGeneratingWord(false);
+            console.error('Word generation error:', error);
+            toast.error(error.message || 'Error al generar documento');
+          }
+        );
+        return;
+      } catch (error: any) {
+        setIsGeneratingWord(false);
+        console.error('Word Connector error:', error);
+        toast.error(error?.message || 'Error al generar documento');
+        return;
+      }
+    }
 
     // Handle thesis type early - before adding optimistic messages
     // This ensures proper chat creation and message sync for new thesis chats
@@ -3243,7 +3407,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className={`relative flex flex-col h-full ${documentPreviewUrl ? 'w-1/2' : 'w-full'}`}>
+        <div className={`relative flex flex-col h-full ${documentPreviewUrl || isWordConnectorActive ? 'w-[40%]' : 'w-full'}`}>
           {/* Header */}
           <div className="absolute top-0 left-0 right-0 z-10 p-4">
             <div className="flex items-center justify-between">
@@ -3480,9 +3644,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
                                     : isSpotifyActive
                                       ? "Enter Spotify command (e.g., 'search for a song by Queen')..."
-                                      : chatType === 'thesis'
-                                        ? "Enter research topic(s) (e.g., 'AI in Healthcare' or multiple topics: 'AI in Healthcare, ML Ethics')..."
-                                        : "Type your message here..."
+                                      : isWordConnectorActive
+                                        ? "Type your message here (Word Connector is active)..."
+                                        : chatType === 'thesis'
+                                          ? "Enter research topic(s) (e.g., 'AI in Healthcare' or multiple topics: 'AI in Healthcare, ML Ethics')..."
+                                          : "Type your message here..."
                         }
                         className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
                         style={{
@@ -3522,6 +3688,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isGoogleCalendarActive={isGoogleCalendarActive}
                           isGoogleDriveActive={isGoogleDriveActive}
                           isSpotifyActive={isSpotifyActive}
+                          isWordConnectorActive={isWordConnectorActive}
+                          setIsWordConnectorActive={setIsWordConnectorActive}
                           setShowAudioPanel={setShowAudioPanel}
 
                           handleComputerUseToggle={handleComputerUseToggle}
@@ -3529,6 +3697,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                           handleGoogleDriveToggle={handleGoogleDriveToggle}
                           handleSpotifyToggle={handleSpotifyToggle}
+                          handleWordConnectorToggle={handleWordConnectorToggle}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
@@ -3790,9 +3959,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                         ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
                                         : isSpotifyActive
                                           ? "Enter Spotify command (e.g., 'search for a song by Queen')..."
-                                          : chatType === 'thesis'
-                                            ? "Enter research topic(s) (e.g., 'AI in Healthcare' or multiple topics: 'AI in Healthcare, ML Ethics')..."
-                                            : "Type your message here..."
+                                          : isWordConnectorActive
+                                            ? "Type your message here (Word Connector is active)..."
+                                            : chatType === 'thesis'
+                                              ? "Enter research topic(s) (e.g., 'AI in Healthcare' or multiple topics: 'AI in Healthcare, ML Ethics')..."
+                                              : "Type your message here..."
                             }
                             className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
                             style={{
@@ -3807,9 +3978,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             }}
                             rows={1}
                             disabled={
-                              // isLoading ||
+                              isLoading ||
                               isGeneratingVideo ||
-
+                              isGeneratingWord ||
                               isWebSearching
                             }
                           />
@@ -3831,6 +4002,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isGoogleCalendarActive={isGoogleCalendarActive}
                               isGoogleDriveActive={isGoogleDriveActive}
                               isSpotifyActive={isSpotifyActive}
+                              isWordConnectorActive={isWordConnectorActive}
+                              setIsWordConnectorActive={setIsWordConnectorActive}
                               setShowAudioPanel={setShowAudioPanel}
 
                               handleComputerUseToggle={handleComputerUseToggle}
@@ -3884,7 +4057,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 />
                                 <Button
                                   onClick={handleSend}
-                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify}
+                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord}
                                   size="sm"
                                   className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                                 >
@@ -3968,6 +4141,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               onClose={() => setIsComputerUseActive(false)}
             />
           </div>
+        )}
+        {isWordConnectorActive && (
+          <WordConnector
+            ref={wordConnectorRef}
+            onClose={() => setIsWordConnectorActive(false)}
+            selectedModel={selectedModel}
+            selectProvider={selectProvider}
+          />
         )}
       </div>
     </div >

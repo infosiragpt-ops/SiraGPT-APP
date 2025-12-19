@@ -341,7 +341,7 @@ export function AppSidebar() {
                   </div>
                 ) : (
                   <>
-                    {chats.map((chat) => (
+                    {chats.filter(chat => chat && chat.id).map((chat) => (
                       <SidebarMenuItem key={chat.id}>
                         <div className="flex items-center w-full group">
                           <SidebarMenuButton

@@ -31,12 +31,12 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   const [debouncedQuery, setDebouncedQuery] = React.useState("")
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([])
   const [isSearching, setIsSearching] = React.useState(false)
-  const { 
-    chats, 
-    selectChat, 
-    loadMoreChats, 
-    hasMoreChats, 
-    isLoadingMore 
+  const {
+    chats,
+    selectChat,
+    loadMoreChats,
+    hasMoreChats,
+    isLoadingMore
   } = useChat()
   const router = useRouter()
   const pathname = usePathname()
@@ -69,7 +69,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
     const performSearch = async () => {
       if (!debouncedQuery.trim()) {
         // Show all currently loaded chats (supports infinite scroll)
-        const loadedChats = chats.map(chat => ({
+        const loadedChats = chats.filter(chat => chat && chat.id).map(chat => ({
           id: chat.id,
           title: chat.title,
           updatedAt: chat.updatedAt,
@@ -84,7 +84,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
 
       // Filter chats by title OR id
       const filteredChats = chats
-        .filter(chat => 
+        .filter(chat =>
           chat.title.toLowerCase().includes(debouncedQuery.toLowerCase()) ||
           chat.id.toLowerCase().includes(debouncedQuery.toLowerCase())
         )
@@ -105,10 +105,10 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   // Infinite scroll handler for recent chats (when no search)
   const handleScroll = React.useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (debouncedQuery.trim()) return // Don't load more during search
-    
+
     const target = e.target as HTMLDivElement
     const bottom = target.scrollHeight - target.scrollTop === target.clientHeight
-    
+
     if (bottom && hasMoreChats && !isLoadingMore) {
       loadMoreChats()
     }
@@ -139,10 +139,10 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
 
   const highlightSearchTerm = (text: string, query: string) => {
     if (!query) return text
-    
+
     const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
     const parts = text.split(regex)
-    
+
     return parts.map((part, index) => (
       regex.test(part) ? (
         <span key={index} className="bg-yellow-200 dark:bg-yellow-900 text-yellow-900 dark:text-yellow-100 rounded px-1">
@@ -171,7 +171,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
             Search Chats
           </DialogTitle>
         </DialogHeader>
-        
+
         {/* Search Input */}
         <div className="px-6 pb-4">
           <div className="relative">
@@ -190,8 +190,8 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
         </div>
 
         {/* Search Results */}
-        <ScrollArea 
-          className="flex-1 max-h-[400px]" 
+        <ScrollArea
+          className="flex-1 max-h-[400px]"
           ref={scrollAreaRef}
           onScrollCapture={handleScroll}
         >
@@ -239,7 +239,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                     </div>
                   </Button>
                 ))}
-                
+
                 {/* Loading indicator for infinite scroll */}
                 {isLoadingMore && !searchQuery && (
                   <div className="flex items-center justify-center py-4">
@@ -247,7 +247,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                     <span className="text-sm text-muted-foreground">Loading more chats...</span>
                   </div>
                 )}
-                
+
                 {/* End of results indicator */}
                 {!hasMoreChats && !searchQuery && searchResults.length > 10 && (
                   <div className="text-center py-4 text-xs text-muted-foreground">

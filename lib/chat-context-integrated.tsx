@@ -385,7 +385,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const updatedChat = { ...activeChat, messages: updatedMessages };
 
         setCurrentChat(updatedChat);
-        setChats((prev) => prev.map((c) => (c.id === activeChat.id ? updatedChat : c)));
+        setChats((prev) => prev.filter(c => c && c.id).map((c) => (c.id === activeChat.id ? updatedChat : c)));
       }
 
       // STEP 2: AI ke jawab ke liye placeholder
@@ -790,10 +790,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         // Update the chats list to ensure consistency and add new chat if needed
         setChats((prev) => {
           // Check if chat already exists
-          const existingIndex = prev.findIndex(c => c.id === chatId)
+          const existingIndex = prev.findIndex(c => c && c.id === chatId)
           if (existingIndex >= 0) {
             // Update existing chat
-            return prev.map((c) => c.id === chatId ? chat : c)
+            return prev.filter(c => c && c.id).map((c) => c.id === chatId ? chat : c)
           } else {
             // Add new chat at the beginning
             return [chat, ...prev]
@@ -835,7 +835,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
 
       setCurrentChat(clearedChat)
-      setChats((prev) => prev.map((chat) =>
+      setChats((prev) => prev.filter(chat => chat && chat.id).map((chat) =>
         chat.id === currentChat.id ? clearedChat : chat
       ))
       setUploadedFiles([]) // Clear uploaded files
@@ -1006,7 +1006,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
                 // Also update the chat in the chats list to keep sidebar in sync
                 setChats(prevChats =>
-                  prevChats.map(chat =>
+                  prevChats.filter(chat => chat && chat.id).map(chat =>
                     chat.id === currentChat.id ? freshChat.chat : chat
                   )
                 );
@@ -1471,7 +1471,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
         // Update message in the specific chat (works for both new and existing chats)
         setChats(prevChats => {
-          return prevChats.map(chat => {
+          return prevChats.filter(chat => chat && chat.id).map(chat => {
             if (chat.id === chatId) {
               const updatedMessages = chat.messages.map(msg => {
                 if (msg.id === messageId) {
