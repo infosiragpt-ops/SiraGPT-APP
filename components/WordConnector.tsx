@@ -334,16 +334,16 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         // Convert markdown lists and process lines properly
                         const lines = cleanContent.split('\n');
                         const processedLines: string[] = [];
-                        
+
                         for (let i = 0; i < lines.length; i++) {
                             const line = lines[i].trim();
-                            
+
                             // Skip completely empty lines
                             if (line === '') continue;
-                            
+
                             // Check if line is already an HTML element
                             const isHtmlElement = line.startsWith('<') && line.includes('>');
-                            
+
                             if (isHtmlElement) {
                                 processedLines.push(line);
                             } else {
@@ -351,7 +351,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                 processedLines.push(`<p>${line}</p>`);
                             }
                         }
-                        
+
                         cleanContent = processedLines.join('');
 
                         // Replace entire content to prevent duplication
@@ -875,9 +875,9 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                                 min-height: 100%;
                                                 font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
                                             }
-                                            .ProseMirror p {
-                                                margin: 0.5em 0;
-                                                line-height: 1.75;
+                                             .ProseMirror p {
+                                                margin: 0.1em 0;
+                                                line-height: 1.5;
                                                 color: #1e293b;
                                                 font-size: 16px;
                                             }
@@ -887,9 +887,9 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             .ProseMirror h1 {
                                                 font-size: 2.25em;
                                                 font-weight: 700;
-                                                margin: 1.2em 0 0.5em 0;
+                                                margin: 0.8em 0 0.3em 0;
                                                 line-height: 1.2;
-                                                color: #0f172a;
+                                                color: #2563eb;
                                                 border-bottom: 3px solid #3b82f6;
                                                 padding-bottom: 0.3em;
                                             }
@@ -900,7 +900,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             .ProseMirror h2 {
                                                 font-size: 1.75em;
                                                 font-weight: 600;
-                                                margin: 1em 0 0.4em 0;
+                                                margin: 0.7em 0 0.3em 0;
                                                 line-height: 1.3;
                                                 color: #1e40af;
                                             }
@@ -910,7 +910,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             .ProseMirror h3 {
                                                 font-size: 1.4em;
                                                 font-weight: 600;
-                                                margin: 0.9em 0 0.3em 0;
+                                                margin: 0.6em 0 0.2em 0;
                                                 line-height: 1.4;
                                                 color: #2563eb;
                                             }
@@ -951,10 +951,10 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                                 list-style-type: decimal;
                                             }
                                             .ProseMirror li {
-                                                margin: 0.5em 0;
+                                                margin: 0.2em 0;
                                                 color: inherit;
                                                 display: list-item;
-                                                line-height: 1.7;
+                                                line-height: 1.5;
                                             }
                                             .ProseMirror strong {
                                                 font-weight: 700;
