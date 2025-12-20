@@ -433,21 +433,126 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                     <title>Document</title>
                     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
                     <style>
-                      body { font-family: Arial, sans-serif; padding: 20px; }
-                      .prose { max-width: 800px; margin: 0 auto; }
-                      img { max-width: 100%; height: auto; }
-                      table { border-collapse: collapse; width: 100%; }
-                      table td, table th { border: 1px solid #ddd; padding: 8px; }
+                      @page {
+                        margin: 1in;
+                      }
+                      body { 
+                        font-family: 'Segoe UI', -apple-system, sans-serif;
+                        padding: 40px;
+                        max-width: 800px;
+                        margin: 0 auto;
+                        background: white;
+                        color: #1e293b;
+                        line-height: 1.75;
+                      }
+                      h1 {
+                        font-size: 2.25em;
+                        font-weight: 700;
+                        margin: 1.2em 0 0.5em 0;
+                        line-height: 1.2;
+                        color: #0f172a;
+                        border-bottom: 3px solid #3b82f6;
+                        padding-bottom: 0.3em;
+                      }
+                      h2 {
+                        font-size: 1.75em;
+                        font-weight: 600;
+                        margin: 1em 0 0.4em 0;
+                        color: #1e40af;
+                      }
+                      h3 {
+                        font-size: 1.4em;
+                        font-weight: 600;
+                        margin: 0.9em 0 0.3em 0;
+                        color: #2563eb;
+                      }
+                      h4 {
+                        font-size: 1.2em;
+                        font-weight: 600;
+                        margin: 0.7em 0 0.3em 0;
+                        color: #3b82f6;
+                      }
+                      h5, h6 {
+                        font-size: 1.1em;
+                        font-weight: 600;
+                        margin: 0.6em 0 0.2em 0;
+                        color: #3b82f6;
+                      }
+                      p {
+                        margin: 0.75em 0;
+                        font-size: 16px;
+                      }
+                      ul, ol {
+                        padding-left: 2em;
+                        margin: 1em 0;
+                      }
+                      li {
+                        margin: 0.5em 0;
+                        line-height: 1.7;
+                      }
+                      strong {
+                        font-weight: 700;
+                        color: #0f172a;
+                      }
+                      em {
+                        font-style: italic;
+                      }
+                      table {
+                        border-collapse: collapse;
+                        width: 100%;
+                        margin: 1.5em 0;
+                      }
+                      table th {
+                        background: #eff6ff;
+                        color: #1e40af;
+                        font-weight: 600;
+                        padding: 8px;
+                        border: 1px solid #cbd5e1;
+                      }
+                      table td {
+                        border: 1px solid #cbd5e1;
+                        padding: 8px;
+                      }
+                      blockquote {
+                        border-left: 4px solid #3b82f6;
+                        padding-left: 1em;
+                        margin: 1em 0;
+                        color: #475569;
+                        font-style: italic;
+                      }
+                      code {
+                        background: #f1f5f9;
+                        color: #0f172a;
+                        padding: 0.2em 0.4em;
+                        border-radius: 3px;
+                        font-family: 'Consolas', monospace;
+                        font-size: 0.9em;
+                      }
+                      img {
+                        max-width: 100%;
+                        height: auto;
+                        margin: 1em 0;
+                      }
+                      .katex {
+                        font-size: 1.1em;
+                      }
+                      @media print {
+                        body {
+                          padding: 0;
+                        }
+                      }
                     </style>
                   </head>
                   <body>
-                    <div class="prose">${htmlContent}</div>
+                    ${htmlContent}
                     <script>
                       window.onload = function() {
-                        window.print();
-                        window.onafterprint = function() {
-                          window.close();
-                        };
+                        setTimeout(() => {
+                          window.print();
+                          window.onafterprint = function() {
+                            window.close();
+                          };
+                        }, 500);
                       };
                     </script>
                   </body>
@@ -462,20 +567,6 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
             }
         }, [editor]);
 
-        // Download as plain text
-        const downloadAsText = useCallback(() => {
-            if (!editor) return;
-
-            try {
-                const textContent = editor.getText();
-                const blob = new Blob([textContent], { type: 'text/plain' });
-                saveAs(blob, 'document.txt');
-                toast.success('Document downloaded as text file');
-            } catch (error) {
-                console.error('Error downloading text file:', error);
-                toast.error('Failed to download text file');
-            }
-        }, [editor]);
 
         // Handle text selection - send to chat input
         useEffect(() => {
@@ -538,9 +629,6 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                     <DropdownMenuItem onClick={downloadAsPDF}>
                                         Download as PDF
                                     </DropdownMenuItem>
-                                    {/* <DropdownMenuItem onClick={downloadAsText}>
-                                        Download as Text (.txt)
-                                    </DropdownMenuItem> */}
                                 </DropdownMenuContent>
                             </DropdownMenu>
                             <Button
