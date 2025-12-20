@@ -15,8 +15,9 @@ import { Table } from '@tiptap/extension-table';
 import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
+import Underline from '@tiptap/extension-underline';
 import { Button } from '@/components/ui/button';
-import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles } from 'lucide-react';
+import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline as UnderlineIcon, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles, Undo, Redo } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { useChat } from '@/lib/chat-context-integrated';
@@ -41,47 +42,78 @@ interface WordConnectorProps {
 
 import { Extension } from '@tiptap/core';
 
+// const FontSize = Extension.create({
+//     name: 'fontSize',
+//     addOptions() {
+//         return {
+//             types: ['textStyle'],
+//         };
+//     },
+//     addGlobalAttributes() {
+//         return [
+//             {
+//                 types: this.options.types,
+//                 attributes: {
+//                     fontSize: {
+//                         default: null,
+//                         parseHTML: element => element.style.fontSize.replace('px', ''),
+//                         renderHTML: attributes => {
+//                             if (!attributes.fontSize) {
+//                                 return {};
+//                             }
+//                             return {
+//                                 style: `font-size: ${attributes.fontSize}px`,
+//                             };
+//                         },
+//                     },
+//                 },
+//             },
+//         ];
+//     },
+//     addCommands() {
+//         return {
+//             setFontSize: fontSize => ({ chain }) => {
+//                 return chain()
+//                     .setMark('textStyle', { fontSize })
+//                     .run();
+//             },
+//             unsetFontSize: () => ({ chain }) => {
+//                 return chain()
+//                     .setMark('textStyle', { fontSize: null })
+//                     .removeEmptyTextStyle()
+//                     .run();
+//             },
+//         };
+//     },
+// });
+
+
 const FontSize = Extension.create({
     name: 'fontSize',
     addOptions() {
-        return {
-            types: ['textStyle'],
-        };
+        return { types: ['textStyle'] };
     },
     addGlobalAttributes() {
-        return [
-            {
-                types: this.options.types,
-                attributes: {
-                    fontSize: {
-                        default: null,
-                        parseHTML: element => element.style.fontSize.replace('px', ''),
-                        renderHTML: attributes => {
-                            if (!attributes.fontSize) {
-                                return {};
-                            }
-                            return {
-                                style: `font-size: ${attributes.fontSize}px`,
-                            };
-                        },
+        return [{
+            types: this.options.types,
+            attributes: {
+                fontSize: {
+                    default: null,
+                    parseHTML: element => element.style.fontSize,
+                    renderHTML: attributes => {
+                        if (!attributes.fontSize) return {};
+                        // Ensure we don't double px
+                        const val = attributes.fontSize.includes('px') ? attributes.fontSize : `${attributes.fontSize}px`;
+                        return { style: `font-size: ${val}` };
                     },
                 },
             },
-        ];
+        }];
     },
     addCommands() {
         return {
-            setFontSize: fontSize => ({ chain }) => {
-                return chain()
-                    .setMark('textStyle', { fontSize })
-                    .run();
-            },
-            unsetFontSize: () => ({ chain }) => {
-                return chain()
-                    .setMark('textStyle', { fontSize: null })
-                    .removeEmptyTextStyle()
-                    .run();
-            },
+            setFontSize: fontSize => ({ chain }) => chain().setMark('textStyle', { fontSize }).run(),
+            unsetFontSize: () => ({ chain }) => chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run(),
         };
     },
 });
@@ -105,6 +137,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         levels: [1, 2, 3, 4, 5, 6],
                     },
                 }),
+                Underline,
                 Mathematics.configure({
                     katexOptions: {
                         throwOnError: false,
@@ -149,10 +182,25 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 }),
                 Table.configure({
                     resizable: true,
+                    HTMLAttributes: {
+                        class: 'border-collapse table-auto w-full my-4',
+                    },
                 }),
-                TableRow,
-                TableHeader,
-                TableCell,
+                TableRow.configure({
+                    HTMLAttributes: {
+                        class: 'border border-zinc-300 dark:border-zinc-700',
+                    },
+                }),
+                TableHeader.configure({
+                    HTMLAttributes: {
+                        class: 'border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-2 font-bold text-left',
+                    },
+                }),
+                TableCell.configure({
+                    HTMLAttributes: {
+                        class: 'border border-zinc-300 dark:border-zinc-700 p-2',
+                    },
+                }),
             ],
             content: '',
             editorProps: {
@@ -260,22 +308,31 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                             return `<em>${text}</em>`;
                         });
 
-                        // Convert markdown lists
-                        cleanContent = cleanContent.replace(/^\* (.*$)/gim, '<ul><li>$1</li></ul>');
-                        cleanContent = cleanContent.replace(/^\- (.*$)/gim, '<ul><li>$1</li></ul>');
-                        cleanContent = cleanContent.replace(/^\d+\. (.*$)/gim, '<ol><li>$1</li></ol>');
+                        // Convert markdown tables to HTML tables
+                        // Simple parser for standard markdown tables
+                        cleanContent = cleanContent.replace(/\|(.+)\|\n\|( *:?-+:? *\|)+\n((?:\|.+?\|\n)+)/g, (match, header, separator, body) => {
+                            const headers = header.split('|').filter((cell: string) => cell.trim()).map((cell: string) => `<th>${cell.trim()}</th>`).join('');
+                            const rows = body.trim().split('\n').map((row: string) => {
+                                const cells = row.split('|').filter((cell: string) => cell.trim() || cell === '').map((cell: string) => `<td>${cell.trim()}</td>`).join('');
+                                return `<tr>${cells}</tr>`;
+                            }).join('');
+                            return `<table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
+                        });
 
-                        // Wrap paragraphs (but preserve math nodes and other block elements)
+                        // Convert markdown lists
+                        // A more robust way to handle paragraphs and lists to avoid extra spacing
+                        // Wrap non-empty lines in paragraph tags
                         const lines = cleanContent.split('\n');
                         const wrappedLines = lines.map(line => {
-                            line = line.trim();
-                            if (!line) return '<p><br></p>';
-                            if (line.startsWith('<h') || line.startsWith('<ul') || line.startsWith('<ol') || line.startsWith('<li') || line.startsWith('<div data-type="block-math"')) {
-                                return line;
+                            const trimmedLine = line.trim();
+                            if (trimmedLine === '') return ''; // Skip empty lines completely
+                            if (trimmedLine.startsWith('<h') || trimmedLine.startsWith('<ul') || trimmedLine.startsWith('<ol') || trimmedLine.startsWith('<li') || trimmedLine.startsWith('<div') || trimmedLine.startsWith('<table') || trimmedLine.startsWith('<thead') || trimmedLine.startsWith('<tbody') || trimmedLine.startsWith('<tr') || trimmedLine.startsWith('<td') || trimmedLine.startsWith('<th')) {
+                                return trimmedLine;
                             }
-                            return `<p>${line}</p>`;
+                            // Add some styling to paragraphs to control spacing
+                            return `<p style="margin-bottom: 0.5em; line-height: 1.5;">${trimmedLine}</p>`;
                         });
-                        cleanContent = wrappedLines.join('');
+                        cleanContent = wrappedLines.filter(line => line !== '').join('');
 
                         // Check if editor already has content
                         const isEditorEmpty = editor.isEmpty;
@@ -447,7 +504,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 {/* Header with Toolbar */}
                 <div className="flex flex-col border-b border-border/40 bg-white dark:bg-zinc-900">
                     <div className="flex items-center justify-between p-3 border-b border-border/40">
-                        <h3 className="font-semibold text-base">New Word Document</h3>
+                        <h3 className="font-semibold text-base">Nuevo Documento Word</h3>
                         <div className="flex items-center gap-2">
                             {isGenerating && (
                                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -459,7 +516,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                 <DropdownMenuTrigger asChild>
                                     <Button size="sm" variant="outline" className="h-8">
                                         <Download className="h-3 w-3 mr-1" />
-                                        Download
+                                        Descargar
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end">
@@ -474,37 +531,37 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                     </DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
-                            {/* <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => setIsCollapsed(!isCollapsed)}
-                                className="h-8 w-8 p-0"
-                            >
-                                {isCollapsed ? (
-                                    <Maximize2 className="h-4 w-4" />
-                                ) : (
-                                    <Minimize2 className="h-4 w-4" />
-                                )}
-                            </Button> */}
-                            {/* <Button
+                            <Button
                                 size="sm"
                                 variant="ghost"
                                 onClick={onClose}
                                 className="h-8 w-8 p-0"
                             >
                                 <X className="h-4 w-4" />
-                            </Button> */}
+                            </Button>
                         </div>
                     </div>
 
                     {/* Toolbar */}
                     {!isCollapsed && (
                         <div className="flex items-center gap-1 p-2 border-b border-border/40 bg-white dark:bg-zinc-900">
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => editor.chain().focus().undo().run()}>
+                                <Undo className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => editor.chain().focus().redo().run()}>
+                                <Redo className="h-4 w-4" />
+                            </Button>
+                            <div className="w-px h-6 bg-border mx-1" />
                             {/* Text Style Dropdown */}
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                     <Button variant="ghost" size="sm" className="h-8 px-3">
-                                        <span className="text-xs">Normal Text</span>
+                                        <span className="text-xs">
+                                            {editor.isActive('heading', { level: 1 }) ? 'Heading 1' :
+                                                editor.isActive('heading', { level: 2 }) ? 'Heading 2' :
+                                                    editor.isActive('heading', { level: 3 }) ? 'Heading 3' :
+                                                        'Normal Text'}
+                                        </span>
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent>
@@ -529,7 +586,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                     <Button variant="ghost" size="sm" className="h-8 px-3">
-                                        <span className="text-xs">Inter</span>
+                                        <span className="text-xs">{editor.getAttributes('textStyle').fontFamily || 'Inter'}</span>
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent>
@@ -544,7 +601,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                     <Button variant="ghost" size="sm" className="h-8 px-3">
-                                        <span className="text-xs">12</span>
+                                        <span className="text-xs">{editor.getAttributes('textStyle').fontSize ? editor.getAttributes('textStyle').fontSize.replace('px', '') : '12'}</span>
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent>
@@ -581,7 +638,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                 className={`h-8 w-8 p-0 ${editor.isActive('underline') ? 'bg-muted' : ''}`}
                                 onClick={() => editor.chain().focus().toggleUnderline().run()}
                             >
-                                <Underline className="h-4 w-4" />
+                                <UnderlineIcon className="h-4 w-4" />
                             </Button>
                             <Button
                                 variant="ghost"
@@ -654,14 +711,11 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 {/* Editor Content */}
                 {!isCollapsed && (
                     <div className="relative flex-1 min-h-0 overflow-hidden">
-                        <ScrollArea className="h-full bg-[#F3F4F6] dark:bg-zinc-950">
+                        <ScrollArea className="h-full bg-[#F1F1EF] dark:bg-zinc-950">
                             <div className={isBusy ? 'pointer-events-none select-none opacity-60 blur-[1px]' : ''} aria-busy={isBusy}>
                                 <div className="flex justify-center p-8 min-h-full">
                                     <div
-                                        className="bg-white dark:bg-zinc-900 shadow-sm w-full max-w-[816px] min-h-[1056px] p-16 rounded-sm border border-zinc-200 dark:border-zinc-800 mx-auto transition-shadow hover:shadow-md"
-                                        style={{
-                                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)'
-                                        }}
+                                        className="bg-[#F9F9F7] dark:bg-zinc-900 shadow-lg w-full max-w-[816px] min-h-[1056px] p-16 rounded-sm"
                                     >
                                         <EditorContent editor={editor} />
                                     </div>
