@@ -1926,16 +1926,50 @@ But first, you need to connect your Spotify account securely using the button be
 
       // Auto-open Word Connector for Word Connector chats
      if (currentChat && (currentChat as any).isWordConnectorChat) {
+      console.log('📄 Word Connector chat detected:', currentChat.id);
+      console.log('📄 Has wordContent:', !!(currentChat as any).wordContent);
+      console.log('📄 wordContent length:', (currentChat as any).wordContent?.length);
+      
       setIsWordConnectorActive(true);
       
       // Load existing Word content if available
-      if ((currentChat as any).wordContent && wordConnectorRef.current) {
+      if ((currentChat as any).wordContent) {
+        console.log('📄 Attempting to load Word content into editor...');
+        // Wait longer for editor to be ready
         setTimeout(() => {
-          wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
-        }, 100);
+          if (wordConnectorRef.current) {
+            console.log('📄 Ref is ready, updating content...');
+            wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
+          } else {
+            console.warn('📄 WordConnector ref not ready yet');
+          }
+        }, 500); // Increased timeout for editor initialization
       }
     }
   }, [currentChat?.id]);
+
+  // Additional effect: Load content when Word Connector becomes active and ref is ready
+  React.useEffect(() => {
+    if (isWordConnectorActive && currentChat && (currentChat as any).isWordConnectorChat && (currentChat as any).wordContent) {
+      console.log('📄 Word Connector active, checking if ref is ready...');
+      // Try loading content when panel becomes active
+      const loadContent = () => {
+        if (wordConnectorRef.current) {
+          console.log('📄 Loading content into active Word Connector...');
+          wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
+          return true;
+        }
+        return false;
+      };
+
+      // Try immediately
+      if (!loadContent()) {
+        // If not ready, try again after a short delay
+        const timer = setTimeout(loadContent, 300);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [isWordConnectorActive, currentChat?.id]);
 
   React.useEffect(() => {
     if (currentChat || chatCreationInitiated.current) {
