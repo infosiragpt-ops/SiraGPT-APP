@@ -1457,7 +1457,8 @@ function ChatInterfaceContent() {
     setIsComputerUseActive(newState);
   };
 
-  const handleWordConnectorToggle = () => {
+   const handleWordConnectorToggle = async () => {
+    console.log("Toggling Word Connector");
     const newState = !isWordConnectorActive;
 
     if (newState) {
@@ -1471,6 +1472,20 @@ function ChatInterfaceContent() {
       setIsSpotifyActive(false);
       setIsComputerUseActive(false);
       setChatType('text');
+
+      // If toggling on while a chat is already selected, create/select
+      // a dedicated chat for the Word Connector so we don't reuse
+      // the existing conversation.
+      if (currentChat) {
+        try {
+          const newChat = await createNewChat('text', undefined, undefined, { skipInitialProcessing: true });
+          if (newChat?.id) {
+            await selectChat(newChat.id);
+          }
+        } catch (err) {
+          console.error('Failed to create/select Word Connector chat', err);
+        }
+      }
     } else {
       setChatType('text');
     }
@@ -1891,6 +1906,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
       setIsComputerUseActive(false);
+      setIsWordConnectorActive(false);
       setChatType('text'); // Always default to text when switching chats
 
       // Clear Computer Use reasoning when switching chats
@@ -2151,16 +2167,15 @@ But first, you need to connect your Spotify account securely using the button be
       try {
         setIsGeneratingWord(true);
 
-        // Create or get chat
+        // Create or get chat (IMPORTANT: do NOT trigger generic AI generation here)
         let activeChat = currentChat;
         if (!activeChat) {
-          const response = await createNewChat('text', msg);
-          activeChat = response.chat;
-          await selectChat(activeChat?.id ?? "");
-          // Wait a bit for chat to be set
-          await new Promise(resolve => setTimeout(resolve, 100));
-          // Re-fetch to get updated chat
-          activeChat = currentChat || activeChat;
+          const newChat = await createNewChat('text', msg, undefined, { skipInitialProcessing: true });
+          activeChat = (newChat as any) || currentChat;
+
+          if (activeChat?.id) {
+            await selectChat(activeChat.id);
+          }
         }
 
         // Add user message to chat for display
@@ -4033,6 +4048,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                               handleGoogleDriveToggle={handleGoogleDriveToggle}
                               handleSpotifyToggle={handleSpotifyToggle}
+                              handleWordConnectorToggle={handleWordConnectorToggle}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
@@ -4173,6 +4189,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             onClose={() => setIsWordConnectorActive(false)}
             selectedModel={selectedModel}
             selectProvider={selectProvider}
+            isGeneratingExternal={isGeneratingWord}
             onTextSelected={(text) => {
               // Set selected text to chat input
               setInput(text);

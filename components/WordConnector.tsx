@@ -36,6 +36,7 @@ interface WordConnectorProps {
     onGenerateContent?: (content: string) => void;
     isFullPage?: boolean;
     onTextSelected?: (text: string) => void; // Callback to send selected text to chat
+    isGeneratingExternal?: boolean; // When chat triggers generation, show loader overlay
 }
 
 import { Extension } from '@tiptap/core';
@@ -86,11 +87,13 @@ const FontSize = Extension.create({
 });
 
 export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void }, WordConnectorProps>(
-    function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false, onTextSelected }, ref) {
+    function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false, onTextSelected, isGeneratingExternal = false }, ref) {
         const [isGenerating, setIsGenerating] = useState(false);
         const [isCollapsed, setIsCollapsed] = useState(false);
         const { currentChat } = useChat();
         const { user } = useAuth();
+
+        const isBusy = isGenerating || isGeneratingExternal;
 
         // Initialize Tiptap editor with all extensions
         const editor = useEditor({
@@ -412,7 +415,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
         }
 
         return (
-            <div className={`flex flex-col h-full bg-background border-l border-border/40 transition-all duration-300 ${isCollapsed ? 'w-0' : (isFullPage ? 'w-full' : 'w-[60%]')}`}>
+            <div className={`flex flex-col h-full min-h-0 bg-background border-l border-border/40 transition-all duration-300 ${isCollapsed ? 'w-0' : (isFullPage ? 'w-full' : 'w-[60%]')}`}>
                 {/* Header with Toolbar */}
                 <div className="flex flex-col border-b border-border/40 bg-white dark:bg-zinc-900">
                     <div className="flex items-center justify-between p-3 border-b border-border/40">
@@ -443,7 +446,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                     </DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
-                            <Button
+                            {/* <Button
                                 size="sm"
                                 variant="ghost"
                                 onClick={() => setIsCollapsed(!isCollapsed)}
@@ -454,15 +457,15 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                 ) : (
                                     <Minimize2 className="h-4 w-4" />
                                 )}
-                            </Button>
-                            <Button
+                            </Button> */}
+                            {/* <Button
                                 size="sm"
                                 variant="ghost"
                                 onClick={onClose}
                                 className="h-8 w-8 p-0"
                             >
                                 <X className="h-4 w-4" />
-                            </Button>
+                            </Button> */}
                         </div>
                     </div>
 
@@ -622,18 +625,31 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
 
                 {/* Editor Content */}
                 {!isCollapsed && (
-                    <ScrollArea className="flex-1 bg-[#F3F4F6] dark:bg-zinc-950">
-                        <div className="flex justify-center p-8 min-h-full">
-                            <div
-                                className="bg-white dark:bg-zinc-900 shadow-sm w-full max-w-[816px] min-h-[1056px] p-16 rounded-sm border border-zinc-200 dark:border-zinc-800 mx-auto transition-shadow hover:shadow-md"
-                                style={{
-                                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)'
-                                }}
-                            >
-                                <EditorContent editor={editor} />
+                    <div className="relative flex-1 min-h-0 overflow-hidden">
+                        <ScrollArea className="h-full bg-[#F3F4F6] dark:bg-zinc-950">
+                            <div className={isBusy ? 'pointer-events-none select-none opacity-60 blur-[1px]' : ''} aria-busy={isBusy}>
+                                <div className="flex justify-center p-8 min-h-full">
+                                    <div
+                                        className="bg-white dark:bg-zinc-900 shadow-sm w-full max-w-[816px] min-h-[1056px] p-16 rounded-sm border border-zinc-200 dark:border-zinc-800 mx-auto transition-shadow hover:shadow-md"
+                                        style={{
+                                            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)'
+                                        }}
+                                    >
+                                        <EditorContent editor={editor} />
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                    </ScrollArea>
+                        </ScrollArea>
+
+                        {isBusy && (
+                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm">
+                                <div className="flex items-center gap-2 text-sm text-foreground">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span>Generating document…</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 )}
             </div>
         );

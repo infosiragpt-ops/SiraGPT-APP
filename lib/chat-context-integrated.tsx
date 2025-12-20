@@ -102,7 +102,12 @@ interface ChatContextType {
   chats: Chat[]
   currentChat: Chat | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
-  createNewChat: (type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis', initialContent?: string, initialFiles?: string[]) => Promise<any>
+  createNewChat: (
+    type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
+    initialContent?: string,
+    initialFiles?: string[],
+    options?: { skipInitialProcessing?: boolean }
+  ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
@@ -660,7 +665,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const createNewChat = useCallback(async (type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text', initialContent?: string, initialFiles?: string[]) => {
+  const createNewChat = useCallback(async (
+    type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
+    initialContent?: string,
+    initialFiles?: string[],
+    options?: { skipInitialProcessing?: boolean }
+  ) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
     try {
@@ -676,7 +686,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setCurrentChat(newChat);
       setUploadedFiles([]);
 
-      if (initialContent) {
+      if (initialContent && !options?.skipInitialProcessing) {
         try {
           switch (type) {
             case 'image':
