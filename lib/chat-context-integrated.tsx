@@ -106,7 +106,7 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     initialContent?: string,
     initialFiles?: string[],
-    options?: { skipInitialProcessing?: boolean }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean) => Promise<void>
@@ -669,7 +669,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: string[],
-    options?: { skipInitialProcessing?: boolean }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean }
   ) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
@@ -677,6 +677,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const response = await apiClient.createChat({
         title: initialContent ? initialContent.substring(0, 30) : "New Chat",
         model: selectedModel,
+        isWordConnectorChat: options?.isWordConnectorChat || false,
       });
       const newChat = response.chat;
       newChat.messages = [];

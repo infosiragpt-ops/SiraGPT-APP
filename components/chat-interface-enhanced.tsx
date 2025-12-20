@@ -1478,7 +1478,10 @@ function ChatInterfaceContent() {
       // the existing conversation.
       if (currentChat) {
         try {
-          const newChat = await createNewChat('text', undefined, undefined, { skipInitialProcessing: true });
+          const newChat = await createNewChat('text', undefined, undefined, { 
+            skipInitialProcessing: true,
+            isWordConnectorChat: true 
+          });
           if (newChat?.id) {
             await selectChat(newChat.id);
           }
@@ -1915,6 +1918,20 @@ But first, you need to connect your Spotify account securely using the button be
     prevChatIdRef.current = currentChat?.id;
   }, [currentChat?.id, clearReasoning]); // Only trigger when chat ID changes
 
+  // Auto-open Word Connector for Word Connector chats
+  React.useEffect(() => {
+    if (currentChat && (currentChat as any).isWordConnectorChat) {
+      setIsWordConnectorActive(true);
+      
+      // Load existing Word content if available
+      if ((currentChat as any).wordContent && wordConnectorRef.current) {
+        setTimeout(() => {
+          wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
+        }, 100);
+      }
+    }
+  }, [currentChat?.id]);
+
   React.useEffect(() => {
     setShowAudioPanel(false);
     setDocumentPreviewUrl(null)
@@ -2170,7 +2187,10 @@ But first, you need to connect your Spotify account securely using the button be
         // Create or get chat (IMPORTANT: do NOT trigger generic AI generation here)
         let activeChat = currentChat;
         if (!activeChat) {
-          const newChat = await createNewChat('text', msg, undefined, { skipInitialProcessing: true });
+          const newChat = await createNewChat('text', msg, undefined, { 
+            skipInitialProcessing: true,
+            isWordConnectorChat: true 
+          });
           activeChat = (newChat as any) || currentChat;
 
           if (activeChat?.id) {

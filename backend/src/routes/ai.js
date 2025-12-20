@@ -3569,6 +3569,12 @@ Generate a complete, professional document based on the user's request.`;
       if (chatId && fullResponseContent.trim()) {
         const tokens = fullResponseContent.length + prompt.length;
         await saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
+        
+        // Update chat with Word content
+        await prisma.chat.update({
+          where: { id: chatId },
+          data: { wordContent: fullResponseContent }
+        });
       }
 
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);

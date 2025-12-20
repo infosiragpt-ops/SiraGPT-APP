@@ -112,7 +112,7 @@ class ApiClient {
     return this.request(`/chats${query ? `?${query}` : ''}`);
   }
 
-  async createChat(data: { title: string; model: string }) {
+  async createChat(data: { title: string; model: string; isWordConnectorChat?: boolean }) {
     return this.request('/chats', {
       method: 'POST',
       body: JSON.stringify(data),
