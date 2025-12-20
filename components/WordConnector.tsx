@@ -10,6 +10,7 @@ import Color from '@tiptap/extension-color';
 import TextAlign from '@tiptap/extension-text-align';
 import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
+import FontFamily from '@tiptap/extension-font-family';
 import { Table } from '@tiptap/extension-table';
 import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
@@ -24,17 +25,65 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { saveAs } from 'file-saver';
-import 'katex/dist/katex.min.css';
+ 
 
 interface WordConnectorProps {
     onClose: () => void;
     selectedModel: string;
     selectProvider: string;
     onGenerateContent?: (content: string) => void;
+    isFullPage?: boolean;
 }
 
+import { Extension } from '@tiptap/core';
+
+const FontSize = Extension.create({
+    name: 'fontSize',
+    addOptions() {
+        return {
+            types: ['textStyle'],
+        };
+    },
+    addGlobalAttributes() {
+        return [
+            {
+                types: this.options.types,
+                attributes: {
+                    fontSize: {
+                        default: null,
+                        parseHTML: element => element.style.fontSize.replace('px', ''),
+                        renderHTML: attributes => {
+                            if (!attributes.fontSize) {
+                                return {};
+                            }
+                            return {
+                                style: `font-size: ${attributes.fontSize}px`,
+                            };
+                        },
+                    },
+                },
+            },
+        ];
+    },
+    addCommands() {
+        return {
+            setFontSize: fontSize => ({ chain }) => {
+                return chain()
+                    .setMark('textStyle', { fontSize })
+                    .run();
+            },
+            unsetFontSize: () => ({ chain }) => {
+                return chain()
+                    .setMark('textStyle', { fontSize: null })
+                    .removeEmptyTextStyle()
+                    .run();
+            },
+        };
+    },
+});
+
 export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void }, WordConnectorProps>(
-    function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent }, ref) {
+    function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false }, ref) {
         const [isGenerating, setIsGenerating] = useState(false);
         const [isCollapsed, setIsCollapsed] = useState(false);
         const { currentChat } = useChat();
@@ -71,9 +120,11 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                     },
                 }),
                 Placeholder.configure({
-                    placeholder: 'Comienza a escribir tu documento aquí...',
+                    placeholder: 'Start writing your document here...',
                 }),
                 TextStyle,
+                FontFamily,
+                FontSize,
                 Color,
                 TextAlign.configure({
                     types: ['heading', 'paragraph'],
@@ -99,7 +150,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
             content: '',
             editorProps: {
                 attributes: {
-                    class: 'min-h-[500px] p-6 focus:outline-none',
+                    class: 'focus:outline-none w-full h-full text-zinc-900 dark:text-zinc-100',
                 },
             },
             onCreate: ({ editor: currentEditor }) => {
@@ -337,34 +388,34 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
         }
 
         return (
-            <div className={`flex flex-col h-full bg-background border-l border-border/40 transition-all duration-300 ${isCollapsed ? 'w-0' : 'w-[60%]'}`}>
+            <div className={`flex flex-col h-full bg-background border-l border-border/40 transition-all duration-300 ${isCollapsed ? 'w-0' : (isFullPage ? 'w-full' : 'w-[60%]')}`}>
                 {/* Header with Toolbar */}
-                <div className="flex flex-col border-b border-border/40 bg-muted/30">
+                <div className="flex flex-col border-b border-border/40 bg-white dark:bg-zinc-900">
                     <div className="flex items-center justify-between p-3 border-b border-border/40">
-                        <h3 className="font-semibold text-base">Nuevo Documento Word</h3>
+                        <h3 className="font-semibold text-base">New Word Document</h3>
                         <div className="flex items-center gap-2">
                             {isGenerating && (
                                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                     <Loader2 className="h-3 w-3 animate-spin" />
-                                    <span>Generando...</span>
+                                    <span>Generating...</span>
                                 </div>
                             )}
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                     <Button size="sm" variant="outline" className="h-8">
                                         <Download className="h-3 w-3 mr-1" />
-                                        Descargar
+                                        Download
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end">
                                     <DropdownMenuItem onClick={downloadAsWord}>
-                                        Descargar como Word (.docx)
+                                        Download as Word (.docx)
                                     </DropdownMenuItem>
                                     <DropdownMenuItem onClick={downloadAsPDF}>
-                                        Descargar como PDF
+                                        Download as PDF
                                     </DropdownMenuItem>
                                     <DropdownMenuItem onClick={downloadAsText}>
-                                        Descargar como Texto (.txt)
+                                        Download as Text (.txt)
                                     </DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
@@ -393,26 +444,26 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
 
                     {/* Toolbar */}
                     {!isCollapsed && (
-                        <div className="flex items-center gap-1 p-2 border-b border-border/40 bg-background">
+                        <div className="flex items-center gap-1 p-2 border-b border-border/40 bg-white dark:bg-zinc-900">
                             {/* Text Style Dropdown */}
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                     <Button variant="ghost" size="sm" className="h-8 px-3">
-                                        <span className="text-xs">Texto Normal</span>
+                                        <span className="text-xs">Normal Text</span>
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent>
                                     <DropdownMenuItem onClick={() => editor.chain().focus().setParagraph().run()}>
-                                        Texto Normal
+                                        Normal Text
                                     </DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}>
-                                        Título 1
+                                        Heading 1
                                     </DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
-                                        Título 2
+                                        Heading 2
                                     </DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>
-                                        Título 3
+                                        Heading 3
                                     </DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
@@ -427,10 +478,10 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent>
-                                    <DropdownMenuItem>Inter</DropdownMenuItem>
-                                    <DropdownMenuItem>Arial</DropdownMenuItem>
-                                    <DropdownMenuItem>Times New Roman</DropdownMenuItem>
-                                    <DropdownMenuItem>Calibri</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Inter').run()}>Inter</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Arial').run()}>Arial</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Times New Roman').run()}>Times New Roman</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Calibri').run()}>Calibri</DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
 
@@ -547,9 +598,16 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
 
                 {/* Editor Content */}
                 {!isCollapsed && (
-                    <ScrollArea className="flex-1">
-                        <div className="p-6 bg-white dark:bg-gray-900 min-h-full">
-                            <EditorContent editor={editor} />
+                    <ScrollArea className="flex-1 bg-[#F3F4F6] dark:bg-zinc-950">
+                        <div className="flex justify-center p-8 min-h-full">
+                            <div
+                                className="bg-white dark:bg-zinc-900 shadow-sm w-full max-w-[816px] min-h-[1056px] p-16 rounded-sm border border-zinc-200 dark:border-zinc-800 mx-auto transition-shadow hover:shadow-md"
+                                style={{
+                                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)'
+                                }}
+                            >
+                                <EditorContent editor={editor} />
+                            </div>
                         </div>
                     </ScrollArea>
                 )}
