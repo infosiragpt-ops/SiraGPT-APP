@@ -3568,12 +3568,13 @@ Generate a complete, professional document based on the user's request.`;
       // Save chat and track usage
       if (chatId && fullResponseContent.trim()) {
         const tokens = fullResponseContent.length + prompt.length;
-        await saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
-        
+        // Don't save the full content to the message, just a confirmation.
+        await saveChatAndTrackUsage(userId, chatId, prompt, "The document has been generated in the Word Connector.", tokens, model, processedFiles);
+
         // Update chat with Word content
         await prisma.chat.update({
           where: { id: chatId },
-          data: { wordContent: fullResponseContent }
+          data: { wordContent: fullResponseContent, isWordConnectorChat: true }
         });
       }
 

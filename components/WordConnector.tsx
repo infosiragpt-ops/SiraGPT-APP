@@ -86,10 +86,11 @@ const FontSize = Extension.create({
     },
 });
 
-export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void }, WordConnectorProps>(
+export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; }, WordConnectorProps>(
     function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false, onTextSelected, isGeneratingExternal = false }, ref) {
         const [isGenerating, setIsGenerating] = useState(false);
         const [isCollapsed, setIsCollapsed] = useState(false);
+        const selectionRef = useRef<{ from: number; to: number } | null>(null);
         const { currentChat } = useChat();
         const { user } = useAuth();
 
@@ -276,8 +277,20 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         });
                         cleanContent = wrappedLines.join('');
 
-                        // Set content in editor
-                        editor.commands.setContent(cleanContent);
+                        // Check if editor already has content
+                        const isEditorEmpty = editor.isEmpty;
+
+                        if (isEditorEmpty) {
+                            // If editor is empty, set content normally
+                            editor.commands.setContent(cleanContent);
+                        } else {
+                            // If editor has content, move to end and append new content
+                            editor.chain()
+                                .focus('end') // Move cursor to the end
+                                .insertContent('<p><br></p>') // Add spacing
+                                .insertContent(cleanContent) // Append new content
+                                .run();
+                        }
 
                         // After setting content, migrate any remaining LaTeX strings
                         setTimeout(() => {
@@ -287,9 +300,23 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         }, 100);
                     } catch (error) {
                         console.error('Error updating editor content:', error);
-                        // Fallback: set as plain text
-                        editor.commands.setContent(`<p>${content}</p>`);
+                        // Fallback: append as plain text
+                        if (!editor.isEmpty) {
+                            editor.chain().focus('end').insertContent(`<p>${content}</p>`).run();
+                        } else {
+                            editor.commands.setContent(`<p>${content}</p>`);
+                        }
                     }
+                }
+            },
+            replaceSelection: (content: string) => {
+                if (editor && content && selectionRef.current) {
+                    const { from, to } = selectionRef.current;
+                    editor.chain().focus()
+                        .setTextSelection({ from, to })
+                        .insertContent(content)
+                        .run();
+                    selectionRef.current = null;
                 }
             }
         }), [editor]);
@@ -390,12 +417,13 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
             if (!editor || !onTextSelected) return;
 
             const handleUpdate = () => {
-                const { from, to } = editor.state.selection;
-                const selectedText = editor.state.doc.textBetween(from, to, ' ');
-
-                if (selectedText && selectedText.trim().length > 0) {
-                    // Send selected text to chat input
-                    onTextSelected(selectedText.trim());
+                const { from, to, empty } = editor.state.selection;
+                if (!empty) {
+                    selectionRef.current = { from, to };
+                    const selectedText = editor.state.doc.textBetween(from, to, ' ');
+                    if (selectedText.trim().length > 0) {
+                        onTextSelected(selectedText.trim());
+                    }
                 }
             };
 

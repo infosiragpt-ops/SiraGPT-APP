@@ -91,6 +91,27 @@ import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
 import { WordConnector } from "./WordConnector"
 
+// Selected Text Display Component
+const SelectedTextDisplay = ({ text, onClear }: { text: string | null; onClear: () => void; }) => {
+  if (!text) return null;
+  return (
+    <div className="px-3 pt-3">
+      <div className="relative rounded-lg border bg-muted/30 p-3">
+        <div className="text-xs font-semibold mb-1 text-muted-foreground">AI Rewrite</div>
+        <p className="text-sm pr-8 max-h-24 overflow-y-auto">{text}</p>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="absolute top-1 right-1 h-6 w-6 p-0 rounded-full"
+          onClick={onClear}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 
 // Enhanced Actions Dropdown Component
 const ActionsDropdown = ({
@@ -1325,7 +1346,9 @@ function ChatInterfaceContent() {
   const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
   const [isWordConnectorActive, setIsWordConnectorActive] = React.useState(false);
   const [isGeneratingWord, setIsGeneratingWord] = React.useState(false);
-  const wordConnectorRef = React.useRef<{ updateContent: (content: string) => void } | null>(null);
+  const wordConnectorRef = React.useRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; } | null>(null);
+  const [selectedWordText, setSelectedWordText] = React.useState<string | null>(null);
+  const [isRewriting, setIsRewriting] = React.useState(false);
 
   // Computer Use hook
   const {
@@ -1457,7 +1480,7 @@ function ChatInterfaceContent() {
     setIsComputerUseActive(newState);
   };
 
-   const handleWordConnectorToggle = async () => {
+  const handleWordConnectorToggle = async () => {
     console.log("Toggling Word Connector");
     const newState = !isWordConnectorActive;
 
@@ -1478,9 +1501,9 @@ function ChatInterfaceContent() {
       // the existing conversation.
       if (currentChat) {
         try {
-          const newChat = await createNewChat('text', undefined, undefined, { 
+          const newChat = await createNewChat('text', undefined, undefined, {
             skipInitialProcessing: true,
-            isWordConnectorChat: true 
+            isWordConnectorChat: true
           });
           if (newChat?.id) {
             await selectChat(newChat.id);
@@ -1924,14 +1947,44 @@ But first, you need to connect your Spotify account securely using the button be
     setDocumentPreviewUrl(null)
     setSplitViewContent(null)
 
-      // Auto-open Word Connector for Word Connector chats
-     if (currentChat && (currentChat as any).isWordConnectorChat) {
+    // Auto-open Word Connector for Word Connector chats
+    if (currentChat && (currentChat as any).isWordConnectorChat) {
       console.log('📄 Word Connector chat detected:', currentChat.id);
       console.log('📄 Has wordContent:', !!(currentChat as any).wordContent);
       console.log('📄 wordContent length:', (currentChat as any).wordContent?.length);
-      
+
       setIsWordConnectorActive(true);
-      
+
+      // Load existing Word content if available
+      if ((currentChat as any).wordContent) {
+        console.log('📄 Attempting to load Word content into editor...');
+        // Wait longer for editor to be ready
+        setTimeout(() => {
+          if (wordConnectorRef.current) {
+            console.log('📄 Ref is ready, updating content...');
+            wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
+          } else {
+            console.warn('📄 WordConnector ref not ready yet');
+          }
+        }, 500); // Increased timeout for editor initialization
+      }
+    }
+  }, [currentChat?.id]);
+
+  // Additional effect: Load content when Word Connector becomes active and ref is ready
+  React.useEffect(() => {
+    setShowAudioPanel(false);
+    setDocumentPreviewUrl(null)
+    setSplitViewContent(null)
+
+    // Auto-open Word Connector for Word Connector chats
+    if (currentChat && (currentChat as any).isWordConnectorChat) {
+      console.log('📄 Word Connector chat detected:', currentChat.id);
+      console.log('📄 Has wordContent:', !!(currentChat as any).wordContent);
+      console.log('📄 wordContent length:', (currentChat as any).wordContent?.length);
+
+      setIsWordConnectorActive(true);
+
       // Load existing Word content if available
       if ((currentChat as any).wordContent) {
         console.log('📄 Attempting to load Word content into editor...');
@@ -2201,9 +2254,48 @@ But first, you need to connect your Spotify account securely using the button be
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord) return;
-
     const msg = input.trim();
+    if (!msg || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isRewriting) return;
+
+    // Handle rewrite request
+    if (selectedWordText) {
+      setIsRewriting(true);
+      setInput("");
+
+      const rewritePrompt = `Rewrite the following text based on the command. Only return the rewritten text.\n\nCommand: "${msg}"\n\nText to rewrite: "${selectedWordText}"`;
+
+      let accumulatedContent = '';
+      const streamId = crypto.randomUUID();
+
+      await apiClient.generateAIStream(
+        {
+          provider: selectProvider,
+          model: selectedModel,
+          prompt: rewritePrompt,
+          chatId: currentChat?.id,
+          streamId,
+          regenerate: false,
+        },
+        (chunk) => {
+          accumulatedContent += chunk;
+        },
+        () => {
+          // Stream is complete, replace the text in the editor
+          if (wordConnectorRef.current) {
+            wordConnectorRef.current.replaceSelection(accumulatedContent);
+          }
+          setIsRewriting(false);
+          setSelectedWordText(null); // Clear the selection display
+          toast.success('Text has been rewritten.');
+        },
+        (error) => {
+          console.error('Rewrite error:', error);
+          toast.error(error.message || 'Failed to rewrite text.');
+          setIsRewriting(false);
+        }
+      );
+      return; // Stop further execution
+    }
     const filesToSend = [...uploadedFiles];
     setInput("");
     setUploadedFiles([]);
@@ -2220,9 +2312,9 @@ But first, you need to connect your Spotify account securely using the button be
         // Create or get chat (IMPORTANT: do NOT trigger generic AI generation here)
         let activeChat = currentChat;
         if (!activeChat) {
-          const newChat = await createNewChat('text', msg, undefined, { 
+          const newChat = await createNewChat('text', msg, undefined, {
             skipInitialProcessing: true,
-            isWordConnectorChat: true 
+            isWordConnectorChat: true
           });
           activeChat = (newChat as any) || currentChat;
 
@@ -3712,6 +3804,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         removeFile={removeFile}
                         uploadProgress={uploadProgress}
                       />
+                      <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                       <Textarea
                         ref={textareaRef}
                         value={input}
@@ -3834,7 +3927,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             />
                             <Button
                               onClick={handleSend}
-                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify}
+                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isRewriting}
                               size="sm"
                               className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                             >
@@ -4029,6 +4122,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             removeFile={removeFile}
                             uploadProgress={uploadProgress}
                           />
+                          <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                           <Textarea
                             ref={textareaRef}
                             value={input}
@@ -4151,7 +4245,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 />
                                 <Button
                                   onClick={handleSend}
-                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord}
+                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isRewriting}
                                   size="sm"
                                   className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                                 >
@@ -4244,12 +4338,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             selectProvider={selectProvider}
             isGeneratingExternal={isGeneratingWord}
             onTextSelected={(text) => {
-              // Set selected text to chat input
-              setInput(text);
-              // Focus on textarea
-              if (textareaRef.current) {
-                textareaRef.current.focus();
-              }
+              setSelectedWordText(text);
             }}
           />
         )}

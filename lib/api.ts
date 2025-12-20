@@ -1439,13 +1439,20 @@ class ApiClient {
     return this.request(`/thesis/status/${sessionId}`);
   }
 
+  async updateWordContent(chatId: string, content: string) {
+    return this.request(`/chats/${chatId}/word-content`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    });
+  }
+
   async downloadThesis(sessionId: string) {
     const url = `${this.baseURL}/thesis/download/${sessionId}`;
     const headers = new Headers();
     if (this.token) {
       headers.set('Authorization', `Bearer ${this.token}`);
     }
-    
+
     const response = await fetch(url, {
       method: 'GET',
       headers,
