@@ -7,6 +7,7 @@ import { AuthProvider } from "@/lib/auth-context-integrated"
 import { Toaster } from "@/components/ui/sonner"
 import { AppWrapper } from "@/components/app-wrapper"
 import 'katex/dist/katex.min.css';
+import { ChatProvider } from "@/lib/chat-context-integrated"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -35,9 +36,11 @@ export default function RootLayout({
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <AuthProvider>
-            <AppWrapper>
-              {children}
-            </AppWrapper>
+            <ChatProvider>
+              <AppWrapper>
+                {children}
+              </AppWrapper>
+            </ChatProvider>
             <Toaster />
           </AuthProvider>
         </ThemeProvider>
