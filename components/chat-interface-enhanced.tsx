@@ -1946,6 +1946,7 @@ But first, you need to connect your Spotify account securely using the button be
     setShowAudioPanel(false);
     setDocumentPreviewUrl(null)
     setSplitViewContent(null)
+    setSelectedWordText(null); // Clear AI Rewrite display when switching chats
 
     // Auto-open Word Connector for Word Connector chats
     if (currentChat && (currentChat as any).isWordConnectorChat) {
@@ -2262,7 +2263,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsRewriting(true);
       setInput("");
 
-      const rewritePrompt = `Rewrite the following text based on the command. Only return the rewritten text.\n\nCommand: "${msg}"\n\nText to rewrite: "${selectedWordText}"`;
+      const rewritePrompt = `Rewrite the following text based on the user's command. Return ONLY the rewritten text without any quotes, explanations, or additional formatting.\n\nUser command: ${msg}\n\nText to rewrite:\n${selectedWordText}`;
 
       let accumulatedContent = '';
       const streamId = crypto.randomUUID();
@@ -2280,9 +2281,15 @@ But first, you need to connect your Spotify account securely using the button be
           accumulatedContent += chunk;
         },
         () => {
-          // Stream is complete, replace the text in the editor
+          // Stream is complete, clean up the response and replace the text
           if (wordConnectorRef.current) {
-            wordConnectorRef.current.replaceSelection(accumulatedContent);
+            // Remove surrounding quotes if AI added them
+            let cleanedContent = accumulatedContent.trim();
+            if ((cleanedContent.startsWith('"') && cleanedContent.endsWith('"')) || 
+                (cleanedContent.startsWith("'") && cleanedContent.endsWith("'"))) {
+              cleanedContent = cleanedContent.slice(1, -1);
+            }
+            wordConnectorRef.current.replaceSelection(cleanedContent);
           }
           setIsRewriting(false);
           setSelectedWordText(null); // Clear the selection display

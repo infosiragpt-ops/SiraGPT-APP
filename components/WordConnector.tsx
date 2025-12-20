@@ -125,6 +125,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
         const selectionRef = useRef<{ from: number; to: number } | null>(null);
         const { currentChat } = useChat();
         const { user } = useAuth();
+        const lastChatIdRef = useRef<string | null>(null);
 
         const isBusy = isGenerating || isGeneratingExternal;
 
@@ -276,6 +277,16 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
             return text;
         };
 
+        // Clear editor content when chat changes
+        useEffect(() => {
+            const currentChatId = currentChat?.id;
+            if (editor && currentChatId && lastChatIdRef.current && lastChatIdRef.current !== currentChatId) {
+                // Chat has changed, clear the editor
+                editor.commands.setContent('');
+            }
+            lastChatIdRef.current = currentChatId || null;
+        }, [currentChat?.id, editor]);
+
         // Expose method to update editor content via ref
         React.useImperativeHandle(ref, () => ({
             updateContent: (content: string) => {
@@ -319,35 +330,31 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                             return `<table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
                         });
 
-                        // Convert markdown lists
-                        // A more robust way to handle paragraphs and lists to avoid extra spacing
-                        // Wrap non-empty lines in paragraph tags
+                        // Convert markdown lists and process lines properly
                         const lines = cleanContent.split('\n');
-                        const wrappedLines = lines.map(line => {
-                            const trimmedLine = line.trim();
-                            if (trimmedLine === '') return ''; // Skip empty lines completely
-                            if (trimmedLine.startsWith('<h') || trimmedLine.startsWith('<ul') || trimmedLine.startsWith('<ol') || trimmedLine.startsWith('<li') || trimmedLine.startsWith('<div') || trimmedLine.startsWith('<table') || trimmedLine.startsWith('<thead') || trimmedLine.startsWith('<tbody') || trimmedLine.startsWith('<tr') || trimmedLine.startsWith('<td') || trimmedLine.startsWith('<th')) {
-                                return trimmedLine;
+                        const processedLines: string[] = [];
+                        
+                        for (let i = 0; i < lines.length; i++) {
+                            const line = lines[i].trim();
+                            
+                            // Skip completely empty lines
+                            if (line === '') continue;
+                            
+                            // Check if line is already an HTML element
+                            const isHtmlElement = line.startsWith('<') && line.includes('>');
+                            
+                            if (isHtmlElement) {
+                                processedLines.push(line);
+                            } else {
+                                // Wrap plain text in paragraph without inline styles
+                                processedLines.push(`<p>${line}</p>`);
                             }
-                            // Add some styling to paragraphs to control spacing
-                            return `<p style="margin-bottom: 0.5em; line-height: 1.5;">${trimmedLine}</p>`;
-                        });
-                        cleanContent = wrappedLines.filter(line => line !== '').join('');
-
-                        // Check if editor already has content
-                        const isEditorEmpty = editor.isEmpty;
-
-                        if (isEditorEmpty) {
-                            // If editor is empty, set content normally
-                            editor.commands.setContent(cleanContent);
-                        } else {
-                            // If editor has content, move to end and append new content
-                            editor.chain()
-                                .focus('end') // Move cursor to the end
-                                .insertContent('<p><br></p>') // Add spacing
-                                .insertContent(cleanContent) // Append new content
-                                .run();
                         }
+                        
+                        cleanContent = processedLines.join('');
+
+                        // Replace entire content to prevent duplication
+                        editor.commands.setContent(cleanContent);
 
                         // After setting content, migrate any remaining LaTeX strings
                         setTimeout(() => {
@@ -526,9 +533,9 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                     <DropdownMenuItem onClick={downloadAsPDF}>
                                         Download as PDF
                                     </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={downloadAsText}>
+                                    {/* <DropdownMenuItem onClick={downloadAsText}>
                                         Download as Text (.txt)
-                                    </DropdownMenuItem>
+                                    </DropdownMenuItem> */}
                                 </DropdownMenuContent>
                             </DropdownMenu>
                             <Button
@@ -717,6 +724,81 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                     <div
                                         className="bg-[#F9F9F7] dark:bg-zinc-900 shadow-lg w-full max-w-[816px] min-h-[1056px] p-16 rounded-sm"
                                     >
+                                        <style>{`
+                                            .ProseMirror {
+                                                min-height: 100%;
+                                            }
+                                            .ProseMirror p {
+                                                margin: 0.5em 0;
+                                                line-height: 1.6;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror h1 {
+                                                font-size: 2em;
+                                                font-weight: 700;
+                                                margin: 0.8em 0 0.4em 0;
+                                                line-height: 1.2;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror h2 {
+                                                font-size: 1.5em;
+                                                font-weight: 600;
+                                                margin: 0.7em 0 0.3em 0;
+                                                line-height: 1.3;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror h3 {
+                                                font-size: 1.25em;
+                                                font-weight: 600;
+                                                margin: 0.6em 0 0.3em 0;
+                                                line-height: 1.4;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror h4 {
+                                                font-size: 1.1em;
+                                                font-weight: 600;
+                                                margin: 0.5em 0 0.3em 0;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror h5, .ProseMirror h6 {
+                                                font-size: 1em;
+                                                font-weight: 600;
+                                                margin: 0.4em 0 0.2em 0;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror ul, .ProseMirror ol {
+                                                padding-left: 1.5em;
+                                                margin: 0.5em 0;
+                                                color: inherit;
+                                                list-style-position: outside;
+                                            }
+                                            .ProseMirror ul {
+                                                list-style-type: disc;
+                                            }
+                                            .ProseMirror ol {
+                                                list-style-type: decimal;
+                                            }
+                                            .ProseMirror li {
+                                                margin: 0.25em 0;
+                                                color: inherit;
+                                                display: list-item;
+                                            }
+                                            .ProseMirror strong {
+                                                font-weight: 700;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror em {
+                                                font-style: italic;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror table {
+                                                margin: 1em 0;
+                                                color: inherit;
+                                            }
+                                            .ProseMirror * {
+                                                color: inherit;
+                                            }
+                                        `}</style>
                                         <EditorContent editor={editor} />
                                     </div>
                                 </div>
