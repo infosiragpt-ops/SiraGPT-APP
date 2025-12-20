@@ -1918,9 +1918,14 @@ But first, you need to connect your Spotify account securely using the button be
     prevChatIdRef.current = currentChat?.id;
   }, [currentChat?.id, clearReasoning]); // Only trigger when chat ID changes
 
-  // Auto-open Word Connector for Word Connector chats
+
   React.useEffect(() => {
-    if (currentChat && (currentChat as any).isWordConnectorChat) {
+    setShowAudioPanel(false);
+    setDocumentPreviewUrl(null)
+    setSplitViewContent(null)
+
+      // Auto-open Word Connector for Word Connector chats
+     if (currentChat && (currentChat as any).isWordConnectorChat) {
       setIsWordConnectorActive(true);
       
       // Load existing Word content if available
@@ -1930,12 +1935,6 @@ But first, you need to connect your Spotify account securely using the button be
         }, 100);
       }
     }
-  }, [currentChat?.id]);
-
-  React.useEffect(() => {
-    setShowAudioPanel(false);
-    setDocumentPreviewUrl(null)
-    setSplitViewContent(null)
   }, [currentChat?.id]);
 
   React.useEffect(() => {
