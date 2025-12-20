@@ -545,16 +545,69 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                   </head>
                   <body>
                     ${htmlContent}
-                    <script>
-                      window.onload = function() {
-                        setTimeout(() => {
-                          window.print();
-                          window.onafterprint = function() {
-                            window.close();
-                          };
-                        }, 500);
-                      };
-                    </script>
+                                        <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
+                                        <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/contrib/auto-render.min.js"></script>
+                                        <script>
+                                            // decode HTML entities produced in data-latex attributes
+                                            function decodeEntities(encoded) {
+                                                const textarea = document.createElement('textarea');
+                                                textarea.innerHTML = encoded;
+                                                return textarea.value;
+                                            }
+
+                                            function transformMathPlaceholders() {
+                                                // Inline math
+                                                document.querySelectorAll('[data-type="inline-math"]').forEach(el => {
+                                                    const latex = el.getAttribute('data-latex') || '';
+                                                    const decoded = decodeEntities(latex);
+                                                    // Replace the element with delimiters for auto-render
+                                                    const span = document.createElement('span');
+                                                    span.textContent = '$' + decoded + '$';
+                                                    el.parentNode.replaceChild(span, el);
+                                                });
+
+                                                // Block math
+                                                document.querySelectorAll('[data-type="block-math"]').forEach(el => {
+                                                    const latex = el.getAttribute('data-latex') || '';
+                                                    const decoded = decodeEntities(latex);
+                                                    const div = document.createElement('div');
+                                                    div.textContent = '$$' + decoded + '$$';
+                                                    el.parentNode.replaceChild(div, el);
+                                                });
+                                            }
+
+                                            window.onload = function() {
+                                                try {
+                                                    transformMathPlaceholders();
+
+                                                    // Render math in the document using KaTeX auto-render
+                                                    if (window.renderMathInElement) {
+                                                        renderMathInElement(document.body, {
+                                                            delimiters: [
+                                                                {left: '$$', right: '$$', display: true},
+                                                                {left: '$', right: '$', display: false},
+                                                                {left: '\\(', right: '\\)', display: false},
+                                                                {left: '\\[', right: '\\]', display: true}
+                                                            ],
+                                                            throwOnError: false
+                                                        });
+                                                    }
+
+                                                    setTimeout(() => {
+                                                        window.print();
+                                                        window.onafterprint = function() {
+                                                            window.close();
+                                                        };
+                                                    }, 300);
+                                                } catch (e) {
+                                                    // fallback: still attempt to print
+                                                    setTimeout(() => {
+                                                        window.print();
+                                                        window.onafterprint = function() { window.close(); };
+                                                    }, 300);
+                                                }
+                                            };
+                                        </script>
                   </body>
                 </html>
             `);
