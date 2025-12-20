@@ -375,6 +375,37 @@ const ActionsDropdown = ({
                 )}
               </div>
             </DropdownMenuItem>
+
+            {/* Word Connector */}
+            <DropdownMenuItem
+              onClick={() => {
+                if (handleWordConnectorToggle) {
+                  handleWordConnectorToggle();
+                }
+                setIsOpen(false);
+              }}
+              disabled={isDisabled}
+            >
+              <div className="flex items-center gap-3 w-full">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
+                  ? 'bg-blue-100 dark:bg-blue-900/20'
+                  : 'bg-blue-100 dark:bg-blue-900/20'
+                  }`}>
+                  <FileText className={`h-4 w-4 ${isWordConnectorActive
+                    ? 'text-blue-600 dark:text-blue-400'
+                    : 'text-blue-600 dark:text-blue-400'
+                    }`} />
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-sm">
+                    {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
+                  </div>
+                </div>
+                {isWordConnectorActive && (
+                  <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                )}
+              </div>
+            </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
@@ -499,40 +530,6 @@ const ActionsDropdown = ({
           </div>
         </DropdownMenuItem>
         */}
-
-        {/* Word Connector */}
-        <DropdownMenuItem
-          onClick={() => {
-            if (handleWordConnectorToggle) {
-              handleWordConnectorToggle();
-            }
-            setIsOpen(false);
-          }}
-          disabled={isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
-              ? 'bg-blue-100 dark:bg-blue-900/20'
-              : 'bg-blue-100 dark:bg-blue-900/20'
-              }`}>
-              <FileText className={`h-4 w-4 ${isWordConnectorActive
-                ? 'text-blue-600 dark:text-blue-400'
-                : 'text-blue-600 dark:text-blue-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Rich text editor with AI generation
-              </div>
-            </div>
-            {isWordConnectorActive && (
-              <div className="w-2 h-2 bg-blue-500 rounded-full" />
-            )}
-          </div>
-        </DropdownMenuItem>
 
         {/* Thesis Generation */}
         <DropdownMenuItem
@@ -762,6 +759,8 @@ const ActiveToolsDisplay = ({
   setIsGoogleDriveActive,
   isSpotifyActive,
   setIsSpotifyActive,
+  isWordConnectorActive,
+  setIsWordConnectorActive,
   chatType,
   setChatType,
 
@@ -769,7 +768,8 @@ const ActiveToolsDisplay = ({
   handleGmailToggle,
   handleGoogleCalendarToggle,
   handleGoogleDriveToggle,
-  handleSpotifyToggle
+  handleSpotifyToggle,
+  handleWordConnectorToggle
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
@@ -788,6 +788,8 @@ const ActiveToolsDisplay = ({
   setIsGoogleDriveActive: (value: boolean) => void;
   isSpotifyActive: boolean;
   setIsSpotifyActive: (value: boolean) => void;
+  isWordConnectorActive: boolean;
+  setIsWordConnectorActive: (value: boolean) => void;
   chatType: string;
   setChatType: (type: any) => void;
 
@@ -796,12 +798,14 @@ const ActiveToolsDisplay = ({
   handleGoogleCalendarToggle: () => void;
   handleGoogleDriveToggle: () => void;
   handleSpotifyToggle: () => void;
+  handleWordConnectorToggle: () => void;
 }) => {
   const activeConnectors = [
     isGmailActive && { id: 'gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
     isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
     isGoogleDriveActive && { id: 'drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
     isSpotifyActive && { id: 'spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
+    isWordConnectorActive && { id: 'word', icon: <FileText className="h-4 w-4" /> },
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
@@ -924,6 +928,22 @@ const ActiveToolsDisplay = ({
                   <Switch
                     checked={isSpotifyActive}
                     onCheckedChange={handleSpotifyToggle}
+                  />
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    <span>Word Connector</span>
+                  </div>
+                  <Switch
+                    checked={isWordConnectorActive}
+                    onCheckedChange={() => {
+                      if (handleWordConnectorToggle) {
+                        handleWordConnectorToggle();
+                      }
+                    }}
                   />
                 </div>
               </DropdownMenuItem>
@@ -2218,13 +2238,12 @@ But first, you need to connect your Spotify account securely using the button be
             toast.error(error.message || 'Error al generar documento');
           }
         );
-        return;
       } catch (error: any) {
         setIsGeneratingWord(false);
         console.error('Word Connector error:', error);
         toast.error(error?.message || 'Error al generar documento');
-        return;
       }
+      return; // IMPORTANT: Stop execution here - no other API calls should be made
     }
 
     // Handle thesis type early - before adding optimistic messages
@@ -3726,6 +3745,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsGoogleDriveActive={setIsGoogleDriveActive}
                           isSpotifyActive={isSpotifyActive}
                           setIsSpotifyActive={setIsSpotifyActive}
+                          isWordConnectorActive={isWordConnectorActive}
+                          setIsWordConnectorActive={setIsWordConnectorActive}
                           chatType={chatType}
                           setChatType={setChatType}
 
@@ -3734,6 +3755,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                           handleGoogleDriveToggle={handleGoogleDriveToggle}
                           handleSpotifyToggle={handleSpotifyToggle}
+                          handleWordConnectorToggle={handleWordConnectorToggle}
                         />
                         <div className="flex-grow" />
                         {!(isLoading && isStreaming) && (
@@ -4039,6 +4061,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsGoogleDriveActive={setIsGoogleDriveActive}
                               isSpotifyActive={isSpotifyActive}
                               setIsSpotifyActive={setIsSpotifyActive}
+                              isWordConnectorActive={isWordConnectorActive}
+                              setIsWordConnectorActive={setIsWordConnectorActive}
                               chatType={chatType}
                               setChatType={setChatType}
 
@@ -4047,6 +4071,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleGoogleCalendarToggle={handleGoogleCalendarToggle}
                               handleGoogleDriveToggle={handleGoogleDriveToggle}
                               handleSpotifyToggle={handleSpotifyToggle}
+                              handleWordConnectorToggle={handleWordConnectorToggle}
                             />
                             <div className="flex-grow" />
                             {!(isLoading || isStreaming || pendingStop || isSending) && (
@@ -4148,6 +4173,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             onClose={() => setIsWordConnectorActive(false)}
             selectedModel={selectedModel}
             selectProvider={selectProvider}
+            onTextSelected={(text) => {
+              // Set selected text to chat input
+              setInput(text);
+              // Focus on textarea
+              if (textareaRef.current) {
+                textareaRef.current.focus();
+              }
+            }}
           />
         )}
       </div>

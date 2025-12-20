@@ -16,16 +16,18 @@ import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import { Button } from '@/components/ui/button';
-import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered } from 'lucide-react';
+import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { useChat } from '@/lib/chat-context-integrated';
 import { useAuth } from '@/lib/auth-context-integrated';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
 import { saveAs } from 'file-saver';
- 
+
 
 interface WordConnectorProps {
     onClose: () => void;
@@ -33,6 +35,7 @@ interface WordConnectorProps {
     selectProvider: string;
     onGenerateContent?: (content: string) => void;
     isFullPage?: boolean;
+    onTextSelected?: (text: string) => void; // Callback to send selected text to chat
 }
 
 import { Extension } from '@tiptap/core';
@@ -83,7 +86,7 @@ const FontSize = Extension.create({
 });
 
 export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void }, WordConnectorProps>(
-    function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false }, ref) {
+    function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false, onTextSelected }, ref) {
         const [isGenerating, setIsGenerating] = useState(false);
         const [isCollapsed, setIsCollapsed] = useState(false);
         const { currentChat } = useChat();
@@ -378,6 +381,27 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 toast.error('Failed to download text file');
             }
         }, [editor]);
+
+        // Handle text selection - send to chat input
+        useEffect(() => {
+            if (!editor || !onTextSelected) return;
+
+            const handleUpdate = () => {
+                const { from, to } = editor.state.selection;
+                const selectedText = editor.state.doc.textBetween(from, to, ' ');
+
+                if (selectedText && selectedText.trim().length > 0) {
+                    // Send selected text to chat input
+                    onTextSelected(selectedText.trim());
+                }
+            };
+
+            editor.on('selectionUpdate', handleUpdate);
+
+            return () => {
+                editor.off('selectionUpdate', handleUpdate);
+            };
+        }, [editor, onTextSelected]);
 
         if (!editor) {
             return (
