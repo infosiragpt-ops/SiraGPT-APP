@@ -17,7 +17,7 @@ import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import Underline from '@tiptap/extension-underline';
 import { Button } from '@/components/ui/button';
-import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline as UnderlineIcon, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles, Undo, Redo } from 'lucide-react';
+import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline as UnderlineIcon, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles, Undo, Redo, FileText } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { useChat } from '@/lib/chat-context-integrated';
@@ -143,22 +143,23 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                     katexOptions: {
                         throwOnError: false,
                     },
-                    inlineOptions: {
-                        onClick: (node, pos) => {
-                            const newCalculation = prompt('Enter new calculation:', node.attrs.latex);
-                            if (newCalculation) {
-                                editor?.chain().setNodeSelection(pos).updateInlineMath({ latex: newCalculation }).focus().run();
-                            }
-                        },
-                    },
-                    blockOptions: {
-                        onClick: (node, pos) => {
-                            const newCalculation = prompt('Enter new calculation:', node.attrs.latex);
-                            if (newCalculation) {
-                                editor?.chain().setNodeSelection(pos).updateBlockMath({ latex: newCalculation }).focus().run();
-                            }
-                        },
-                    },
+                    // Commented out to prevent modal popups on equation click
+                    // inlineOptions: {
+                    //     onClick: (node, pos) => {
+                    //         const newCalculation = prompt('Enter new calculation:', node.attrs.latex);
+                    //         if (newCalculation) {
+                    //             editor?.chain().setNodeSelection(pos).updateInlineMath({ latex: newCalculation }).focus().run();
+                    //         }
+                    //     },
+                    // },
+                    // blockOptions: {
+                    //     onClick: (node, pos) => {
+                    //         const newCalculation = prompt('Enter new calculation:', node.attrs.latex);
+                    //         if (newCalculation) {
+                    //             editor?.chain().setNodeSelection(pos).updateBlockMath({ latex: newCalculation }).focus().run();
+                    //         }
+                    //     },
+                    // },
                 }),
                 Placeholder.configure({
                     placeholder: 'Start writing your document here...',
@@ -511,7 +512,11 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 {/* Header with Toolbar */}
                 <div className="flex flex-col border-b border-border/40 bg-white dark:bg-zinc-900">
                     <div className="flex items-center justify-between p-3 border-b border-border/40">
-                        <h3 className="font-semibold text-base">Nuevo Documento Word</h3>
+                        <div className="flex items-center gap-2">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src="/icons/Word.png" alt="Word" className="h-5 w-5" />
+                            <h3 className="font-semibold text-base text-blue-600 dark:text-blue-400">Word Document</h3>
+                        </div>
                         <div className="flex items-center gap-2">
                             {isGenerating && (
                                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -523,7 +528,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                 <DropdownMenuTrigger asChild>
                                     <Button size="sm" variant="outline" className="h-8">
                                         <Download className="h-3 w-3 mr-1" />
-                                        Descargar
+                                        Download
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end">
@@ -718,59 +723,85 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 {/* Editor Content */}
                 {!isCollapsed && (
                     <div className="relative flex-1 min-h-0 overflow-hidden">
-                        <ScrollArea className="h-full bg-[#F1F1EF] dark:bg-zinc-950">
+                        <ScrollArea className="h-full bg-gradient-to-br from-slate-50 to-blue-50 dark:from-zinc-950 dark:to-slate-900">
                             <div className={isBusy ? 'pointer-events-none select-none opacity-60 blur-[1px]' : ''} aria-busy={isBusy}>
                                 <div className="flex justify-center p-8 min-h-full">
                                     <div
-                                        className="bg-[#F9F9F7] dark:bg-zinc-900 shadow-lg w-full max-w-[816px] min-h-[1056px] p-16 rounded-sm"
+                                        className="bg-white dark:bg-zinc-900 shadow-2xl w-full max-w-[816px] min-h-[1056px] p-12 rounded-lg border border-slate-200 dark:border-zinc-800"
                                     >
                                         <style>{`
                                             .ProseMirror {
                                                 min-height: 100%;
+                                                font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
                                             }
                                             .ProseMirror p {
                                                 margin: 0.5em 0;
-                                                line-height: 1.6;
-                                                color: inherit;
+                                                line-height: 1.75;
+                                                color: #1e293b;
+                                                font-size: 16px;
+                                            }
+                                            .dark .ProseMirror p {
+                                                color: #e2e8f0;
                                             }
                                             .ProseMirror h1 {
-                                                font-size: 2em;
+                                                font-size: 2.25em;
                                                 font-weight: 700;
-                                                margin: 0.8em 0 0.4em 0;
+                                                margin: 1.2em 0 0.5em 0;
                                                 line-height: 1.2;
-                                                color: inherit;
+                                                color: #0f172a;
+                                                border-bottom: 3px solid #3b82f6;
+                                                padding-bottom: 0.3em;
+                                            }
+                                            .dark .ProseMirror h1 {
+                                                color: #f1f5f9;
+                                                border-bottom-color: #60a5fa;
                                             }
                                             .ProseMirror h2 {
-                                                font-size: 1.5em;
+                                                font-size: 1.75em;
                                                 font-weight: 600;
-                                                margin: 0.7em 0 0.3em 0;
+                                                margin: 1em 0 0.4em 0;
                                                 line-height: 1.3;
-                                                color: inherit;
+                                                color: #1e40af;
+                                            }
+                                            .dark .ProseMirror h2 {
+                                                color: #93c5fd;
                                             }
                                             .ProseMirror h3 {
-                                                font-size: 1.25em;
+                                                font-size: 1.4em;
                                                 font-weight: 600;
-                                                margin: 0.6em 0 0.3em 0;
+                                                margin: 0.9em 0 0.3em 0;
                                                 line-height: 1.4;
-                                                color: inherit;
+                                                color: #2563eb;
+                                            }
+                                            .dark .ProseMirror h3 {
+                                                color: #60a5fa;
                                             }
                                             .ProseMirror h4 {
-                                                font-size: 1.1em;
+                                                font-size: 1.2em;
                                                 font-weight: 600;
-                                                margin: 0.5em 0 0.3em 0;
-                                                color: inherit;
+                                                margin: 0.7em 0 0.3em 0;
+                                                color: #3b82f6;
+                                            }
+                                            .dark .ProseMirror h4 {
+                                                color: #60a5fa;
                                             }
                                             .ProseMirror h5, .ProseMirror h6 {
-                                                font-size: 1em;
+                                                font-size: 1.1em;
                                                 font-weight: 600;
-                                                margin: 0.4em 0 0.2em 0;
-                                                color: inherit;
+                                                margin: 0.6em 0 0.2em 0;
+                                                color: #3b82f6;
+                                            }
+                                            .dark .ProseMirror h5, .dark .ProseMirror h6 {
+                                                color: #60a5fa;
                                             }
                                             .ProseMirror ul, .ProseMirror ol {
-                                                padding-left: 1.5em;
-                                                margin: 0.5em 0;
-                                                color: inherit;
+                                                padding-left: 2em;
+                                                margin: 1em 0;
+                                                color: #1e293b;
                                                 list-style-position: outside;
+                                            }
+                                            .dark .ProseMirror ul, .dark .ProseMirror ol {
+                                                color: #e2e8f0;
                                             }
                                             .ProseMirror ul {
                                                 list-style-type: disc;
@@ -779,24 +810,61 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                                 list-style-type: decimal;
                                             }
                                             .ProseMirror li {
-                                                margin: 0.25em 0;
+                                                margin: 0.5em 0;
                                                 color: inherit;
                                                 display: list-item;
+                                                line-height: 1.7;
                                             }
                                             .ProseMirror strong {
                                                 font-weight: 700;
-                                                color: inherit;
+                                                color: #0f172a;
+                                            }
+                                            .dark .ProseMirror strong {
+                                                color: #f8fafc;
                                             }
                                             .ProseMirror em {
                                                 font-style: italic;
-                                                color: inherit;
+                                                color: #334155;
+                                            }
+                                            .dark .ProseMirror em {
+                                                color: #cbd5e1;
                                             }
                                             .ProseMirror table {
-                                                margin: 1em 0;
-                                                color: inherit;
+                                                margin: 1.5em 0;
+                                                border-collapse: collapse;
+                                                width: 100%;
                                             }
-                                            .ProseMirror * {
-                                                color: inherit;
+                                            .ProseMirror table th {
+                                                background: #eff6ff;
+                                                color: #1e40af;
+                                                font-weight: 600;
+                                            }
+                                            .dark .ProseMirror table th {
+                                                background: #1e3a8a;
+                                                color: #dbeafe;
+                                            }
+                                            .ProseMirror blockquote {
+                                                border-left: 4px solid #3b82f6;
+                                                padding-left: 1em;
+                                                margin: 1em 0;
+                                                color: #475569;
+                                                font-style: italic;
+                                            }
+                                            .dark .ProseMirror blockquote {
+                                                border-left-color: #60a5fa;
+                                                color: #94a3b8;
+                                            }
+                                            .ProseMirror code {
+                                                background: #f1f5f9;
+                                                color: #0f172a;
+                                                padding: 0.2em 0.4em;
+                                                border-radius: 3px;
+                                                font-family: 'Consolas', monospace;
+                                                font-size: 0.9em;
+                                            }
+                                            .dark .ProseMirror code {
+                                                background: #1e293b;
+                                                color: #e2e8f0;
                                             }
                                         `}</style>
                                         <EditorContent editor={editor} />
