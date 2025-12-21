@@ -7,9 +7,10 @@ import { Loader2 } from "lucide-react"
 interface AuthGuardProps {
   children: React.ReactNode
   requireAdmin?: boolean
+  requireSuperAdmin?: boolean
 }
 
-export function AuthGuard({ children, requireAdmin = false,}: AuthGuardProps) {
+export function AuthGuard({ children, requireAdmin = false, requireSuperAdmin = false }: AuthGuardProps) {
   const { user, isLoading } = useAuth()
   const router = useRouter()
 
@@ -19,11 +20,17 @@ export function AuthGuard({ children, requireAdmin = false,}: AuthGuardProps) {
         router.push("/auth/login")
         return
       }
-    if (requireAdmin && !user.isAdmin) {
+      
+    if (requireSuperAdmin && !user.isSuperAdmin) {
         router.push("/chat")
         return
       }
-  }, [user, isLoading, requireAdmin, router])
+      
+    if (requireAdmin && !user.isAdmin && !user.isSuperAdmin) {
+        router.push("/chat")
+        return
+      }
+  }, [user, isLoading, requireAdmin, requireSuperAdmin, router])
 
   if (isLoading) {
     return (
@@ -33,7 +40,7 @@ export function AuthGuard({ children, requireAdmin = false,}: AuthGuardProps) {
     )
   }
 
-  if (!user || (requireAdmin && !user.isAdmin)) {
+  if (!user || (requireSuperAdmin && !user.isSuperAdmin) || (requireAdmin && !user.isAdmin && !user.isSuperAdmin)) {
     return null
   }
 

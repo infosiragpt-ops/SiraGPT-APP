@@ -647,4 +647,116 @@ router.post('/refresh', authenticateToken, async (req, res) => {
   }
 });
 
+// Super Admin Impersonation - Allow super admin to access any user account
+router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
+  try {
+    // Check if current user is super admin
+    if (!req.user.isSuperAdmin) {
+      return res.status(403).json({ error: 'Super admin access required' });
+    }
+
+    const { userId } = req.params;
+
+    // Find target user
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId }
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Don't allow impersonating other super admins
+    if (targetUser.isSuperAdmin) {
+      return res.status(403).json({ error: 'Cannot impersonate other super admins' });
+    }
+
+    // Create impersonation token
+    const impersonationToken = jwt.sign(
+      { 
+        userId: targetUser.id,
+        impersonatedBy: req.user.id,
+        isImpersonation: true
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' } // Shorter expiry for impersonation
+    );
+
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    // Create impersonation session
+    await prisma.session.create({
+      data: {
+        userId: targetUser.id,
+        token: impersonationToken,
+        expiresAt
+      }
+    });
+
+    console.log(`Super admin ${req.user.email} impersonating user ${targetUser.email}`);
+
+    res.json({
+      token: impersonationToken,
+      user: serializeUser(targetUser),
+      impersonatedBy: req.user.id
+    });
+  } catch (error) {
+    console.error('Impersonation error:', error);
+    res.status(500).json({ error: 'Impersonation failed' });
+  }
+});
+
+// End impersonation and return to super admin account
+router.post('/end-impersonation', authenticateToken, async (req, res) => {
+  try {
+    // Get the token payload to check if it's an impersonation session
+    const decoded = jwt.verify(req.token, process.env.JWT_SECRET);
+    
+    if (!decoded.isImpersonation || !decoded.impersonatedBy) {
+      return res.status(400).json({ error: 'Not an impersonation session' });
+    }
+
+    // Find the original super admin user
+    const superAdmin = await prisma.user.findUnique({
+      where: { id: decoded.impersonatedBy }
+    });
+
+    if (!superAdmin || !superAdmin.isSuperAdmin) {
+      return res.status(403).json({ error: 'Original super admin not found' });
+    }
+
+    // Delete the impersonation session
+    await prisma.session.deleteMany({
+      where: { token: req.token }
+    });
+
+    // Create new session for super admin
+    const newToken = jwt.sign(
+      { userId: superAdmin.id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    await prisma.session.create({
+      data: {
+        userId: superAdmin.id,
+        token: newToken,
+        expiresAt
+      }
+    });
+
+    console.log(`Ending impersonation, returning to super admin ${superAdmin.email}`);
+
+    res.json({
+      token: newToken,
+      user: serializeUser(superAdmin)
+    });
+  } catch (error) {
+    console.error('End impersonation error:', error);
+    res.status(500).json({ error: 'Failed to end impersonation' });
+  }
+});
+
 module.exports = router;

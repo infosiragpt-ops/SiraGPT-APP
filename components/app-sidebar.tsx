@@ -453,7 +453,7 @@ export function AppSidebar() {
                         {user?.name || "Admin User"}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {user?.plan || "Enterprise Plan"}
+                        {user?.isSuperAdmin ? "Super Administrator" : user?.isAdmin ? "Administrator" : user?.plan || "Free Plan"}
                       </span>
                     </div>
                   </SidebarMenuButton>
@@ -482,6 +482,38 @@ export function AppSidebar() {
                       <DropdownMenuItem onClick={() => router.push("/admin")}>
                         <Settings className="mr-2 h-4 w-4" />
                         Admin Panel
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {user?.isSuperAdmin && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => router.push("/super-admin")}>
+                        <Shield className="mr-2 h-4 w-4 text-red-600" />
+                        <span className="text-red-600">Super Admin Panel</span>
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {/* Hidden return option for super admin accessing other accounts */}
+                  {typeof window !== "undefined" && localStorage.getItem('superadmin-return-data') && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem 
+                        onClick={async () => {
+                          const returnData = localStorage.getItem('superadmin-return-data')
+                          if (returnData) {
+                            const { originalToken } = JSON.parse(returnData)
+                            if (originalToken) {
+                              localStorage.setItem('auth-token', originalToken)
+                              localStorage.removeItem('superadmin-return-data')
+                              window.location.href = '/super-admin'
+                            }
+                          }
+                        }}
+                        className="text-orange-600"
+                      >
+                        <Shield className="mr-2 h-4 w-4" />
+                        Return to Super Admin
                       </DropdownMenuItem>
                     </>
                   )}
