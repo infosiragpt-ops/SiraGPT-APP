@@ -8,6 +8,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { AppWrapper } from "@/components/app-wrapper"
 import 'katex/dist/katex.min.css';
 import { ChatProvider } from "@/lib/chat-context-integrated"
+import { SyncfusionBannerRemover } from "@/components/SyncfusionBannerRemover"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -34,6 +35,7 @@ export default function RootLayout({
         />
       </head>
       <body className={inter.className}>
+        <SyncfusionBannerRemover />
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <AuthProvider>
             <ChatProvider>

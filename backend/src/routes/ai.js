@@ -3606,4 +3606,217 @@ Generate a complete, professional document based on the user's request.`;
   }
 );
 
+// ✅ Generate Excel Workbook Content - Specialized endpoint for Excel Connector
+router.post(
+  '/generate-excel',
+  [
+    body('model').trim().notEmpty().withMessage('Model is required'),
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('provider').trim().notEmpty().withMessage('Provider is required'),
+    body('chatId').optional().isString(),
+    body('files').optional().isArray(),
+    body('streamId').optional().isString(),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const { streamId } = req.body;
+
+    if (streamId) {
+      streamControllers.set(streamId, controller);
+      console.log(`Excel Workbook Stream registered with ID: ${streamId}`);
+    }
+
+    req.on('close', () => {
+      console.log(`Client connection closed for Excel workbook chat: ${req.body.chatId}. Aborting generation.`);
+      controller.abort();
+    });
+    req.on('aborted', () => {
+      console.log(`Client request aborted for Excel workbook chat: ${req.body.chatId}. Aborting generation.`);
+      controller.abort();
+    });
+
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        controller.abort();
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
+      const userId = req.user.id;
+
+      console.log('📊 Excel Workbook generation request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
+
+      // Check monthly limit
+      if (req.user.plan === 'FREE') {
+        const result = await prisma.user.updateMany({
+          where: {
+            id: userId,
+            monthlyCallLimit: { gt: 0 }
+          },
+          data: {
+            monthlyCallLimit: { decrement: 1 }
+          }
+        });
+
+        if (!result || result.count === 0) {
+          return res.status(429).json({
+            error: 'Free monthly queries exhausted. Please upgrade to continue.',
+            remaining: 0
+          });
+        }
+      } else {
+        if (req.user.apiUsage >= req.user.monthlyLimit) {
+          return res.status(429).json({
+            error: 'Monthly API limit exceeded',
+            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
+          });
+        }
+      }
+
+      // Verify chat exists and belongs to user
+      let chat = null;
+      if (chatId) {
+        chat = await prisma.chat.findUnique({ where: { id: chatId } });
+        if (chat && chat.userId !== userId) {
+          return res.status(404).json({ error: 'Chat not found or access denied.' });
+        }
+      }
+
+      // Process attached files
+      let processedFiles = [];
+      if (files && files.length > 0) {
+        processedFiles = await Promise.all(
+          files.map(async (fileId) => {
+            const file = await prisma.file.findFirst({
+              where: { id: fileId, userId }
+            });
+            return file ? {
+              id: file.id,
+              name: file.originalName,
+              extractedText: file.extractedText,
+              mimeType: file.mimeType,
+              path: file.path
+            } : null;
+          })
+        ).then(results => results.filter(Boolean));
+      }
+
+      // Set up streaming response
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      const messages = [];
+
+      const excelSystemMessage = `You are an expert spreadsheet designer. Generate a spreadsheet as a JSON workbook that can be loaded into Syncfusion Spreadsheet (openFromJson).
+
+CRITICAL REQUIREMENTS:
+1. Return ONLY valid JSON. No markdown, no backticks, no commentary.
+2. The JSON must be a workbook model with this shape:
+   {"sheets":[{"name":"Sheet1","rows":[{"cells":[{"value":"Header 1"},{"value":"Header 2"}]}]}]}
+3. Use rows[].cells[].value for values (string/number/boolean). If a cell is intentionally blank, set {"value":""}.
+4. For formulas, use rows[].cells[].formula with Excel-style formulas like "=SUM(A2:A10)".
+5. Keep the table rectangular (each row should have the same number of cells). If needed, pad with empty cells.
+6. Default to 1 sheet unless the user explicitly requests multiple sheets.
+7. Unless the user requests a very large dataset, keep output within 200 rows and 30 columns.
+
+Generate the workbook based on the user's request.`;
+
+      messages.push({ role: 'system', content: excelSystemMessage });
+
+      if (processedFiles.length > 0) {
+        for (const file of processedFiles) {
+          if (file.extractedText) {
+            messages.push({
+              role: 'user',
+              content: `Context from file "${file.name}":\n${file.extractedText.substring(0, 5000)}`
+            });
+          }
+        }
+      }
+
+      messages.push({ role: 'user', content: prompt });
+
+      // Initialize OpenAI client based on provider
+      let openai;
+      if (provider === "Gemini") {
+        openai = new OpenAI({
+          apiKey: process.env.GEMINI_API_KEY,
+          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+        });
+      } else if (provider === "OpenRouter") {
+        openai = new OpenAI({
+          apiKey: process.env.OPENROUTER_API_KEY,
+          baseURL: "https://openrouter.ai/api/v1",
+        });
+      } else {
+        openai = new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY
+        });
+      }
+
+      let fullResponseContent = '';
+
+      const stream = await openai.chat.completions.create({
+        model: model,
+        messages: messages,
+        stream: true,
+      }, { signal });
+
+      for await (const chunk of stream) {
+        const contentChunk = chunk.choices[0]?.delta?.content || '';
+        if (contentChunk) {
+          fullResponseContent += contentChunk;
+          res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+        }
+      }
+
+      // Save chat and track usage
+      if (chatId && fullResponseContent.trim()) {
+        const tokens = fullResponseContent.length + prompt.length;
+        await saveChatAndTrackUsage(userId, chatId, prompt, "The spreadsheet has been generated in the Excel Connector.", tokens, model, processedFiles);
+
+        let parsedExcelContent = null;
+        try {
+          parsedExcelContent = JSON.parse(fullResponseContent.trim());
+        } catch (e) {
+          parsedExcelContent = fullResponseContent.trim();
+        }
+
+        await prisma.chat.update({
+          where: { id: chatId },
+          data: { excelContent: parsedExcelContent, isExcelConnectorChat: true }
+        });
+      }
+
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+    } catch (error) {
+      console.error('❌ Excel Workbook generation error:', error);
+
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message || 'Excel Workbook generation failed' });
+      } else {
+        try {
+          res.write(`data: ${JSON.stringify({ error: error.message || 'Excel Workbook generation failed' })}\n\n`);
+        } catch (writeError) {
+          console.error('Failed to write error to stream:', writeError);
+        }
+      }
+    } finally {
+      if (streamId) {
+        streamControllers.delete(streamId);
+        console.log(`Excel Workbook Stream unregistered for ID: ${streamId}`);
+      }
+
+      if (!res.writableEnded) {
+        res.end();
+      }
+    }
+  }
+);
+
 module.exports = router;

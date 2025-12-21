@@ -61,14 +61,15 @@ router.post('/', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { title, model, isWordConnectorChat } = req.body;
+    const { title, model, isWordConnectorChat, isExcelConnectorChat } = req.body;
 
     const chat = await prisma.chat.create({
       data: {
         userId: req.user.id,
         title,
         model,
-        isWordConnectorChat: isWordConnectorChat || false
+        isWordConnectorChat: isWordConnectorChat || false,
+        isExcelConnectorChat: isExcelConnectorChat || false
       },
       include: {
         messages: true

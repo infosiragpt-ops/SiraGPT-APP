@@ -1,7 +1,58 @@
 @import 'katex/dist/katex.min.css';
+/* Syncfusion Spreadsheet styles (required for Excel Connector) */
+@import '@syncfusion/ej2-base/styles/tailwind.css';
+@import '@syncfusion/ej2-buttons/styles/tailwind.css';
+@import '@syncfusion/ej2-calendars/styles/tailwind.css';
+@import '@syncfusion/ej2-dropdowns/styles/tailwind.css';
+@import '@syncfusion/ej2-inputs/styles/tailwind.css';
+@import '@syncfusion/ej2-navigations/styles/tailwind.css';
+@import '@syncfusion/ej2-popups/styles/tailwind.css';
+@import '@syncfusion/ej2-splitbuttons/styles/tailwind.css';
+@import '@syncfusion/ej2-grids/styles/tailwind.css';
+@import '@syncfusion/ej2-spreadsheet/styles/tailwind.css';
+@import '@syncfusion/ej2-react-spreadsheet/styles/tailwind.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+
+/* Hide ALL Syncfusion trial license content (banners, modals, dialogs, overlays) */
+div[style*="z-index: 999999999"],
+div[style*="This application was built using a trial version"],
+.e-dlg-container,
+.e-dialog,
+.e-dlg-overlay,
+[role="dialog"][aria-label*="Syncfusion"],
+[role="dialog"][aria-label*="license"],
+[role="alertdialog"],
+div[class*="syncfusion"][class*="license"],
+div[class*="e-license"],
+*[id*="license-dialog"],
+*[id*="syncfusion-banner"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  height: 0 !important;
+  width: 0 !important;
+  max-height: 0 !important;
+  max-width: 0 !important;
+  position: absolute !important;
+  pointer-events: none !important;
+  z-index: -9999 !important;
+  overflow: hidden !important;
+}
+
+/* Hide any overlay/backdrop that might appear with modals */
+.e-dlg-overlay,
+.e-popup-overlay,
+div[style*="position: fixed"][style*="background"][style*="rgba"],
+div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 
 @layer base {
   :root {

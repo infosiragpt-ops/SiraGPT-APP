@@ -121,7 +121,7 @@ class ApiClient {
     return this.request(`/chats${query ? `?${query}` : ''}`);
   }
 
-  async createChat(data: { title: string; model: string; isWordConnectorChat?: boolean }) {
+  async createChat(data: { title: string; model: string; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean }) {
     return this.request('/chats', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -561,6 +561,113 @@ class ApiClient {
       }
     } catch (error: any) {
       console.error('Word Document API stream failed:', error);
+      onError(error);
+    }
+  }
+
+  // ✅ Excel Workbook Generation Stream - Specialized for Excel Connector
+  async generateExcelStream(
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string },
+    onData: (chunk: string) => void,
+    onClose: () => void,
+    onError: (error: Error) => void,
+    signal?: AbortSignal
+  ) {
+    const url = `${this.baseURL}/ai/generate-excel`;
+    const config: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+      body: JSON.stringify(data),
+      ...(signal && { signal })
+    };
+
+    try {
+      const response = await fetch(url, config);
+
+      if (!response.ok) {
+        let details: any = {};
+        try { details = await response.json(); } catch { }
+        const message = details.error || `HTTP ${response.status}`;
+
+        if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+          window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
+        }
+
+        const error: any = new Error(message);
+        if (details.code) error.code = details.code;
+        throw error;
+      }
+
+      if (signal?.aborted) {
+        throw new Error('Request aborted');
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Response body is not readable');
+      }
+
+      const decoder = new TextDecoder('utf-8');
+      let batchBuffer = '';
+      let lastProcessTime = Date.now();
+      const batchProcessingDelay = 20;
+
+      while (true) {
+        if (signal?.aborted) {
+          reader.cancel();
+          throw new Error('Request aborted');
+        }
+
+        const { done, value } = await reader.read();
+
+        if (done) {
+          if (batchBuffer.trim()) {
+            onData(batchBuffer);
+          }
+          onClose();
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonData = JSON.parse(line.substring(6));
+              if (jsonData.content) {
+                batchBuffer += jsonData.content;
+                const timeSinceLastProcess = Date.now() - lastProcessTime;
+                const shouldProcess =
+                  batchBuffer.length >= 150 ||
+                  timeSinceLastProcess >= batchProcessingDelay ||
+                  jsonData.content.includes('\n');
+
+                if (shouldProcess && batchBuffer.trim()) {
+                  onData(batchBuffer);
+                  batchBuffer = '';
+                  lastProcessTime = Date.now();
+                }
+              } else if (jsonData.error) {
+                onError(new Error(jsonData.error));
+              } else if (jsonData.done) {
+                if (batchBuffer.trim()) {
+                  onData(batchBuffer);
+                }
+                onClose();
+                return;
+              }
+            } catch (e) {
+              console.warn('Failed to parse streaming data:', e);
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('API stream failed:', error);
       onError(error);
     }
   }

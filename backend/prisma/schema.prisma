@@ -110,6 +110,10 @@ model Chat {
   isWordConnectorChat Boolean @default(false)  // Track if this chat is for Word Connector
   wordContent         String? @db.Text         // Store the full Word document HTML content
 
+  // Excel Connector Integration
+  isExcelConnectorChat Boolean @default(false) // Track if this chat is for Excel Connector
+  excelContent         Json?                   // Store the workbook JSON (Syncfusion openFromJson compatible)
+
 // GPT Integration
   customGptId String?
   customGpt   CustomGpt? @relation(fields: [customGptId], references: [id], onDelete: SetNull)

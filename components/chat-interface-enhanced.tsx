@@ -90,6 +90,7 @@ import ComputerUseReasoning from "./ComputerUseReasoning"
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
 import { WordConnector } from "./WordConnector"
+import { ExcelConnector, type ExcelConnectorRef } from "./ExcelConnector"
 
 // Selected Text Display Component
 const SelectedTextDisplay = ({ text, onClear }: { text: string | null; onClear: () => void; }) => {
@@ -133,6 +134,8 @@ const ActionsDropdown = ({
   isSpotifyActive,
   isWordConnectorActive,
   setIsWordConnectorActive,
+  isExcelConnectorActive,
+  setIsExcelConnectorActive,
   setShowAudioPanel,
   setAudioTab,
   handleAndUploadFiles,
@@ -152,6 +155,7 @@ const ActionsDropdown = ({
   handleGoogleDriveToggle,
   handleSpotifyToggle,
   handleWordConnectorToggle,
+  handleExcelConnectorToggle,
 
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -412,10 +416,7 @@ const ActionsDropdown = ({
                   ? 'bg-blue-100 dark:bg-blue-900/20'
                   : 'bg-blue-100 dark:bg-blue-900/20'
                   }`}>
-                  <FileText className={`h-4 w-4 ${isWordConnectorActive
-                    ? 'text-blue-600 dark:text-blue-400'
-                    : 'text-blue-600 dark:text-blue-400'
-                    }`} />
+                 <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
                 </div>
                 <div className="flex-1">
                   <div className="font-medium text-sm">
@@ -423,6 +424,34 @@ const ActionsDropdown = ({
                   </div>
                 </div>
                 {isWordConnectorActive && (
+                  <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                )}
+              </div>
+            </DropdownMenuItem>
+
+            {/* Excel Connector */}
+            <DropdownMenuItem
+              onClick={() => {
+                if (handleExcelConnectorToggle) {
+                  handleExcelConnectorToggle();
+                }
+                setIsOpen(false);
+              }}
+              disabled={isDisabled}
+            >
+              <div className="flex items-center gap-3 w-full">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
+                  ? 'bg-blue-100 dark:bg-blue-900/20'
+                  : 'bg-blue-100 dark:bg-blue-900/20'
+                  }`}>
+                  <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-sm">
+                    {isExcelConnectorActive ? 'Excel Connector Active' : 'Excel Connector'}
+                  </div>
+                </div>
+                {isExcelConnectorActive && (
                   <div className="w-2 h-2 bg-blue-500 rounded-full" />
                 )}
               </div>
@@ -782,6 +811,8 @@ const ActiveToolsDisplay = ({
   setIsSpotifyActive,
   isWordConnectorActive,
   setIsWordConnectorActive,
+  isExcelConnectorActive,
+  setIsExcelConnectorActive,
   chatType,
   setChatType,
 
@@ -790,7 +821,8 @@ const ActiveToolsDisplay = ({
   handleGoogleCalendarToggle,
   handleGoogleDriveToggle,
   handleSpotifyToggle,
-  handleWordConnectorToggle
+  handleWordConnectorToggle,
+  handleExcelConnectorToggle
 }: {
   isWebSearchActive: boolean;
   setIsWebSearchActive: (value: boolean) => void;
@@ -811,6 +843,8 @@ const ActiveToolsDisplay = ({
   setIsSpotifyActive: (value: boolean) => void;
   isWordConnectorActive: boolean;
   setIsWordConnectorActive: (value: boolean) => void;
+  isExcelConnectorActive: boolean;
+  setIsExcelConnectorActive: (value: boolean) => void;
   chatType: string;
   setChatType: (type: any) => void;
 
@@ -820,13 +854,15 @@ const ActiveToolsDisplay = ({
   handleGoogleDriveToggle: () => void;
   handleSpotifyToggle: () => void;
   handleWordConnectorToggle: () => void;
+  handleExcelConnectorToggle: () => void;
 }) => {
   const activeConnectors = [
     isGmailActive && { id: 'gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
     isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
     isGoogleDriveActive && { id: 'drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
     isSpotifyActive && { id: 'spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
-    isWordConnectorActive && { id: 'word', icon: <FileText className="h-4 w-4" /> },
+    isWordConnectorActive && { id: 'word', icon:  <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />},
+    isExcelConnectorActive && { id: 'excel', icon: <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" /> },
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
@@ -840,6 +876,8 @@ const ActiveToolsDisplay = ({
     setIsGoogleCalendarActive(false);
     setIsGoogleDriveActive(false);
     setIsSpotifyActive(false);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
     setChatType('text');
   };
 
@@ -955,7 +993,7 @@ const ActiveToolsDisplay = ({
               <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4" />
+                     <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
                     <span>Word Connector</span>
                   </div>
                   <Switch
@@ -963,6 +1001,23 @@ const ActiveToolsDisplay = ({
                     onCheckedChange={() => {
                       if (handleWordConnectorToggle) {
                         handleWordConnectorToggle();
+                      }
+                    }}
+                  />
+                </div>
+              </DropdownMenuItem>
+
+              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2">
+                     <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
+                    <span>Excel Connector</span>
+                  </div>
+                  <Switch
+                    checked={isExcelConnectorActive}
+                    onCheckedChange={() => {
+                      if (handleExcelConnectorToggle) {
+                        handleExcelConnectorToggle();
                       }
                     }}
                   />
@@ -1350,6 +1405,10 @@ function ChatInterfaceContent() {
   const [selectedWordText, setSelectedWordText] = React.useState<string | null>(null);
   const [isRewriting, setIsRewriting] = React.useState(false);
 
+  const [isExcelConnectorActive, setIsExcelConnectorActive] = React.useState(false);
+  const [isGeneratingExcel, setIsGeneratingExcel] = React.useState(false);
+  const excelConnectorRef = React.useRef<ExcelConnectorRef | null>(null);
+
   // Computer Use hook
   const {
     status: computerUseHookStatus,
@@ -1415,6 +1474,10 @@ function ChatInterfaceContent() {
       setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsSpotifyActive(false);
+      setIsComputerUseActive(false);
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
     }
   };
 
@@ -1428,6 +1491,10 @@ function ChatInterfaceContent() {
       setIsGoogleDriveActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsSpotifyActive(false);
+      setIsComputerUseActive(false);
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
     }
   };
 
@@ -1441,6 +1508,10 @@ function ChatInterfaceContent() {
       setIsGoogleCalendarActive(false);
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsSpotifyActive(false);
+      setIsComputerUseActive(false);
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
     }
   };
 
@@ -1456,6 +1527,8 @@ function ChatInterfaceContent() {
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
       setIsComputerUseActive(false);
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
     }
   };
 
@@ -1472,6 +1545,7 @@ function ChatInterfaceContent() {
       setIsVideoGenerationActive(false);
       setIsSpotifyActive(false);
       setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
       setChatType('computer-use');
     } else {
       setChatType('text');
@@ -1494,6 +1568,7 @@ function ChatInterfaceContent() {
       setIsVideoGenerationActive(false);
       setIsSpotifyActive(false);
       setIsComputerUseActive(false);
+      setIsExcelConnectorActive(false);
       setChatType('text');
 
       // If toggling on while a chat is already selected, create/select
@@ -1517,6 +1592,44 @@ function ChatInterfaceContent() {
     }
 
     setIsWordConnectorActive(newState);
+  };
+
+  const handleExcelConnectorToggle = async () => {
+    console.log("Toggling Excel Connector");
+    const newState = !isExcelConnectorActive;
+
+    if (newState) {
+      // Disable other modes
+      setIsWebSearchActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+      setIsSpotifyActive(false);
+      setIsComputerUseActive(false);
+      setIsWordConnectorActive(false);
+      setChatType('text');
+
+      // Create/select a dedicated chat for the Excel Connector
+      if (currentChat) {
+        try {
+          const newChat = await createNewChat('text', undefined, undefined, {
+            skipInitialProcessing: true,
+            isExcelConnectorChat: true,
+          } as any);
+          if (newChat?.id) {
+            await selectChat(newChat.id);
+          }
+        } catch (err) {
+          console.error('Failed to create/select Excel Connector chat', err);
+        }
+      }
+    } else {
+      setChatType('text');
+    }
+
+    setIsExcelConnectorActive(newState);
   };
 
   const handleSpotifyCommand = async (prompt: string) => {
@@ -1933,6 +2046,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsVideoGenerationActive(false);
       setIsComputerUseActive(false);
       setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
       setChatType('text'); // Always default to text when switching chats
 
       // Clear Computer Use reasoning when switching chats
@@ -1970,37 +2084,20 @@ But first, you need to connect your Spotify account securely using the button be
         }, 500); // Increased timeout for editor initialization
       }
     }
-  }, [currentChat?.id]);
 
-  // Additional effect: Load content when Word Connector becomes active and ref is ready
-  React.useEffect(() => {
-    setShowAudioPanel(false);
-    setDocumentPreviewUrl(null)
-    setSplitViewContent(null)
+    // Auto-open Excel Connector for Excel Connector chats
+    if (currentChat && (currentChat as any).isExcelConnectorChat) {
+      setIsExcelConnectorActive(true);
 
-    // Auto-open Word Connector for Word Connector chats
-    if (currentChat && (currentChat as any).isWordConnectorChat) {
-      console.log('📄 Word Connector chat detected:', currentChat.id);
-      console.log('📄 Has wordContent:', !!(currentChat as any).wordContent);
-      console.log('📄 wordContent length:', (currentChat as any).wordContent?.length);
-
-      setIsWordConnectorActive(true);
-
-      // Load existing Word content if available
-      if ((currentChat as any).wordContent) {
-        console.log('📄 Attempting to load Word content into editor...');
-        // Wait longer for editor to be ready
+      if ((currentChat as any).excelContent) {
         setTimeout(() => {
-          if (wordConnectorRef.current) {
-            console.log('📄 Ref is ready, updating content...');
-            wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
-          } else {
-            console.warn('📄 WordConnector ref not ready yet');
-          }
-        }, 500); // Increased timeout for editor initialization
+          excelConnectorRef.current?.loadWorkbook((currentChat as any).excelContent);
+        }, 500);
       }
     }
   }, [currentChat?.id]);
+
+
 
   // Additional effect: Load content when Word Connector becomes active and ref is ready
   React.useEffect(() => {
@@ -2256,7 +2353,7 @@ But first, you need to connect your Spotify account securely using the button be
 
   const handleSend = async () => {
     const msg = input.trim();
-    if (!msg || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isRewriting) return;
+    if (!msg || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting) return;
 
     // Handle rewrite request
     if (selectedWordText) {
@@ -2411,6 +2508,120 @@ But first, you need to connect your Spotify account securely using the button be
         toast.error(error?.message || 'Error al generar documento');
       }
       return; // IMPORTANT: Stop execution here - no other API calls should be made
+    }
+
+    // Handle Excel Connector - generate content directly into the Syncfusion Spreadsheet
+    if (isExcelConnectorActive) {
+      try {
+        setIsGeneratingExcel(true);
+
+        // Create or get chat (IMPORTANT: do NOT trigger generic AI generation here)
+        let activeChat = currentChat;
+        if (!activeChat) {
+          const newChat = await createNewChat('text', msg, undefined, {
+            skipInitialProcessing: true,
+            isExcelConnectorChat: true
+          } as any);
+          activeChat = (newChat as any) || currentChat;
+
+          if (activeChat?.id) {
+            await selectChat(activeChat.id);
+          }
+        }
+
+        // Add user message to chat for display
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: activeChat?.id || '',
+          role: 'USER' as const,
+          content: msg,
+          timestamp: new Date().toISOString(),
+          files: filesToSend,
+        };
+
+        setCurrentChat(prevChat => {
+          if (!prevChat && activeChat) {
+            return { ...activeChat, messages: [userMessage] };
+          }
+          if (prevChat) {
+            const updatedMessages = [...(prevChat.messages || []), userMessage];
+            return { ...prevChat, messages: updatedMessages };
+          }
+          return prevChat;
+        });
+
+        const streamId = crypto.randomUUID();
+        let accumulatedContent = '';
+
+        await apiClient.generateExcelStream(
+          {
+            provider: selectProvider,
+            model: selectedModel,
+            prompt: msg,
+            chatId: activeChat?.id,
+            files: filesToSend?.map(f => f.id) || [],
+            streamId,
+          },
+          (chunk) => {
+            accumulatedContent += chunk;
+          },
+          () => {
+            setIsGeneratingExcel(false);
+            try {
+              const cleaned = accumulatedContent
+                .trim()
+                .replace(/^```json\s*/i, '')
+                .replace(/^```\s*/i, '')
+                .replace(/```\s*$/i, '');
+              
+              const workbookJson = JSON.parse(cleaned);
+              console.log('Parsed workbook JSON:', workbookJson);
+
+              if (excelConnectorRef.current) {
+                excelConnectorRef.current.loadWorkbook(workbookJson);
+                toast.success('Excel generated successfully');
+              } else {
+                console.error('Excel connector ref is not available');
+                toast.error('Excel connector not ready');
+              }
+            } catch (e) {
+              console.error('Failed to parse Excel workbook JSON', e);
+              console.error('Accumulated content:', accumulatedContent);
+              toast.error('Failed to load generated Excel');
+            }
+
+            const aiMessage = {
+              id: `msg-ai-${Date.now()}`,
+              chatId: activeChat?.id || '',
+              role: 'ASSISTANT' as const,
+              content: 'Excel generated in spreadsheet editor',
+              timestamp: new Date().toISOString(),
+            };
+            setCurrentChat(prevChat => {
+              if (!prevChat) return prevChat;
+              const updatedMessages = [...(prevChat.messages || []), aiMessage];
+              return { ...prevChat, messages: updatedMessages };
+            });
+
+            if (activeChat?.id) {
+              setTimeout(() => {
+                selectChat(activeChat.id);
+              }, 500);
+            }
+          },
+          (error) => {
+            setIsGeneratingExcel(false);
+            console.error('Excel generation error:', error);
+            toast.error(error.message || 'Failed to generate Excel');
+          }
+        );
+      } catch (error: any) {
+        setIsGeneratingExcel(false);
+        console.error('Excel Connector error:', error);
+        toast.error(error?.message || 'Failed to generate Excel');
+      }
+
+      return;
     }
 
     // Handle thesis type early - before adding optimistic messages
@@ -3877,6 +4088,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isSpotifyActive={isSpotifyActive}
                           isWordConnectorActive={isWordConnectorActive}
                           setIsWordConnectorActive={setIsWordConnectorActive}
+                          isExcelConnectorActive={isExcelConnectorActive}
+                          setIsExcelConnectorActive={setIsExcelConnectorActive}
                           setShowAudioPanel={setShowAudioPanel}
 
                           handleComputerUseToggle={handleComputerUseToggle}
@@ -3885,6 +4098,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleGoogleDriveToggle={handleGoogleDriveToggle}
                           handleSpotifyToggle={handleSpotifyToggle}
                           handleWordConnectorToggle={handleWordConnectorToggle}
+                          handleExcelConnectorToggle={handleExcelConnectorToggle}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
@@ -3915,6 +4129,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsSpotifyActive={setIsSpotifyActive}
                           isWordConnectorActive={isWordConnectorActive}
                           setIsWordConnectorActive={setIsWordConnectorActive}
+                          isExcelConnectorActive={isExcelConnectorActive}
+                          setIsExcelConnectorActive={setIsExcelConnectorActive}
                           chatType={chatType}
                           setChatType={setChatType}
 
@@ -3924,6 +4140,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleGoogleDriveToggle={handleGoogleDriveToggle}
                           handleSpotifyToggle={handleSpotifyToggle}
                           handleWordConnectorToggle={handleWordConnectorToggle}
+                          handleExcelConnectorToggle={handleExcelConnectorToggle}
                         />
                         <div className="flex-grow" />
                         {!(isLoading && isStreaming) && (
@@ -3934,7 +4151,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             />
                             <Button
                               onClick={handleSend}
-                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isRewriting}
+                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
                               size="sm"
                               className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                             >
@@ -4172,6 +4389,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isLoading ||
                               isGeneratingVideo ||
                               isGeneratingWord ||
+                              isGeneratingExcel ||
                               isWebSearching
                             }
                           />
@@ -4195,6 +4413,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isSpotifyActive={isSpotifyActive}
                               isWordConnectorActive={isWordConnectorActive}
                               setIsWordConnectorActive={setIsWordConnectorActive}
+                              isExcelConnectorActive={isExcelConnectorActive}
+                              setIsExcelConnectorActive={setIsExcelConnectorActive}
                               setShowAudioPanel={setShowAudioPanel}
 
                               handleComputerUseToggle={handleComputerUseToggle}
@@ -4203,6 +4423,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleGoogleDriveToggle={handleGoogleDriveToggle}
                               handleSpotifyToggle={handleSpotifyToggle}
                               handleWordConnectorToggle={handleWordConnectorToggle}
+                              handleExcelConnectorToggle={handleExcelConnectorToggle}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
@@ -4233,6 +4454,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsSpotifyActive={setIsSpotifyActive}
                               isWordConnectorActive={isWordConnectorActive}
                               setIsWordConnectorActive={setIsWordConnectorActive}
+                              isExcelConnectorActive={isExcelConnectorActive}
+                              setIsExcelConnectorActive={setIsExcelConnectorActive}
                               chatType={chatType}
                               setChatType={setChatType}
 
@@ -4242,6 +4465,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleGoogleDriveToggle={handleGoogleDriveToggle}
                               handleSpotifyToggle={handleSpotifyToggle}
                               handleWordConnectorToggle={handleWordConnectorToggle}
+                              handleExcelConnectorToggle={handleExcelConnectorToggle}
                             />
                             <div className="flex-grow" />
                             {!(isLoading || isStreaming || pendingStop || isSending) && (
@@ -4252,7 +4476,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 />
                                 <Button
                                   onClick={handleSend}
-                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isRewriting}
+                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
                                   size="sm"
                                   className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
                                 >
@@ -4347,6 +4571,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             onTextSelected={(text) => {
               setSelectedWordText(text);
             }}
+          />
+        )}
+
+        {isExcelConnectorActive && (
+          <ExcelConnector
+            ref={excelConnectorRef}
+            onClose={() => setIsExcelConnectorActive(false)}
+            isGeneratingExternal={isGeneratingExcel}
           />
         )}
       </div>
