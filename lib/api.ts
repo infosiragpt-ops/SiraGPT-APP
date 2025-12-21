@@ -460,13 +460,13 @@ class ApiClient {
 
   // ✅ Word Document Generation Stream - Specialized for Word Connector
   async generateWordStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, mode?: 'create' | 'rewrite', selectedText?: string },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
     signal?: AbortSignal
   ) {
-    const url = `${this.baseURL}/ai/generate-word`;
+    const url = `${this.baseURL}/document-ai/generate-word`;
     const config: RequestInit = {
       method: 'POST',
       headers: {

@@ -3389,6 +3389,8 @@ router.post(
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
     body('streamId').optional().isString(),
+    body('selectedText').optional().isString(),
+
   ],
   authenticateToken,
   async (req, res) => {
@@ -3417,7 +3419,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files, selectedText } = req.body;
       const userId = req.user.id;
 
       console.log('📄 Word Document generation request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
@@ -3484,9 +3486,27 @@ router.post(
 
       // Build messages for Word document generation
       const messages = [];
+      const { mode } = req.body;
 
-      // System message specifically for Word document generation
-      const wordSystemMessage = `You are an expert document writer specializing in creating professional Word documents. Your task is to generate well-structured, formatted content that will be displayed in a rich text editor.
+      let wordSystemMessage;
+
+      if (mode === 'rewrite') {
+        wordSystemMessage = `You are an expert editor. You are editing a specific part of a document based on user instructions.
+
+CRITICAL REQUIREMENTS:
+1. Apply the user's command ONLY to the selected text provided in the prompt.
+2. Use the full document context (if provided) to ensure consistency in tone, style, and content, but DO NOT rewrite the whole document.
+3. Return ONLY the rewritten version of the selected text in clean HTML format.
+4. Do NOT include any explanations, quotes, or conversational filler.
+5. If the user asks to "summarize", summarize only the selected text.
+6. If the user asks to "fix grammar", fix it only for the selected text.
+7. Return HTML content if needed for formatting (bold, italic, lists), otherwise plain text.
+8. For math equations, use LaTeX format with single dollar signs ($...$) for inline and double dollar signs ($$...$$) for block.
+
+Your response will directly replace the selected text in the document.`;
+      } else {
+        // Default mode: Create new document
+        wordSystemMessage = `You are an expert document writer specializing in creating professional Word documents. Your task is to generate well-structured, formatted content that will be displayed in a rich text editor.
 
 CRITICAL REQUIREMENTS:
 1. Return content in clean HTML format suitable for a rich text editor (Tiptap)
@@ -3505,6 +3525,7 @@ CRITICAL REQUIREMENTS:
    - The LaTeX will be automatically converted to proper math rendering nodes
 
 Generate a complete, professional document based on the user's request.`;
+      }
 
       messages.push({
         role: 'system',
@@ -3522,11 +3543,17 @@ Generate a complete, professional document based on the user's request.`;
           }
         }
       }
+      const userPrompt = selectedText ? `Edit the following text\n The user has selected the following text to edit:
+"${selectedText}"\n\n  
+USER COMMAND:
+${prompt}
+`
 
+        : prompt;
       // Add user prompt
       messages.push({
         role: 'user',
-        content: prompt
+        content: userPrompt
       });
 
       // Initialize OpenAI client based on provider
@@ -3569,13 +3596,15 @@ Generate a complete, professional document based on the user's request.`;
       if (chatId && fullResponseContent.trim()) {
         const tokens = fullResponseContent.length + prompt.length;
         // Don't save the full content to the message, just a confirmation.
-        await saveChatAndTrackUsage(userId, chatId, prompt, "The document has been generated in the Word Connector.", tokens, model, processedFiles);
+        await saveChatAndTrackUsage(userId, chatId, prompt, mode === "rewrite" ? fullResponseContent : "The document has been generated in the Word Connector.", tokens, model, processedFiles);
 
         // Update chat with Word content
-        await prisma.chat.update({
-          where: { id: chatId },
-          data: { wordContent: fullResponseContent, isWordConnectorChat: true }
-        });
+        if (mode !== 'rewrite') {
+          await prisma.chat.update({
+            where: { id: chatId },
+            data: { wordContent: fullResponseContent, isWordConnectorChat: true }
+          });
+        }
       }
 
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
