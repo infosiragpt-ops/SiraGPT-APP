@@ -149,11 +149,13 @@ export function AppSidebar() {
   const formatChatTime = (dateString: string) => {
     const date = new Date(dateString)
     const now = new Date()
-    const diffInHours = Math.floor(
-      (now.getTime() - date.getTime()) / (1000 * 60 * 60)
+    const diffInMinutes = Math.floor(
+      (now.getTime() - date.getTime()) / (1000 * 60)
     )
 
-    if (diffInHours < 1) return "Just now"
+    if (diffInMinutes < 1) return "Just now"
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`
+    const diffInHours = Math.floor(diffInMinutes / 60)
     if (diffInHours < 24) return `${diffInHours}h ago`
     if (diffInHours < 48) return "Yesterday"
     return `${Math.floor(diffInHours / 24)}d ago`
@@ -161,7 +163,7 @@ export function AppSidebar() {
 
   const isAnon = !user
   const isFreeUser = user?.plan?.toLowerCase() === "free"
-  
+
   // Show upgrade button for free users OR users approaching their monthly limit (70% or more)
   const currentUsage = user?.apiUsage || 0
   const monthlyLimit = user?.monthlyLimit || 0
@@ -498,7 +500,7 @@ export function AppSidebar() {
                   {typeof window !== "undefined" && localStorage.getItem('superadmin-return-data') && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem 
+                      <DropdownMenuItem
                         onClick={async () => {
                           const returnData = localStorage.getItem('superadmin-return-data')
                           if (returnData) {
@@ -534,11 +536,10 @@ export function AppSidebar() {
                   onClick={handleUpgradeClick}
                   size="sm"
                   variant={usagePercentage >= 90 ? "destructive" : "outline"}
-                  className={`ml-2 h-7 px-2 text-xs ${
-                    usagePercentage >= 90 
-                      ? "" 
+                  className={`ml-2 h-7 px-2 text-xs ${usagePercentage >= 90
+                      ? ""
                       : "border-primary text-primary hover:bg-primary hover:text-primary-foreground"
-                  }`}
+                    }`}
                 >
                   <Crown className="h-3 w-3 mr-1" />
                   {usagePercentage >= 90 ? 'Upgrade Now' : 'Upgrade'}
