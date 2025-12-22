@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { registerLicense } from "@syncfusion/ej2-base";
 import {
   SpreadsheetComponent,
-    SheetsDirective,
+  SheetsDirective,
   SheetDirective,
   Inject,
   Ribbon,
@@ -68,17 +68,17 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
           // Syncfusion expects the format: { Workbook: {...} } or just the sheets data
           // Let's check if workbookJson has 'sheets' property
-          const formattedJson = (workbookJson as any).sheets 
-            ? { Workbook: workbookJson } 
+          const formattedJson = (workbookJson as any).sheets
+            ? { Workbook: workbookJson }
             : workbookJson;
 
           console.log('Loading workbook with formatted JSON:', formattedJson);
-          
+
           spreadsheetRef.current.openFromJson(
             { file: formattedJson },
             { onlyValues: false }
           );
-          
+
           console.log('Workbook loaded successfully');
         } catch (e) {
           console.error("Failed to load workbook JSON", e);
@@ -110,7 +110,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
       <div className="w-full min-w-0 border-l border-border/40 bg-background flex flex-col h-full">
         <div className="flex items-center justify-between p-4 border-b border-border/40">
           <div className="flex items-center gap-2">
-          <img src="/icons/Excel.png" alt="Excel Connector" className="h-6 w-6" />
+            <img src="/icons/Excel.png" alt="Excel Connector" className="h-6 w-6" />
             <h2 className="text-lg font-semibold">Excel File</h2>
           </div>
           <div className="flex items-center gap-2">
@@ -127,48 +127,51 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
           </div>
         </div>
 
-        <div className="relative flex-1 min-w-0 overflow-hidden">
+        <div className="relative flex-1 min-w-0 overflow-hidden h-[calc(100vh-100px)]">
           {isGeneratingExternal && (
             <div className="absolute inset-0 z-10 bg-background/70 backdrop-blur-sm flex items-center justify-center">
               <div className="text-sm text-muted-foreground">Generating spreadsheet…</div>
             </div>
           )}
 
-          <SpreadsheetComponent
-            ref={(instance: SpreadsheetComponent | null) => {
-              spreadsheetRef.current = instance;
-            }}
-            height="100%"
-             width="100%"
-            showRibbon={true}
-            showFormulaBar={true}
-          >
-           <Inject
-          services={[
-            Ribbon,
-            FormulaBar,
-            SheetTabs,
-            Selection,
-            Edit,
-            Clipboard,
-            Open,
-            Save,
-            ContextMenu,
-            NumberFormat,
-            Resize,
-            UndoRedo,
-            KeyboardNavigation,
-            Sort,
-            Filter,
-            DataValidation,
-            ConditionalFormatting,
-            ProtectSheet,
-          ]}
-        />
-            <SheetsDirective>
-              <SheetDirective name="Sheet1" />
-            </SheetsDirective>
-          </SpreadsheetComponent>
+          <div className="absolute inset-0">
+            <SpreadsheetComponent
+              ref={(instance: SpreadsheetComponent | null) => {
+                spreadsheetRef.current = instance;
+              }}
+              height="100%"
+              width="100%"
+              showRibbon={true}
+              showFormulaBar={true}
+              cssClass="e-spreadsheet-container"
+            >
+              <Inject
+                services={[
+                  Ribbon,
+                  FormulaBar,
+                  SheetTabs,
+                  Selection,
+                  Edit,
+                  Clipboard,
+                  Open,
+                  Save,
+                  ContextMenu,
+                  NumberFormat,
+                  Resize,
+                  UndoRedo,
+                  KeyboardNavigation,
+                  Sort,
+                  Filter,
+                  DataValidation,
+                  ConditionalFormatting,
+                  ProtectSheet,
+                ]}
+              />
+              <SheetsDirective>
+                <SheetDirective name="Sheet1" />
+              </SheetsDirective>
+            </SpreadsheetComponent>
+          </div>
         </div>
       </div>
     );

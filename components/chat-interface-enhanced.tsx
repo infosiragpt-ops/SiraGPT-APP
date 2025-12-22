@@ -416,7 +416,7 @@ const ActionsDropdown = ({
                   ? 'bg-blue-100 dark:bg-blue-900/20'
                   : 'bg-blue-100 dark:bg-blue-900/20'
                   }`}>
-                 <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
+                  <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
                 </div>
                 <div className="flex-1">
                   <div className="font-medium text-sm">
@@ -861,7 +861,7 @@ const ActiveToolsDisplay = ({
     isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
     isGoogleDriveActive && { id: 'drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
     isSpotifyActive && { id: 'spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
-    isWordConnectorActive && { id: 'word', icon:  <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />},
+    isWordConnectorActive && { id: 'word', icon: <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" /> },
     isExcelConnectorActive && { id: 'excel', icon: <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" /> },
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
@@ -993,7 +993,7 @@ const ActiveToolsDisplay = ({
               <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-2">
-                     <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
+                    <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
                     <span>Word Connector</span>
                   </div>
                   <Switch
@@ -1010,7 +1010,7 @@ const ActiveToolsDisplay = ({
               <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-2">
-                     <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
+                    <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
                     <span>Excel Connector</span>
                   </div>
                   <Switch
@@ -2598,7 +2598,7 @@ REWRITTEN TEXT:`;
                 .replace(/^```json\s*/i, '')
                 .replace(/^```\s*/i, '')
                 .replace(/```\s*$/i, '');
-              
+
               const workbookJson = JSON.parse(cleaned);
               console.log('Parsed workbook JSON:', workbookJson);
 
@@ -3813,7 +3813,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   return (
     <div
-      className="flex h-full flex-col relative"
+      className="flex h-screen flex-col relative overflow-hidden"
       onDragEnter={handleDragIn}
       onDragOver={handleDrag}
       onDragLeave={handleDragOut}
@@ -3828,8 +3828,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
-        <div className={`relative flex flex-col h-full ${documentPreviewUrl || isWordConnectorActive ? 'w-[40%]' : 'w-full'}`}>
+      <div className="flex flex-1 overflow-hidden w-full relative">
+        <div className={`relative flex flex-col h-full overflow-hidden ${documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive ? 'w-[40%] shrink-0' : 'w-full'}`}>
           {/* Header */}
           <div className="absolute top-0 left-0 right-0 z-10 p-4">
             <div className="flex items-center justify-between">

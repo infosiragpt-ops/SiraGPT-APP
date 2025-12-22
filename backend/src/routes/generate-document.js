@@ -15,9 +15,8 @@ const crypto = require('crypto');
 const mime = require('mime-types');
 
 const { exec } = require('child_process');
-// Dependencies ko file ke top par import karen
 const fs = require('fs').promises;
-const fsSync = require('fs'); // ✅ For synchronous file operations
+const fsSync = require('fs');
 const path = require('path');
 const { use } = require('passport');
 
@@ -71,16 +70,6 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
                 }
             });
         }
-
-        // ✅ Track usage
-        // await prisma.apiUsage.create({
-        //   data: { userId, model, tokens, cost: tokens * 0.001 }
-        // });
-
-        // await prisma.user.update({
-        //   where: { id: userId },
-        //   data: { apiUsage: { increment: tokens } }
-        // });
         await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
 
         console.log("Background task: Database save complete.");
