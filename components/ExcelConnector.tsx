@@ -28,12 +28,13 @@ import {
   Filter,
   DataValidation,
   ConditionalFormatting,
-  ProtectSheet,
+  ProtectSheet
 } from "@syncfusion/ej2-react-spreadsheet";
 
 export type ExcelConnectorRef = {
-  loadWorkbook: (workbookJson: object) => void;
+  loadWorkbook: (workbookJson: object, actions?: any[]) => void;
   saveAsJson: () => Promise<object | null>;
+  insertChart: (chartConfig: any) => void;
 };
 
 type ExcelConnectorProps = {
@@ -57,7 +58,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
     }, []);
 
     React.useImperativeHandle(ref, () => ({
-      loadWorkbook: (workbookJson: object) => {
+      loadWorkbook: (workbookJson: object, actions?: any[]) => {
         console.log('ExcelConnector.loadWorkbook called with:', workbookJson);
         try {
           if (!spreadsheetRef.current) {
@@ -66,8 +67,6 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             return;
           }
 
-          // Syncfusion expects the format: { Workbook: {...} } or just the sheets data
-          // Let's check if workbookJson has 'sheets' property
           const formattedJson = (workbookJson as any).sheets
             ? { Workbook: workbookJson }
             : workbookJson;
@@ -80,6 +79,30 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
           );
 
           console.log('Workbook loaded successfully');
+
+          // Process chart actions if provided
+          if (actions && actions.length > 0) {
+            console.log('Processing chart actions:', actions);
+            setTimeout(() => {
+              actions.forEach((action, index) => {
+                if (action.type === 'insertChart') {
+                  try {
+                    // Syncfusion will auto-position the chart
+                    // No need to specify position coordinates
+                    spreadsheetRef.current?.insertChart([{
+                      type: action.chartType || 'Column',
+                      range: action.range,
+                      id: `chart_${Date.now()}_${index}`,
+                      theme: 'Material'
+                    }]);
+                    console.log(`✅ Chart ${index + 1} inserted:`, action.chartType, 'for range:', action.range);
+                  } catch (chartError) {
+                    console.error('❌ Error inserting chart:', chartError);
+                  }
+                }
+              });
+            }, 1000); // Longer delay to ensure workbook is fully loaded
+          }
         } catch (e) {
           console.error("Failed to load workbook JSON", e);
           toast.error("Failed to load generated spreadsheet");
@@ -92,6 +115,30 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         } catch (e) {
           console.error("Failed to save spreadsheet as JSON", e);
           return null;
+        }
+      },
+      insertChart: (chartConfig: any) => {
+        console.log('Inserting chart with config:', chartConfig);
+        try {
+          if (!spreadsheetRef.current) {
+            console.error('Spreadsheet ref is not initialized');
+            toast.error('Spreadsheet not initialized');
+            return;
+          }
+
+          const chartOptions = [{
+            type: chartConfig.chartType || 'Column',
+            range: chartConfig.range,
+            id: chartConfig.id || `chart_${Date.now()}`,
+            theme: chartConfig.theme || 'Material'
+          }];
+
+          spreadsheetRef.current.insertChart(chartOptions);
+          console.log('Chart inserted successfully');
+          toast.success('Chart created successfully');
+        } catch (e) {
+          console.error("Failed to insert chart", e);
+          toast.error("Failed to create chart");
         }
       },
     }));
@@ -143,6 +190,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
               width="100%"
               showRibbon={true}
               showFormulaBar={true}
+              allowChart={true}
               cssClass="e-spreadsheet-container"
             >
               <Inject
@@ -164,7 +212,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
                   Filter,
                   DataValidation,
                   ConditionalFormatting,
-                  ProtectSheet,
+                  ProtectSheet
                 ]}
               />
               <SheetsDirective>

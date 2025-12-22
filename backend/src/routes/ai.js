@@ -3497,6 +3497,64 @@ CRITICAL REQUIREMENTS:
 6. Default to 1 sheet unless the user explicitly requests multiple sheets.
 7. Unless the user requests a very large dataset, keep output within 200 rows and 30 columns.
 
+**ADVANCED EXCEL ERP & FORMULA GENERATION RULES:**
+
+If the user asks for a complex Excel system (like ERP, Inventory Management, Finance Dashboard) with multiple sheets and connections:
+
+1. **TRANSLATE FORMULAS:** Even if the user asks in Spanish (e.g., BUSCARX, SUMAR.SI), you MUST write the formula in **ENGLISH** (VLOOKUP, SUMIFS) because the Excel file engine requires English formulas. They will appear in the user's local language when they open the file.
+2. **🚨 CRITICAL: ALWAYS USE VLOOKUP - NEVER XLOOKUP:** 
+   - **FORBIDDEN:** Never use XLOOKUP - it's not supported in many Excel versions
+   - **MANDATORY:** Always use VLOOKUP for cross-sheet lookups
+   - **VLOOKUP Syntax:** VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])
+   - **🚨 CRITICAL RANGE REQUIREMENT:** Syncfusion Spreadsheet does NOT support full column references like $A:$E
+   - **MANDATORY:** Always use BOUNDED ranges with explicit rows (e.g., $A$1:$E$500, NOT $A:$E)
+   - **Correct Example:** VLOOKUP(B2, Productos!$A$1:$E$500, 5, FALSE)
+   - **WRONG Example:** VLOOKUP(B2, Productos!$A:$E, 5, FALSE) ❌ - This will NOT work in Syncfusion so use this VLOOKUP(B2, Productos!$A$1:$E$500, 5, FALSE)
+   - **For cross-sheet references:** Use 'SheetName'!$A$1:$E$500 format (bounded ranges with row numbers)
+   - Range_lookup should be FALSE for exact matches (most common case)
+   - **Always use absolute references ($A$1:$E$500) for lookup tables to ensure formulas work correctly.
+
+ 
+// ------------------- CHART ACTION RULES -------------------
+
+**CRITICAL: ONLY create charts when user EXPLICITLY requests visualization/charts/graphs.**
+
+DO NOT create charts by default. Only create charts if user says:
+- "with a chart"
+- "show as chart"
+- "visualize"
+- "create a graph"
+- "bar chart"
+- "pie chart"
+- "line chart"
+- etc.
+
+If user ONLY asks for data/spreadsheet WITHOUT mentioning charts/visualization, return:
+{
+  "sheets": [ ... ]
+}
+
+If user EXPLICITLY requests charts, then return:
+{
+  "workbook": {
+    "sheets": [ ... ]
+  },
+  "actions": [
+    {
+      "type": "insertChart",
+      "sheet": "Sheet1",
+      "chartType": "Column | Line | Pie | Bar",
+      "range": "A1:B10",
+      "title": "Chart Title"
+    }
+  ]
+}
+
+**CHART POSITIONING RULES:**
+- Charts will auto-position below the data
+- You do NOT need to specify position coordinates
+- Just provide: type, sheet, chartType, range, and title
+
 Generate the workbook based on the user's request.`;
 
 

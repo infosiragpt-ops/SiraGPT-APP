@@ -2599,12 +2599,28 @@ REWRITTEN TEXT:`;
                 .replace(/^```\s*/i, '')
                 .replace(/```\s*$/i, '');
 
-              const workbookJson = JSON.parse(cleaned);
-              console.log('Parsed workbook JSON:', workbookJson);
+              const parsedResponse = JSON.parse(cleaned);
+              console.log('Parsed Excel response:', parsedResponse);
+
+              // Check if response has both workbook and actions (chart support)
+              let workbookData = parsedResponse;
+              let chartActions = [];
+
+              if (parsedResponse.workbook && parsedResponse.actions) {
+                // New format with chart actions
+                workbookData = parsedResponse.workbook;
+                chartActions = parsedResponse.actions;
+                console.log('Chart actions detected:', chartActions);
+              }
 
               if (excelConnectorRef.current) {
-                excelConnectorRef.current.loadWorkbook(workbookJson);
-                toast.success('Excel generated successfully');
+                excelConnectorRef.current.loadWorkbook(workbookData, chartActions);
+
+                if (chartActions.length > 0) {
+                  toast.success(`Excel generated with ${chartActions.length} chart(s)!`);
+                } else {
+                  toast.success('Excel generated successfully');
+                }
               } else {
                 console.error('Excel connector ref is not available');
                 toast.error('Excel connector not ready');

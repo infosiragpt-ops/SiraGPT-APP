@@ -39,6 +39,7 @@
     "@radix-ui/react-toggle-group": "1.1.1",
     "@radix-ui/react-tooltip": "latest",
     "@syncfusion/ej2-base": "^32.1.19",
+    "@syncfusion/ej2-react-charts": "^32.1.19",
     "@syncfusion/ej2-react-spreadsheet": "^32.1.19",
     "@tiptap/extension-color": "^3.14.0",
     "@tiptap/extension-font-family": "^3.14.0",
