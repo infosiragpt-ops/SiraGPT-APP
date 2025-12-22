@@ -14,6 +14,8 @@ const authRoutes = require('./src/routes/auth');
 const chatRoutes = require('./src/routes/chats');
 const fileRoutes = require('./src/routes/files');
 const aiRoutes = require('./src/routes/ai');
+const documentGenerateAiRoutes = require('./src/routes/generate-document');
+
 const paymentRoutes = require('./src/routes/payments');
 const adminRoutes = require('./src/routes/admin');
 const userRoutes = require('./src/routes/users');
@@ -135,6 +137,8 @@ app.use('/api/spotify', spotifyRoutes);
 app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
 app.use('/api/thesis', thesisRoutes);
+app.use('/api/document-ai', documentGenerateAiRoutes);
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {

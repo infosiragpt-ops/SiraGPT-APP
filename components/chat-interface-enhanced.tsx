@@ -1401,7 +1401,7 @@ function ChatInterfaceContent() {
   const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
   const [isWordConnectorActive, setIsWordConnectorActive] = React.useState(false);
   const [isGeneratingWord, setIsGeneratingWord] = React.useState(false);
-  const wordConnectorRef = React.useRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; } | null>(null);
+  const wordConnectorRef = React.useRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; getHTML: () => string; } | null>(null);
   const [selectedWordText, setSelectedWordText] = React.useState<string | null>(null);
   const [isRewriting, setIsRewriting] = React.useState(false);
 
@@ -2360,19 +2360,44 @@ But first, you need to connect your Spotify account securely using the button be
       setIsRewriting(true);
       setInput("");
 
-      const rewritePrompt = `Rewrite the following text based on the user's command. Return ONLY the rewritten text without any quotes, explanations, or additional formatting.\n\nUser command: ${msg}\n\nText to rewrite:\n${selectedWordText}`;
+      // Get full document context
+      const fullDocumentContent = wordConnectorRef.current?.getHTML() || '';
+
+      // Construct prompt with full context but focus on selected text
+      const rewritePrompt = `You are editing a specific part of a document.
+      
+CONTEXT:
+The user has selected the following text to edit:
+"${selectedWordText}"
+
+FULL DOCUMENT CONTEXT (for reference only):
+${fullDocumentContent}
+
+USER COMMAND:
+${msg}
+
+INSTRUCTIONS:
+1. Apply the user's command ONLY to the selected text.
+2. Use the full document context to ensure consistency in tone, style, and content, but DO NOT rewrite the whole document.
+3. Return ONLY the rewritten version of the selected text.
+4. Do NOT include any explanations, quotes, or conversational filler.
+5. If the user asks to "summarize", summarize only the selected text.
+6. If the user asks to "fix grammar", fix it only for the selected text.
+
+REWRITTEN TEXT:`;
 
       let accumulatedContent = '';
       const streamId = crypto.randomUUID();
 
-      await apiClient.generateAIStream(
+      await apiClient.generateWordStream(
         {
           provider: selectProvider,
           model: selectedModel,
-          prompt: rewritePrompt,
+          prompt: msg,
           chatId: currentChat?.id,
           streamId,
-          regenerate: false,
+          mode: 'rewrite',
+          selectedText: selectedWordText,
         },
         (chunk) => {
           accumulatedContent += chunk;
@@ -2382,8 +2407,8 @@ But first, you need to connect your Spotify account securely using the button be
           if (wordConnectorRef.current) {
             // Remove surrounding quotes if AI added them
             let cleanedContent = accumulatedContent.trim();
-            if ((cleanedContent.startsWith('"') && cleanedContent.endsWith('"')) || 
-                (cleanedContent.startsWith("'") && cleanedContent.endsWith("'"))) {
+            if ((cleanedContent.startsWith('"') && cleanedContent.endsWith('"')) ||
+              (cleanedContent.startsWith("'") && cleanedContent.endsWith("'"))) {
               cleanedContent = cleanedContent.slice(1, -1);
             }
             wordConnectorRef.current.replaceSelection(cleanedContent);
@@ -4545,7 +4570,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           </div>
         )}
         {documentPreviewUrl && (
-          <div className="w-1/2 border-l border-border/40">
+          <div className="w-[60%] border-l border-border/40">
             <DocumentPreview
               url={documentPreviewUrl}
               onClose={() => setDocumentPreviewUrl(null)}

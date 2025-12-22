@@ -118,7 +118,7 @@ const FontSize = Extension.create({
     },
 });
 
-export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; }, WordConnectorProps>(
+export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; getHTML: () => string; }, WordConnectorProps>(
     function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false, onTextSelected, isGeneratingExternal = false }, ref) {
         const [isGenerating, setIsGenerating] = useState(false);
         const [isCollapsed, setIsCollapsed] = useState(false);
@@ -383,6 +383,9 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         .run();
                     selectionRef.current = null;
                 }
+            },
+            getHTML: () => {
+                return editor ? editor.getHTML() : '';
             }
         }), [editor]);
 
