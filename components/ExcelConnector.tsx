@@ -46,6 +46,13 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
   function ExcelConnector({ onClose, isGeneratingExternal = false }, ref) {
     const spreadsheetRef = React.useRef<SpreadsheetComponent | null>(null);
 
+    const spreadsheetSaveUrl = React.useMemo(() => {
+      return (
+        process.env.NEXT_PUBLIC_SYNCFUSION_SPREADSHEET_SAVE_URL?.trim() ||
+        "https://document.syncfusion.com/web-services/spreadsheet-editor/api/spreadsheet/save"
+      );
+    }, []);
+
     React.useEffect(() => {
       const key = process.env.NEXT_PUBLIC_SYNCFUSION_LICENSE_KEY;
       if (key && key.trim()) {
@@ -145,13 +152,27 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
     const handleDownloadXlsx = React.useCallback(() => {
       try {
-        // Syncfusion will trigger a client-side download
-        spreadsheetRef.current?.save({ fileName: "spreadsheet.xlsx", saveType: "Xlsx" } as any);
+        if (!spreadsheetRef.current) {
+          toast.error("Spreadsheet not initialized");
+          return;
+        }
+
+        if (!spreadsheetSaveUrl) {
+          toast.error("Spreadsheet export service is not configured");
+          return;
+        }
+
+        // NOTE: Syncfusion Spreadsheet XLSX export requires a save service endpoint (saveUrl).
+        spreadsheetRef.current.save({
+          url: spreadsheetSaveUrl,
+          fileName: "spreadsheet",
+          saveType: "Xlsx",
+        } as any);
       } catch (e) {
         console.error("Excel download failed", e);
         toast.error("Failed to download Excel file");
       }
-    }, []);
+    }, [spreadsheetSaveUrl]);
 
     return (
       <div className="w-full min-w-0 border-l border-border/40 bg-background flex flex-col h-full">
@@ -191,6 +212,8 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
               showRibbon={true}
               showFormulaBar={true}
               allowChart={true}
+              allowSave={true}
+              saveUrl={spreadsheetSaveUrl}
               cssClass="e-spreadsheet-container"
             >
               <Inject
