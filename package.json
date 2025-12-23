@@ -90,6 +90,7 @@
     "react-day-picker": "latest",
     "react-dom": "^18",
     "react-hook-form": "^7.54.1",
+    "react-is": "^19.2.3",
     "react-katex": "^3.1.0",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^2.1.7",
