@@ -6,6 +6,7 @@ import { Download, FileSpreadsheet, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { registerLicense } from "@syncfusion/ej2-base";
+import { SpreadsheetChart } from "@syncfusion/ej2-spreadsheet";
 import {
   SpreadsheetComponent,
   SheetsDirective,
@@ -45,6 +46,8 @@ type ExcelConnectorProps = {
 export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnectorProps>(
   function ExcelConnector({ onClose, isGeneratingExternal = false }, ref) {
     const spreadsheetRef = React.useRef<SpreadsheetComponent | null>(null);
+    const loadIdRef = React.useRef(0);
+    const chartTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const spreadsheetSaveUrl = React.useMemo(() => {
       return (
@@ -74,9 +77,22 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             return;
           }
 
-          const formattedJson = (workbookJson as any).sheets
-            ? { Workbook: workbookJson }
-            : workbookJson;
+          // Cancel any delayed chart inserts from previous loads (e.g., when switching chats quickly).
+          if (chartTimeoutRef.current) {
+            clearTimeout(chartTimeoutRef.current);
+            chartTimeoutRef.current = null;
+          }
+
+          const currentLoadId = ++loadIdRef.current;
+
+          // Some callers send { workbook, actions }. Normalize that so we always load just the workbook.
+          const payload: any = workbookJson as any;
+          const effectiveActions = actions ?? (Array.isArray(payload?.actions) ? payload.actions : undefined);
+          const rawWorkbook = payload?.workbook ?? payload?.Workbook ?? payload;
+
+          const formattedJson = rawWorkbook?.sheets
+            ? { Workbook: rawWorkbook }
+            : rawWorkbook;
 
           console.log('Loading workbook with formatted JSON:', formattedJson);
 
@@ -88,17 +104,25 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
           console.log('Workbook loaded successfully');
 
           // Process chart actions if provided
-          if (actions && actions.length > 0) {
-            console.log('Processing chart actions:', actions);
-            setTimeout(() => {
-              actions.forEach((action, index) => {
+          if (effectiveActions && effectiveActions.length > 0) {
+            console.log('Processing chart actions:', effectiveActions);
+            chartTimeoutRef.current = setTimeout(() => {
+              // Ignore stale async inserts if a newer workbook was loaded.
+              if (loadIdRef.current !== currentLoadId) return;
+
+              effectiveActions.forEach((action: any, index: number) => {
                 if (action.type === 'insertChart') {
                   try {
+                    const range =
+                      action.sheet && typeof action.range === 'string' && !action.range.includes('!')
+                        ? `${action.sheet}!${action.range}`
+                        : action.range;
+
                     // Syncfusion will auto-position the chart
                     // No need to specify position coordinates
                     spreadsheetRef.current?.insertChart([{
                       type: action.chartType || 'Column',
-                      range: action.range,
+                      range,
                       id: `chart_${Date.now()}_${index}`,
                       theme: 'Material'
                     }]);
@@ -108,7 +132,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
                   }
                 }
               });
-            }, 1000); // Longer delay to ensure workbook is fully loaded
+            }, 750); // Give the workbook time to render before inserting charts
           }
         } catch (e) {
           console.error("Failed to load workbook JSON", e);
@@ -218,6 +242,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             >
               <Inject
                 services={[
+                  SpreadsheetChart,
                   Ribbon,
                   FormulaBar,
                   SheetTabs,
