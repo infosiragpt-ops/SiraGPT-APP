@@ -51,6 +51,12 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter, usePathname } from "next/navigation"
@@ -126,6 +132,10 @@ export function AppSidebar() {
   const handleNewChat = () => {
     setCurrentChat(null);
     localStorage.removeItem('currentChatId');
+    
+    // Dispatch custom event to reset all connector and tool states
+    window.dispatchEvent(new CustomEvent('resetChatState'));
+    
     // Navigate to chat if not already there
     if (!pathname.startsWith('/chat')) {
       router.push('/chat')
@@ -275,44 +285,73 @@ export function AppSidebar() {
           state === "open" ? "p-4 pt-2 pl-2" : "p-2"
         )}
       >
-        <SidebarMenuButton
-          onClick={handleNewChat}
-          className="w-full justify-start h-9 px-3"
+        <TooltipProvider>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onClick={handleNewChat}
+                className="w-full justify-start h-9 px-3"
+              >
+                <PenSquare className="h-4 w-4" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2">New Chat</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>New Chat</p>
+            </TooltipContent>
+          </Tooltip>
 
-        >
-          <PenSquare className="h-4 w-4" />
-          <span className="group-data-[state=closed]:hidden -ml-0.2">New Chat</span>
-        </SidebarMenuButton>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onClick={handleSearchClick}
+                className="w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors"
+                variant="default"
+              >
+                <Search className="h-4 w-4" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2">Search chats</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>Search chats</p>
+            </TooltipContent>
+          </Tooltip>
 
-        <SidebarMenuButton
-          onClick={handleSearchClick}
-          className="w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors"
-          variant="default"
-        >
-          <Search className="h-4 w-4" />
-          <span className="group-data-[state=closed]:hidden -ml-0.2">Search chats</span>
-        </SidebarMenuButton>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onClick={handleLibraryClick}
+                className="w-full justify-start h-9 px-3"
+                variant="default"
+              >
+                <Images className="h-4 w-4" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2">Library</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>Library</p>
+            </TooltipContent>
+          </Tooltip>
 
-        <SidebarMenuButton
-          onClick={handleLibraryClick}
-          className="w-full justify-start h-9 px-3"
-          variant="default"
-        >
-          <Images className="h-4 w-4" />
-          <span className="group-data-[state=closed]:hidden -ml-0.2">Library</span>
-        </SidebarMenuButton>
-
-        <SidebarMenuButton
-          onClick={handleGPTsClick}
-          className={cn(
-            "w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors",
-            isOnGPTsPage && "bg-accent text-accent-foreground"
-          )}
-          variant="default"
-        >
-          <LayoutGrid className="h-4 w-4" />
-          <span className="group-data-[state=closed]:hidden -ml-0.2">GPTs</span>
-        </SidebarMenuButton>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onClick={handleGPTsClick}
+                className={cn(
+                  "w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors",
+                  isOnGPTsPage && "bg-accent text-accent-foreground"
+                )}
+                variant="default"
+              >
+                <LayoutGrid className="h-4 w-4" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2">GPTs</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>GPTs</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <SidebarContent

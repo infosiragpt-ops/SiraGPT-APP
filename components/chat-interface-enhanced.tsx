@@ -2098,6 +2098,46 @@ But first, you need to connect your Spotify account securely using the button be
   }, [currentChat?.id]);
 
 
+  // Listen for "New Chat" button click to reset all states
+  React.useEffect(() => {
+    const handleResetChatState = () => {
+      console.log('🔄 Resetting all chat states (New Chat clicked)');
+      
+      // Reset all connector and tool states
+      setIsWebSearchActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsSpotifyActive(false);
+      setIsImageGenerationActive(false);
+      setIsVideoGenerationActive(false);
+      setIsComputerUseActive(false);
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
+      setChatType('text');
+      
+      // Reset other UI states
+      setShowAudioPanel(false);
+      setDocumentPreviewUrl(null);
+      setSplitViewContent(null);
+      setSelectedWordText(null);
+      setUploadedFiles([]);
+      setInput('');
+      
+      // Clear Computer Use state
+      clearReasoning();
+      setComputerUseStatus('idle');
+      setComputerUseScreenshot(null);
+    };
+
+    window.addEventListener('resetChatState', handleResetChatState);
+    
+    return () => {
+      window.removeEventListener('resetChatState', handleResetChatState);
+    };
+  }, [clearReasoning, setUploadedFiles]);
+
+
 
   // Additional effect: Load content when Word Connector becomes active and ref is ready
   React.useEffect(() => {
