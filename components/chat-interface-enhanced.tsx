@@ -160,6 +160,7 @@ const ActionsDropdown = ({
   handleSpotifyToggle,
   handleWordConnectorToggle,
   handleExcelConnectorToggle,
+  closeAllToolsAndConnectors,
 
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -182,37 +183,16 @@ const ActionsDropdown = ({
   const handleWebSearchToggle = () => {
     setChatType('text');
     if (!isWebSearchActive) {
-      // Deactivate other options and connectors
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsSpotifyActive(false);
-      setIsComputerUseActive(false);
+      closeAllToolsAndConnectors();
     }
     setIsWebSearchActive(!isWebSearchActive);
-
   };
-
 
   const handleImageGenerationToggle = () => {
     const newState = !isImageGenerationActive;
 
     if (newState) {
-      // Close all other tools and connectors
-      setIsWebSearchActive(false);
-      setIsVideoGenerationActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsSpotifyActive(false);
-      setIsComputerUseActive(false);
-
+      closeAllToolsAndConnectors();
       setChatType('image');
     } else {
       setChatType('text');
@@ -221,22 +201,11 @@ const ActionsDropdown = ({
     setIsImageGenerationActive(newState);
   };
 
-
   const handleVideoGenerationToggle = () => {
     const newState = !isVideoGenerationActive;
 
     if (newState) {
-      // Close all other tools and connectors
-      setIsWebSearchActive(false);
-      setIsImageGenerationActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsSpotifyActive(false);
-      setIsComputerUseActive(false);
-
+      closeAllToolsAndConnectors();
       setChatType('video');
     } else {
       setChatType('text');
@@ -1454,6 +1423,51 @@ function ChatInterfaceContent() {
     setComputerUseScreenshot(computerUseHookScreenshot);
   }, [computerUseHookStatus, computerUseHookScreenshot]);
 
+  // ============================================
+  // CENTRALIZED FUNCTIONS FOR TOOLS & CONNECTORS
+  // ============================================
+
+  /**
+   * Closes all tools and connectors - used when activating a new tool/connector
+   * This ensures only one tool/connector is active at a time
+   */
+  const closeAllToolsAndConnectors = React.useCallback(() => {
+    setIsWebSearchActive(false);
+    setIsImageGenerationActive(false);
+    setIsVideoGenerationActive(false);
+    setIsGmailActive(false);
+    setIsGoogleCalendarActive(false);
+    setIsGoogleDriveActive(false);
+    setIsSpotifyActive(false);
+    setIsComputerUseActive(false);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+  }, []);
+
+  /**
+   * Resets all tools, connectors, and UI states - used when switching chats or clicking "New Chat"
+   */
+  const resetAllToolsAndConnectors = React.useCallback(() => {
+    // Close all tools and connectors
+    closeAllToolsAndConnectors();
+
+    // Reset chat type
+    setChatType('text');
+
+    // Reset other UI states
+    setShowAudioPanel(false);
+    setDocumentPreviewUrl(null);
+    setSplitViewContent(null);
+    setSelectedWordText(null);
+    setUploadedFiles([]);
+    setInput('');
+
+    // Clear Computer Use state
+    if (clearReasoning) clearReasoning();
+    setComputerUseStatus('idle');
+    setComputerUseScreenshot(null);
+  }, [closeAllToolsAndConnectors, setChatType, clearReasoning]);
+
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
     if (computerUseReasoning.length > 0 && currentChat && isComputerUseActive) {
@@ -1493,68 +1507,44 @@ function ChatInterfaceContent() {
   const handleGmailToggle = () => {
     const newState = !isGmailActive;
     setChatType('text');
-    setIsGmailActive(newState);
     if (newState) {
-      setIsWebSearchActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsSpotifyActive(false);
-      setIsComputerUseActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
+      closeAllToolsAndConnectors();
+      setIsGmailActive(true);
+    } else {
+      setIsGmailActive(false);
     }
   };
 
   const handleGoogleCalendarToggle = () => {
     const newState = !isGoogleCalendarActive;
     setChatType('text');
-    setIsGoogleCalendarActive(newState);
     if (newState) {
-      setIsWebSearchActive(false);
-      setIsGmailActive(false);
-      setIsGoogleDriveActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsSpotifyActive(false);
-      setIsComputerUseActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
+      closeAllToolsAndConnectors();
+      setIsGoogleCalendarActive(true);
+    } else {
+      setIsGoogleCalendarActive(false);
     }
   };
 
   const handleGoogleDriveToggle = () => {
     const newState = !isGoogleDriveActive;
     setChatType('text');
-    setIsGoogleDriveActive(newState);
     if (newState) {
-      setIsWebSearchActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsSpotifyActive(false);
-      setIsComputerUseActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
+      closeAllToolsAndConnectors();
+      setIsGoogleDriveActive(true);
+    } else {
+      setIsGoogleDriveActive(false);
     }
   };
 
   const handleSpotifyToggle = () => {
     const newState = !isSpotifyActive;
     setChatType('text');
-    setIsSpotifyActive(newState);
     if (newState) {
-      setIsWebSearchActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsComputerUseActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
+      closeAllToolsAndConnectors();
+      setIsSpotifyActive(true);
+    } else {
+      setIsSpotifyActive(false);
     }
   };
 
@@ -1562,22 +1552,13 @@ function ChatInterfaceContent() {
     const newState = !isComputerUseActive;
 
     if (newState) {
-      // Disable other modes
-      setIsWebSearchActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsSpotifyActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
+      closeAllToolsAndConnectors();
+      setIsComputerUseActive(true);
       setChatType('computer-use');
     } else {
+      setIsComputerUseActive(false);
       setChatType('text');
     }
-
-    setIsComputerUseActive(newState);
   };
 
   const handleWordConnectorToggle = async () => {
@@ -1585,16 +1566,8 @@ function ChatInterfaceContent() {
     const newState = !isWordConnectorActive;
 
     if (newState) {
-      // Disable other modes
-      setIsWebSearchActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsSpotifyActive(false);
-      setIsComputerUseActive(false);
-      setIsExcelConnectorActive(false);
+      closeAllToolsAndConnectors();
+      setIsWordConnectorActive(true);
       setChatType('text');
 
       // If toggling on while a chat is already selected, create/select
@@ -1614,10 +1587,9 @@ function ChatInterfaceContent() {
         }
       }
     } else {
+      setIsWordConnectorActive(false);
       setChatType('text');
     }
-
-    setIsWordConnectorActive(newState);
   };
 
   const handleExcelConnectorToggle = async () => {
@@ -1625,16 +1597,8 @@ function ChatInterfaceContent() {
     const newState = !isExcelConnectorActive;
 
     if (newState) {
-      // Disable other modes
-      setIsWebSearchActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsSpotifyActive(false);
-      setIsComputerUseActive(false);
-      setIsWordConnectorActive(false);
+      closeAllToolsAndConnectors();
+      setIsExcelConnectorActive(true);
       setChatType('text');
 
       // Create/select a dedicated chat for the Excel Connector
@@ -1652,10 +1616,9 @@ function ChatInterfaceContent() {
         }
       }
     } else {
+      setIsExcelConnectorActive(false);
       setChatType('text');
     }
-
-    setIsExcelConnectorActive(newState);
   };
 
   const handleSpotifyCommand = async (prompt: string) => {
@@ -2064,22 +2027,14 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => {
     if (prevChatIdRef.current && prevChatIdRef.current !== currentChat?.id) {
       // Reset generation modes when switching chats
-      setIsWebSearchActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsComputerUseActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
+      closeAllToolsAndConnectors();
       setChatType('text'); // Always default to text when switching chats
 
       // Clear Computer Use reasoning when switching chats
       clearReasoning();
     }
     prevChatIdRef.current = currentChat?.id;
-  }, [currentChat?.id, clearReasoning]); // Only trigger when chat ID changes
+  }, [currentChat?.id, clearReasoning, closeAllToolsAndConnectors]); // Only trigger when chat ID changes
 
 
   React.useEffect(() => {
@@ -2087,8 +2042,9 @@ But first, you need to connect your Spotify account securely using the button be
     setDocumentPreviewUrl(null)
     setSplitViewContent(null)
     setSelectedWordText(null);
-    setIsWordConnectorActive(false);
-    setIsExcelConnectorActive(false);
+
+    // Close all connectors first when switching chats
+    closeAllToolsAndConnectors();
 
     // Use a small delay to ensure previous connector UI is fully closed
     const timer = setTimeout(() => {
@@ -2124,36 +2080,14 @@ But first, you need to connect your Spotify account securely using the button be
     }, 150);
 
     return () => clearTimeout(timer);
-  }, [currentChat?.id]);
+  }, [currentChat?.id, closeAllToolsAndConnectors]);
 
 
   // Listen for "New Chat" button click to reset all states
   React.useEffect(() => {
     const handleResetChatState = () => {
       console.log('🔄 Resetting all chat states (New Chat clicked)');
-      // Reset all connector and tool states
-      setIsWebSearchActive(false);
-      setIsGmailActive(false);
-      setIsGoogleCalendarActive(false);
-      setIsGoogleDriveActive(false);
-      setIsSpotifyActive(false);
-      setIsImageGenerationActive(false);
-      setIsVideoGenerationActive(false);
-      setIsComputerUseActive(false);
-      setIsWordConnectorActive(false);
-      setIsExcelConnectorActive(false);
-      setChatType('text');
-
-      // Reset other UI states
-      setShowAudioPanel(false);
-      setDocumentPreviewUrl(null);
-      setSplitViewContent(null);
-      setSelectedWordText(null);
-      setUploadedFiles([]);
-      setInput('');
-
-      // Clear Computer Use state
-      clearReasoning();
+      resetAllToolsAndConnectors();
       setComputerUseStatus('idle');
       setComputerUseScreenshot(null);
     };
@@ -2163,7 +2097,7 @@ But first, you need to connect your Spotify account securely using the button be
     return () => {
       window.removeEventListener('resetChatState', handleResetChatState);
     };
-  }, [clearReasoning, setUploadedFiles]);
+  }, [resetAllToolsAndConnectors]);
 
 
 
@@ -2643,87 +2577,68 @@ REWRITTEN TEXT:`;
           return prevChat;
         });
 
-        const streamId = crypto.randomUUID();
-        let accumulatedContent = '';
+        // Generate Excel using simple POST request (no streaming)
+        const response = await apiClient.generateExcel({
+          provider: selectProvider,
+          model: selectedModel,
+          prompt: msg,
+          chatId: activeChat?.id,
+          files: filesToSend?.map(f => f.id) || [],
+        });
 
-        await apiClient.generateExcelStream(
-          {
-            provider: selectProvider,
-            model: selectedModel,
-            prompt: msg,
-            chatId: activeChat?.id,
-            files: filesToSend?.map(f => f.id) || [],
-            streamId,
-          },
-          (chunk) => {
-            accumulatedContent += chunk;
-          },
-          () => {
-            setIsGeneratingExcel(false);
-            try {
-              const cleaned = accumulatedContent
-                .trim()
-                .replace(/^```json\s*/i, '')
-                .replace(/^```\s*/i, '')
-                .replace(/```\s*$/i, '');
+        setIsGeneratingExcel(false);
 
-              const parsedResponse = JSON.parse(cleaned);
-              console.log('Parsed Excel response:', parsedResponse);
+        try {
+          const parsedResponse = response.data;
+          console.log('Parsed Excel response:', parsedResponse);
 
-              // Check if response has both workbook and actions (chart support)
-              let workbookData = parsedResponse;
-              let chartActions = [];
+          // Check if response has both workbook and actions (chart support)
+          let workbookData = parsedResponse;
+          let chartActions = [];
 
-              if (parsedResponse.workbook && parsedResponse.actions) {
-                // New format with chart actions
-                workbookData = parsedResponse.workbook;
-                chartActions = parsedResponse.actions;
-                console.log('Chart actions detected:', chartActions);
-              }
-
-              if (excelConnectorRef.current) {
-                excelConnectorRef.current.loadWorkbook(workbookData, chartActions);
-
-                if (chartActions.length > 0) {
-                  toast.success(`Excel generated with ${chartActions.length} chart(s)!`);
-                } else {
-                  toast.success('Excel generated successfully');
-                }
-              } else {
-                console.error('Excel connector ref is not available');
-                toast.error('Excel connector not ready');
-              }
-            } catch (e) {
-              console.error('Failed to parse Excel workbook JSON', e);
-              console.error('Accumulated content:', accumulatedContent);
-              toast.error('Failed to load generated Excel');
-            }
-
-            const aiMessage = {
-              id: `msg-ai-${Date.now()}`,
-              chatId: activeChat?.id || '',
-              role: 'ASSISTANT' as const,
-              content: 'Excel generated in spreadsheet editor',
-              timestamp: new Date().toISOString(),
-            };
-            setCurrentChat(prevChat => {
-              if (!prevChat) return prevChat;
-              const updatedMessages = [...(prevChat.messages || []), aiMessage];
-              return { ...prevChat, messages: updatedMessages };
-            });
-
-            if (activeChat?.id) {
-              setTimeout(() => {
-                selectChat(activeChat.id);
-              }, 500);
-            }
-          },
-          (error) => {
-            setIsGeneratingExcel(false);
-            console.error('Excel generation error:', error);
-            toast.error(error.message || 'Failed to generate Excel');
+          if (parsedResponse.workbook && parsedResponse.actions) {
+            // New format with chart actions
+            workbookData = parsedResponse.workbook;
+            chartActions = parsedResponse.actions;
+            console.log('Chart actions detected:', chartActions);
           }
-        );
+
+          if (excelConnectorRef.current) {
+            excelConnectorRef.current.loadWorkbook(workbookData, chartActions);
+
+            if (chartActions.length > 0) {
+              toast.success(`Excel generated with ${chartActions.length} chart(s)!`);
+            } else {
+              toast.success('Excel generated successfully');
+            }
+          } else {
+            console.error('Excel connector ref is not available');
+            toast.error('Excel connector not ready');
+          }
+
+          // Add AI response message to chat for display
+          const aiMessage = {
+            id: `msg-ai-${Date.now()}`,
+            chatId: activeChat?.id || '',
+            role: 'ASSISTANT' as const,
+            content: 'Excel generated in spreadsheet editor',
+            timestamp: new Date().toISOString(),
+          };
+          setCurrentChat(prevChat => {
+            if (!prevChat) return prevChat;
+            const updatedMessages = [...(prevChat.messages || []), aiMessage];
+            return { ...prevChat, messages: updatedMessages };
+          });
+
+          if (activeChat?.id) {
+            setTimeout(() => {
+              selectChat(activeChat.id);
+            }, 500);
+          }
+        } catch (e) {
+          console.error('Failed to process Excel response', e);
+          toast.error('Failed to load generated Excel');
+        }
       } catch (error: any) {
         setIsGeneratingExcel(false);
         console.error('Excel Connector error:', error);
@@ -4212,6 +4127,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleSpotifyToggle={handleSpotifyToggle}
                           handleWordConnectorToggle={handleWordConnectorToggle}
                           handleExcelConnectorToggle={handleExcelConnectorToggle}
+                          closeAllToolsAndConnectors={closeAllToolsAndConnectors}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
@@ -4541,6 +4457,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleSpotifyToggle={handleSpotifyToggle}
                               handleWordConnectorToggle={handleWordConnectorToggle}
                               handleExcelConnectorToggle={handleExcelConnectorToggle}
+                              closeAllToolsAndConnectors={closeAllToolsAndConnectors}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}

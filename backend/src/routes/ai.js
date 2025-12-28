@@ -3389,32 +3389,12 @@ router.post(
     body('provider').trim().notEmpty().withMessage('Provider is required'),
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
-    body('streamId').optional().isString(),
   ],
   authenticateToken,
   async (req, res) => {
-    const controller = new AbortController();
-    const signal = controller.signal;
-    const { streamId } = req.body;
-
-    if (streamId) {
-      streamControllers.set(streamId, controller);
-      console.log(`Excel Workbook Stream registered with ID: ${streamId}`);
-    }
-
-    req.on('close', () => {
-      console.log(`Client connection closed for Excel workbook chat: ${req.body.chatId}. Aborting generation.`);
-      controller.abort();
-    });
-    req.on('aborted', () => {
-      console.log(`Client request aborted for Excel workbook chat: ${req.body.chatId}. Aborting generation.`);
-      controller.abort();
-    });
-
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        controller.abort();
         return res.status(400).json({ errors: errors.array() });
       }
 
@@ -3477,11 +3457,6 @@ router.post(
           })
         ).then(results => results.filter(Boolean));
       }
-
-      // Set up streaming response
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
 
       const messages = [];
 
@@ -3591,33 +3566,42 @@ Generate the workbook based on the user's request.`;
         });
       }
 
-      let fullResponseContent = '';
-
-      const stream = await openai.chat.completions.create({
+      // Generate response without streaming
+      const completion = await openai.chat.completions.create({
         model: model,
         messages: messages,
-        stream: true,
-      }, { signal });
+        stream: false,
+      });
 
-      for await (const chunk of stream) {
-        const contentChunk = chunk.choices[0]?.delta?.content || '';
-        if (contentChunk) {
-          fullResponseContent += contentChunk;
-          res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
-        }
+      const fullResponseContent = completion.choices[0]?.message?.content || '';
+
+      if (!fullResponseContent.trim()) {
+        return res.status(500).json({ error: 'Empty response from AI model' });
+      }
+
+      // Clean response content (remove markdown code blocks if present)
+      let cleanedContent = fullResponseContent.trim()
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/i, '');
+
+      // Parse JSON response
+      let parsedExcelContent = null;
+      try {
+        parsedExcelContent = JSON.parse(cleanedContent);
+      } catch (parseError) {
+        console.error('Failed to parse Excel JSON response:', parseError);
+        console.error('Response content:', cleanedContent.substring(0, 500));
+        return res.status(500).json({
+          error: 'Invalid JSON response from AI model',
+          details: parseError.message
+        });
       }
 
       // Save chat and track usage
-      if (chatId && fullResponseContent.trim()) {
+      if (chatId) {
         const tokens = fullResponseContent.length + prompt.length;
         await saveChatAndTrackUsage(userId, chatId, prompt, "The spreadsheet has been generated in the Excel Connector.", tokens, model, processedFiles);
-
-        let parsedExcelContent = null;
-        try {
-          parsedExcelContent = JSON.parse(fullResponseContent.trim());
-        } catch (e) {
-          parsedExcelContent = fullResponseContent.trim();
-        }
 
         await prisma.chat.update({
           where: { id: chatId },
@@ -3625,29 +3609,17 @@ Generate the workbook based on the user's request.`;
         });
       }
 
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-      res.end();
+      // Return the parsed JSON content
+      return res.json({
+        success: true,
+        data: parsedExcelContent
+      });
     } catch (error) {
       console.error('❌ Excel Workbook generation error:', error);
 
-      if (!res.headersSent) {
-        res.status(500).json({ error: error.message || 'Excel Workbook generation failed' });
-      } else {
-        try {
-          res.write(`data: ${JSON.stringify({ error: error.message || 'Excel Workbook generation failed' })}\n\n`);
-        } catch (writeError) {
-          console.error('Failed to write error to stream:', writeError);
-        }
-      }
-    } finally {
-      if (streamId) {
-        streamControllers.delete(streamId);
-        console.log(`Excel Workbook Stream unregistered for ID: ${streamId}`);
-      }
-
-      if (!res.writableEnded) {
-        res.end();
-      }
+      return res.status(500).json({
+        error: error.message || 'Excel Workbook generation failed'
+      });
     }
   }
 );
