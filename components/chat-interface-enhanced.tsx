@@ -129,9 +129,13 @@ const ActionsDropdown = ({
   setIsComputerUseActive,
   computerUseStatus,
   isGmailActive,
+  setIsGmailActive,
   isGoogleCalendarActive,
+  setIsGoogleCalendarActive,
   isGoogleDriveActive,
+  setIsGoogleDriveActive,
   isSpotifyActive,
+  setIsSpotifyActive,
   isWordConnectorActive,
   setIsWordConnectorActive,
   isExcelConnectorActive,
@@ -178,9 +182,16 @@ const ActionsDropdown = ({
   const handleWebSearchToggle = () => {
     setChatType('text');
     if (!isWebSearchActive) {
-      // Deactivate other options
+      // Deactivate other options and connectors
       setIsImageGenerationActive(false);
       setIsVideoGenerationActive(false);
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsSpotifyActive(false);
+      setIsComputerUseActive(false);
     }
     setIsWebSearchActive(!isWebSearchActive);
 
@@ -191,8 +202,16 @@ const ActionsDropdown = ({
     const newState = !isImageGenerationActive;
 
     if (newState) {
+      // Close all other tools and connectors
       setIsWebSearchActive(false);
       setIsVideoGenerationActive(false);
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsSpotifyActive(false);
+      setIsComputerUseActive(false);
 
       setChatType('image');
     } else {
@@ -207,9 +226,16 @@ const ActionsDropdown = ({
     const newState = !isVideoGenerationActive;
 
     if (newState) {
-      //setIsWebSearchActive(false);
+      // Close all other tools and connectors
+      setIsWebSearchActive(false);
       setIsImageGenerationActive(false);
-
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
+      setIsGmailActive(false);
+      setIsGoogleCalendarActive(false);
+      setIsGoogleDriveActive(false);
+      setIsSpotifyActive(false);
+      setIsComputerUseActive(false);
 
       setChatType('video');
     } else {
@@ -2060,41 +2086,44 @@ But first, you need to connect your Spotify account securely using the button be
     setShowAudioPanel(false);
     setDocumentPreviewUrl(null)
     setSplitViewContent(null)
-    setSelectedWordText(null); // Clear AI Rewrite display when switching chats
+    setSelectedWordText(null);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
 
-    // Auto-open Word Connector for Word Connector chats
-    if (currentChat && (currentChat as any).isWordConnectorChat) {
-      console.log('📄 Word Connector chat detected:', currentChat.id);
-      console.log('📄 Has wordContent:', !!(currentChat as any).wordContent);
-      console.log('📄 wordContent length:', (currentChat as any).wordContent?.length);
+    // Use a small delay to ensure previous connector UI is fully closed
+    const timer = setTimeout(() => {
+      if (currentChat && (currentChat as any).isWordConnectorChat) {
+        console.log('📄 Word Connector chat detected:', currentChat.id);
+        console.log('📄 Has wordContent:', !!(currentChat as any).wordContent);
+        console.log('📄 wordContent length:', (currentChat as any).wordContent?.length);
 
-      setIsWordConnectorActive(true);
+        setIsWordConnectorActive(true);
 
-      // Load existing Word content if available
-      if ((currentChat as any).wordContent) {
-        console.log('📄 Attempting to load Word content into editor...');
-        // Wait longer for editor to be ready
-        setTimeout(() => {
-          if (wordConnectorRef.current) {
-            console.log('📄 Ref is ready, updating content...');
-            wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
-          } else {
-            console.warn('📄 WordConnector ref not ready yet');
-          }
-        }, 500); // Increased timeout for editor initialization
+        // Load existing Word content if available
+        if ((currentChat as any).wordContent) {
+          console.log('📄 Attempting to load Word content into editor...');
+          // Wait longer for editor to be ready
+          setTimeout(() => {
+            if (wordConnectorRef.current) {
+              console.log('📄 Ref is ready, updating content...');
+              wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
+            } else {
+              console.warn('📄 WordConnector ref not ready yet');
+            }
+          }, 500);
+        }
+      } else if (currentChat && (currentChat as any).isExcelConnectorChat) {
+        setIsExcelConnectorActive(true);
+
+        if ((currentChat as any).excelContent) {
+          setTimeout(() => {
+            excelConnectorRef.current?.loadWorkbook((currentChat as any).excelContent);
+          }, 500);
+        }
       }
-    }
+    }, 150);
 
-    // Auto-open Excel Connector for Excel Connector chats
-    if (currentChat && (currentChat as any).isExcelConnectorChat) {
-      setIsExcelConnectorActive(true);
-
-      if ((currentChat as any).excelContent) {
-        setTimeout(() => {
-          excelConnectorRef.current?.loadWorkbook((currentChat as any).excelContent);
-        }, 500);
-      }
-    }
+    return () => clearTimeout(timer);
   }, [currentChat?.id]);
 
 
@@ -2102,7 +2131,6 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => {
     const handleResetChatState = () => {
       console.log('🔄 Resetting all chat states (New Chat clicked)');
-      
       // Reset all connector and tool states
       setIsWebSearchActive(false);
       setIsGmailActive(false);
@@ -2115,7 +2143,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsWordConnectorActive(false);
       setIsExcelConnectorActive(false);
       setChatType('text');
-      
+
       // Reset other UI states
       setShowAudioPanel(false);
       setDocumentPreviewUrl(null);
@@ -2123,7 +2151,7 @@ But first, you need to connect your Spotify account securely using the button be
       setSelectedWordText(null);
       setUploadedFiles([]);
       setInput('');
-      
+
       // Clear Computer Use state
       clearReasoning();
       setComputerUseStatus('idle');
@@ -2131,7 +2159,7 @@ But first, you need to connect your Spotify account securely using the button be
     };
 
     window.addEventListener('resetChatState', handleResetChatState);
-    
+
     return () => {
       window.removeEventListener('resetChatState', handleResetChatState);
     };
@@ -4164,9 +4192,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsComputerUseActive={setIsComputerUseActive}
                           computerUseStatus={computerUseStatus}
                           isGmailActive={isGmailActive}
+                          setIsGmailActive={setIsGmailActive}
                           isGoogleCalendarActive={isGoogleCalendarActive}
+                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
                           isGoogleDriveActive={isGoogleDriveActive}
+                          setIsGoogleDriveActive={setIsGoogleDriveActive}
                           isSpotifyActive={isSpotifyActive}
+                          setIsSpotifyActive={setIsSpotifyActive}
                           isWordConnectorActive={isWordConnectorActive}
                           setIsWordConnectorActive={setIsWordConnectorActive}
                           isExcelConnectorActive={isExcelConnectorActive}
@@ -4489,9 +4521,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsComputerUseActive={setIsComputerUseActive}
                               computerUseStatus={computerUseStatus}
                               isGmailActive={isGmailActive}
+                              setIsGmailActive={setIsGmailActive}
                               isGoogleCalendarActive={isGoogleCalendarActive}
+                              setIsGoogleCalendarActive={setIsGoogleCalendarActive}
                               isGoogleDriveActive={isGoogleDriveActive}
+                              setIsGoogleDriveActive={setIsGoogleDriveActive}
                               isSpotifyActive={isSpotifyActive}
+                              setIsSpotifyActive={setIsSpotifyActive}
                               isWordConnectorActive={isWordConnectorActive}
                               setIsWordConnectorActive={setIsWordConnectorActive}
                               isExcelConnectorActive={isExcelConnectorActive}

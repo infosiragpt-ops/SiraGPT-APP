@@ -128,7 +128,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
     const insertChartWithLayout = React.useCallback((chartConfig: any) => {
       const spreadsheet = spreadsheetRef.current as any;
       if (!spreadsheet) {
-        toast.error('Spreadsheet not initialized');
+        // toast.error('Spreadsheet not initialized');
         return;
       }
 
@@ -140,7 +140,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
       // Parse the range to get sheet name if present
       const { sheetName, range } = parseSheetAndRange(chartConfig?.range, chartConfig?.sheet);
-      
+
       // Validate range exists
       if (!range || range.trim() === '') {
         console.error('Invalid chart range provided:', chartConfig?.range);
@@ -149,7 +149,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
       // Determine target sheet - use sheet from range/config, or default to active sheet
       let targetSheetIndex = getSheetIndexByName(sheetName) ?? spreadsheet.activeSheetIndex ?? 0;
-      
+
       // Ensure target sheet index is valid
       if (targetSheetIndex < 0 || targetSheetIndex >= spreadsheet.sheets.length) {
         targetSheetIndex = 0;
@@ -181,7 +181,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
           // Calculate base positions for this specific sheet
           const usedRowIndex = getUsedRowIndex(targetSheetIndex);
-          
+
           // Determine chart position in grid
           const chartRow = Math.floor(layout.count / CHARTS_PER_ROW);
           const chartCol = layout.count % CHARTS_PER_ROW;
@@ -252,7 +252,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         try {
           if (!spreadsheetRef.current) {
             console.error('Spreadsheet ref is not initialized');
-            toast.error('Spreadsheet not initialized');
+            // toast.error('Spreadsheet not initialized');
             return;
           }
 
@@ -298,7 +298,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
                 if (action.type === 'insertChart') {
                   setTimeout(() => {
                     if (loadIdRef.current !== currentLoadId) return;
-                    
+
                     try {
                       insertChartWithLayout({
                         ...action,
@@ -335,7 +335,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         try {
           if (!spreadsheetRef.current) {
             console.error('Spreadsheet ref is not initialized');
-            toast.error('Spreadsheet not initialized');
+            // toast.error('Spreadsheet not initialized');
             return;
           }
 
@@ -352,7 +352,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
     const handleDownloadXlsx = React.useCallback(() => {
       try {
         if (!spreadsheetRef.current) {
-          toast.error("Spreadsheet not initialized");
+          // toast.error("Spreadsheet not initialized");
           return;
         }
 
