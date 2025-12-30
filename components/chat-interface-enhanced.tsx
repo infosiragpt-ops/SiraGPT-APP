@@ -3874,7 +3874,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       <div className="flex flex-1 overflow-hidden w-full relative">
         <div className={`relative flex flex-col h-full overflow-hidden ${documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive ? 'w-[40%] shrink-0' : 'w-full'}`}>
           {/* Header */}
-          <div className="absolute top-0 left-0 right-0 z-10 p-4">
+          <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-4  backdrop-blur-sm ">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="md:hidden">

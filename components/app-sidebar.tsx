@@ -25,6 +25,10 @@ import {
   Loader2,
   PenSquare,
   Shield,
+
+  Edit2,
+  Check,
+  X,
 } from "lucide-react"
 import {
   Sidebar,
@@ -64,6 +68,9 @@ import { cn } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
+import { apiClient } from "@/lib/api"
+import { Input } from "@/components/ui/input"
+import { toast } from "sonner"
 // import NotificationCenter from "./notification-center" // Commented out to stop repeated API calls
 
 // Generation Types with enhanced functionality
@@ -119,9 +126,13 @@ export function AppSidebar() {
   const { state, toggleSidebar, isMobile, setOpenMobile } = useSidebar()
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
+  const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
+  const [editTitle, setEditTitle] = React.useState("")
+  const [optimisticUpdates, setOptimisticUpdates] = React.useState<Record<string, string>>({})
 
   // Scroll area ref for infinite scroll
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
+  const editInputRef = React.useRef<HTMLInputElement>(null)
 
   const handleLogout = () => {
     localStorage.setItem("currentChatId", "")
@@ -132,10 +143,10 @@ export function AppSidebar() {
   const handleNewChat = () => {
     setCurrentChat(null);
     localStorage.removeItem('currentChatId');
-    
+
     // Dispatch custom event to reset all connector and tool states
     window.dispatchEvent(new CustomEvent('resetChatState'));
-    
+
     // Navigate to chat if not already there
     if (!pathname.startsWith('/chat')) {
       router.push('/chat')
@@ -209,6 +220,115 @@ export function AppSidebar() {
 
   const handleSearchClick = () => {
     setSearchOpen(true)
+  }
+
+
+
+  // Handle edit chat title
+  const handleEditClick = (chat: any, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    setEditingChatId(chat.id)
+    setEditTitle(chat.title)
+    // Small delay for smooth animation
+    setTimeout(() => {
+      editInputRef.current?.focus()
+      editInputRef.current?.select()
+    }, 50)
+  }
+
+  // Handle save edited title
+  const handleSaveEdit = async (chatId: string) => {
+    if (!editTitle.trim()) {
+      setEditingChatId(null)
+      return
+    }
+
+    const newTitle = editTitle.trim()
+    const originalTitle = chats.find(c => c.id === chatId)?.title || ""
+
+    // Optimistic update - update immediately
+    setOptimisticUpdates(prev => ({ ...prev, [chatId]: newTitle }))
+
+    // Update current chat immediately if it's the one being edited
+    if (currentChat?.id === chatId) {
+      setCurrentChat({ ...currentChat, title: newTitle })
+    }
+
+    setEditingChatId(null)
+    setEditTitle("")
+
+    try {
+      // Call API to update on server
+      await apiClient.updateChat(chatId, { title: newTitle })
+
+      // Silently fetch updated chat to sync with server without navigation
+      try {
+        const chatResponse = await apiClient.getChat(chatId)
+        const refreshedChat = chatResponse.chat
+
+        // Update currentChat if it's the active one (without navigation)
+        if (currentChat?.id === chatId) {
+          setCurrentChat(refreshedChat)
+        }
+
+        // Note: The optimistic update will handle the display
+        // The chats array will sync naturally on next refresh or navigation
+        // We don't call selectChat to avoid navigation
+      } catch (refreshError) {
+        // If refresh fails, that's okay - optimistic update will handle display
+        console.log('Could not refresh chat, but update was successful')
+      }
+
+      // Keep optimistic update active - it will persist until natural refresh
+      // This ensures the UI shows the updated title immediately and it persists
+      // The optimistic update will remain until page refresh or chat list reload
+
+      toast.success("Chat renamed successfully")
+    } catch (error) {
+      console.error('Failed to update chat title:', error)
+
+      // Revert optimistic update on error
+      setOptimisticUpdates(prev => {
+        const updated = { ...prev }
+        delete updated[chatId]
+        return updated
+      })
+
+      // Revert current chat if it was updated
+      if (currentChat?.id === chatId) {
+        setCurrentChat({ ...currentChat, title: originalTitle })
+      }
+
+      toast.error('Failed to update chat title')
+    }
+  }
+
+  // Handle cancel edit
+  const handleCancelEdit = () => {
+    setEditingChatId(null)
+    setEditTitle("")
+    // Remove any optimistic updates when canceling
+    if (editingChatId) {
+      setOptimisticUpdates(prev => {
+        const updated = { ...prev }
+        delete updated[editingChatId]
+        return updated
+      })
+    }
+  }
+
+  // Handle key press in edit input
+  const handleEditKeyDown = (e: React.KeyboardEvent, chatId: string) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleSaveEdit(chatId)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      handleCancelEdit()
+    }
   }
 
   // Handle load more chats
@@ -366,7 +486,7 @@ export function AppSidebar() {
           <SidebarGroup>
             <SidebarGroupLabel
               className={cn(
-                "px-3 py-4 text-center text-sm text-muted-foreground",
+                "pr-2 py-4 text-center text-sm text-muted-foreground",
                 state === "closed" && "hidden"
               )}
             >
@@ -382,47 +502,114 @@ export function AppSidebar() {
                   </div>
                 ) : (
                   <>
-                    {chats.filter(chat => chat && chat.id).map((chat) => (
-                      <SidebarMenuItem key={chat.id}>
-                        <div className="flex items-center w-full group">
-                          <SidebarMenuButton
-                            isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
-                            onClick={() => handleChatClick(chat.id)}
-                            className="flex-1 justify-start h-auto py-2 pr-8"
-                          >
-                            <History className="mr-2 h-4 w-4 flex-shrink-0" />
-                            <div className="flex flex-col items-start min-w-0 flex-1">
-                              <span className="text-sm truncate w-full">
-                                {chat.title}
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                {formatChatTime(chat.updatedAt)}
-                              </span>
-                            </div>
-                          </SidebarMenuButton>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2"
-                              >
-                                <MoreHorizontal className="h-3 w-3" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => deleteChat(chat.id)}
-                                className="text-red-600"
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      </SidebarMenuItem>
-                    ))}
+                    {chats.filter(chat => chat && chat.id).map((chat) => {
+                      const isEditing = editingChatId === chat.id
+                      // Use optimistic update if available, otherwise use original title
+                      const displayTitle = optimisticUpdates[chat.id] || chat.title
+                      const isTruncated = displayTitle.length > 25
+
+                      return (
+                        <SidebarMenuItem key={chat.id}>
+                          <div className="flex items-center w-full group">
+                            {isEditing ? (
+                              <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                                <Input
+                                  ref={editInputRef}
+                                  value={editTitle}
+                                  onChange={(e) => setEditTitle(e.target.value)}
+                                  onKeyDown={(e) => handleEditKeyDown(e, chat.id)}
+                                  onBlur={() => handleSaveEdit(chat.id)}
+                                  className="h-7 text-sm flex-1 px-2 py-1"
+                                  onClick={(e) => e.stopPropagation()}
+                                  autoFocus
+                                />
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0 hover:bg-green-100 dark:hover:bg-green-900/20"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleSaveEdit(chat.id)
+                                  }}
+                                >
+                                  <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/20"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleCancelEdit()
+                                  }}
+                                >
+                                  <X className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <SidebarMenuButton
+                                        isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
+                                        onClick={() => !isEditing && handleChatClick(chat.id)}
+                                        className="flex-1 justify-start h-auto py-2 pr-8 transition-all"
+                                      >
+                                        <div className="flex flex-col items-start min-w-0 flex-1">
+                                          <span className={cn("text-sm w-full transition-all", isTruncated ? "truncate" : "")}>
+                                            {displayTitle}
+                                          </span>
+                                          <span className="text-xs text-muted-foreground">
+                                            {formatChatTime(chat.updatedAt)}
+                                          </span>
+                                        </div>
+                                      </SidebarMenuButton>
+                                    </TooltipTrigger>
+                                    {isTruncated && (
+                                      <TooltipContent side="right" className="max-w-xs">
+                                        <p className="break-words">{displayTitle}</p>
+                                      </TooltipContent>
+                                    )}
+                                  </Tooltip>
+                                </TooltipProvider>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2 transition-opacity"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <MoreHorizontal className="h-3 w-3" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                    <DropdownMenuItem
+                                      onClick={(e) => handleEditClick(chat, e)}
+                                    >
+                                      <Edit2 className="mr-2 h-4 w-4" />
+                                      Rename
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        deleteChat(chat.id)
+                                      }}
+                                      className="text-red-600 focus:text-red-600"
+                                    >
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                      Delete
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </>
+                            )}
+                          </div>
+                        </SidebarMenuItem>
+                      )
+                    })}
 
                     {/* Loading indicator at the bottom */}
                     {isLoadingMore && (
@@ -576,8 +763,8 @@ export function AppSidebar() {
                   size="sm"
                   variant={usagePercentage >= 90 ? "destructive" : "outline"}
                   className={`ml-2 h-7 px-2 text-xs ${usagePercentage >= 90
-                      ? ""
-                      : "border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+                    ? ""
+                    : "border-primary text-primary hover:bg-primary hover:text-primary-foreground"
                     }`}
                 >
                   <Crown className="h-3 w-3 mr-1" />
