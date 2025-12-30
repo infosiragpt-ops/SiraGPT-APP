@@ -6,6 +6,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { useToast } from '@/hooks/use-toast'
 import apiClient from '@/lib/api'
 import VoiceSelector from './voice-selector'
@@ -236,31 +242,39 @@ useEffect(() => {
   }
 
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
-      {/* Recording Button */}
-      <Button
-        variant={isRecording ? "destructive" : "outline"}
-        size="sm"
-        onClick={isRecording ? stopRecording : startRecording}
-        disabled={isLoading}
-        className="relative"
-      >
-        {isRecording ? (
-          <>
-            <Square className="w-4 h-4" />
-            {recordingTime > 0 && (
-              <Badge
-                variant="destructive"
-                className="absolute -top-2 -right-2 text-xs px-1"
-              >
-                {formatTime(recordingTime)}
-              </Badge>
-            )}
-          </>
-        ) : (
-          <Mic className="w-4 h-4" />
-        )}
-      </Button>
+    <TooltipProvider>
+      <div className={`flex items-center gap-2 ${className}`}>
+        {/* Recording Button */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={isRecording ? "destructive" : "outline"}
+              size="sm"
+              onClick={isRecording ? stopRecording : startRecording}
+              disabled={isLoading}
+              className="relative"
+            >
+              {isRecording ? (
+                <>
+                  <Square className="w-4 h-4" />
+                  {recordingTime > 0 && (
+                    <Badge
+                      variant="destructive"
+                      className="absolute -top-2 -right-2 text-xs px-1"
+                    >
+                      {formatTime(recordingTime)}
+                    </Badge>
+                  )}
+                </>
+              ) : (
+                <Mic className="w-4 h-4" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p>{isRecording ? "Stop recording" : "Record audio"}</p>
+          </TooltipContent>
+        </Tooltip>
 
       {/* Voice Settings Popover */}
       {/* <Popover>
@@ -331,7 +345,8 @@ useEffect(() => {
           <Loader2 className="w-4 h-4 animate-spin" />
         </div>
       )}
-    </div>
+      </div>
+    </TooltipProvider>
   )
 }
 

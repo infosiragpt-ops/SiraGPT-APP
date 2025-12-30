@@ -66,6 +66,12 @@ import {
   DialogClose,
 } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import MessageComponent from "./message-component"
 import VoiceControls from "./voice-controls"
 import SpeechToTextComponent from "./speech-to-text-component"
@@ -165,6 +171,8 @@ const ActionsDropdown = ({
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
+  const [justClosed, setJustClosed] = React.useState(false);
+  const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
   const handleFileUpload = () => {
     fileInputRef.current?.click();
@@ -217,333 +225,368 @@ const ActionsDropdown = ({
 
   const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
 
-  return (
-    <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
-          disabled={isDisabled}
-        >
-          <Plus className="h-8 w-8" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64">
-        {/* File Upload - Only for text chats */}
+  const handleDropdownOpenChange = (open: boolean) => {
+    setIsOpen(open);
+    if (!open) {
+      // Prevent tooltip from showing immediately after dropdown closes
+      setJustClosed(true);
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+      }
+      closeTimeoutRef.current = setTimeout(() => {
+        setJustClosed(false);
+      }, 300); // Wait 300ms before allowing tooltip to show again
+    } else {
+      setJustClosed(false);
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+      }
+    }
+  };
 
-        <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
-          <div className="flex items-center gap-3 w-full">
-            <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
-              <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">Upload Files</div>
-              <div className="text-xs text-muted-foreground">
-                {isUploading ? 'Uploading...' : 'Images, PDFs, Documents'}
-              </div>
-            </div>
-          </div>
-        </DropdownMenuItem>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
-          onChange={handleFilesSelected}
-        />
-        {/* Web Search */}
-        <DropdownMenuItem
-          onClick={handleWebSearchToggle}
-          disabled={isWebSearching}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
-              ? 'bg-green-100 dark:bg-green-900/20'
-              : 'bg-emerald-100 dark:bg-emerald-900/20'
-              }`}>
-              <Globe className={`h-4 w-4 ${isWebSearchActive
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-emerald-600 dark:text-emerald-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isWebSearchActive ? 'Web Search Active' : 'Web Search'}
-              </div>
-            </div>
-            {isWebSearchActive && (
-              <div className="w-2 h-2 bg-green-500 rounded-full" />
-            )}
-          </div>
-        </DropdownMenuItem>
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
+  React.useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) {
+        clearTimeout(closeTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <TooltipProvider>
+      <DropdownMenu open={isOpen} onOpenChange={handleDropdownOpenChange}>
+        <Tooltip open={!isOpen && !justClosed ? undefined : false} delayDuration={300}>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
+                disabled={isDisabled}
+              >
+                <Plus className="h-8 w-8" />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p>Attach files & tools</p>
+          </TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="start" className="w-64">
+          {/* File Upload - Only for text chats */}
+
+          <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
             <div className="flex items-center gap-3 w-full">
-              <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                {/* <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
+                <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div className="flex-1">
+                <div className="font-medium text-sm">Upload Files</div>
+                <div className="text-xs text-muted-foreground">
+                  {isUploading ? 'Uploading...' : 'Images, PDFs, Documents'}
+                </div>
+              </div>
+            </div>
+          </DropdownMenuItem>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+            onChange={handleFilesSelected}
+          />
+          {/* Web Search */}
+          <DropdownMenuItem
+            onClick={handleWebSearchToggle}
+            disabled={isWebSearching}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
+                ? 'bg-green-100 dark:bg-green-900/20'
+                : 'bg-emerald-100 dark:bg-emerald-900/20'
+                }`}>
+                <Globe className={`h-4 w-4 ${isWebSearchActive
+                  ? 'text-green-600 dark:text-green-400'
+                  : 'text-emerald-600 dark:text-emerald-400'
+                  }`} />
+              </div>
+              <div className="flex-1">
+                <div className="font-medium text-sm">
+                  {isWebSearchActive ? 'Web Search Active' : 'Web Search'}
+                </div>
+              </div>
+              {isWebSearchActive && (
+                <div className="w-2 h-2 bg-green-500 rounded-full" />
+              )}
+            </div>
+          </DropdownMenuItem>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <div className="flex items-center gap-3 w-full">
+                <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                  {/* <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
                   <path d="M16.5 12.5C16.5 14.9853 14.4853 17 12 17C9.51472 17 7.5 14.9853 7.5 12.5C7.5 10.0147 9.51472 8 12 8C14.4853 8 16.5 10.0147 16.5 12.5Z" stroke="currentColor" stroke-width="1.5" />
                   <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
 
                 </svg> */}
 
-                <Network width="13" height="13" />
+                  <Network width="13" height="13" />
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-sm flex items-center">
+                    Connectors
+                  </div>
+                </div>
+              </div>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+
+              {/* Gmail */}
+              <DropdownMenuItem
+                onClick={handleGmailToggle}
+                disabled={isProcessingGmail}
+              >
+                <div className="flex items-center gap-3 w-full">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
+                    ? 'bg-red-100 dark:bg-red-900/20'
+                    : 'bg-red-100 dark:bg-red-900/20'
+                    }`}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">
+                      {isGmailActive ? 'Gmail Active' : 'Gmail'}
+                    </div>
+                  </div>
+                  {isGmailActive && (
+                    <div className="w-2 h-2 bg-red-500 rounded-full" />
+                  )}
+                </div>
+              </DropdownMenuItem>
+
+              {/* Google Calendar */}
+              <DropdownMenuItem
+                onClick={handleGoogleCalendarToggle}
+                disabled={isProcessingGoogleServices}
+              >
+                <div className="flex items-center gap-3 w-full">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleCalendarActive
+                    ? 'bg-blue-100 dark:bg-blue-900/20'
+                    : 'bg-blue-100 dark:bg-blue-900/20'
+                    }`}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">
+                      {isGoogleCalendarActive ? 'Calendar Active' : 'Google Calendar'}
+                    </div>
+                  </div>
+                  {isGoogleCalendarActive && (
+                    <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                  )}
+                </div>
+              </DropdownMenuItem>
+
+              {/* Google Drive */}
+              <DropdownMenuItem
+                onClick={handleGoogleDriveToggle}
+                disabled={isProcessingGoogleServices}
+              >
+                <div className="flex items-center gap-3 w-full">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleDriveActive
+                    ? 'bg-green-100 dark:bg-green-900/20'
+                    : 'bg-green-100 dark:bg-green-900/20'
+                    }`}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">
+                      {isGoogleDriveActive ? 'Drive Active' : 'Google Drive'}
+                    </div>
+                  </div>
+                  {isGoogleDriveActive && (
+                    <div className="w-2 h-2 bg-green-500 rounded-full" />
+                  )}
+                </div>
+              </DropdownMenuItem>
+
+              {/* Spotify */}
+              <DropdownMenuItem
+                onClick={handleSpotifyToggle}
+                disabled={isProcessingSpotify}
+              >
+                <div className="flex items-center gap-3 w-full">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isSpotifyActive
+                    ? 'bg-green-100 dark:bg-green-900/20'
+                    : 'bg-green-100 dark:bg-green-900/20'
+                    }`}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">
+                      {isSpotifyActive ? 'Spotify Active' : 'Spotify'}
+                    </div>
+                  </div>
+                  {isSpotifyActive && (
+                    <div className="w-2 h-2 bg-green-500 rounded-full" />
+                  )}
+                </div>
+              </DropdownMenuItem>
+
+              {/* Word Connector */}
+              <DropdownMenuItem
+                onClick={() => {
+                  if (handleWordConnectorToggle) {
+                    handleWordConnectorToggle();
+                  }
+                  setIsOpen(false);
+                }}
+                disabled={isDisabled}
+              >
+                <div className="flex items-center gap-3 w-full">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
+                    ? 'bg-blue-100 dark:bg-blue-900/20'
+                    : 'bg-blue-100 dark:bg-blue-900/20'
+                    }`}>
+                    <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">
+                      {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
+                    </div>
+                  </div>
+                  {isWordConnectorActive && (
+                    <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                  )}
+                </div>
+              </DropdownMenuItem>
+
+              {/* Excel Connector */}
+              <DropdownMenuItem
+                onClick={() => {
+                  if (handleExcelConnectorToggle) {
+                    handleExcelConnectorToggle();
+                  }
+                  setIsOpen(false);
+                }}
+                disabled={isDisabled}
+              >
+                <div className="flex items-center gap-3 w-full">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
+                    ? 'bg-blue-100 dark:bg-blue-900/20'
+                    : 'bg-blue-100 dark:bg-blue-900/20'
+                    }`}>
+                    <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">
+                      {isExcelConnectorActive ? 'Excel Connector Active' : 'Excel Connector'}
+                    </div>
+                  </div>
+                  {isExcelConnectorActive && (
+                    <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                  )}
+                </div>
+              </DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+
+          <DropdownMenuSeparator />
+
+          {/* Voice Studio - Opens panel directly */}
+          <DropdownMenuItem
+            onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
+            disabled={currentPlan === "FREE" || isDisabled}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
+                <Mic className="h-4 w-4 text-purple-600 dark:text-purple-400" />
               </div>
               <div className="flex-1">
-                <div className="font-medium text-sm flex items-center">
-                  Connectors
+                <div className="font-medium text-sm">Voice Studio</div>
+                <div className="text-xs text-muted-foreground">
+                  Text-to-Speech, Speech-to-Text, Music
                 </div>
               </div>
+              {currentPlan === "FREE" && (
+                <Badge variant="secondary" className="text-xs">Pro</Badge>
+              )}
             </div>
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
+          </DropdownMenuItem>
 
-            {/* Gmail */}
-            <DropdownMenuItem
-              onClick={handleGmailToggle}
-              disabled={isProcessingGmail}
-            >
-              <div className="flex items-center gap-3 w-full">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
-                  ? 'bg-red-100 dark:bg-red-900/20'
-                  : 'bg-red-100 dark:bg-red-900/20'
-                  }`}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-sm">
-                    {isGmailActive ? 'Gmail Active' : 'Gmail'}
-                  </div>
-                </div>
-                {isGmailActive && (
-                  <div className="w-2 h-2 bg-red-500 rounded-full" />
-                )}
+
+          {/* Image Generation */}
+          <DropdownMenuItem
+            onClick={handleImageGenerationToggle}
+            disabled={currentPlan === "FREE" || isDisabled}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
+                ? 'bg-pink-100 dark:bg-pink-900/20'
+                : 'bg-pink-100 dark:bg-pink-900/20'
+                }`}>
+                <Palette className={`h-4 w-4 ${isImageGenerationActive
+                  ? 'text-pink-600 dark:text-pink-400'
+                  : 'text-pink-600 dark:text-pink-400'
+                  }`} />
               </div>
-            </DropdownMenuItem>
-
-            {/* Google Calendar */}
-            <DropdownMenuItem
-              onClick={handleGoogleCalendarToggle}
-              disabled={isProcessingGoogleServices}
-            >
-              <div className="flex items-center gap-3 w-full">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleCalendarActive
-                  ? 'bg-blue-100 dark:bg-blue-900/20'
-                  : 'bg-blue-100 dark:bg-blue-900/20'
-                  }`}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" />
+              <div className="flex-1">
+                <div className="font-medium text-sm">
+                  {isImageGenerationActive ? 'Image Generation Active' : 'Image Generation'}
                 </div>
-                <div className="flex-1">
-                  <div className="font-medium text-sm">
-                    {isGoogleCalendarActive ? 'Calendar Active' : 'Google Calendar'}
-                  </div>
+                <div className="text-xs text-muted-foreground">
+                  Generate images with DALL-E 3
                 </div>
-                {isGoogleCalendarActive && (
-                  <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                )}
               </div>
-            </DropdownMenuItem>
-
-            {/* Google Drive */}
-            <DropdownMenuItem
-              onClick={handleGoogleDriveToggle}
-              disabled={isProcessingGoogleServices}
-            >
-              <div className="flex items-center gap-3 w-full">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleDriveActive
-                  ? 'bg-green-100 dark:bg-green-900/20'
-                  : 'bg-green-100 dark:bg-green-900/20'
-                  }`}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-sm">
-                    {isGoogleDriveActive ? 'Drive Active' : 'Google Drive'}
-                  </div>
-                </div>
-                {isGoogleDriveActive && (
-                  <div className="w-2 h-2 bg-green-500 rounded-full" />
-                )}
-              </div>
-            </DropdownMenuItem>
-
-            {/* Spotify */}
-            <DropdownMenuItem
-              onClick={handleSpotifyToggle}
-              disabled={isProcessingSpotify}
-            >
-              <div className="flex items-center gap-3 w-full">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isSpotifyActive
-                  ? 'bg-green-100 dark:bg-green-900/20'
-                  : 'bg-green-100 dark:bg-green-900/20'
-                  }`}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-sm">
-                    {isSpotifyActive ? 'Spotify Active' : 'Spotify'}
-                  </div>
-                </div>
-                {isSpotifyActive && (
-                  <div className="w-2 h-2 bg-green-500 rounded-full" />
-                )}
-              </div>
-            </DropdownMenuItem>
-
-            {/* Word Connector */}
-            <DropdownMenuItem
-              onClick={() => {
-                if (handleWordConnectorToggle) {
-                  handleWordConnectorToggle();
-                }
-                setIsOpen(false);
-              }}
-              disabled={isDisabled}
-            >
-              <div className="flex items-center gap-3 w-full">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
-                  ? 'bg-blue-100 dark:bg-blue-900/20'
-                  : 'bg-blue-100 dark:bg-blue-900/20'
-                  }`}>
-                  <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-sm">
-                    {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
-                  </div>
-                </div>
-                {isWordConnectorActive && (
-                  <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                )}
-              </div>
-            </DropdownMenuItem>
-
-            {/* Excel Connector */}
-            <DropdownMenuItem
-              onClick={() => {
-                if (handleExcelConnectorToggle) {
-                  handleExcelConnectorToggle();
-                }
-                setIsOpen(false);
-              }}
-              disabled={isDisabled}
-            >
-              <div className="flex items-center gap-3 w-full">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
-                  ? 'bg-blue-100 dark:bg-blue-900/20'
-                  : 'bg-blue-100 dark:bg-blue-900/20'
-                  }`}>
-                  <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
-                </div>
-                <div className="flex-1">
-                  <div className="font-medium text-sm">
-                    {isExcelConnectorActive ? 'Excel Connector Active' : 'Excel Connector'}
-                  </div>
-                </div>
-                {isExcelConnectorActive && (
-                  <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                )}
-              </div>
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-
-        <DropdownMenuSeparator />
-
-        {/* Voice Studio - Opens panel directly */}
-        <DropdownMenuItem
-          onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
-          disabled={currentPlan === "FREE" || isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
-              <Mic className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+              {isImageGenerationActive && (
+                <div className="w-2 h-2 bg-pink-500 rounded-full" />
+              )}
+              {currentPlan === "FREE" && (
+                <Badge variant="secondary" className="text-xs">Pro</Badge>
+              )}
             </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">Voice Studio</div>
-              <div className="text-xs text-muted-foreground">
-                Text-to-Speech, Speech-to-Text, Music
-              </div>
-            </div>
-            {currentPlan === "FREE" && (
-              <Badge variant="secondary" className="text-xs">Pro</Badge>
-            )}
-          </div>
-        </DropdownMenuItem>
+          </DropdownMenuItem>
 
+          {/* Video Generation */}
+          <DropdownMenuItem
+            onClick={handleVideoGenerationToggle}
+            disabled={currentPlan === "FREE" || isDisabled}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
+                ? 'bg-orange-100 dark:bg-orange-900/20'
+                : 'bg-orange-100 dark:bg-orange-900/20'
+                }`}>
+                <Video className={`h-4 w-4 ${isVideoGenerationActive
+                  ? 'text-orange-600 dark:text-orange-400'
+                  : 'text-orange-600 dark:text-orange-400'
+                  }`} />
+              </div>
+              <div className="flex-1">
+                <div className="font-medium text-sm">
+                  {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Create videos with Google Veo 3
+                </div>
+              </div>
+              {isVideoGenerationActive && (
+                <div className="w-2 h-2 bg-orange-500 rounded-full" />
+              )}
+              {currentPlan === "FREE" && (
+                <Badge variant="secondary" className="text-xs">Pro</Badge>
+              )}
+            </div>
+          </DropdownMenuItem>
 
-        {/* Image Generation */}
-        <DropdownMenuItem
-          onClick={handleImageGenerationToggle}
-          disabled={currentPlan === "FREE" || isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
-              ? 'bg-pink-100 dark:bg-pink-900/20'
-              : 'bg-pink-100 dark:bg-pink-900/20'
-              }`}>
-              <Palette className={`h-4 w-4 ${isImageGenerationActive
-                ? 'text-pink-600 dark:text-pink-400'
-                : 'text-pink-600 dark:text-pink-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isImageGenerationActive ? 'Image Generation Active' : 'Image Generation'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Generate images with DALL-E 3
-              </div>
-            </div>
-            {isImageGenerationActive && (
-              <div className="w-2 h-2 bg-pink-500 rounded-full" />
-            )}
-            {currentPlan === "FREE" && (
-              <Badge variant="secondary" className="text-xs">Pro</Badge>
-            )}
-          </div>
-        </DropdownMenuItem>
-
-        {/* Video Generation */}
-        <DropdownMenuItem
-          onClick={handleVideoGenerationToggle}
-          disabled={currentPlan === "FREE" || isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
-              ? 'bg-orange-100 dark:bg-orange-900/20'
-              : 'bg-orange-100 dark:bg-orange-900/20'
-              }`}>
-              <Video className={`h-4 w-4 ${isVideoGenerationActive
-                ? 'text-orange-600 dark:text-orange-400'
-                : 'text-orange-600 dark:text-orange-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Create videos with Google Veo 3
-              </div>
-            </div>
-            {isVideoGenerationActive && (
-              <div className="w-2 h-2 bg-orange-500 rounded-full" />
-            )}
-            {currentPlan === "FREE" && (
-              <Badge variant="secondary" className="text-xs">Pro</Badge>
-            )}
-          </div>
-        </DropdownMenuItem>
-
-        {/* Computer Use Agent - Temporarily disabled */}
-        {/*
+          {/* Computer Use Agent - Temporarily disabled */}
+          {/*
         <DropdownMenuItem
           onClick={handleComputerUseToggle}
           disabled={currentPlan === "FREE" || isDisabled}
@@ -576,41 +619,42 @@ const ActionsDropdown = ({
         </DropdownMenuItem>
         */}
 
-        {/* Thesis Generation */}
-        <DropdownMenuItem
-          onClick={() => {
-            setChatType('thesis');
-            setIsOpen(false);
-          }}
-          disabled={currentPlan === "FREE" || isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
-              ? 'bg-purple-100 dark:bg-purple-900/20'
-              : 'bg-purple-100 dark:bg-purple-900/20'
-              }`}>
-              <BookOpen className={`h-4 w-4 ${chatType === 'thesis'
-                ? 'text-purple-600 dark:text-purple-400'
-                : 'text-purple-600 dark:text-purple-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {chatType === 'thesis' ? 'Thesis Generator Active' : 'Thesis Generator'}
+          {/* Thesis Generation */}
+          <DropdownMenuItem
+            onClick={() => {
+              setChatType('thesis');
+              setIsOpen(false);
+            }}
+            disabled={currentPlan === "FREE" || isDisabled}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
+                ? 'bg-purple-100 dark:bg-purple-900/20'
+                : 'bg-purple-100 dark:bg-purple-900/20'
+                }`}>
+                <BookOpen className={`h-4 w-4 ${chatType === 'thesis'
+                  ? 'text-purple-600 dark:text-purple-400'
+                  : 'text-purple-600 dark:text-purple-400'
+                  }`} />
               </div>
-              <div className="text-xs text-muted-foreground">
-                Generate comprehensive academic theses
+              <div className="flex-1">
+                <div className="font-medium text-sm">
+                  {chatType === 'thesis' ? 'Thesis Generator Active' : 'Thesis Generator'}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Generate comprehensive academic theses
+                </div>
               </div>
+              {chatType === 'thesis' && (
+                <div className="w-2 h-2 bg-purple-500 rounded-full" />
+              )}
+              {currentPlan === "FREE" && (
+                <Badge variant="secondary" className="text-xs">Pro</Badge>
+              )}
             </div>
-            {chatType === 'thesis' && (
-              <div className="w-2 h-2 bg-purple-500 rounded-full" />
-            )}
-            {currentPlan === "FREE" && (
-              <Badge variant="secondary" className="text-xs">Pro</Badge>
-            )}
-          </div>
-        </DropdownMenuItem>      </DropdownMenuContent>
-    </DropdownMenu>
+          </DropdownMenuItem>      </DropdownMenuContent>
+      </DropdownMenu>
+    </TooltipProvider>
   );
 };
 const wrapIconInSmallSquare = (icon: JSX.Element, color: string) => (
@@ -3639,7 +3683,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setUploadedFiles(uploadedFiles.filter((_, i) => i !== index))
   }
 
-  const isInitial = !currentChat && !showAudioPanel
+  const isInitial = !currentChat && !showAudioPanel && !isWordConnectorActive && !isExcelConnectorActive
 
   const handleWebSearch = async (searchQuery: string) => {
     if (!searchQuery) {
@@ -3961,46 +4005,46 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           {isInitial ? (
             <div className="flex flex-1 items-center justify-center p-4">
               <div className="w-full max-w-4xl space-y-6">
-                {/* <div className="text-center space-y-2">
-              <h1 className="text-3xl font-bold">Welcome to Sira GPT</h1>
-              <p className="text-muted-foreground">Ask anything, generate images, or create videos with AI.</p>
-            </div> */}
+                <div className="text-center space-y-2">
+                  <h1 className="text-3xl font-bold">Welcome to Sira GPT</h1>
+                  <p className="text-muted-foreground">Ask anything, generate images, or create videos with AI.</p>
+                </div>
 
                 {/* Example prompts */}
-                {/* {chatType === 'text' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("Create a table of the top 10 countries by population with their capitals, population, and GDP")}
-                >
-                  <div>
-                    <div className="font-medium">Population Data</div>
-                    <div className="text-xs text-muted-foreground">Get downloadable country statistics</div>
+                {chatType === 'text' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
+                    <Button
+                      variant="outline"
+                      className="p-4 h-auto text-left justify-start"
+                      onClick={() => setInput("Create a table of the top 10 countries by population with their capitals, population, and GDP")}
+                    >
+                      <div>
+                        <div className="font-medium">Population Data</div>
+                        <div className="text-xs text-muted-foreground">Get downloadable country statistics</div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="p-4 h-auto text-left justify-start"
+                      onClick={() => setInput("List the Fortune 500 top 20 companies with their revenue, employees, and industry")}
+                    >
+                      <div>
+                        <div className="font-medium">Company Rankings</div>
+                        <div className="text-xs text-muted-foreground">Generate business data tables</div>
+                      </div>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="p-4 h-auto text-left justify-start"
+                      onClick={() => setInput("Create a comparison table of programming languages with their features, performance, and use cases")}
+                    >
+                      <div>
+                        <div className="font-medium">Tech Comparison</div>
+                        <div className="text-xs text-muted-foreground">Compare technologies in table format</div>
+                      </div>
+                    </Button>
                   </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("List the Fortune 500 top 20 companies with their revenue, employees, and industry")}
-                >
-                  <div>
-                    <div className="font-medium">Company Rankings</div>
-                    <div className="text-xs text-muted-foreground">Generate business data tables</div>
-                  </div>
-                </Button>
-                <Button
-                  variant="outline"
-                  className="p-4 h-auto text-left justify-start"
-                  onClick={() => setInput("Create a comparison table of programming languages with their features, performance, and use cases")}
-                >
-                  <div>
-                    <div className="font-medium">Tech Comparison</div>
-                    <div className="text-xs text-muted-foreground">Compare technologies in table format</div>
-                  </div>
-                </Button>
-              </div>
-            )} */}
+                )}
 
                 {/* Video generation prompts */}
                 {chatType === 'video' && (
@@ -4092,134 +4136,143 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isWebSearching
                         }
                       />
-                      <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2  bg-background/95 p-2 backdrop-blur-sm">
-                        <ActionsDropdown
-                          chatType={chatType}
-                          setChatType={setChatType}
-                          currentPlan={currentPlan}
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
-                          isVideoGenerationActive={isVideoGenerationActive}
-                          setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          isComputerUseActive={isComputerUseActive}
-                          setIsComputerUseActive={setIsComputerUseActive}
-                          computerUseStatus={computerUseStatus}
-                          isGmailActive={isGmailActive}
-                          setIsGmailActive={setIsGmailActive}
-                          isGoogleCalendarActive={isGoogleCalendarActive}
-                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                          isGoogleDriveActive={isGoogleDriveActive}
-                          setIsGoogleDriveActive={setIsGoogleDriveActive}
-                          isSpotifyActive={isSpotifyActive}
-                          setIsSpotifyActive={setIsSpotifyActive}
-                          isWordConnectorActive={isWordConnectorActive}
-                          setIsWordConnectorActive={setIsWordConnectorActive}
-                          isExcelConnectorActive={isExcelConnectorActive}
-                          setIsExcelConnectorActive={setIsExcelConnectorActive}
-                          setShowAudioPanel={setShowAudioPanel}
+                      <TooltipProvider>
+                        <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2  bg-background/95 p-2 backdrop-blur-sm">
+                          <ActionsDropdown
+                            chatType={chatType}
+                            setChatType={setChatType}
+                            currentPlan={currentPlan}
+                            isWebSearchActive={isWebSearchActive}
+                            setIsWebSearchActive={setIsWebSearchActive}
+                            isImageGenerationActive={isImageGenerationActive}
+                            setIsImageGenerationActive={setIsImageGenerationActive}
+                            isVideoGenerationActive={isVideoGenerationActive}
+                            setIsVideoGenerationActive={setIsVideoGenerationActive}
+                            isComputerUseActive={isComputerUseActive}
+                            setIsComputerUseActive={setIsComputerUseActive}
+                            computerUseStatus={computerUseStatus}
+                            isGmailActive={isGmailActive}
+                            setIsGmailActive={setIsGmailActive}
+                            isGoogleCalendarActive={isGoogleCalendarActive}
+                            setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                            isGoogleDriveActive={isGoogleDriveActive}
+                            setIsGoogleDriveActive={setIsGoogleDriveActive}
+                            isSpotifyActive={isSpotifyActive}
+                            setIsSpotifyActive={setIsSpotifyActive}
+                            isWordConnectorActive={isWordConnectorActive}
+                            setIsWordConnectorActive={setIsWordConnectorActive}
+                            isExcelConnectorActive={isExcelConnectorActive}
+                            setIsExcelConnectorActive={setIsExcelConnectorActive}
+                            setShowAudioPanel={setShowAudioPanel}
 
-                          handleComputerUseToggle={handleComputerUseToggle}
-                          handleGmailToggle={handleGmailToggle}
-                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                          handleGoogleDriveToggle={handleGoogleDriveToggle}
-                          handleSpotifyToggle={handleSpotifyToggle}
-                          handleWordConnectorToggle={handleWordConnectorToggle}
-                          handleExcelConnectorToggle={handleExcelConnectorToggle}
-                          closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                          setAudioTab={setAudioTab}
-                          handleAndUploadFiles={handleAndUploadFiles}
-                          isUploading={isUploading}
-                          isWebSearching={isWebSearching}
-                          isLoading={isLoading}
-                          isGeneratingImage={isGeneratingImage}
-                          isGeneratingVideo={isGeneratingVideo}
-                          isGeneratingPPT={isGeneratingPPT}
-                          isProcessingGmail={isProcessingGmail}
-                        />
-                        <ActiveToolsDisplay
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
-                          isVideoGenerationActive={isVideoGenerationActive}
-                          setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          isComputerUseActive={isComputerUseActive}
-                          setIsComputerUseActive={setIsComputerUseActive}
-                          computerUseStatus={computerUseStatus}
-                          isGmailActive={isGmailActive}
-                          setIsGmailActive={setIsGmailActive}
-                          isGoogleCalendarActive={isGoogleCalendarActive}
-                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                          isGoogleDriveActive={isGoogleDriveActive}
-                          setIsGoogleDriveActive={setIsGoogleDriveActive}
-                          isSpotifyActive={isSpotifyActive}
-                          setIsSpotifyActive={setIsSpotifyActive}
-                          isWordConnectorActive={isWordConnectorActive}
-                          setIsWordConnectorActive={setIsWordConnectorActive}
-                          isExcelConnectorActive={isExcelConnectorActive}
-                          setIsExcelConnectorActive={setIsExcelConnectorActive}
-                          chatType={chatType}
-                          setChatType={setChatType}
+                            handleComputerUseToggle={handleComputerUseToggle}
+                            handleGmailToggle={handleGmailToggle}
+                            handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                            handleGoogleDriveToggle={handleGoogleDriveToggle}
+                            handleSpotifyToggle={handleSpotifyToggle}
+                            handleWordConnectorToggle={handleWordConnectorToggle}
+                            handleExcelConnectorToggle={handleExcelConnectorToggle}
+                            closeAllToolsAndConnectors={closeAllToolsAndConnectors}
+                            setAudioTab={setAudioTab}
+                            handleAndUploadFiles={handleAndUploadFiles}
+                            isUploading={isUploading}
+                            isWebSearching={isWebSearching}
+                            isLoading={isLoading}
+                            isGeneratingImage={isGeneratingImage}
+                            isGeneratingVideo={isGeneratingVideo}
+                            isGeneratingPPT={isGeneratingPPT}
+                            isProcessingGmail={isProcessingGmail}
+                          />
+                          <ActiveToolsDisplay
+                            isWebSearchActive={isWebSearchActive}
+                            setIsWebSearchActive={setIsWebSearchActive}
+                            isImageGenerationActive={isImageGenerationActive}
+                            setIsImageGenerationActive={setIsImageGenerationActive}
+                            isVideoGenerationActive={isVideoGenerationActive}
+                            setIsVideoGenerationActive={setIsVideoGenerationActive}
+                            isComputerUseActive={isComputerUseActive}
+                            setIsComputerUseActive={setIsComputerUseActive}
+                            computerUseStatus={computerUseStatus}
+                            isGmailActive={isGmailActive}
+                            setIsGmailActive={setIsGmailActive}
+                            isGoogleCalendarActive={isGoogleCalendarActive}
+                            setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                            isGoogleDriveActive={isGoogleDriveActive}
+                            setIsGoogleDriveActive={setIsGoogleDriveActive}
+                            isSpotifyActive={isSpotifyActive}
+                            setIsSpotifyActive={setIsSpotifyActive}
+                            isWordConnectorActive={isWordConnectorActive}
+                            setIsWordConnectorActive={setIsWordConnectorActive}
+                            isExcelConnectorActive={isExcelConnectorActive}
+                            setIsExcelConnectorActive={setIsExcelConnectorActive}
+                            chatType={chatType}
+                            setChatType={setChatType}
 
-                          handleComputerUseToggle={handleComputerUseToggle}
-                          handleGmailToggle={handleGmailToggle}
-                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                          handleGoogleDriveToggle={handleGoogleDriveToggle}
-                          handleSpotifyToggle={handleSpotifyToggle}
-                          handleWordConnectorToggle={handleWordConnectorToggle}
-                          handleExcelConnectorToggle={handleExcelConnectorToggle}
-                        />
-                        <div className="flex-grow" />
-                        {!(isLoading && isStreaming) && (
-                          <>
-                            <VoiceControls
-                              onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                              className="flex items-center gap-1"
-                            />
+                            handleComputerUseToggle={handleComputerUseToggle}
+                            handleGmailToggle={handleGmailToggle}
+                            handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                            handleGoogleDriveToggle={handleGoogleDriveToggle}
+                            handleSpotifyToggle={handleSpotifyToggle}
+                            handleWordConnectorToggle={handleWordConnectorToggle}
+                            handleExcelConnectorToggle={handleExcelConnectorToggle}
+                          />
+                          <div className="flex-grow" />
+                          {!(isLoading && isStreaming) && (
+                            <>
+                              <VoiceControls
+                                onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                                className="flex items-center gap-1"
+                              />
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    onClick={handleSend}
+                                    disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
+                                    size="sm"
+                                    className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+                                  >
+                                    {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <ArrowUp className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="top">
+                                  <p>Send message</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </>
+                          )}
+
+                          {/* Stop Button - Show during loading, streaming, sending intent, or when stop is pending */}
+                          {(isLoading || isStreaming || pendingStop || isSending) && (
                             <Button
-                              onClick={handleSend}
-                              disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
-                              size="sm"
-                              className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+                              onClick={() => {
+                                // Abort intent classification if running
+                                if (intentAbortControllerRef.current) {
+                                  intentAbortControllerRef.current.abort();
+                                  intentAbortControllerRef.current = null;
+                                }
+                                // Always trigger stream stop as well (no-op if not streaming)
+                                stopStreaming();
+                                setIsSending(false);
+                              }}
+                              size="icon"
+                              className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
+                              title="Stop Generating"
+                              disabled={pendingStop}
                             >
-                              {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
+                              {pendingStop ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
-                                <ArrowUp className="h-4 w-4" />
+                                <Square className="h-4 w-4" />
                               )}
                             </Button>
-                          </>
-                        )}
+                          )}
 
-                        {/* Stop Button - Show during loading, streaming, sending intent, or when stop is pending */}
-                        {(isLoading || isStreaming || pendingStop || isSending) && (
-                          <Button
-                            onClick={() => {
-                              // Abort intent classification if running
-                              if (intentAbortControllerRef.current) {
-                                intentAbortControllerRef.current.abort();
-                                intentAbortControllerRef.current = null;
-                              }
-                              // Always trigger stream stop as well (no-op if not streaming)
-                              stopStreaming();
-                              setIsSending(false);
-                            }}
-                            size="icon"
-                            className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
-                            title="Stop Generating"
-                            disabled={pendingStop}
-                          >
-                            {pendingStop ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Square className="h-4 w-4" />
-                            )}
-                          </Button>
-                        )}
-
-                      </div>
+                        </div>
+                      </TooltipProvider>
                     </div></div>
 
                   {/* <p className="text-center text-xs text-muted-foreground">
@@ -4422,133 +4475,142 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isWebSearching
                             }
                           />
-                          <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 rounded-b-xl bg-background/95 p-2 backdrop-blur-sm">
-                            <ActionsDropdown
-                              chatType={chatType}
-                              setChatType={setChatType}
-                              currentPlan={currentPlan}
-                              isWebSearchActive={isWebSearchActive}
-                              setIsWebSearchActive={setIsWebSearchActive}
-                              isImageGenerationActive={isImageGenerationActive}
-                              setIsImageGenerationActive={setIsImageGenerationActive}
-                              isVideoGenerationActive={isVideoGenerationActive}
-                              setIsVideoGenerationActive={setIsVideoGenerationActive}
-                              isComputerUseActive={isComputerUseActive}
-                              setIsComputerUseActive={setIsComputerUseActive}
-                              computerUseStatus={computerUseStatus}
-                              isGmailActive={isGmailActive}
-                              setIsGmailActive={setIsGmailActive}
-                              isGoogleCalendarActive={isGoogleCalendarActive}
-                              setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                              isGoogleDriveActive={isGoogleDriveActive}
-                              setIsGoogleDriveActive={setIsGoogleDriveActive}
-                              isSpotifyActive={isSpotifyActive}
-                              setIsSpotifyActive={setIsSpotifyActive}
-                              isWordConnectorActive={isWordConnectorActive}
-                              setIsWordConnectorActive={setIsWordConnectorActive}
-                              isExcelConnectorActive={isExcelConnectorActive}
-                              setIsExcelConnectorActive={setIsExcelConnectorActive}
-                              setShowAudioPanel={setShowAudioPanel}
+                          <TooltipProvider>
+                            <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 rounded-b-xl bg-background/95 p-2 backdrop-blur-sm">
+                              <ActionsDropdown
+                                chatType={chatType}
+                                setChatType={setChatType}
+                                currentPlan={currentPlan}
+                                isWebSearchActive={isWebSearchActive}
+                                setIsWebSearchActive={setIsWebSearchActive}
+                                isImageGenerationActive={isImageGenerationActive}
+                                setIsImageGenerationActive={setIsImageGenerationActive}
+                                isVideoGenerationActive={isVideoGenerationActive}
+                                setIsVideoGenerationActive={setIsVideoGenerationActive}
+                                isComputerUseActive={isComputerUseActive}
+                                setIsComputerUseActive={setIsComputerUseActive}
+                                computerUseStatus={computerUseStatus}
+                                isGmailActive={isGmailActive}
+                                setIsGmailActive={setIsGmailActive}
+                                isGoogleCalendarActive={isGoogleCalendarActive}
+                                setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                                isGoogleDriveActive={isGoogleDriveActive}
+                                setIsGoogleDriveActive={setIsGoogleDriveActive}
+                                isSpotifyActive={isSpotifyActive}
+                                setIsSpotifyActive={setIsSpotifyActive}
+                                isWordConnectorActive={isWordConnectorActive}
+                                setIsWordConnectorActive={setIsWordConnectorActive}
+                                isExcelConnectorActive={isExcelConnectorActive}
+                                setIsExcelConnectorActive={setIsExcelConnectorActive}
+                                setShowAudioPanel={setShowAudioPanel}
 
-                              handleComputerUseToggle={handleComputerUseToggle}
-                              handleGmailToggle={handleGmailToggle}
-                              handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                              handleGoogleDriveToggle={handleGoogleDriveToggle}
-                              handleSpotifyToggle={handleSpotifyToggle}
-                              handleWordConnectorToggle={handleWordConnectorToggle}
-                              handleExcelConnectorToggle={handleExcelConnectorToggle}
-                              closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                              setAudioTab={setAudioTab}
-                              handleAndUploadFiles={handleAndUploadFiles}
-                              isUploading={isUploading}
-                              isWebSearching={isWebSearching}
-                              isLoading={isLoading}
-                              isGeneratingImage={isGeneratingImage}
-                              isGeneratingVideo={isGeneratingVideo}
-                              isGeneratingPPT={isGeneratingPPT}
-                              isProcessingGmail={isProcessingGmail}
-                            />
-                            <ActiveToolsDisplay
-                              isWebSearchActive={isWebSearchActive}
-                              setIsWebSearchActive={setIsWebSearchActive}
-                              isImageGenerationActive={isImageGenerationActive}
-                              setIsImageGenerationActive={setIsImageGenerationActive}
-                              isVideoGenerationActive={isVideoGenerationActive}
-                              setIsVideoGenerationActive={setIsVideoGenerationActive}
-                              isComputerUseActive={isComputerUseActive}
-                              setIsComputerUseActive={setIsComputerUseActive}
-                              computerUseStatus={computerUseStatus}
-                              isGmailActive={isGmailActive}
-                              setIsGmailActive={setIsGmailActive}
-                              isGoogleCalendarActive={isGoogleCalendarActive}
-                              setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                              isGoogleDriveActive={isGoogleDriveActive}
-                              setIsGoogleDriveActive={setIsGoogleDriveActive}
-                              isSpotifyActive={isSpotifyActive}
-                              setIsSpotifyActive={setIsSpotifyActive}
-                              isWordConnectorActive={isWordConnectorActive}
-                              setIsWordConnectorActive={setIsWordConnectorActive}
-                              isExcelConnectorActive={isExcelConnectorActive}
-                              setIsExcelConnectorActive={setIsExcelConnectorActive}
-                              chatType={chatType}
-                              setChatType={setChatType}
+                                handleComputerUseToggle={handleComputerUseToggle}
+                                handleGmailToggle={handleGmailToggle}
+                                handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                                handleGoogleDriveToggle={handleGoogleDriveToggle}
+                                handleSpotifyToggle={handleSpotifyToggle}
+                                handleWordConnectorToggle={handleWordConnectorToggle}
+                                handleExcelConnectorToggle={handleExcelConnectorToggle}
+                                closeAllToolsAndConnectors={closeAllToolsAndConnectors}
+                                setAudioTab={setAudioTab}
+                                handleAndUploadFiles={handleAndUploadFiles}
+                                isUploading={isUploading}
+                                isWebSearching={isWebSearching}
+                                isLoading={isLoading}
+                                isGeneratingImage={isGeneratingImage}
+                                isGeneratingVideo={isGeneratingVideo}
+                                isGeneratingPPT={isGeneratingPPT}
+                                isProcessingGmail={isProcessingGmail}
+                              />
+                              <ActiveToolsDisplay
+                                isWebSearchActive={isWebSearchActive}
+                                setIsWebSearchActive={setIsWebSearchActive}
+                                isImageGenerationActive={isImageGenerationActive}
+                                setIsImageGenerationActive={setIsImageGenerationActive}
+                                isVideoGenerationActive={isVideoGenerationActive}
+                                setIsVideoGenerationActive={setIsVideoGenerationActive}
+                                isComputerUseActive={isComputerUseActive}
+                                setIsComputerUseActive={setIsComputerUseActive}
+                                computerUseStatus={computerUseStatus}
+                                isGmailActive={isGmailActive}
+                                setIsGmailActive={setIsGmailActive}
+                                isGoogleCalendarActive={isGoogleCalendarActive}
+                                setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                                isGoogleDriveActive={isGoogleDriveActive}
+                                setIsGoogleDriveActive={setIsGoogleDriveActive}
+                                isSpotifyActive={isSpotifyActive}
+                                setIsSpotifyActive={setIsSpotifyActive}
+                                isWordConnectorActive={isWordConnectorActive}
+                                setIsWordConnectorActive={setIsWordConnectorActive}
+                                isExcelConnectorActive={isExcelConnectorActive}
+                                setIsExcelConnectorActive={setIsExcelConnectorActive}
+                                chatType={chatType}
+                                setChatType={setChatType}
 
-                              handleComputerUseToggle={handleComputerUseToggle}
-                              handleGmailToggle={handleGmailToggle}
-                              handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                              handleGoogleDriveToggle={handleGoogleDriveToggle}
-                              handleSpotifyToggle={handleSpotifyToggle}
-                              handleWordConnectorToggle={handleWordConnectorToggle}
-                              handleExcelConnectorToggle={handleExcelConnectorToggle}
-                            />
-                            <div className="flex-grow" />
-                            {!(isLoading || isStreaming || pendingStop || isSending) && (
-                              <>
-                                <VoiceControls
-                                  onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                                  className="flex items-center gap-1"
-                                />
+                                handleComputerUseToggle={handleComputerUseToggle}
+                                handleGmailToggle={handleGmailToggle}
+                                handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                                handleGoogleDriveToggle={handleGoogleDriveToggle}
+                                handleSpotifyToggle={handleSpotifyToggle}
+                                handleWordConnectorToggle={handleWordConnectorToggle}
+                                handleExcelConnectorToggle={handleExcelConnectorToggle}
+                              />
+                              <div className="flex-grow" />
+                              {!(isLoading || isStreaming || pendingStop || isSending) && (
+                                <>
+                                  <VoiceControls
+                                    onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                                    className="flex items-center gap-1"
+                                  />
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        onClick={handleSend}
+                                        disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
+                                        size="sm"
+                                        className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+                                      >
+                                        {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                          <ArrowUp className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top">
+                                      <p>Send message</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </>
+                              )}
+
+                              {/* Stop Button - Show during loading, streaming, sending intent, or when stop is pending */}
+                              {(isLoading || isStreaming || pendingStop || isSending) && (
                                 <Button
-                                  onClick={handleSend}
-                                  disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
-                                  size="sm"
-                                  className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+                                  onClick={() => {
+                                    // Abort intent classification if running
+                                    if (intentAbortControllerRef.current) {
+                                      intentAbortControllerRef.current.abort();
+                                      intentAbortControllerRef.current = null;
+                                    }
+                                    // Always trigger stream stop as well (no-op if not streaming)
+                                    stopStreaming();
+                                    setIsSending(false);
+                                  }}
+                                  size="icon"
+                                  className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
+                                  title="Stop Generating"
+                                  disabled={pendingStop}
                                 >
-                                  {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
+                                  {pendingStop ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                   ) : (
-                                    <ArrowUp className="h-4 w-4" />
+                                    <Square className="h-4 w-4" />
                                   )}
                                 </Button>
-                              </>
-                            )}
-
-                            {/* Stop Button - Show during loading, streaming, sending intent, or when stop is pending */}
-                            {(isLoading || isStreaming || pendingStop || isSending) && (
-                              <Button
-                                onClick={() => {
-                                  // Abort intent classification if running
-                                  if (intentAbortControllerRef.current) {
-                                    intentAbortControllerRef.current.abort();
-                                    intentAbortControllerRef.current = null;
-                                  }
-                                  // Always trigger stream stop as well (no-op if not streaming)
-                                  stopStreaming();
-                                  setIsSending(false);
-                                }}
-                                size="icon"
-                                className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
-                                title="Stop Generating"
-                                disabled={pendingStop}
-                              >
-                                {pendingStop ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Square className="h-4 w-4" />
-                                )}
-                              </Button>
-                            )}
-                          </div>
+                              )}
+                            </div>
+                          </TooltipProvider>
                         </div>
                       </div>
 

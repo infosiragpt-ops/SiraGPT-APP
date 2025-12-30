@@ -17,7 +17,7 @@ import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import Underline from '@tiptap/extension-underline';
 import { Button } from '@/components/ui/button';
-import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline as UnderlineIcon, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles, Undo, Redo, FileText } from 'lucide-react';
+import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline as UnderlineIcon, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles, Undo, Redo, FileText, ChevronDown, Image as ImageIcon, Link as LinkIcon, Table as TableIcon, Palette, RotateCcw, RotateCw, Type, Highlighter, Quote, Code, Minus } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { useChat } from '@/lib/chat-context-integrated';
@@ -118,6 +118,46 @@ const FontSize = Extension.create({
     },
 });
 
+// Table Grid Selector Component
+const TableGridSelector: React.FC<{ onSelectTable: (rows: number, cols: number) => void }> = ({ onSelectTable }) => {
+    const [hoveredCell, setHoveredCell] = useState<{ row: number; col: number } | null>(null);
+
+    return (
+        <div className="space-y-2">
+            <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                {hoveredCell ? `${hoveredCell.row} × ${hoveredCell.col} Table` : 'Select Table Size'}
+            </label>
+            <div
+                className="grid grid-cols-10 gap-0.5"
+                onMouseLeave={() => setHoveredCell(null)}
+            >
+                {Array.from({ length: 100 }, (_, i) => {
+                    const row = Math.floor(i / 10) + 1;
+                    const col = (i % 10) + 1;
+                    const isSelected = hoveredCell && row <= hoveredCell.row && col <= hoveredCell.col;
+
+                    return (
+                        <button
+                            key={i}
+                            className={`w-6 h-6 border transition-all ${isSelected
+                                ? 'bg-blue-200 dark:bg-blue-500/40 border-blue-400 dark:border-blue-400'
+                                : 'bg-white dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                                }`}
+                            onMouseEnter={() => setHoveredCell({ row, col })}
+                            onClick={() => {
+                                onSelectTable(row, col);
+                            }}
+                        />
+                    );
+                })}
+            </div>
+            <p className="text-xs text-center text-muted-foreground">
+                {hoveredCell ? `Click to insert ${hoveredCell.row} × ${hoveredCell.col} table` : 'Hover to preview table size'}
+            </p>
+        </div>
+    );
+};
+
 export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; getHTML: () => string; }, WordConnectorProps>(
     function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false, onTextSelected, isGeneratingExternal = false }, ref) {
         const [isGenerating, setIsGenerating] = useState(false);
@@ -185,7 +225,8 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 Table.configure({
                     resizable: true,
                     HTMLAttributes: {
-                        class: 'border-collapse table-auto w-full my-4',
+                        class: 'border-collapse w-full my-4',
+                        style: 'table-layout: fixed; max-width: 100%;',
                     },
                 }),
                 TableRow.configure({
@@ -196,11 +237,13 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 TableHeader.configure({
                     HTMLAttributes: {
                         class: 'border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-2 font-bold text-left',
+                        style: 'word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; min-width: 50px;',
                     },
                 }),
                 TableCell.configure({
                     HTMLAttributes: {
                         class: 'border border-zinc-300 dark:border-zinc-700 p-2',
+                        style: 'word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; min-width: 50px;',
                     },
                 }),
             ],
@@ -656,224 +699,465 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
 
         return (
             <div className={`flex flex-col h-full min-h-0 bg-background border-l border-border/40 transition-all duration-300 ${isCollapsed ? 'w-0' : (isFullPage ? 'w-full' : 'w-[60%]')}`}>
-                {/* Header with Toolbar */}
-                <div className="flex flex-col border-b border-border/40 bg-white dark:bg-zinc-900">
-                    <div className="flex items-center justify-between p-3 border-b border-border/40">
-                        <div className="flex items-center gap-2">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src="/icons/Word.png" alt="Word" className="h-5 w-5" />
-                            <h3 className="font-semibold text-base text-blue-600 dark:text-blue-400">Word Document</h3>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            {isGenerating && (
-                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                    <span>Generating...</span>
-                                </div>
-                            )}
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button size="sm" variant="outline" className="h-8">
-                                        <Download className="h-3 w-3 mr-1" />
-                                        Download
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                    <DropdownMenuItem onClick={downloadAsWord}>
-                                        Download as Word (.docx)
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={downloadAsPDF}>
-                                        Download as PDF
-                                    </DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-                            <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={onClose}
-                                className="h-8 w-8 p-0"
-                            >
-                                <X className="h-4 w-4" />
-                            </Button>
-                        </div>
+                {/* Fixed Top Header */}
+                <div className="flex items-center justify-between p-3 border-b border-border/40 bg-white dark:bg-zinc-900">
+                    <div className="flex items-center gap-2">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src="/icons/Word.png" alt="Word" className="h-5 w-5" />
+                        <h3 className="font-semibold text-base text-blue-600 dark:text-blue-400">Word Document</h3>
                     </div>
-
-                    {/* Toolbar */}
-                    {!isCollapsed && (
-                        <div className="flex items-center gap-1 p-2 border-b border-border/40 bg-white dark:bg-zinc-900">
-                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => editor.chain().focus().undo().run()}>
-                                <Undo className="h-4 w-4" />
-                            </Button>
-                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => editor.chain().focus().redo().run()}>
-                                <Redo className="h-4 w-4" />
-                            </Button>
-                            <div className="w-px h-6 bg-border mx-1" />
-                            {/* Text Style Dropdown */}
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button variant="ghost" size="sm" className="h-8 px-3">
-                                        <span className="text-xs">
-                                            {editor.isActive('heading', { level: 1 }) ? 'Heading 1' :
-                                                editor.isActive('heading', { level: 2 }) ? 'Heading 2' :
-                                                    editor.isActive('heading', { level: 3 }) ? 'Heading 3' :
-                                                        'Normal Text'}
-                                        </span>
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent>
-                                    <DropdownMenuItem onClick={() => editor.chain().focus().setParagraph().run()}>
-                                        Normal Text
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}>
-                                        Heading 1
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
-                                        Heading 2
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>
-                                        Heading 3
-                                    </DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-
-                            <div className="w-px h-6 bg-border mx-1" />
-
-                            {/* Font Family */}
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button variant="ghost" size="sm" className="h-8 px-3">
-                                        <span className="text-xs">{editor.getAttributes('textStyle').fontFamily || 'Inter'}</span>
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent>
-                                    <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Inter').run()}>Inter</DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Arial').run()}>Arial</DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Times New Roman').run()}>Times New Roman</DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Calibri').run()}>Calibri</DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-
-                            {/* Font Size */}
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button variant="ghost" size="sm" className="h-8 px-3">
-                                        <span className="text-xs">{editor.getAttributes('textStyle').fontSize ? editor.getAttributes('textStyle').fontSize.replace('px', '') : '12'}</span>
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent>
-                                    {[8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 72].map(size => (
-                                        <DropdownMenuItem key={size} onClick={() => editor.chain().focus().setFontSize(`${size}px`).run()}>
-                                            {size}
-                                        </DropdownMenuItem>
-                                    ))}
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-
-                            <div className="w-px h-6 bg-border mx-1" />
-
-                            {/* Formatting Buttons */}
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive('bold') ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().toggleBold().run()}
-                            >
-                                <Bold className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive('italic') ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().toggleItalic().run()}
-                            >
-                                <Italic className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive('underline') ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().toggleUnderline().run()}
-                            >
-                                <UnderlineIcon className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive('strike') ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().toggleStrike().run()}
-                            >
-                                <Strikethrough className="h-4 w-4" />
-                            </Button>
-
-                            <div className="w-px h-6 bg-border mx-1" />
-
-                            {/* Alignment Buttons */}
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive({ textAlign: 'left' }) ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().setTextAlign('left').run()}
-                            >
-                                <AlignLeft className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive({ textAlign: 'center' }) ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().setTextAlign('center').run()}
-                            >
-                                <AlignCenter className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive({ textAlign: 'right' }) ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().setTextAlign('right').run()}
-                            >
-                                <AlignRight className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive({ textAlign: 'justify' }) ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().setTextAlign('justify').run()}
-                            >
-                                <AlignJustify className="h-4 w-4" />
-                            </Button>
-
-                            <div className="w-px h-6 bg-border mx-1" />
-
-                            {/* List Buttons */}
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive('bulletList') ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().toggleBulletList().run()}
-                            >
-                                <List className="h-4 w-4" />
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className={`h-8 w-8 p-0 ${editor.isActive('orderedList') ? 'bg-muted' : ''}`}
-                                onClick={() => editor.chain().focus().toggleOrderedList().run()}
-                            >
-                                <ListOrdered className="h-4 w-4" />
-                            </Button>
-                        </div>
-                    )}
+                    <div className="flex items-center gap-2">
+                        {isGenerating && (
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                <span>Generating...</span>
+                            </div>
+                        )}
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button size="sm" variant="outline" className="h-8">
+                                    <Download className="h-3 w-3 mr-1" />
+                                    Download
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={downloadAsWord}>
+                                    Download as Word (.docx)
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={downloadAsPDF}>
+                                    Download as PDF
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    </div>
                 </div>
 
-                {/* Editor Content */}
+                {/* Scrollable Editor Content */}
                 {!isCollapsed && (
-                    <div className="relative flex-1 min-h-0 overflow-hidden">
-                        <ScrollArea className="h-full bg-gradient-to-br from-slate-50 to-blue-50 dark:from-zinc-950 dark:to-slate-900">
-                            <div className={isBusy ? 'pointer-events-none select-none opacity-60 blur-[1px]' : ''} aria-busy={isBusy}>
-                                <div className="flex justify-center p-8 min-h-full">
-                                    <div
-                                        className="bg-white dark:bg-zinc-900 shadow-2xl w-full max-w-[816px] min-h-[1056px] p-12 rounded-lg border border-slate-200 dark:border-zinc-800"
-                                    >
-                                        <style>{`
+                    <>
+                        {/* Floating Toolbar - Fixed position with gap from top */}
+                        <div className="bg-gradient-to-br from-slate-50 to-slate-100 dark:from-zinc-950 dark:to-zinc-950 pt-6 px-4">
+                            <div className="mx-auto max-w-[820px]">
+                                <div className="bg-white dark:bg-zinc-900 rounded-3xl shadow-lg border border-slate-200 dark:border-zinc-800 overflow-hidden">
+                                    {/* Toolbar - Complete Professional Design Matching Image */}
+                                    <div className="flex flex-wrap items-center gap-1 px-3 py-2.5 bg-gradient-to-b from-zinc-50 to-white dark:from-zinc-900 dark:to-zinc-900">
+                                        {/* Undo/Redo with circular design */}
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full"
+                                            onClick={() => editor.chain().focus().undo().run()}
+                                            disabled={!editor.can().undo()}
+                                            title="Undo"
+                                        >
+                                            <RotateCcw className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full"
+                                            onClick={() => editor.chain().focus().redo().run()}
+                                            disabled={!editor.can().redo()}
+                                            title="Redo"
+                                        >
+                                            <RotateCw className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+
+                                        <div className="w-px h-6 bg-zinc-300 dark:bg-zinc-700 mx-1.5" />
+
+                                        {/* Text Style Dropdown with Chevron */}
+                                        <DropdownMenu>
+                                            <DropdownMenuTrigger asChild>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="h-9 px-3 min-w-[130px] justify-between bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 rounded"
+                                                >
+                                                    <span className="text-sm font-normal text-zinc-700 dark:text-zinc-300">
+                                                        {editor.isActive('heading', { level: 1 }) ? 'Heading 1' :
+                                                            editor.isActive('heading', { level: 2 }) ? 'Heading 2' :
+                                                                editor.isActive('heading', { level: 3 }) ? 'Heading 3' :
+                                                                    'Normal Text'}
+                                                    </span>
+                                                    <ChevronDown className="h-3.5 w-3.5 ml-2 text-zinc-500" />
+                                                </Button>
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent className="w-40">
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().setParagraph().run()}>
+                                                    <span className="text-sm">Normal Text</span>
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}>
+                                                    <span className="text-2xl font-bold">Heading 1</span>
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
+                                                    <span className="text-xl font-bold">Heading 2</span>
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>
+                                                    <span className="text-lg font-bold">Heading 3</span>
+                                                </DropdownMenuItem>
+                                            </DropdownMenuContent>
+                                        </DropdownMenu>
+
+                                        {/* Font Family with Chevron */}
+                                        <DropdownMenu>
+                                            <DropdownMenuTrigger asChild>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="h-9 px-3 min-w-[110px] justify-between bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 rounded"
+                                                >
+                                                    <span className="text-sm font-normal text-zinc-700 dark:text-zinc-300">
+                                                        {editor.getAttributes('textStyle').fontFamily || 'Arial'}
+                                                    </span>
+                                                    <ChevronDown className="h-3.5 w-3.5 ml-2 text-zinc-500" />
+                                                </Button>
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent className="w-48">
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Arial').run()}>
+                                                    <span style={{ fontFamily: 'Arial' }}>Arial</span>
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Times New Roman').run()}>
+                                                    <span style={{ fontFamily: 'Times New Roman' }}>Times New Roman</span>
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Calibri').run()}>
+                                                    <span style={{ fontFamily: 'Calibri' }}>Calibri</span>
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Georgia').run()}>
+                                                    <span style={{ fontFamily: 'Georgia' }}>Georgia</span>
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Verdana').run()}>
+                                                    <span style={{ fontFamily: 'Verdana' }}>Verdana</span>
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onClick={() => editor.chain().focus().setFontFamily('Courier New').run()}>
+                                                    <span style={{ fontFamily: 'Courier New' }}>Courier New</span>
+                                                </DropdownMenuItem>
+                                            </DropdownMenuContent>
+                                        </DropdownMenu>
+
+                                        {/* Font Size with Chevron */}
+                                        <DropdownMenu>
+                                            <DropdownMenuTrigger asChild>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="h-9 px-3 w-[70px] justify-between bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 rounded"
+                                                >
+                                                    <span className="text-sm font-normal text-zinc-700 dark:text-zinc-300">
+                                                        {editor.getAttributes('textStyle').fontSize ? editor.getAttributes('textStyle').fontSize.replace('px', '') : '14'}
+                                                    </span>
+                                                    <ChevronDown className="h-3.5 w-3.5 ml-1 text-zinc-500" />
+                                                </Button>
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent className="w-24">
+                                                {[8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 32, 36, 48, 72].map(size => (
+                                                    <DropdownMenuItem key={size} onClick={() => editor.chain().focus().setFontSize(`${size}px`).run()}>
+                                                        {size}
+                                                    </DropdownMenuItem>
+                                                ))}
+                                            </DropdownMenuContent>
+                                        </DropdownMenu>
+
+                                        <div className="w-px h-6 bg-zinc-300 dark:bg-zinc-700 mx-1.5" />
+
+                                        {/* Formatting Buttons */}
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('bold') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().toggleBold().run()}
+                                            title="Bold"
+                                        >
+                                            <Bold className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('italic') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().toggleItalic().run()}
+                                            title="Italic"
+                                        >
+                                            <Italic className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('underline') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().toggleUnderline().run()}
+                                            title="Underline"
+                                        >
+                                            <UnderlineIcon className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('strike') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().toggleStrike().run()}
+                                            title="Strikethrough"
+                                        >
+                                            <Strikethrough className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+
+                                        {/* Text Color */}
+                                        <Popover>
+                                            <PopoverTrigger asChild>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                                                    title="Text Color"
+                                                >
+                                                    <div className="relative flex items-center justify-center">
+                                                        <Palette className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                                        <div className="absolute -bottom-0.5 left-1 right-1 h-1 rounded-full" style={{ backgroundColor: editor.getAttributes('textStyle').color || '#000000' }} />
+                                                    </div>
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-64">
+                                                <div className="space-y-2">
+                                                    <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">Text Color</label>
+                                                    <div className="grid grid-cols-8 gap-1.5">
+                                                        {['#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef',
+                                                            '#f3f3f3', '#ffffff', '#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff',
+                                                            '#4a86e8', '#0000ff', '#9900ff', '#ff00ff', '#e6b8af', '#f4cccc', '#fce5cd', '#fff2cc',
+                                                            '#d9ead3', '#d0e0e3', '#c9daf8', '#cfe2f3', '#d9d2e9', '#ead1dc'].map(color => (
+                                                                <button
+                                                                    key={color}
+                                                                    className="w-6 h-6 rounded border border-zinc-300 cursor-pointer hover:scale-110 transition-transform"
+                                                                    style={{ backgroundColor: color }}
+                                                                    onClick={() => editor.chain().focus().setColor(color).run()}
+                                                                />
+                                                            ))}
+                                                    </div>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="w-full mt-2"
+                                                        onClick={() => editor.chain().focus().unsetColor().run()}
+                                                    >
+                                                        Reset Color
+                                                    </Button>
+                                                </div>
+                                            </PopoverContent>
+                                        </Popover>
+
+                                        <div className="w-px h-6 bg-zinc-300 dark:bg-zinc-700 mx-1.5" />
+
+                                        {/* Alignment Buttons */}
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive({ textAlign: 'left' }) ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().setTextAlign('left').run()}
+                                            title="Align Left"
+                                        >
+                                            <AlignLeft className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive({ textAlign: 'center' }) ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().setTextAlign('center').run()}
+                                            title="Align Center"
+                                        >
+                                            <AlignCenter className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive({ textAlign: 'right' }) ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().setTextAlign('right').run()}
+                                            title="Align Right"
+                                        >
+                                            <AlignRight className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive({ textAlign: 'justify' }) ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().setTextAlign('justify').run()}
+                                            title="Justify"
+                                        >
+                                            <AlignJustify className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+
+                                        <div className="w-px h-6 bg-zinc-300 dark:bg-zinc-700 mx-1.5" />
+
+                                        {/* List Buttons */}
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('bulletList') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().toggleBulletList().run()}
+                                            title="Bullet List"
+                                        >
+                                            <List className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('orderedList') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().toggleOrderedList().run()}
+                                            title="Numbered List"
+                                        >
+                                            <ListOrdered className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+
+                                        <div className="w-px h-6 bg-zinc-300 dark:bg-zinc-700 mx-1.5" />
+
+                                        {/* Additional Formatting */}
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                                            onClick={() => {
+                                                const { from, to, empty } = editor.state.selection;
+                                                if (!empty) {
+                                                    const selectedText = editor.state.doc.textBetween(from, to, ' ');
+                                                    // Wrap in bold and add quotation marks
+                                                    editor.chain().focus()
+                                                        .setTextSelection({ from, to })
+                                                        .insertContent(`<strong>"${selectedText}"</strong>`)
+                                                        .run();
+                                                } else {
+                                                    editor.chain().focus().insertContent('<strong>""</strong>').run();
+                                                    // Move cursor back to be inside the quotes
+                                                    const newPos = editor.state.selection.from - 1;
+                                                    editor.chain().focus().setTextSelection(newPos).run();
+                                                }
+                                            }}
+                                            title="Add Bold Quote"
+                                        >
+                                            <Quote className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('code') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
+                                            onClick={() => editor.chain().focus().toggleCode().run()}
+                                            title="Code"
+                                        >
+                                            <Code className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                                            onClick={() => editor.chain().focus().setHorizontalRule().run()}
+                                            title="Horizontal Line"
+                                        >
+                                            <Minus className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                        </Button>
+
+                                        <div className="w-px h-6 bg-zinc-300 dark:bg-zinc-700 mx-1.5" />
+
+                                        {/* Insert Options */}
+                                        <Popover>
+                                            <PopoverTrigger asChild>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                                                    title="Insert Image"
+                                                >
+                                                    <ImageIcon className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-80">
+                                                <div className="space-y-2">
+                                                    <label className="text-sm font-medium">Image URL</label>
+                                                    <Input
+                                                        placeholder="https://example.com/image.jpg"
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') {
+                                                                const url = e.currentTarget.value;
+                                                                if (url) {
+                                                                    editor.chain().focus().setImage({ src: url }).run();
+                                                                    e.currentTarget.value = '';
+                                                                }
+                                                            }
+                                                        }}
+                                                    />
+                                                    <p className="text-xs text-muted-foreground">Press Enter to insert</p>
+                                                </div>
+                                            </PopoverContent>
+                                        </Popover>
+
+                                        <Popover>
+                                            <PopoverTrigger asChild>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                                                    title="Insert Link"
+                                                >
+                                                    <LinkIcon className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-80">
+                                                <div className="space-y-2">
+                                                    <label className="text-sm font-medium">Link URL</label>
+                                                    <Input
+                                                        placeholder="https://example.com"
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') {
+                                                                const url = e.currentTarget.value;
+                                                                if (url) {
+                                                                    editor.chain().focus().setLink({ href: url }).run();
+                                                                    e.currentTarget.value = '';
+                                                                }
+                                                            }
+                                                        }}
+                                                    />
+                                                    <p className="text-xs text-muted-foreground">Press Enter to insert</p>
+                                                    {editor.isActive('link') && (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            className="w-full"
+                                                            onClick={() => editor.chain().focus().unsetLink().run()}
+                                                        >
+                                                            Remove Link
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </PopoverContent>
+                                        </Popover>
+
+                                        {/* Table Grid Selector */}
+                                        <Popover>
+                                            <PopoverTrigger asChild>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                                                    title="Insert Table"
+                                                >
+                                                    <TableIcon className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-auto p-3">
+                                                <TableGridSelector
+                                                    onSelectTable={(rows, cols) => {
+                                                        editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
+                                                    }}
+                                                />
+                                            </PopoverContent>
+                                        </Popover>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Scrollable Document Area */}
+                        <div className="relative flex-1 min-h-0 overflow-hidden bg-gradient-to-br from-slate-50  dark:from-zinc-950 dark:to-zinc-950">
+                            <ScrollArea className="h-full">
+                                <div className={isBusy ? 'pointer-events-none select-none opacity-60 blur-[1px]' : ''} aria-busy={isBusy}>
+                                    {/* Document Editor Page */}
+                                    <div className="flex justify-center px-2 py-8">
+                                        <div
+                                            className="bg-white dark:bg-zinc-900 shadow-2xl w-full max-w-[816px] min-h-[2000px] p-12 rounded-lg border border-slate-200 dark:border-zinc-800"
+                                        >
+                                            <style>{`
                                             .ProseMirror {
                                                 min-height: 100%;
                                                 font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -977,6 +1261,24 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                                 margin: 1.5em 0;
                                                 border-collapse: collapse;
                                                 width: 100%;
+                                                max-width: 100%;
+                                                table-layout: fixed;
+                                                overflow: hidden;
+                                            }
+                                            .ProseMirror table td,
+                                            .ProseMirror table th {
+                                                word-wrap: break-word;
+                                                overflow-wrap: break-word;
+                                                word-break: break-word;
+                                                min-width: 50px;
+                                                max-width: 100%;
+                                                vertical-align: top;
+                                                padding: 8px;
+                                                border: 1px solid #cbd5e1;
+                                            }
+                                            .dark .ProseMirror table td,
+                                            .dark .ProseMirror table th {
+                                                border-color: #3f3f46;
                                             }
                                             .ProseMirror table th {
                                                 background: #eff6ff;
@@ -1011,21 +1313,22 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                                 color: #e2e8f0;
                                             }
                                         `}</style>
-                                        <EditorContent editor={editor} />
+                                            <EditorContent editor={editor} />
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        </ScrollArea>
+                            </ScrollArea>
 
-                        {isBusy && (
-                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm">
-                                <div className="flex items-center gap-2 text-sm text-foreground">
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    <span>Generating document…</span>
+                            {isBusy && (
+                                <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm">
+                                    <div className="flex items-center gap-2 text-sm text-foreground">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        <span>Generating document…</span>
+                                    </div>
                                 </div>
-                            </div>
-                        )}
-                    </div>
+                            )}
+                        </div>
+                    </>
                 )}
             </div>
         );
