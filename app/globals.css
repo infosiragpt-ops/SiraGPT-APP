@@ -53,6 +53,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   pointer-events: none !important;
 }
 
+/* Hide Syncfusion's default ribbon */
+.e-ribbon,
+.e-ribbon-container,
+.e-ribbon-wrapper,
+.e-spreadsheet-ribbon,
+.e-spreadsheet .e-ribbon {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+
 
 @layer base {
   :root {
@@ -643,4 +655,328 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 footer {
   padding: 2rem 0;
   border-top: 1px solid hsl(var(--border));
+}
+
+/* Excel Ribbon Styling */
+.excel-ribbon-container {
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border-bottom: 1px solid #d0d0d0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 11px;
+  z-index: 1000;
+}
+
+/* Top Bar - Dark Green */
+.excel-ribbon-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #217346;
+  color: #ffffff;
+  padding: 0 12px;
+  height: 34px;
+  font-size: 12px;
+}
+
+.excel-ribbon-title {
+  font-weight: 400;
+  color: #ffffff;
+}
+
+.excel-ribbon-topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.excel-ribbon-topbar-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 2px;
+  transition: background-color 0.2s;
+}
+
+.excel-ribbon-topbar-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Ribbon Tabs */
+.excel-ribbon-tabs {
+  display: flex;
+  align-items: center;
+  background: #217346;
+  padding: 0;
+  height: 42px;
+  border-bottom: 1px solid #1F4E3D;
+}
+
+.excel-ribbon-tab {
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 400;
+  height: 100%;
+  transition: background-color 0.2s;
+  border-bottom: 2px solid transparent;
+}
+
+.excel-ribbon-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.excel-ribbon-tab.active {
+  background: #ffffff;
+  color: #217346;
+  border-bottom: 2px solid #217346;
+  font-weight: 500;
+}
+
+.excel-ribbon-search {
+  margin-left: auto;
+  padding: 0 12px;
+}
+
+.excel-ribbon-search-input {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #ffffff;
+  padding: 4px 8px;
+  width: 300px;
+  font-size: 11px;
+  border-radius: 2px;
+}
+
+.excel-ribbon-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.excel-ribbon-search-input:focus {
+  outline: none;
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Ribbon Content */
+.excel-ribbon-content {
+  display: flex;
+  align-items: flex-start;
+  background: #ffffff;
+  padding: 8px 4px;
+  min-height: 120px;
+  gap: 0;
+}
+
+/* Ribbon Groups */
+.excel-ribbon-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 8px;
+  border-right: 1px solid #e0e0e0;
+  min-width: 90px;
+  position: relative;
+}
+
+.excel-ribbon-group:last-child {
+  border-right: none;
+}
+
+.excel-ribbon-group-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+  padding-bottom: 4px;
+}
+
+.excel-ribbon-group-label {
+  font-size: 10px;
+  color: #666666;
+  text-align: center;
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid #f0f0f0;
+  width: 100%;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+/* Ribbon Buttons */
+.excel-ribbon-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: all 0.2s;
+  min-width: 32px;
+  min-height: 32px;
+  position: relative;
+  gap: 2px;
+}
+
+.excel-ribbon-button:hover {
+  background: #e8f4f0;
+  border-color: #a0c0b0;
+}
+
+.excel-ribbon-button:active {
+  background: #d0e8e0;
+  border-color: #80a090;
+}
+
+.excel-ribbon-icon {
+  width: 16px;
+  height: 16px;
+  color: #333333;
+}
+
+.excel-ribbon-label {
+  font-size: 10px;
+  color: #333333;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.excel-ribbon-dropdown-icon {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 10px;
+  height: 10px;
+  color: #666666;
+}
+
+/* Button Groups */
+.excel-ribbon-button-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.excel-ribbon-button-group .excel-ribbon-button {
+  border: none;
+  border-radius: 0;
+  min-height: 24px;
+  padding: 2px 4px;
+}
+
+.excel-ribbon-button-group .excel-ribbon-button:not(:last-child) {
+  border-bottom: 1px solid #d0d0d0;
+}
+
+.excel-ribbon-icon-only {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px;
+}
+
+.excel-ribbon-icon-only .excel-ribbon-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Select Dropdowns */
+.excel-ribbon-select {
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  padding: 2px 4px;
+  font-size: 11px;
+  border-radius: 2px;
+  cursor: pointer;
+  min-width: 80px;
+  height: 24px;
+}
+
+.excel-ribbon-select-small {
+  min-width: 50px;
+}
+
+.excel-ribbon-select-medium {
+  min-width: 100px;
+}
+
+.excel-ribbon-select:hover {
+  border-color: #a0a0a0;
+}
+
+.excel-ribbon-select:focus {
+  outline: none;
+  border-color: #217346;
+  box-shadow: 0 0 0 1px #217346;
+}
+
+/* Color Buttons */
+.excel-ribbon-color-button {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 2px;
+  position: relative;
+  min-width: 32px;
+  min-height: 24px;
+}
+
+.excel-ribbon-color-button:hover {
+  border-color: #a0a0a0;
+}
+
+.excel-ribbon-color-fill {
+  width: 20px;
+  height: 16px;
+  border: 1px solid #d0d0d0;
+  border-radius: 1px;
+}
+
+.excel-ribbon-color-text {
+  font-size: 12px;
+  font-weight: bold;
+  color: #333333;
+  line-height: 1;
+}
+
+.excel-ribbon-color-underline {
+  width: 20px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.excel-ribbon-color-dropdown {
+  width: 10px;
+  height: 10px;
+  color: #666666;
+}
+
+/* Placeholder */
+.excel-ribbon-placeholder {
+  padding: 20px;
+  text-align: center;
+  color: #999999;
+  font-size: 12px;
 }

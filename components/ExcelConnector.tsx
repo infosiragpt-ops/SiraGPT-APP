@@ -4,6 +4,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { Download, FileSpreadsheet, X } from "lucide-react";
 import { toast } from "sonner";
+import { ExcelRibbon } from "./ExcelRibbon";
 
 import { registerLicense } from "@syncfusion/ej2-base";
 import { SpreadsheetChart } from "@syncfusion/ej2-spreadsheet";
@@ -394,7 +395,10 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
           </div>
         </div>
 
-        <div className="relative flex-1 min-w-0 overflow-hidden h-[calc(100vh-100px)]">
+        {/* Custom Excel Ribbon */}
+        <ExcelRibbon spreadsheetRef={spreadsheetRef} />
+
+        <div className="relative flex-1 min-w-0 overflow-hidden h-[calc(100vh-280px)]">
           {isGeneratingExternal && (
             <div className="absolute inset-0 z-10 bg-background/70 backdrop-blur-sm flex items-center justify-center">
               <div className="text-sm text-muted-foreground">Generating spreadsheet…</div>
@@ -408,7 +412,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
               }}
               height="100%"
               width="100%"
-              showRibbon={true}
+              showRibbon={false}
               showFormulaBar={true}
               allowChart={true}
               allowSave={true}
