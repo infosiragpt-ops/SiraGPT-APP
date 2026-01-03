@@ -675,9 +675,9 @@ footer {
   align-items: center;
   background: #217346;
   color: #ffffff;
-  padding: 0 12px;
-  height: 34px;
-  font-size: 12px;
+  padding: 0 10px;
+  height: 24px;
+  font-size: 10px;
 }
 
 .excel-ribbon-title {
@@ -697,9 +697,9 @@ footer {
   background: transparent;
   border: none;
   color: #ffffff;
-  padding: 4px 8px;
+  padding: 3px 6px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10px;
   border-radius: 2px;
   transition: background-color 0.2s;
 }
@@ -714,7 +714,7 @@ footer {
   align-items: center;
   background: #217346;
   padding: 0;
-  height: 42px;
+  height: 32px;
   border-bottom: 1px solid #1F4E3D;
 }
 
@@ -722,9 +722,9 @@ footer {
   background: transparent;
   border: none;
   color: #ffffff;
-  padding: 8px 16px;
+  padding: 4px 12px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 400;
   height: 100%;
   transition: background-color 0.2s;
@@ -751,10 +751,11 @@ footer {
   background: rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.3);
   color: #ffffff;
-  padding: 4px 8px;
-  width: 300px;
-  font-size: 11px;
+  padding: 3px 6px;
+  width: 280px;
+  font-size: 10px;
   border-radius: 2px;
+  height: 22px;
 }
 
 .excel-ribbon-search-input::placeholder {
@@ -772,8 +773,8 @@ footer {
   display: flex;
   align-items: flex-start;
   background: #ffffff;
-  padding: 8px 4px;
-  min-height: 120px;
+  padding: 5px 4px;
+  min-height: 90px;
   gap: 0;
 }
 
@@ -782,10 +783,13 @@ footer {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 5px;
   border-right: 1px solid #e0e0e0;
-  min-width: 90px;
+  min-width: 80px;
+  max-width: 180px;
   position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .excel-ribbon-group:last-child {
@@ -795,19 +799,22 @@ footer {
 .excel-ribbon-group-content {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
-  align-items: center;
+  gap: 3px;
+  align-items: flex-start;
   justify-content: center;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
   padding-bottom: 4px;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .excel-ribbon-group-label {
-  font-size: 10px;
+  font-size: 9px;
   color: #666666;
   text-align: center;
   margin-top: auto;
-  padding-top: 6px;
+  padding-top: 3px;
   border-top: 1px solid #f0f0f0;
   width: 100%;
   position: absolute;
@@ -824,14 +831,20 @@ footer {
   justify-content: center;
   background: transparent;
   border: 1px solid transparent;
-  padding: 4px 8px;
+  padding: 2px 4px;
   cursor: pointer;
   border-radius: 2px;
-  transition: all 0.2s;
-  min-width: 32px;
-  min-height: 32px;
+  transition: all 0.15s;
+  min-width: 26px;
+  min-height: 26px;
   position: relative;
-  gap: 2px;
+  gap: 1px;
+}
+
+.excel-ribbon-button-large {
+  min-width: 48px;
+  min-height: 48px;
+  padding: 4px 8px;
 }
 
 .excel-ribbon-button:hover {
@@ -844,17 +857,22 @@ footer {
   border-color: #80a090;
 }
 
+.excel-ribbon-button-large:hover {
+  background: #e8f4f0;
+  border-color: #a0c0b0;
+}
+
 .excel-ribbon-icon {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   color: #333333;
 }
 
 .excel-ribbon-label {
-  font-size: 10px;
+  font-size: 9px;
   color: #333333;
   text-align: center;
-  line-height: 1.2;
+  line-height: 1.1;
 }
 
 .excel-ribbon-dropdown-icon {
@@ -879,23 +897,261 @@ footer {
 .excel-ribbon-button-group .excel-ribbon-button {
   border: none;
   border-radius: 0;
-  min-height: 24px;
-  padding: 2px 4px;
+  min-height: 20px;
+  padding: 2px 3px;
 }
 
 .excel-ribbon-button-group .excel-ribbon-button:not(:last-child) {
   border-bottom: 1px solid #d0d0d0;
 }
 
+/* Override for horizontal button groups in alignment */
+.excel-ribbon-alignment-vertical,
+.excel-ribbon-alignment-horizontal {
+  flex-direction: row !important;
+}
+
+.excel-ribbon-alignment-vertical .excel-ribbon-button:not(:last-child),
+.excel-ribbon-alignment-horizontal .excel-ribbon-button:not(:last-child) {
+  border-bottom: none !important;
+  border-right: 1px solid #d0d0d0 !important;
+}
+
+/* Alignment Section */
+.excel-ribbon-alignment-container {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  align-items: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.excel-ribbon-alignment-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  max-width: 100px;
+}
+
+.excel-ribbon-alignment-vertical {
+  display: flex;
+  flex-direction: row;
+  gap: 1px;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+}
+
+.excel-ribbon-alignment-vertical .excel-ribbon-button {
+  border: none;
+  border-radius: 0;
+  min-height: 20px;
+  padding: 2px 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.excel-ribbon-alignment-vertical .excel-ribbon-button:not(:last-child) {
+  border-right: 1px solid #d0d0d0;
+}
+
+.excel-ribbon-alignment-horizontal {
+  display: flex;
+  flex-direction: row;
+  gap: 1px;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+}
+
+.excel-ribbon-alignment-horizontal .excel-ribbon-button {
+  border: none;
+  border-radius: 0;
+  min-height: 20px;
+  padding: 2px 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.excel-ribbon-alignment-horizontal .excel-ribbon-button:not(:last-child) {
+  border-right: 1px solid #d0d0d0;
+}
+
+.excel-ribbon-indent-buttons {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.excel-ribbon-indent-btn {
+  flex: 1;
+  min-height: 22px;
+  padding: 2px 4px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.excel-ribbon-indent-btn .excel-ribbon-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.excel-ribbon-indent-btn .excel-ribbon-label {
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.excel-ribbon-alignment-right {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+  min-width: 85px;
+  max-width: 85px;
+}
+
+.excel-ribbon-alignment-action-btn {
+  min-width: 0;
+  min-height: 22px;
+  padding: 2px 4px;
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 3px;
+}
+
+.excel-ribbon-alignment-action-btn .excel-ribbon-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.excel-ribbon-alignment-action-btn .excel-ribbon-label {
+  font-size: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.excel-ribbon-alignment-action-btn.active {
+  background: #d0e8e0 !important;
+  color: #217346;
+  border-color: #80a090;
+}
+
+.excel-ribbon-alignment-action-btn.active:hover {
+  background: #b8d8c8 !important;
+}
+
 .excel-ribbon-icon-only {
-  min-width: 24px;
-  min-height: 24px;
+  min-width: 20px;
+  min-height: 20px;
   padding: 2px;
 }
 
 .excel-ribbon-icon-only .excel-ribbon-icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* Clipboard Grid - 2 columns */
+.excel-ribbon-clipboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.excel-ribbon-clipboard-btn {
+  min-width: 38px;
+  min-height: 24px;
+  padding: 2px 4px;
+}
+
+.excel-ribbon-clipboard-btn .excel-ribbon-icon {
   width: 14px;
   height: 14px;
+}
+
+.excel-ribbon-clipboard-btn .excel-ribbon-label {
+  font-size: 9px;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+/* Font Section Layout */
+.excel-ribbon-font-row {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: 3px;
+}
+
+.excel-ribbon-font-format-row {
+  display: flex;
+  gap: 1px;
+  width: 100%;
+  margin-bottom: 3px;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.excel-ribbon-font-actions-row {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  align-items: center;
+}
+
+.excel-ribbon-format-btn {
+  flex: 1;
+  min-width: 0;
+  min-height: 22px;
+  padding: 2px;
+  border: none;
+  border-radius: 0;
+}
+
+.excel-ribbon-format-btn:not(:last-child) {
+  border-right: 1px solid #d0d0d0;
+}
+
+.excel-ribbon-format-btn .excel-ribbon-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.excel-ribbon-format-btn.active {
+  background: #d0e8e0 !important;
+  color: #217346;
+}
+
+.excel-ribbon-format-btn.active:hover {
+  background: #b8d8c8 !important;
+}
+
+.excel-ribbon-action-btn {
+  min-width: 50px;
+  min-height: 22px;
+  padding: 2px 4px;
 }
 
 /* Select Dropdowns */
@@ -903,19 +1159,26 @@ footer {
   background: #ffffff;
   border: 1px solid #d0d0d0;
   padding: 2px 4px;
-  font-size: 11px;
+  font-size: 10px;
   border-radius: 2px;
   cursor: pointer;
-  min-width: 80px;
-  height: 24px;
+  height: 20px;
+  flex: 1;
+}
+
+.excel-ribbon-select:first-child {
+  min-width: 90px;
 }
 
 .excel-ribbon-select-small {
   min-width: 50px;
+  flex: 0 0 auto;
 }
+
 
 .excel-ribbon-select-medium {
   min-width: 100px;
+  max-width: 120px;
 }
 
 .excel-ribbon-select:hover {
@@ -929,6 +1192,10 @@ footer {
 }
 
 /* Color Buttons */
+.excel-ribbon-color-picker-container {
+  position: relative;
+}
+
 .excel-ribbon-color-button {
   display: flex;
   align-items: center;
@@ -939,30 +1206,33 @@ footer {
   cursor: pointer;
   border-radius: 2px;
   position: relative;
-  min-width: 32px;
-  min-height: 24px;
+  min-width: 28px;
+  min-height: 22px;
+  transition: all 0.15s;
 }
 
 .excel-ribbon-color-button:hover {
   border-color: #a0a0a0;
+  background: #f8f8f8;
 }
 
+
 .excel-ribbon-color-fill {
-  width: 20px;
-  height: 16px;
+  width: 18px;
+  height: 14px;
   border: 1px solid #d0d0d0;
   border-radius: 1px;
 }
 
 .excel-ribbon-color-text {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: bold;
   color: #333333;
   line-height: 1;
 }
 
 .excel-ribbon-color-underline {
-  width: 20px;
+  width: 18px;
   height: 2px;
   border-radius: 1px;
 }
