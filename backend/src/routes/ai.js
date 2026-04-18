@@ -9,6 +9,7 @@ const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const googleMCPService = require('../services/google-mcp');
 const documentService = require('../services/document-service');
+const langPolicy = require('../services/language-policy');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -195,6 +196,34 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+
+      // ─── Language policy ──────────────────────────────────────────
+      // Resolves the response language for THIS turn under a strict
+      // precedence: explicit instruction > thread preference > detection
+      // of the current message > user locale fallback. The result is
+      // injected into the system prompt below as a hard rule and (when
+      // applicable) persisted to the Chat row so short follow-ups
+      // ("hola", "resúmelo", "continúa") never drift from the
+      // conversation's established language.
+      const langResolution = await langPolicy.resolveResponseLanguage({
+        userMessage: prompt,
+        chatId: canPersist ? chatId : null,
+        userLocale: (req.user && req.user.locale) || 'es',
+        prisma,
+      });
+      console.log('[language_policy_resolved]', JSON.stringify({
+        chat_id: chatId || null,
+        user_id: userId || null,
+        input_language: langResolution.detected,
+        resolved_language: langResolution.language,
+        source: langResolution.source,
+        provider,
+        model,
+      }));
+      if (langResolution.shouldPersist && canPersist) {
+        langPolicy.persistThreadLanguage(prisma, chatId, langResolution.language)
+          .catch(() => { /* non-fatal — rule still in this turn's prompt */ });
+      }
 
       let openai;
       let actualProvider = provider; // ✅ NEW: track actual provider
@@ -391,14 +420,19 @@ Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`;
 
         systemInstruction = {
           role: 'system',
-          content: customSystemPrompt
+          // Language rule MUST be first — overrides every other instruction,
+          // including any language defaults the GPT author may have baked
+          // into customSystemPrompt.
+          content: `${langPolicy.buildSystemRule(langResolution.language)}\n\n${customSystemPrompt}`,
         };
 
-        console.log(`📝 Custom GPT system prompt length: ${customSystemPrompt.length} characters`);
+        console.log(`📝 Custom GPT system prompt length: ${customSystemPrompt.length} characters (lang=${langResolution.language})`);
       } else {
         systemInstruction = {
           role: 'system',
-          content: `You are an expert AI assistant.
+          content: `${langPolicy.buildSystemRule(langResolution.language)}
+
+You are an expert AI assistant.
 Writing math formulas:
 You have a MathJax render environment.
 - Any LaTeX text between single dollar sign ($) will be rendered as a TeX formula;

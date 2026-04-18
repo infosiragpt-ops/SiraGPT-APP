@@ -102,7 +102,14 @@ model Chat {
 
 
   isShared  Boolean  @default(false)
-  shareId   String?  @unique 
+  shareId   String?  @unique
+
+  // Language policy — persisted resolution of "what language should the
+  // assistant reply in for this thread". Set on first turn (or on any
+  // explicit "respond in X" instruction); reused on every subsequent turn
+  // so short follow-ups like "ok", "continúa", "summarize" don't drift to
+  // the model's default language. ISO 639-1 (es, en, pt, fr, …).
+  preferredResponseLanguage String?
 
   googleCalendarContext Json?      // NEW: Store recent Google Calendar event IDs for context
 
