@@ -113,6 +113,21 @@ jobs:
       GOOGLE_AUTH_URI: http://localhost:5000/api/auth/google/callback
       GOOGLE_REDIRECT_URI: http://localhost:5000/api/auth/gmail/callback
       GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: http://localhost:5000/api/auth/google-services/callback
+      # Multiple routes (files.js, api.js, computer-use.js, thesis.js,
+      # elevenlabs.js) instantiate SDK clients at require-time. Without
+      # keys the constructors throw and Express never binds. Dummies let
+      # the modules load; no outbound calls happen in the smoke test.
+      OPENAI_API_KEY: sk-ci-dummy-openai-key-not-used-in-smoke-test
+      ANTHROPIC_API_KEY: sk-ant-ci-dummy-key
+      GROQ_API_KEY: gsk_ci_dummy_key
+      GEMINI_API_KEY: ci-dummy-gemini-key
+      OPENROUTER_API_KEY: sk-or-ci-dummy-key
+      ELEVENLABS_API_KEY: sk_ci_dummy_elevenlabs_key
+      STRIPE_SECRET_KEY: sk_test_ci_dummy_stripe_key
+      STRIPE_WEBHOOK_SECRET: whsec_ci_dummy
+      FAL_KEY: ci-dummy-fal-key
+      GOOGLE_API_KEY: ci-dummy-google-api-key
+      GOOGLE_SEARCH_ENGINE_ID: ci-dummy-cse-id
     steps:
       - name: Checkout
         uses: actions/checkout@v4
