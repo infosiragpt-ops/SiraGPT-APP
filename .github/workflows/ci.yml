@@ -1,0 +1,214 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel outdated runs on the same branch — saves minutes and gives
+# PR authors faster feedback from the most recent commit only.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  # Dummy NEXT_PUBLIC_* values for `next build`. The build step statically
+  # evaluates them into client bundles; real values are injected at deploy
+  # time via the host's env (Vercel/VPS/etc.), not baked into CI artifacts.
+  NEXT_PUBLIC_API_URL: http://localhost:5000/api
+  NEXT_PUBLIC_IMAGE_URL: http://localhost:5000
+  NEXT_PUBLIC_URL: http://localhost:3000
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────
+  # FRONTEND — Next.js 14 at repo root
+  # Gates: install, build (hard) · lint, type-check (soft, informational)
+  # ───────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      # Soft gate — project has pre-existing lint warnings; runs for
+      # visibility but doesn't block merges. Tighten once the baseline
+      # is clean.
+      - name: Lint (informational)
+        run: npm run lint
+        continue-on-error: true
+
+      # Soft gate — same reason. There's a known backlog of TS errors
+      # in ported components (voice-selector, chart, etc.). Tracking
+      # them here so they're visible in every run without being a blocker.
+      - name: TypeScript check (informational)
+        run: npx tsc --noEmit --skipLibCheck --ignoreDeprecations 5.0
+        continue-on-error: true
+
+      # Hard gate — `next build` is the source of truth. Catches
+      # missing modules, import errors, static-analysis failures, and
+      # env-usage bugs that lint/tsc may miss.
+      - name: Next.js build
+        run: npm run build
+
+  # ───────────────────────────────────────────────────────────────────
+  # BACKEND — Express API in backend/
+  # Hard gates: install, prisma generate, schema push, boot + health check
+  # against a real Postgres service container.
+  # ───────────────────────────────────────────────────────────────────
+  backend:
+    name: Backend · prisma + boot smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openwebui
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d openwebui"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PRISMA_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openwebui
+      PORT: 5000
+      NODE_ENV: production
+      # Smoke-test-only secrets — never touch real data in CI.
+      JWT_SECRET: ci-dummy-jwt-secret-long-enough-for-hs256-32bytes
+      SESSION_SECRET: ci-dummy-session-secret-not-used-in-prod
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      FRONTEND_URL: http://localhost:3000
+      BASE_URL: http://localhost:5000
+      CORS_ORIGINS: "*"
+      MAX_FILE_SIZE: 50
+      UPLOAD_DIR: uploads
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Prisma · generate client
+        run: npx prisma generate
+
+      # Using `db push` (not `migrate deploy`) because the repo has no
+      # migration history yet — push materializes the schema directly
+      # from `schema.prisma`. Switch to `migrate deploy` once migrations
+      # start shipping from the team's workflow.
+      - name: Prisma · push schema to Postgres service
+        run: npx prisma db push --accept-data-loss --skip-generate
+
+      - name: Boot server and verify /health
+        run: |
+          set -euo pipefail
+          node index.js > server.log 2>&1 &
+          SERVER_PID=$!
+          # Poll /health for up to 30s; fail loudly with server.log if timeout.
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5000/health >/dev/null 2>&1; then
+              echo "✓ Backend healthy after ${i}s"
+              echo "--- /health response ---"
+              curl -s http://localhost:5000/health
+              echo ""
+              kill "$SERVER_PID" 2>/dev/null || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "✗ Backend did not become healthy within 30s"
+          echo "--- server.log ---"
+          cat server.log || true
+          kill "$SERVER_PID" 2>/dev/null || true
+          exit 1
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-server-log
+          path: backend/server.log
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────
+  # SECURITY — npm audit (informational)
+  # ───────────────────────────────────────────────────────────────────
+  # Both workspaces have known high/critical advisories in transitive
+  # deps (radix-ui, next, prisma, etc.). Runs for visibility so
+  # newly-introduced vulns are surfaced in PRs, but never blocks merge —
+  # the fix for most of these is upstream, not in this repo.
+  security-audit:
+    name: Security · npm audit (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Frontend · npm audit (critical only)
+        run: npm audit --omit=dev --audit-level=critical
+        continue-on-error: true
+
+      - name: Backend · npm audit (critical only)
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=critical
+        continue-on-error: true
+
+  # ───────────────────────────────────────────────────────────────────
+  # FINAL GATE — one-green-check for branch protection rules
+  # ───────────────────────────────────────────────────────────────────
+  # Branch protection on `main` can require this single status instead
+  # of juggling the individual jobs — add/remove jobs above without
+  # touching the protection rule.
+  ci:
+    name: CI · required checks passed
+    needs: [frontend, backend]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Verify upstream jobs
+        run: |
+          if [[ "${{ needs.frontend.result }}" != "success" ]]; then
+            echo "✗ frontend: ${{ needs.frontend.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.backend.result }}" != "success" ]]; then
+            echo "✗ backend: ${{ needs.backend.result }}"
+            exit 1
+          fi
+          echo "✓ all required checks passed"
