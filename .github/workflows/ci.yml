@@ -104,6 +104,15 @@ jobs:
       CORS_ORIGINS: "*"
       MAX_FILE_SIZE: 50
       UPLOAD_DIR: uploads
+      # passport-google-oauth20 requires non-empty clientID/clientSecret at
+      # module-load (throws from src/config/passport.js). Dummies keep the
+      # Google strategy wireable so the Express app can boot; OAuth flows
+      # are not exercised by the smoke test.
+      GOOGLE_CLIENT_ID: ci-dummy-google-client-id.apps.googleusercontent.com
+      GOOGLE_CLIENT_SECRET: ci-dummy-google-client-secret
+      GOOGLE_AUTH_URI: http://localhost:5000/api/auth/google/callback
+      GOOGLE_REDIRECT_URI: http://localhost:5000/api/auth/gmail/callback
+      GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: http://localhost:5000/api/auth/google-services/callback
     steps:
       - name: Checkout
         uses: actions/checkout@v4
