@@ -1,34 +1,62 @@
 "use client"
-import { Moon, Sun } from "lucide-react"
+import { Moon, Sun, Monitor } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { cn } from "@/lib/utils"
 
 export function ThemeToggle() {
-  const { setTheme } = useTheme()
+  const { setTheme, theme } = useTheme()
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-9 w-9">
-          <Sun className="h-[1.2rem] w-[1.2rem] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-          <Moon className="absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-          <span className="sr-only">Toggle theme</span>
+        {/* Shape + hover vocabulary matches the WhatsApp + Upgrade buttons
+            so the whole header feels like one icon system. */}
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Cambiar tema"
+          title="Cambiar tema"
+          className={cn(
+            "relative h-9 w-9 rounded-full text-muted-foreground transition-all duration-200",
+            "hover:bg-foreground/[0.06] hover:text-foreground",
+            "active:scale-[0.96]",
+          )}
+        >
+          <Sun
+            className="h-[17px] w-[17px] rotate-0 scale-100 transition-transform duration-300 dark:-rotate-90 dark:scale-0"
+            strokeWidth={1.75}
+          />
+          <Moon
+            className="absolute h-[17px] w-[17px] rotate-90 scale-0 transition-transform duration-300 dark:rotate-0 dark:scale-100"
+            strokeWidth={1.75}
+          />
+          <span className="sr-only">Cambiar tema</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => setTheme("light")}>
-          <Sun className="mr-2 h-4 w-4" />
-          Light
+      <DropdownMenuContent align="end" className="min-w-[9rem] rounded-xl p-1">
+        <DropdownMenuItem
+          onClick={() => setTheme("light")}
+          className={cn("cursor-pointer rounded-lg gap-2 text-[13px]", theme === 'light' && 'bg-muted/60 font-medium')}
+        >
+          <Sun className="h-4 w-4" strokeWidth={1.75} />
+          <span>Claro</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("dark")}>
-          <Moon className="mr-2 h-4 w-4" />
-          Dark
+        <DropdownMenuItem
+          onClick={() => setTheme("dark")}
+          className={cn("cursor-pointer rounded-lg gap-2 text-[13px]", theme === 'dark' && 'bg-muted/60 font-medium')}
+        >
+          <Moon className="h-4 w-4" strokeWidth={1.75} />
+          <span>Oscuro</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("system")}>
-          <span className="mr-2 h-4 w-4">💻</span>
-          System
+        <DropdownMenuItem
+          onClick={() => setTheme("system")}
+          className={cn("cursor-pointer rounded-lg gap-2 text-[13px]", theme === 'system' && 'bg-muted/60 font-medium')}
+        >
+          <Monitor className="h-4 w-4" strokeWidth={1.75} />
+          <span>Sistema</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

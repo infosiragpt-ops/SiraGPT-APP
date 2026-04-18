@@ -32,15 +32,18 @@ import {
   Search,
   BookOpen,
   Download,
+  Sparkles,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
+import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { aiService } from "@/lib/ai-service"
@@ -1281,15 +1284,25 @@ const NavbarModelSelector = ({
     <DropdownMenu onOpenChange={(open) => {
       if (!open) setSearchQuery("");
     }}>
-      <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
-        {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4" />}
-        <span className="text-sm font-medium">{selectedModelData?.displayName || selectedModel}</span>
-        <div className="flex items-center gap-1">
-          {(
-            <div className="w-2 h-2 bg-red-500 rounded-full" title="API Key required" />
-          )}
-          <ChevronDown className="h-4 w-4 opacity-70" />
-        </div>
+      {/* Model selector trigger — h-10, medium weight, subtle surface.
+          The always-on red dot was removed: it was a dead indicator
+          (every model showed "API Key required" regardless of state),
+          which is visual noise and contradicts the premium target. */}
+      <DropdownMenuTrigger
+        className={cn(
+          "group/model inline-flex h-10 items-center gap-2 rounded-xl px-3",
+          "bg-muted/40 text-foreground",
+          "border border-transparent",
+          "text-[13.5px] font-semibold tracking-tight",
+          "transition-[background-color,border-color] duration-200",
+          "hover:bg-muted/60",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+          "data-[state=open]:bg-muted/70",
+        )}
+      >
+        {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4 shrink-0" />}
+        <span className="max-w-[180px] truncate">{selectedModelData?.displayName || selectedModel}</span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="w-56 p-0">
@@ -1321,12 +1334,15 @@ const NavbarModelSelector = ({
                   className="flex items-center gap-2 py-2"
                 >
                   <IconProvider name={model.icon} className="h-5 w-5 flex-shrink-0" />
-                  <div className="flex flex-col flex-1">
-                    <span className="text-sm">{model.displayName}</span>
-                    {/* <span className="text-xs text-muted-foreground">{model.name}</span> */}
+                  <div className="flex flex-col flex-1 min-w-0">
+                    <span className="text-[13.5px] font-medium truncate">{model.displayName}</span>
+                    <span className="text-[11px] text-muted-foreground truncate">{model.provider}</span>
                   </div>
-                  {(
-                    <div className="w-2 h-2 bg-red-500 rounded-full" />
+                  {model.name === selectedModel && (
+                    <span
+                      aria-hidden="true"
+                      className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet))] shadow-[0_0_0_3px_hsl(var(--accent-violet)/0.18)]"
+                    />
                   )}
                 </DropdownMenuItem>
               ))
@@ -3918,25 +3934,47 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 )}
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 <ThemeToggle />
-                <Button
-                  variant="ghost"
-                  size={currentPlan === 'FREE' ? 'sm' : 'icon'}
-                  onClick={() => setSubscribeOpen(true)}
-                  className={`${currentPlan !== 'FREE' ? 'h-9 w-9' : ''} ${currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit
-                    ? (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.9
-                      ? 'border-red-500 text-red-600 hover:bg-red-50'
-                      : (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.7
-                        ? 'border-orange-500 text-orange-600 hover:bg-orange-50'
-                        : ''
-                    : ''
-                    }`}
-                >
-                  {currentPlan === 'FREE' ? 'Upgrade Plan' :
-                    currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit &&
-                      (currentUserInfo.apiUsage / currentUserInfo.monthlyLimit) >= 0.7 ?
-                      'Upgrade Now' :
-                      <span role="img" aria-label="Manage Plan" className="text-xl">💰</span>}
-                </Button>
+                {/* Plan / Upgrade button — unified icon-system:
+                    Free plan → text CTA "Subir de plan"
+                    Paid + near-quota → text CTA "Upgrade Now" + warning border
+                    Paid + healthy → compact icon button with Sparkles glyph
+                    The 💰 emoji was replaced with Lucide Sparkles (same stroke
+                    family as the rest of the header icons). */}
+                {(() => {
+                  const usageRatio =
+                    currentUserInfo?.apiUsage && currentUserInfo?.monthlyLimit
+                      ? currentUserInfo.apiUsage / currentUserInfo.monthlyLimit
+                      : 0
+                  const isFree = currentPlan === 'FREE'
+                  const showTextCta = isFree || usageRatio >= 0.7
+                  const warn = !isFree && usageRatio >= 0.9
+                  const caution = !isFree && usageRatio >= 0.7 && usageRatio < 0.9
+                  return (
+                    <Button
+                      variant={showTextCta ? 'outline' : 'ghost'}
+                      size={showTextCta ? 'sm' : 'icon'}
+                      onClick={() => setSubscribeOpen(true)}
+                      aria-label={isFree ? 'Subir de plan' : 'Gestionar plan'}
+                      title={isFree ? 'Subir de plan' : 'Gestionar plan'}
+                      className={cn(
+                        !showTextCta && 'h-9 w-9 rounded-full text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.96]',
+                        showTextCta && 'h-9 gap-1.5 rounded-full px-3 text-[13px] font-semibold',
+                        warn && 'border-red-500/70 text-red-600 hover:bg-red-500/10 hover:text-red-600',
+                        caution && 'border-amber-500/70 text-amber-600 hover:bg-amber-500/10 hover:text-amber-600',
+                        'transition-all duration-200',
+                      )}
+                    >
+                      {showTextCta ? (
+                        <>
+                          <PremiumCardIcon className="h-4 w-[22px] shrink-0 drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
+                          <span>{isFree ? 'Subir de plan' : 'Upgrade Now'}</span>
+                        </>
+                      ) : (
+                        <PremiumCardIcon className="h-[14px] w-[20px] drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
+                      )}
+                    </Button>
+                  )
+                })()}
                 <UpgradeModal
                   open={subscribeOpen}
                   onOpenChange={setSubscribeOpen}
@@ -4003,141 +4041,95 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
 
           {isInitial ? (
-            <div className="flex flex-1 items-center justify-center p-4">
-              <div className="w-full max-w-4xl space-y-6">
-                <div className="text-center space-y-2">
-                  <h1 className="text-3xl font-bold">Welcome to Sira GPT</h1>
-                  <p className="text-muted-foreground">Ask anything, generate images, or create videos with AI.</p>
-                </div>
-
-                {/* Example prompts */}
-                {chatType === 'text' && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
-                    <Button
-                      variant="outline"
-                      className="p-4 h-auto text-left justify-start"
-                      onClick={() => setInput("Create a table of the top 10 countries by population with their capitals, population, and GDP")}
-                    >
-                      <div>
-                        <div className="font-medium">Population Data</div>
-                        <div className="text-xs text-muted-foreground">Get downloadable country statistics</div>
-                      </div>
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="p-4 h-auto text-left justify-start"
-                      onClick={() => setInput("List the Fortune 500 top 20 companies with their revenue, employees, and industry")}
-                    >
-                      <div>
-                        <div className="font-medium">Company Rankings</div>
-                        <div className="text-xs text-muted-foreground">Generate business data tables</div>
-                      </div>
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="p-4 h-auto text-left justify-start"
-                      onClick={() => setInput("Create a comparison table of programming languages with their features, performance, and use cases")}
-                    >
-                      <div>
-                        <div className="font-medium">Tech Comparison</div>
-                        <div className="text-xs text-muted-foreground">Compare technologies in table format</div>
-                      </div>
-                    </Button>
-                  </div>
-                )}
-
-                {/* Video generation prompts */}
-                {chatType === 'video' && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-5xl mx-auto">
-                    <Button
-                      variant="outline"
-                      className="p-4 h-auto text-left justify-start"
-                      onClick={() => setInput("A majestic eagle soaring through mountain peaks at sunset")}
-                    >
-                      <div>
-                        <div className="font-medium">Nature Scene</div>
-                        <div className="text-xs text-muted-foreground">Beautiful wildlife and landscapes</div>
-                      </div>
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="p-4 h-auto text-left justify-start"
-                      onClick={() => setInput("A futuristic cityscape with flying cars and neon lights")}
-                    >
-                      <div>
-                        <div className="font-medium">Sci-Fi Scene</div>
-                        <div className="text-xs text-muted-foreground">Futuristic and technology themes</div>
-                      </div>
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="p-4 h-auto text-left justify-start"
-                      onClick={() => setInput("A peaceful beach with gentle waves and palm trees swaying")}
-                    >
-                      <div>
-                        <div className="font-medium">Relaxing Scene</div>
-                        <div className="text-xs text-muted-foreground">Calm and peaceful environments</div>
-                      </div>
-                    </Button>
-                  </div>
-                )}
-
+            <div className="canvas-ambient flex flex-1 items-center justify-center p-4">
+              <div className="w-full max-w-[860px]">
                 <div className="space-y-3">
-                  <div className="border-wrapper">
-                    <div className="relative rounded-3xl   focus-within:ring-1 focus-within:ring-ring overflow-hidden  ">
-                      <ActiveOptionsDisplay
-                        uploadedFiles={uploadedFiles}
-                        removeFile={removeFile}
-                        uploadProgress={uploadProgress}
-                      />
-                      <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                      <Textarea
-                        ref={textareaRef}
-                        value={input}
-                        onChange={handleTextareaChange}
-                        onKeyDown={handleKeyDown}
-                        onKeyPress={handleKeyPress}
-                        placeholder={
-                          isImageGenerationActive
-                            ? "Describe the image you want to create..."
-                            : isVideoGenerationActive
-                              ? "Describe the video you want to create..."
-                              : isWebSearchActive
-                                ? "Enter your search query..."
-                                : isGmailActive
-                                  ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
-                                  : (isGoogleCalendarActive || isGoogleDriveActive)
-                                    ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
-                                    : isSpotifyActive
-                                      ? "Enter Spotify command (e.g., 'search for a song by Queen')..."
-                                      : isWordConnectorActive
-                                        ? "Type your message here (Word Connector is active)..."
-                                        : chatType === 'thesis'
-                                          ? "Enter research topic(s) (e.g., 'AI in Healthcare' or multiple topics: 'AI in Healthcare, ML Ethics')..."
-                                          : "Type your message here..."
-                        }
-                        className={`resize-none w-full border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 rounded-none`}
-                        style={{
-                          minHeight: "60px",
-                          maxHeight: "350px",
-                          overflowY: "auto",
-                          overflowX: "hidden",
-                          wordWrap: "break-word",
-                          border: "none",           // Inline style border remove
-                          outline: "none",          // Inline style outline remove
-                          boxShadow: "none",        // Remove focus shadow if any
-                        }}
-                        rows={1}
-                        disabled={
-                          isLoading ||
-                          isGeneratingImage ||
-                          isGeneratingVideo ||
+                  {/*
+                    Composer — premium production UI.
+                    In DARK mode, inherits `composer-surface` from globals.css
+                    which applies the design-spec tokens (#0B1118 bg, #1C2430
+                    border, 0 12px 32px rgba(0,0,0,0.28) shadow) with a
+                    violet-tinted focus ring. In LIGHT mode it uses the Tailwind
+                    classes below (soft white surface with layered shadow).
+                    The focus state is the ONLY place accent color appears —
+                    idle never glows.
+                  */}
+                  <div
+                    className={cn(
+                      "composer-surface group/composer relative overflow-hidden rounded-[24px]",
+                      "bg-background",
+                      "ring-1 ring-border/70 dark:ring-0",
+                      "shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.10)] dark:shadow-none",
+                      "transition-[border-color,background-color,box-shadow] duration-200 ease-out",
+                      "hover:ring-border dark:hover:ring-0",
+                      "hover:shadow-[0_1px_2px_rgba(0,0,0,0.05),0_10px_32px_-12px_rgba(0,0,0,0.14)] dark:hover:shadow-none",
+                      "focus-within:ring-foreground/25 dark:focus-within:ring-0",
+                      "focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.05),0_12px_36px_-10px_rgba(0,0,0,0.18)] dark:focus-within:shadow-none",
+                    )}
+                    style={{ minHeight: "96px" }}
+                  >
+                    <ActiveOptionsDisplay
+                      uploadedFiles={uploadedFiles}
+                      removeFile={removeFile}
+                      uploadProgress={uploadProgress}
+                    />
+                    <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+                    <Textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={handleTextareaChange}
+                      onKeyDown={handleKeyDown}
+                      onKeyPress={handleKeyPress}
+                      placeholder={
+                        isImageGenerationActive
+                          ? "Describe la imagen que quieres crear"
+                          : isVideoGenerationActive
+                            ? "Describe el video que quieres crear"
+                            : isWebSearchActive
+                              ? "Busca en la web…"
+                              : isGmailActive
+                                ? "Comando de Gmail"
+                                : (isGoogleCalendarActive || isGoogleDriveActive)
+                                  ? "Comando de Google"
+                                  : isSpotifyActive
+                                    ? "Comando de Spotify"
+                                    : isWordConnectorActive
+                                      ? "Escribe un mensaje (Word Connector activo)"
+                                      : chatType === 'thesis'
+                                        ? "Introduce el tema de investigación"
+                                        : "Pregunta a Sira GPT"
+                      }
+                      className={cn(
+                        "w-full resize-none border-none bg-transparent",
+                        "px-5 pt-4 pb-14",
+                        "text-[15px] leading-[1.55] tracking-[-0.005em] text-foreground",
+                        // Placeholder — weight medium, dark-mode token #667085
+                        "placeholder:text-muted-foreground/60 placeholder:font-medium",
+                        "dark:placeholder:text-[hsl(var(--text-tertiary))] dark:placeholder:font-medium",
+                        "outline-none ring-0 focus:outline-none focus:ring-0",
+                        "rounded-none transition-colors duration-200",
+                      )}
+                      style={{
+                        minHeight: "60px",
+                        maxHeight: "320px",
+                        overflowY: "auto",
+                        overflowX: "hidden",
+                        wordWrap: "break-word",
+                        border: "none",
+                        outline: "none",
+                        boxShadow: "none",
+                      }}
+                      rows={1}
+                      disabled={
+                        isLoading ||
+                        isGeneratingImage ||
+                        isGeneratingVideo ||
 
-                          isWebSearching
-                        }
-                      />
-                      <TooltipProvider>
-                        <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2  bg-background/95 p-2 backdrop-blur-sm">
+                        isWebSearching
+                      }
+                    />
+                    <TooltipProvider>
+                      <div className="absolute bottom-0 left-0 right-0 flex items-center gap-1.5 bg-transparent px-2.5 pb-2.5 pt-1">
                           <ActionsDropdown
                             chatType={chatType}
                             setChatType={setChatType}
@@ -4221,59 +4213,79 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             <>
                               <VoiceControls
                                 onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                                className="flex items-center gap-1"
+                                className="flex items-center gap-0.5"
                               />
+                              {/* Thin divider between secondary actions and the
+                                  primary Send button — visual anchor that
+                                  separates "compose" from "commit". */}
+                              <div className="mx-1 h-5 w-px bg-border/60" aria-hidden="true" />
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
                                     onClick={handleSend}
                                     disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
-                                    size="sm"
-                                    className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+                                    size="icon"
+                                    aria-label="Enviar mensaje"
+                                    title="Enviar (⏎)"
+                                    className={cn(
+                                      "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                      "bg-foreground text-background",
+                                      "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_2px_6px_-2px_rgba(0,0,0,0.14)]",
+                                      "hover:bg-foreground/90 hover:shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_12px_-4px_rgba(0,0,0,0.22)]",
+                                      "active:scale-[0.96]",
+                                      "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100",
+                                    )}
                                   >
                                     {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
-                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                      <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
                                     ) : (
-                                      <ArrowUp className="h-4 w-4" />
+                                      <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
                                     )}
                                   </Button>
                                 </TooltipTrigger>
                                 <TooltipContent side="top">
-                                  <p>Send message</p>
+                                  <p>Enviar · ⏎</p>
                                 </TooltipContent>
                               </Tooltip>
                             </>
                           )}
 
-                          {/* Stop Button - Show during loading, streaming, sending intent, or when stop is pending */}
+                          {/* Stop Button — shown during any in-flight state.
+                              Matches Send in size/radius so the swap reads as
+                              a single button morphing, not two different ones. */}
                           {(isLoading || isStreaming || pendingStop || isSending) && (
                             <Button
                               onClick={() => {
-                                // Abort intent classification if running
                                 if (intentAbortControllerRef.current) {
                                   intentAbortControllerRef.current.abort();
                                   intentAbortControllerRef.current = null;
                                 }
-                                // Always trigger stream stop as well (no-op if not streaming)
                                 stopStreaming();
                                 setIsSending(false);
                               }}
                               size="icon"
-                              className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
-                              title="Stop Generating"
+                              aria-label="Detener generación"
+                              title="Detener"
                               disabled={pendingStop}
+                              className={cn(
+                                "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                "bg-foreground text-background",
+                                "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_2px_6px_-2px_rgba(0,0,0,0.14)]",
+                                "hover:bg-foreground/90 active:scale-[0.96]",
+                                "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
+                              )}
                             >
                               {pendingStop ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
                               ) : (
-                                <Square className="h-4 w-4" />
+                                <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
                               )}
                             </Button>
                           )}
 
                         </div>
                       </TooltipProvider>
-                    </div></div>
+                    </div>
 
                   {/* <p className="text-center text-xs text-muted-foreground">
                 {isWebSearchActive

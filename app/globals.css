@@ -105,41 +105,69 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 
+  /*
+   * ─── Dark mode tokens ─────────────────────────────────────────────
+   * Premium SaaS/AI palette — deep navy-grey hierarchy with a single
+   * violet accent reserved for active/focus states only. Pure black is
+   * avoided on interactive surfaces (reserved for the outer canvas).
+   *
+   * Visual hierarchy (low → high):
+   *   canvas   #05070A  — outermost app background
+   *   sidebar  #0B0F15  — nav/rail, slightly richer than canvas
+   *   surface  #0E131B  — panels, cards, popovers
+   *   elevated #121824  — composer, dialogs, hover states
+   *   accent   #7C5CFF  — only on active/focus (never idle)
+   *
+   * Text:
+   *   primary    #F5F7FA  — body copy, strong headings
+   *   secondary  #98A2B3  — supporting copy, meta
+   *   tertiary   #667085  — placeholders, hints
+   *   icon       #D0D5DD  — default icon stroke/fill
+   */
   .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
+    --background: 216 33% 3%;          /* #05070A — canvas */
+    --foreground: 216 29% 97%;         /* #F5F7FA — text/primary */
+    --card: 217 32% 8%;                /* #0E131B — surface/primary */
+    --card-foreground: 216 29% 97%;
+    --popover: 220 33% 11%;            /* #121824 — surface/elevated */
+    --popover-foreground: 216 29% 97%;
+    --primary: 216 29% 97%;
+    --primary-foreground: 216 33% 3%;
+    --secondary: 220 33% 11%;          /* #121824 */
+    --secondary-foreground: 216 29% 97%;
+    --muted: 217 32% 8%;               /* #0E131B */
+    --muted-foreground: 219 15% 65%;   /* #98A2B3 — text/secondary */
+    --accent: 220 33% 11%;             /* #121824 */
+    --accent-foreground: 216 29% 97%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    --border: 214 28% 15%;             /* #1B2430 — border/subtle */
+    --input: 214 28% 15%;
+    --ring: 253 100% 68%;              /* #7C5CFF — accent violet, focus only */
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
     --chart-4: 280 65% 60%;
     --chart-5: 340 75% 55%;
 
-    /* Dark sidebar variables */
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 0 0% 98%;
-    --sidebar-primary-foreground: 240 5.9% 10%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    /* Premium-extension tokens (consumed via arbitrary values in the
+       few places the shadcn tokens don't cover the spec exactly). */
+    --accent-violet: 253 100% 68%;     /* #7C5CFF */
+    --text-tertiary: 219 13% 46%;      /* #667085 — placeholders */
+    --icon-default: 220 16% 84%;       /* #D0D5DD */
+    --surface-elevated: 220 33% 11%;   /* #121824 */
+    --composer-bg: 212 37% 7%;         /* #0B1118 */
+    --composer-border: 216 26% 15%;    /* #1C2430 */
+
+    /* Sidebar — 1 step lighter than canvas for subtle depth. */
+    --sidebar-background: 216 31% 6%;  /* #0B0F15 */
+    --sidebar-foreground: 216 29% 97%;
+    --sidebar-primary: 253 100% 68%;
+    --sidebar-primary-foreground: 216 29% 97%;
+    --sidebar-accent: 0 0% 100%;       /* used at low alpha for hover bg */
+    --sidebar-accent-foreground: 216 29% 97%;
+    --sidebar-border: 215 21% 11%;     /* #161B22 */
+    --sidebar-ring: 253 100% 68%;
   }
 }
 
@@ -2248,3 +2276,42 @@ footer {
 .formulas-tab-content .group\/calc:hover .hidden {
   display: block !important;
 }
+
+/* ─── Premium dark-mode ambient ─────────────────────────────────────
+ * Subtle radial vignette applied to the canvas when dark mode is
+ * active, so the empty-chat state reads as a "silent surface" rather
+ * than a dead rectangle. Low-contrast, fixed-position, non-interactive.
+ * ─────────────────────────────────────────────────────────────────── */
+.dark .canvas-ambient {
+  position: relative;
+  isolation: isolate;
+}
+.dark .canvas-ambient::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 85% 55% at 50% 42%, rgba(124, 92, 255, 0.05) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 50% 105%, rgba(90, 120, 200, 0.04) 0%, transparent 70%);
+  mask-image: linear-gradient(to bottom, black 0%, black 80%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 80%, transparent 100%);
+}
+.dark .canvas-ambient > * { position: relative; z-index: 1; }
+
+/* ─── Composer — premium dark surface ────────────────────────────── */
+.dark .composer-surface {
+  background-color: hsl(var(--composer-bg));
+  border: 1px solid hsl(var(--composer-border));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dark .composer-surface:focus-within {
+  border-color: hsl(var(--accent-violet) / 0.45);
+  box-shadow: 0 0 0 1px hsl(var(--accent-violet) / 0.35),
+              0 14px 38px rgba(0, 0, 0, 0.36);
+}
+

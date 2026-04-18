@@ -1,7 +1,8 @@
 "use client"
 
 import React from "react"
-import { MessageCircle, } from "lucide-react" // WhatsApp-like icon
+import { WhatsAppIcon } from "@/components/icons/whatsapp-icon"
+import { cn } from "@/lib/utils"
 
 type Props = {
   number?: string
@@ -37,20 +38,27 @@ const WhatsAppButton: React.FC<Props> = ({ number, message, className = "" }) =>
     }
   }
 
+  // Matches the sizing + hover/focus/active vocabulary used by neighboring
+  // icon buttons (ThemeToggle, upgrade, etc.) so the header reads as a
+  // single system. Icon inherits `currentColor` from the anchor's text
+  // color, so no dark-mode invert hacks needed.
   return (
     <a
       href={webUrl}
       onClick={handleClick}
-      aria-label="Chat on WhatsApp"
-      title="Chat on WhatsApp"
+      aria-label="Chat en WhatsApp"
+      title="Chat en WhatsApp"
       role="button"
-      className={`group ${className}`}
+      className={cn(
+        "inline-flex h-9 w-9 items-center justify-center rounded-full",
+        "text-muted-foreground transition-all duration-200",
+        "hover:bg-foreground/[0.06] hover:text-foreground",
+        "active:scale-[0.96]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        className,
+      )}
     >
-      <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-5 h-5 dark:invert" />
-
-      {/* <div className="relative flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-green-600 text-white shadow-lg transition-transform duration-200 hover:scale-110 active:scale-95">
-        <img src="/icons/whatsapp.png" alt="WhatsApp" className="w-6 h-6" />
-      </div> */}
+      <WhatsAppIcon className="h-[18px] w-[18px]" />
     </a>
   )
 }
