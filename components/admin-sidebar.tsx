@@ -1,5 +1,5 @@
 "use client"
-import { BarChart3, Users, Settings, CreditCard, Database, Shield, Activity, FileText, Bot, LogOut, PanelLeft } from "lucide-react"
+import { BarChart3, Users, Settings, CreditCard, Database, Shield, Activity, FileText, Bot, LogOut, PanelLeft, ArrowLeft } from "lucide-react"
 import { useRouter, usePathname } from "next/navigation"
 
 import {
@@ -125,6 +125,25 @@ export function AdminSidebar() {
       </SidebarHeader>
 
       <SidebarContent className="px-2">
+        {/* Back-to-app escape hatch — admin panel has no top-bar, so without
+            this button users get stuck inside /admin with no way out. */}
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  onClick={() => handleNavigation("/chat")}
+                  className="w-full justify-start cursor-pointer"
+                  tooltip={state === "closed" ? "Volver al chat" : undefined}
+                >
+                  <ArrowLeft className="h-4 w-4 flex-shrink-0" />
+                  {state === "open" && <span className="ml-2">Volver al chat</span>}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
         <SidebarGroup>
           <SidebarGroupLabel>Administration</SidebarGroupLabel>
           <SidebarGroupContent>
