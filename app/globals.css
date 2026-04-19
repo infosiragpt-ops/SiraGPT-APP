@@ -2315,3 +2315,35 @@ footer {
               0 14px 38px rgba(0, 0, 0, 0.36);
 }
 
+
+/* ────────────────────────────────────────────────────────────
+ * Accessibility toggles applied on <html> via SettingsProvider.
+ * `.reduce-motion` disables every animation + transition so users
+ * with vestibular sensitivities aren't knocked around by our
+ * micro-interactions. `.high-contrast` lifts the outline and
+ * ring-offset contrast so focus rings are unmissable on any
+ * background.
+ * ──────────────────────────────────────────────────────────── */
+.reduce-motion,
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+.high-contrast {
+  --ring: 0 0% 0%;
+}
+.high-contrast.dark {
+  --ring: 0 0% 100%;
+}
+.high-contrast *:focus-visible {
+  outline: 2px solid hsl(var(--ring)) !important;
+  outline-offset: 2px !important;
+}
+.high-contrast :is(button, a, [role="button"]) {
+  box-shadow: 0 0 0 1px hsl(var(--border) / 0.6);
+}

@@ -113,8 +113,14 @@ model Chat {
   updatedAt DateTime @updatedAt
 
 
-  isShared  Boolean  @default(false)
-  shareId   String?  @unique
+  isShared   Boolean   @default(false)
+  shareId    String?   @unique
+
+  // Lifecycle flags driven from the Settings → Data controls section.
+  // `isArchived` hides the chat from the main list without deleting it;
+  // `deletedAt` soft-deletes with a 30-day window before hard purge.
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime?
 
   // Language policy — persisted resolution of "what language should the
   // assistant reply in for this thread". Set on first turn (or on any

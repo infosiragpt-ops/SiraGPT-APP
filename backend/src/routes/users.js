@@ -39,7 +39,10 @@ router.get('/profile', authenticateToken, async (req, res) => {
 // Update user profile
 router.put('/profile', [
   body('name').optional().trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
-  body('email').optional().isEmail().normalizeEmail().withMessage('Valid email required')
+  body('email').optional().isEmail().normalizeEmail().withMessage('Valid email required'),
+  // Accept data URLs (client-encoded avatar) or remote URLs up to ~2MB
+  // base64. Rejects anything non-string to keep the Prisma update safe.
+  body('avatar').optional().isString().isLength({ max: 3_000_000 }),
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -47,10 +50,11 @@ router.put('/profile', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, email } = req.body;
+    const { name, email, avatar } = req.body;
     const updateData = {};
 
     if (name) updateData.name = name;
+    if (typeof avatar === 'string') updateData.avatar = avatar;
     if (email) {
       // Check if email is already taken by another user
       const existingUser = await prisma.user.findFirst({
@@ -292,6 +296,141 @@ router.put('/settings', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Update settings error:', error);
     res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// Sessions — trusted-device list for Settings → Security.
+// Includes the current session with a flag so the UI can show
+// "This device" + "Other devices" and wire logout-all.
+// ────────────────────────────────────────────────────────────
+router.get('/sessions', authenticateToken, async (req, res) => {
+  try {
+    const sessions = await prisma.session.findMany({
+      where: { userId: req.user.id, expiresAt: { gt: new Date() } },
+      select: { id: true, token: true, createdAt: true, expiresAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    // Get the current token off the Authorization header so we can
+    // mark "this device" vs "other devices".
+    const currentToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const out = sessions.map((s) => ({
+      id: s.id,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      current: s.token === currentToken,
+    }));
+    res.json({ sessions: out, total: out.length });
+  } catch (error) {
+    console.error('Get sessions error:', error);
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+router.post('/sessions/revoke-others', authenticateToken, async (req, res) => {
+  try {
+    const currentToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const result = await prisma.session.deleteMany({
+      where: { userId: req.user.id, NOT: { token: currentToken } },
+    });
+    res.json({ revoked: result.count });
+  } catch (error) {
+    console.error('Revoke sessions error:', error);
+    res.status(500).json({ error: 'Failed to revoke sessions' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// Chat lifecycle stats — used by Settings → Data controls to
+// display counters for archived / deleted chats and by the
+// "Archivar todos los chats" action.
+// ────────────────────────────────────────────────────────────
+router.get('/chat-stats', authenticateToken, async (req, res) => {
+  try {
+    const [total, archived, deleted, shared] = await Promise.all([
+      prisma.chat.count({ where: { userId: req.user.id, isArchived: false, deletedAt: null } }),
+      prisma.chat.count({ where: { userId: req.user.id, isArchived: true, deletedAt: null } }),
+      prisma.chat.count({ where: { userId: req.user.id, deletedAt: { not: null } } }),
+      prisma.chat.count({ where: { userId: req.user.id, isShared: true } }),
+    ]);
+    res.json({ total, archived, deleted, shared });
+  } catch (error) {
+    console.error('Chat stats error:', error);
+    res.status(500).json({ error: 'Failed to fetch chat stats' });
+  }
+});
+
+router.post('/chats/archive-all', authenticateToken, async (req, res) => {
+  try {
+    const result = await prisma.chat.updateMany({
+      where: { userId: req.user.id, isArchived: false, deletedAt: null },
+      data: { isArchived: true },
+    });
+    res.json({ archived: result.count });
+  } catch (error) {
+    console.error('Archive all error:', error);
+    res.status(500).json({ error: 'Failed to archive chats' });
+  }
+});
+
+router.post('/chats/clear-history', authenticateToken, async (req, res) => {
+  try {
+    const now = new Date();
+    const result = await prisma.chat.updateMany({
+      where: { userId: req.user.id, deletedAt: null },
+      data: { deletedAt: now },
+    });
+    res.json({ deleted: result.count });
+  } catch (error) {
+    console.error('Clear history error:', error);
+    res.status(500).json({ error: 'Failed to clear history' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// Data export — returns the user's data as a downloadable JSON
+// blob. Kept intentionally readable (not ZIP) so users can
+// inspect the export before unpacking tooling gets involved.
+// ────────────────────────────────────────────────────────────
+router.get('/data-export', authenticateToken, async (req, res) => {
+  try {
+    const [user, chats, files] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: {
+          id: true, email: true, name: true, avatar: true, plan: true,
+          locale: true, preferredTone: true, customInstructions: true,
+          settings: true, createdAt: true, updatedAt: true,
+        },
+      }),
+      prisma.chat.findMany({
+        where: { userId: req.user.id },
+        select: {
+          id: true, title: true, model: true, createdAt: true, updatedAt: true,
+          isArchived: true, deletedAt: true,
+          messages: { select: { role: true, content: true, timestamp: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.file.findMany({
+        where: { userId: req.user.id },
+        select: { id: true, filename: true, originalName: true, mimeType: true, size: true, createdAt: true },
+      }),
+    ]);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      user,
+      chats,
+      files,
+      stats: { chatCount: chats.length, fileCount: files.length, messageCount: chats.reduce((a, c) => a + (c.messages?.length || 0), 0) },
+    };
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="siraGPT-export-${Date.now()}.json"`);
+    res.send(JSON.stringify(payload, null, 2));
+  } catch (error) {
+    console.error('Data export error:', error);
+    res.status(500).json({ error: 'Failed to export data' });
   }
 });
 

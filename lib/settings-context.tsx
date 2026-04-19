@@ -14,7 +14,6 @@
  */
 
 import React from "react"
-import { toast } from "sonner"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const STORAGE_KEY = "siraGPT-settings"
@@ -209,6 +208,8 @@ function applyPreviewVars(s: SettingsShape) {
 type Ctx = {
   settings: SettingsShape
   loaded: boolean
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error'
+  savedAt: number | null
   update: (patch: Partial<SettingsShape> | ((prev: SettingsShape) => Partial<SettingsShape>)) => void
   reset: () => void
 }
@@ -224,6 +225,8 @@ export function useSettings(): Ctx {
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = React.useState<SettingsShape>(DEFAULT_SETTINGS)
   const [loaded, setLoaded] = React.useState(false)
+  const [saveStatus, setSaveStatus] = React.useState<Ctx['saveStatus']>('idle')
+  const [savedAt, setSavedAt] = React.useState<number | null>(null)
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const firstPersistSkip = React.useRef(true)
 
@@ -259,16 +262,25 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     if (firstPersistSkip.current) { firstPersistSkip.current = false; return }
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)) } catch { /* ignore */ }
     if (debounceRef.current) clearTimeout(debounceRef.current)
+    setSaveStatus('saving')
     debounceRef.current = setTimeout(() => {
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-      if (!token) return
+      if (!token) { setSaveStatus('idle'); return }
       fetch(`${API_BASE}/users/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(settings),
       })
-        .then((r) => r.ok ? toast.success("Guardado", { duration: 1200, id: "settings-saved" }) : null)
-        .catch(() => { /* swallow — localStorage keeps the UI in sync */ })
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          setSaveStatus('saved')
+          setSavedAt(Date.now())
+        })
+        .catch(() => {
+          setSaveStatus('error')
+          // localStorage keeps the UI in sync so the user doesn't lose
+          // their choice; error state just flags it for next retry.
+        })
     }, 500)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [settings, loaded])
@@ -283,7 +295,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const reset = React.useCallback(() => setSettings(DEFAULT_SETTINGS), [])
 
   return (
-    <SettingsContext.Provider value={{ settings, loaded, update, reset }}>
+    <SettingsContext.Provider value={{ settings, loaded, saveStatus, savedAt, update, reset }}>
       {children}
     </SettingsContext.Provider>
   )

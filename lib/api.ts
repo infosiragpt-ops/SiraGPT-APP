@@ -786,11 +786,42 @@ class ApiClient {
     return this.request('/users/profile');
   }
 
-  async updateUserProfile(data: { name?: string; email?: string }) {
+  async updateUserProfile(data: { name?: string; email?: string; avatar?: string }) {
     return this.request('/users/profile', {
       method: 'PUT',
       body: JSON.stringify(data),
     });
+  }
+
+  async getUserSettings() {
+    return this.request('/users/settings');
+  }
+
+  async updateUserSettings(patch: Record<string, any>) {
+    return this.request('/users/settings', {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    });
+  }
+
+  async getUserSessions() {
+    return this.request('/users/sessions');
+  }
+
+  async revokeOtherSessions() {
+    return this.request('/users/sessions/revoke-others', { method: 'POST' });
+  }
+
+  async getChatStats() {
+    return this.request('/users/chat-stats');
+  }
+
+  async archiveAllChats() {
+    return this.request('/users/chats/archive-all', { method: 'POST' });
+  }
+
+  async clearChatHistory() {
+    return this.request('/users/chats/clear-history', { method: 'POST' });
   }
 
   async changePassword(data: { currentPassword: string; newPassword: string }) {
