@@ -57,6 +57,9 @@ import {
   Plus,
   Check,
   Copy,
+  Maximize2,
+  RefreshCw,
+  Reply,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
@@ -66,11 +69,25 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneLight, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import mammoth from "mammoth"
 import JSZip from "jszip"
+import DOMPurify from "dompurify"
+import { Document as PdfDocument, Page as PdfPage, pdfjs } from "react-pdf"
+import "react-pdf/dist/Page/TextLayer.css"
+import "react-pdf/dist/Page/AnnotationLayer.css"
+
+// pdfjs worker — pinned to the exact pdfjs-dist version react-pdf bundles,
+// so we never get a "API version X / Worker version Y" mismatch when the
+// dependency is bumped. Hosted on unpkg by default; for fully offline /
+// air-gapped deployments, copy `pdf.worker.min.mjs` into /public and point
+// `workerSrc` at `/pdf.worker.min.mjs`.
+if (typeof window !== "undefined") {
+  pdfjs.GlobalWorkerOptions.workerSrc =
+    `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
+}
 
 // ─── Format detection ────────────────────────────────────────────────
 
 type Kind =
-  | "image" | "pdf" | "docx" | "xlsx" | "csv" | "pptx"
+  | "image" | "pdf" | "docx" | "doc" | "xlsx" | "csv" | "pptx"
   | "md" | "html" | "xml" | "json" | "text" | "code"
   | "unknown"
 
@@ -88,7 +105,10 @@ function detectKind(file: AttachmentLike): Kind {
   const mt = (file.mimeType || "").toLowerCase()
   if (mt.startsWith("image/") || /^(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|svg)$/.test(ext)) return "image"
   if (mt === "application/pdf" || ext === "pdf") return "pdf"
-  if (mt.includes("wordprocessingml") || ext === "docx" || ext === "doc") return "docx"
+  // Legacy binary .doc → "doc" (needs server-side conversion); modern
+  // .docx (OOXML) → "docx" (handled client-side by docx-preview).
+  if (mt === "application/msword" || ext === "doc") return "doc"
+  if (mt.includes("wordprocessingml") || ext === "docx") return "docx"
   if (mt.includes("spreadsheetml") || mt === "application/vnd.ms-excel" || /^xlsx?$/.test(ext)) return "xlsx"
   if (mt === "text/csv" || ext === "csv") return "csv"
   if (mt.includes("presentationml") || /^pptx?$/.test(ext)) return "pptx"
@@ -112,6 +132,7 @@ function iconForKind(kind: Kind) {
     case "image": return ImageIcon
     case "pdf":
     case "docx":
+    case "doc":
     case "md":
     case "html":
     case "text": return FileText
@@ -190,6 +211,17 @@ export default function UnifiedDocumentViewer({
   onNavigate,
 }: UnifiedDocumentViewerProps) {
   const isDark = useIsDark()
+  // Retry counter used as React key on the renderer subtree — bumping
+  // it forces a clean remount, which resets all internal state and
+  // re-runs effects. The Retry button surfaced inside ErrorState calls
+  // `onRetry` which lives in RendererCtx, so any renderer can trigger
+  // a retry without explicit prop wiring.
+  const [retryKey, setRetryKey] = React.useState(0)
+  const onRetry = React.useCallback(() => setRetryKey(k => k + 1), [])
+  // Reset retry counter when the user navigates to a different
+  // attachment — otherwise an old "I retried 3x" state would carry over.
+  React.useEffect(() => { setRetryKey(0) }, [attachment?.id, attachment?.name])
+
   if (!attachment) return null
 
   const kind = detectKind(attachment)
@@ -292,6 +324,34 @@ export default function UnifiedDocumentViewer({
             </div>
           )}
 
+          {/* Reuse-in-prompt: re-attaches this file to the next composer
+              message via a window CustomEvent the chat shell listens to.
+              Only meaningful for attachments that already have a backend
+              id (i.e., already uploaded). */}
+          {attachment.id && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => {
+                if (typeof window === "undefined") return
+                window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
+                  detail: {
+                    id: attachment.id,
+                    name: attachment.name,
+                    mimeType: attachment.mimeType,
+                    size: attachment.size,
+                    url: attachment.url,
+                    extractedText: attachment.extractedText,
+                  },
+                }))
+              }}
+              title="Reutilizar en prompt"
+              aria-label="Reutilizar en prompt"
+            >
+              <Reply className="h-4 w-4" />
+            </Button>
+          )}
           {canDownload && (
             <Button
               variant="ghost"
@@ -318,9 +378,15 @@ export default function UnifiedDocumentViewer({
           )}
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <RendererDispatch kind={kind} attachment={attachment} isDark={isDark} />
-        </div>
+        {/* Renderer subtree, wrapped in a context that gives
+            LoadingState/ErrorState access to attachment+kind+onRetry,
+            and keyed on `retryKey` so "Reintentar" remounts the renderer
+            cleanly (resets all internal state, re-runs effects). */}
+        <RendererCtx.Provider value={{ attachment, kind, onRetry }}>
+          <div className="min-h-0 flex-1 overflow-hidden" key={retryKey}>
+            <RendererDispatch kind={kind} attachment={attachment} isDark={isDark} />
+          </div>
+        </RendererCtx.Provider>
       </DialogContent>
     </Dialog>
   )
@@ -336,8 +402,25 @@ function RendererDispatch({
     case "pdf":      return <PdfRenderer a={attachment} />
     case "csv":      return <CsvRenderer a={attachment} />
     case "xlsx":     return <XlsxRenderer a={attachment} />
-    case "pptx":     return <PptxRenderer a={attachment} />
+    // PPTX (and legacy .ppt): try server-rendered PDF first for layout
+    // fidelity; if unavailable, fall back to the JSZip text+image
+    // extraction we already have for OOXML .pptx.
+    case "pptx":     return (
+      <ServerConvertedPdfRenderer
+        a={attachment}
+        fallback={<PptxRenderer a={attachment} />}
+      />
+    )
     case "docx":     return <DocxRenderer a={attachment} isDark={isDark} />
+    // Legacy binary .doc cannot be parsed in the browser. Server PDF
+    // is the only viable preview path; if the server can't convert,
+    // we surface the professional fallback (download CTA).
+    case "doc":      return (
+      <ServerConvertedPdfRenderer
+        a={attachment}
+        fallback={<FallbackRenderer a={attachment} />}
+      />
+    )
     case "md":       return <MarkdownRenderer a={attachment} />
     case "html":     return <HtmlRenderer a={attachment} />
     case "xml":
@@ -346,6 +429,90 @@ function RendererDispatch({
     case "text":     return <TextRenderer a={attachment} />
     default:         return <FallbackRenderer a={attachment} />
   }
+}
+
+// ─── ServerConvertedPdfRenderer ──────────────────────────────────────
+
+/**
+ * Probes the backend's `/api/files/:id/render?target=pdf` endpoint, which
+ * runs LibreOffice (or Gotenberg) server-side to convert PPTX/PPT/DOC/
+ * RTF/ODP/ODS/ODT to a faithful PDF. On success, the PDF is rendered
+ * with the same `PdfRenderer` used for native PDFs — paginated, zoomable,
+ * with a real text layer.
+ *
+ * On any non-200 response (typically 503 if the backend has neither
+ * LibreOffice installed nor a Gotenberg URL configured, or 415 for an
+ * unsupported source), we render the supplied fallback so the user is
+ * never left with an empty modal.
+ *
+ * The backend caches the produced PDF on disk by file id, so the second
+ * open of the same attachment is instant.
+ */
+function ServerConvertedPdfRenderer({
+  a, fallback,
+}: { a: AttachmentLike; fallback: React.ReactNode }) {
+  const [state, setState] = React.useState<"probing" | "ok" | "unavailable">("probing")
+  const [pdfAttachment, setPdfAttachment] = React.useState<AttachmentLike | null>(null)
+  const [unavailableReason, setUnavailableReason] = React.useState<string>("")
+
+  React.useEffect(() => {
+    // We need a stable backend id to ask the server to convert. While the
+    // attachment is still in the composer (pre-upload), there's no id —
+    // we silently fall back to the client-side renderer.
+    if (!a.id) { setState("unavailable"); setUnavailableReason("no-id"); return }
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const token = typeof window !== "undefined"
+          ? (window.localStorage?.getItem("auth-token") || "")
+          : ""
+        const base = process.env.NEXT_PUBLIC_IMAGE_URL || ""
+        const url = `${base}/api/files/${encodeURIComponent(String(a.id))}/render?target=pdf`
+        const res = await fetch(url, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          credentials: "include",
+        })
+        if (cancelled) return
+        if (!res.ok) {
+          // 503 = engine not available, 415 = format not convertible,
+          // 404 = file disappeared. All map to "use fallback".
+          setUnavailableReason(`http-${res.status}`)
+          setState("unavailable")
+          return
+        }
+        const buf = await res.arrayBuffer()
+        // Wrap the PDF buffer in a synthetic File so PdfRenderer's
+        // `a.file.arrayBuffer()` path picks it up — no special-case
+        // plumbing needed inside the renderer.
+        const pdfBlob = new File([buf], `${a.name}.pdf`, { type: "application/pdf" })
+        setPdfAttachment({
+          id: a.id,
+          name: a.name,
+          mimeType: "application/pdf",
+          size: buf.byteLength,
+          file: pdfBlob,
+        })
+        setState("ok")
+      } catch (e: any) {
+        if (!cancelled) {
+          setUnavailableReason(e?.message || "fetch-failed")
+          setState("unavailable")
+        }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [a])
+
+  if (state === "probing") return <LoadingState label="Generando vista de alta fidelidad…" />
+  if (state === "unavailable" || !pdfAttachment) {
+    if (process.env.NODE_ENV !== "production" && unavailableReason) {
+      // eslint-disable-next-line no-console
+      console.debug("[UnifiedDocumentViewer] server PDF unavailable:", unavailableReason)
+    }
+    return <>{fallback}</>
+  }
+  return <PdfRenderer a={pdfAttachment} />
 }
 
 // ─── Reusable CopyButton (code/json/text copy) ───────────────────────
@@ -396,24 +563,228 @@ async function readAsArrayBuffer(a: AttachmentLike): Promise<ArrayBuffer> {
   throw new Error("No source available")
 }
 
-function LoadingState({ label = "Cargando…" }: { label?: string }) {
+// ─── Renderer context ────────────────────────────────────────────────
+//
+// Avoids prop-drilling `attachment`, `kind`, and `onRetry` into every
+// nested LoadingState / ErrorState. Provided at dispatch level by
+// UnifiedDocumentViewer, consumed by the shared Loading/Error UI so
+// they can show format-aware skeletons and a working Retry button
+// without each renderer re-wiring the same props.
+interface RendererCtxValue {
+  attachment: AttachmentLike
+  kind: Kind
+  onRetry: () => void
+}
+const RendererCtx = React.createContext<RendererCtxValue | null>(null)
+
+// ─── Skeletons (per-format shimmer) ──────────────────────────────────
+
+function SkLine({
+  w = "100%", h = 12, className = "", delay = 0,
+}: { w?: string | number; h?: number; className?: string; delay?: number }) {
+  return (
+    <div
+      className={cn("rounded bg-muted animate-pulse", className)}
+      style={{
+        width: typeof w === "number" ? `${w}px` : w,
+        height: `${h}px`,
+        animationDelay: `${delay}ms`,
+      }}
+    />
+  )
+}
+
+function SkeletonGeneric({ label }: { label?: string }) {
   return (
     <div className="flex h-full items-center justify-center text-muted-foreground">
       <div className="flex flex-col items-center gap-2">
         <Loader2 className="h-6 w-6 animate-spin" />
-        <span className="text-[12px]">{label}</span>
+        {label ? <span className="text-[12px]">{label}</span> : null}
       </div>
     </div>
   )
 }
 
-function ErrorState({ error, hint }: { error: string; hint?: string }) {
+function SkeletonPdf() {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-      <AlertTriangle className="h-8 w-8 text-amber-500" />
-      <p className="text-[14px] font-medium">No se pudo abrir el documento</p>
-      <p className="max-w-md text-[12px] text-muted-foreground">{error}</p>
-      {hint && <p className="text-[11px] text-muted-foreground/80">{hint}</p>}
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 border-b border-border/40 px-3 py-1.5">
+        <SkLine w={28} h={20} />
+        <SkLine w={60} h={20} delay={80} />
+        <div className="ml-auto flex items-center gap-1.5">
+          <SkLine w={28} h={20} />
+          <SkLine w={48} h={20} delay={60} />
+          <SkLine w={28} h={20} delay={120} />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden bg-muted/30 px-3 py-4">
+        <div className="mx-auto max-w-[680px] space-y-3 rounded-sm bg-card p-8 shadow-md ring-1 ring-border/30">
+          <SkLine w="60%" h={20} />
+          <SkLine w="92%" h={11} delay={60} />
+          <SkLine w="88%" h={11} delay={90} />
+          <SkLine w="94%" h={11} delay={120} />
+          <SkLine w="40%" h={11} delay={150} />
+          <div className="h-3" />
+          <SkLine w="50%" h={16} delay={180} />
+          <SkLine w="95%" h={11} delay={210} />
+          <SkLine w="89%" h={11} delay={240} />
+          <SkLine w="93%" h={11} delay={270} />
+          <SkLine w="35%" h={11} delay={300} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SkeletonXlsx() {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-1.5 border-b border-border/40 px-2 py-1.5">
+        <SkLine w={64} h={22} />
+        <SkLine w={48} h={22} delay={60} />
+        <SkLine w={48} h={22} delay={120} />
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden p-3">
+        <div className="grid grid-cols-6 gap-px overflow-hidden rounded border border-border/40 bg-border/40">
+          {Array.from({ length: 6 * 9 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-7 bg-card animate-pulse"
+              style={{ animationDelay: `${(i % 6) * 70 + Math.floor(i / 6) * 30}ms` }}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SkeletonPptx() {
+  return (
+    <div className="flex h-full">
+      <div className="flex w-44 shrink-0 flex-col gap-1.5 border-r border-border/40 bg-muted/20 p-2">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="rounded-md border border-border/40 bg-card p-2">
+            <SkLine w={50} h={8} className="mb-1.5" delay={i * 80} />
+            <SkLine w="80%" h={12} delay={i * 80 + 40} />
+          </div>
+        ))}
+      </div>
+      <div className="min-w-0 flex-1 overflow-hidden bg-muted/10 p-6">
+        <div className="mx-auto flex aspect-[16/9] max-w-4xl flex-col rounded-lg border border-border/50 bg-card p-8 shadow-sm">
+          <SkLine w="55%" h={22} className="mb-4" />
+          <SkLine w="92%" h={12} delay={80} />
+          <SkLine w="88%" h={12} delay={120} className="mt-2" />
+          <SkLine w="60%" h={12} delay={160} className="mt-2" />
+          <div className="mt-auto flex justify-end">
+            <SkLine w={36} h={10} delay={240} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SkeletonDocx() {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-hidden bg-muted/30 px-3 py-6">
+        <div className="mx-auto max-w-[680px] space-y-3 rounded-sm bg-card p-10 shadow-md ring-1 ring-border/30">
+          <SkLine w="50%" h={22} />
+          <div className="h-3" />
+          <SkLine w="95%" h={11} delay={60} />
+          <SkLine w="92%" h={11} delay={90} />
+          <SkLine w="88%" h={11} delay={120} />
+          <SkLine w="40%" h={11} delay={150} />
+          <div className="h-3" />
+          <SkLine w="92%" h={11} delay={180} />
+          <SkLine w="86%" h={11} delay={210} />
+          <SkLine w="93%" h={11} delay={240} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SkeletonImage() {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-muted/20 p-8">
+      <div className="flex aspect-square w-full max-w-md items-center justify-center rounded-lg bg-muted animate-pulse">
+        <ImageIcon className="h-10 w-10 text-muted-foreground/40" />
+      </div>
+    </div>
+  )
+}
+
+function LoadingState({ label }: { label?: string }) {
+  const ctx = React.useContext(RendererCtx)
+  const kind = ctx?.kind
+  switch (kind) {
+    case "pdf":
+    case "doc":  return <SkeletonPdf />
+    case "xlsx":
+    case "csv":  return <SkeletonXlsx />
+    case "pptx": return <SkeletonPptx />
+    case "docx": return <SkeletonDocx />
+    case "image": return <SkeletonImage />
+    default:     return <SkeletonGeneric label={label} />
+  }
+}
+
+// Typed error state. Pulls attachment/kind/onRetry from RendererCtx so
+// every renderer's `<ErrorState error={…} />` automatically gets the
+// correct format icon, a working Download CTA backed by the actual
+// attachment, and a Retry button that remounts the renderer.
+function ErrorState({ error, hint }: { error: string; hint?: string }) {
+  const ctx = React.useContext(RendererCtx)
+  const Icon = ctx ? iconForKind(ctx.kind) : AlertTriangle
+  const a = ctx?.attachment
+  const onRetry = ctx?.onRetry
+  const downloadUrl = a?.url ? absUrl(a.url) : null
+  const canDownload = !!downloadUrl || !!a?.file
+
+  const handleDownload = async () => {
+    if (!a) return
+    if (downloadUrl) {
+      window.open(downloadUrl, "_blank", "noopener,noreferrer")
+      return
+    }
+    if (a.file) {
+      const u = URL.createObjectURL(a.file)
+      const link = document.createElement("a")
+      link.href = u
+      link.download = a.name
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      setTimeout(() => URL.revokeObjectURL(u), 250)
+    }
+  }
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+      <div className="rounded-full bg-amber-500/10 p-3 ring-1 ring-amber-500/25">
+        <Icon className="h-7 w-7 text-amber-600 dark:text-amber-400" />
+      </div>
+      <div>
+        <p className="text-[14px] font-semibold">No se pudo abrir el documento</p>
+        <p className="mx-auto mt-1 max-w-md text-[12px] text-muted-foreground">{error}</p>
+        {hint && <p className="mx-auto mt-1 max-w-md text-[11px] text-muted-foreground/70">{hint}</p>}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+        {canDownload && (
+          <Button variant="outline" size="sm" onClick={handleDownload}>
+            <Download className="mr-1.5 h-3.5 w-3.5" />
+            Descargar archivo original
+          </Button>
+        )}
+        {onRetry && (
+          <Button size="sm" onClick={onRetry}>
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            Reintentar
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
@@ -429,26 +800,99 @@ function ImageRenderer({ a }: { a: AttachmentLike }) {
   React.useEffect(() => {
     return () => { if (src && src.startsWith("blob:")) URL.revokeObjectURL(src) }
   }, [src])
+
   const [zoom, setZoom] = React.useState(1)
+  const [pan, setPan] = React.useState({ x: 0, y: 0 })
+  const dragRef = React.useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null)
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
+
+  // Reset pan when zoom drops back to fit-to-screen.
+  React.useEffect(() => { if (zoom <= 1) setPan({ x: 0, y: 0 }) }, [zoom])
+
+  // Cmd/Ctrl + wheel → zoom centered on the image. Plain wheel without
+  // modifier scrolls the container as usual (so users with long images
+  // can still scroll naturally).
+  React.useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      e.preventDefault()
+      // deltaY is negative when scrolling up (= zoom in); use a smooth
+      // exponential factor so the zoom feels uniform regardless of
+      // current scale.
+      const factor = Math.exp(-e.deltaY * 0.0015)
+      setZoom(z => Math.min(8, Math.max(0.25, +(z * factor).toFixed(3))))
+    }
+    el.addEventListener("wheel", onWheel, { passive: false })
+    return () => el.removeEventListener("wheel", onWheel)
+  }, [])
+
+  // Drag-to-pan when zoomed in. Below 1× the image fits the viewport,
+  // so panning is a no-op.
+  const onMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (zoom <= 1) return
+    e.preventDefault()
+    dragRef.current = { startX: e.clientX, startY: e.clientY, baseX: pan.x, baseY: pan.y }
+    const onMove = (ev: MouseEvent) => {
+      const d = dragRef.current
+      if (!d) return
+      setPan({ x: d.baseX + (ev.clientX - d.startX), y: d.baseY + (ev.clientY - d.startY) })
+    }
+    const onUp = () => {
+      dragRef.current = null
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+    }
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+  }
+
+  // Double-click toggles between fit (1×) and 2× zoom for quick inspection.
+  const onDoubleClick = () => setZoom(z => (z === 1 ? 2 : 1))
 
   if (!src) return <FallbackRenderer a={a} />
+  const cursor = zoom > 1 ? (dragRef.current ? "grabbing" : "grab") : "zoom-in"
+
   return (
-    <div className="relative flex h-full w-full items-center justify-center overflow-auto bg-muted/30">
+    <div
+      ref={containerRef}
+      className="relative flex h-full w-full items-center justify-center overflow-hidden bg-muted/40 dark:bg-background"
+      onMouseDown={onMouseDown}
+      onDoubleClick={onDoubleClick}
+      style={{ cursor }}
+    >
       <img
         src={src}
         alt={a.name}
-        style={{ transform: `scale(${zoom})`, transformOrigin: "center", transition: "transform 120ms ease-out" }}
-        className="max-h-full max-w-full select-none"
+        style={{
+          transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+          transformOrigin: "center",
+          transition: dragRef.current ? "none" : "transform 120ms ease-out",
+        }}
+        className="max-h-full max-w-full select-none will-change-transform"
         draggable={false}
       />
-      <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-full border border-border/60 bg-background/80 px-1 py-0.5 shadow-md backdrop-blur">
-        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(z => Math.max(0.25, z - 0.25))} aria-label="Reducir">
+      <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-full border border-border/60 bg-background/85 px-1 py-0.5 shadow-md backdrop-blur">
+        <Button size="icon" variant="ghost" className="h-7 w-7"
+          onClick={() => setZoom(z => Math.max(0.25, +(z - 0.25).toFixed(2)))} aria-label="Reducir" title="Reducir">
           <Minus className="h-3.5 w-3.5" />
         </Button>
-        <span className="min-w-[40px] text-center text-[11px] font-medium tabular-nums">{Math.round(zoom * 100)}%</span>
-        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setZoom(z => Math.min(4, z + 0.25))} aria-label="Aumentar">
+        <button
+          onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}
+          className="min-w-[44px] rounded px-1 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground hover:bg-muted"
+          title="Restablecer (doble click)"
+          aria-label="Restablecer zoom"
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+        <Button size="icon" variant="ghost" className="h-7 w-7"
+          onClick={() => setZoom(z => Math.min(8, +(z + 0.25).toFixed(2)))} aria-label="Aumentar" title="Aumentar">
           <Plus className="h-3.5 w-3.5" />
         </Button>
+      </div>
+      <div className="pointer-events-none absolute bottom-3 left-3 select-none rounded-full border border-border/60 bg-background/85 px-2 py-0.5 text-[10px] text-muted-foreground/80 shadow-sm backdrop-blur">
+        ⌘+Scroll para zoom · doble click para reset
       </div>
     </div>
   )
@@ -456,36 +900,221 @@ function ImageRenderer({ a }: { a: AttachmentLike }) {
 
 // ─── PDF ─────────────────────────────────────────────────────────────
 
+/**
+ * High-fidelity PDF renderer using pdf.js (via react-pdf).
+ *
+ * Why we don't use the browser's native `<iframe src="...#toolbar=1">`:
+ *   • Inconsistent toolbar across Chrome / Safari / Firefox / mobile
+ *   • Some browsers strip the `#toolbar` hint entirely (PDFium ignores it)
+ *   • No control over zoom, no programmatic page nav, no theme awareness
+ *   • Selection layer behaves differently per engine
+ *
+ * pdf.js gives us:
+ *   • paginated rendering with virtual scroll (fast on huge PDFs)
+ *   • text layer for proper text selection + Cmd/Ctrl-F find
+ *   • controllable zoom (Fit width / 50–300%)
+ *   • predictable styling under light/dark mode
+ *   • runs entirely in the browser — no server round-trip
+ */
 function PdfRenderer({ a }: { a: AttachmentLike }) {
-  const [src, setSrc] = React.useState<string | null>(null)
+  // pdf.js accepts a URL string OR a `{ data: Uint8Array }` payload.
+  // Using `data` for in-memory File blobs avoids creating a blob URL
+  // that pdf.js would have to refetch over HTTP.
+  const [source, setSource] = React.useState<{ url: string } | { data: Uint8Array } | null>(null)
   const [err, setErr] = React.useState<string | null>(null)
+  const [numPages, setNumPages] = React.useState<number>(0)
+  const [scale, setScale] = React.useState<number>(1)
+  const [containerWidth, setContainerWidth] = React.useState<number>(800)
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
+  const pageRefs = React.useRef<Record<number, HTMLDivElement | null>>({})
+  const [activePage, setActivePage] = React.useState<number>(1)
 
+  // Resolve source from File or URL.
   React.useEffect(() => {
-    let revoke: string | null = null
+    let cancelled = false
     ;(async () => {
       try {
         if (a.file) {
-          const url = URL.createObjectURL(a.file)
-          revoke = url
-          setSrc(url)
+          const buf = await a.file.arrayBuffer()
+          if (!cancelled) setSource({ data: new Uint8Array(buf) })
         } else if (a.url) {
-          setSrc(absUrl(a.url))
+          if (!cancelled) setSource({ url: absUrl(a.url) })
         } else {
           throw new Error("Sin fuente PDF")
         }
-      } catch (e: any) { setErr(e?.message || "Error") }
+      } catch (e: any) {
+        if (!cancelled) setErr(e?.message || "Error")
+      }
     })()
-    return () => { if (revoke) URL.revokeObjectURL(revoke) }
+    return () => { cancelled = true }
   }, [a])
 
-  if (err) return <ErrorState error={err} />
-  if (!src) return <LoadingState />
+  // Track container width for "fit-to-width" rendering.
+  React.useEffect(() => {
+    if (!containerRef.current) return
+    const el = containerRef.current
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        // Subtract scrollbar gutter so pages don't overflow.
+        const w = Math.max(320, Math.floor(entry.contentRect.width) - 24)
+        setContainerWidth(w)
+      }
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // IntersectionObserver — track which page is currently most visible so
+  // the "page X of Y" indicator stays accurate while the user scrolls.
+  React.useEffect(() => {
+    if (!numPages) return
+    const root = containerRef.current
+    if (!root) return
+    const visibility = new Map<number, number>()
+    const io = new IntersectionObserver(
+      entries => {
+        for (const e of entries) {
+          const n = Number((e.target as HTMLElement).dataset.pageNum)
+          if (Number.isFinite(n)) visibility.set(n, e.intersectionRatio)
+        }
+        let bestPage = 1
+        let bestRatio = 0
+        visibility.forEach((ratio, page) => {
+          if (ratio > bestRatio) { bestRatio = ratio; bestPage = page }
+        })
+        if (bestRatio > 0) setActivePage(bestPage)
+      },
+      { root, threshold: [0.1, 0.3, 0.55, 0.8] },
+    )
+    Object.values(pageRefs.current).forEach(el => { if (el) io.observe(el) })
+    return () => io.disconnect()
+  }, [numPages])
+
+  const goToPage = (p: number) => {
+    const target = Math.min(Math.max(1, p), numPages || 1)
+    const el = pageRefs.current[target]
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
+    setActivePage(target)
+  }
+
+  // Keyboard shortcuts within the PDF viewer.
+  React.useEffect(() => {
+    if (!numPages) return
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return
+      if (e.key === "PageDown" || e.key === "ArrowDown" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault(); goToPage(activePage + 1)
+      } else if (e.key === "PageUp" || e.key === "ArrowUp" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault(); goToPage(activePage - 1)
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === "+" || e.key === "=")) {
+        e.preventDefault(); setScale(s => Math.min(3, +(s + 0.25).toFixed(2)))
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "-") {
+        e.preventDefault(); setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "0") {
+        e.preventDefault(); setScale(1)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [numPages, activePage])
+
+  if (err) return <ErrorState error={err} hint="Si el archivo está cifrado o protegido, descárgalo y ábrelo en un visor PDF nativo." />
+  if (!source) return <LoadingState label="Cargando PDF…" />
+
+  const renderWidth = Math.floor(containerWidth * scale)
+
   return (
-    <iframe
-      src={`${src}#toolbar=1&navpanes=0&view=FitH`}
-      title={a.name}
-      className="h-full w-full bg-muted/20"
-    />
+    <div className="flex h-full flex-col">
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 border-b border-border/40 px-3 py-1.5">
+        <div className="flex items-center gap-1">
+          <Button size="icon" variant="ghost" className="h-7 w-7"
+            disabled={activePage <= 1}
+            onClick={() => goToPage(activePage - 1)}
+            aria-label="Página anterior" title="Página anterior">
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <div className="flex items-center gap-1 text-[11.5px] tabular-nums">
+            <input
+              type="number"
+              min={1}
+              max={numPages || 1}
+              value={activePage}
+              onChange={e => {
+                const n = parseInt(e.target.value, 10)
+                if (Number.isFinite(n)) setActivePage(Math.min(Math.max(1, n), numPages || 1))
+              }}
+              onKeyDown={e => { if (e.key === "Enter") goToPage(activePage) }}
+              onBlur={() => goToPage(activePage)}
+              className="h-6 w-10 rounded border border-border/60 bg-background px-1 text-center text-[11.5px] tabular-nums focus:outline-none focus:ring-1 focus:ring-foreground/30"
+              aria-label="Número de página"
+            />
+            <span className="text-muted-foreground">/ {numPages || "…"}</span>
+          </div>
+          <Button size="icon" variant="ghost" className="h-7 w-7"
+            disabled={activePage >= numPages}
+            onClick={() => goToPage(activePage + 1)}
+            aria-label="Página siguiente" title="Página siguiente">
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+
+        <div className="ml-auto flex items-center gap-1">
+          <Button size="icon" variant="ghost" className="h-7 w-7"
+            onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
+            aria-label="Reducir zoom" title="Reducir (⌘−)">
+            <Minus className="h-3.5 w-3.5" />
+          </Button>
+          <button
+            onClick={() => setScale(1)}
+            className="min-w-[48px] rounded px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground hover:bg-muted"
+            title="Restablecer zoom (⌘0)"
+            aria-label="Restablecer zoom"
+          >
+            {Math.round(scale * 100)}%
+          </button>
+          <Button size="icon" variant="ghost" className="h-7 w-7"
+            onClick={() => setScale(s => Math.min(3, +(s + 0.25).toFixed(2)))}
+            aria-label="Aumentar zoom" title="Aumentar (⌘+)">
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="icon" variant="ghost" className="h-7 w-7"
+            onClick={() => setScale(1)}
+            aria-label="Ajustar al ancho" title="Ajustar al ancho">
+            <Maximize2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Pages */}
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 px-3 py-4">
+        <PdfDocument
+          file={source}
+          onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+          onLoadError={(e) => setErr(e?.message || "No se pudo abrir el PDF")}
+          loading={<LoadingState label="Renderizando PDF…" />}
+          error={<ErrorState error="No se pudo abrir el PDF" />}
+          className="flex flex-col items-center gap-3"
+        >
+          {Array.from({ length: numPages }, (_, i) => i + 1).map(p => (
+            <div
+              key={p}
+              data-page-num={p}
+              ref={el => { pageRefs.current[p] = el }}
+              className="rounded-sm bg-white shadow-md ring-1 ring-border/30"
+            >
+              <PdfPage
+                pageNumber={p}
+                width={renderWidth}
+                renderTextLayer
+                renderAnnotationLayer
+              />
+            </div>
+          ))}
+        </PdfDocument>
+      </div>
+    </div>
   )
 }
 
@@ -617,15 +1246,31 @@ function CodeRenderer({ a, kind, isDark }: { a: AttachmentLike; kind: Kind; isDa
 
 // ─── HTML ────────────────────────────────────────────────────────────
 
+// DOMPurify-backed sanitization. We keep two profiles:
+//   • `sanitizeHtml`        — for arbitrary HTML files (HtmlRenderer).
+//                             Stripped of scripts, event handlers, and
+//                             javascript: / data: (non-image) URIs.
+//   • `sanitizeDocxHtml`    — for HTML produced by mammoth from DOCX,
+//                             which legitimately needs inline images
+//                             via `data:image/...` URIs.
 function sanitizeHtml(html: string): string {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, "")
-    .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, "")
-    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, "")
-    .replace(/(href|src)\s*=\s*"javascript:[^"]*"/gi, '$1="#"')
-    .replace(/(href|src)\s*=\s*'javascript:[^']*'/gi, "$1='#'")
+  if (typeof window === "undefined") return ""
+  return DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true, svg: true },
+    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "link", "meta", "form", "input", "button", "textarea", "select"],
+    FORBID_ATTR: ["style", "srcset"],
+    ALLOW_DATA_ATTR: false,
+  })
+}
+
+function sanitizeDocxHtml(html: string): string {
+  if (typeof window === "undefined") return ""
+  return DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
+    // DOCX inline images come back as data:image/* — keep them.
+    ADD_DATA_URI_TAGS: ["img"],
+  })
 }
 
 function HtmlRenderer({ a }: { a: AttachmentLike }) {
@@ -1009,54 +1654,121 @@ function PptxRenderer({ a }: { a: AttachmentLike }) {
   )
 }
 
-// ─── DOCX (mammoth) ──────────────────────────────────────────────────
+// ─── DOCX (docx-preview, mammoth fallback) ──────────────────────────
 
-function DocxRenderer({ a, isDark }: { a: AttachmentLike; isDark: boolean }) {
-  const [html, setHtml] = React.useState<string | null>(null)
+/**
+ * High-fidelity DOCX renderer:
+ *   1. Primary path: `docx-preview` renders the document into the actual
+ *      page-sized boxes from the .docx (sectPr / pgSz / pgMar), with real
+ *      headers/footers, multi-column layouts, table styling, embedded
+ *      images, list numbering, and the document's own fonts where
+ *      available. The output looks like Word, not "HTML approximation".
+ *   2. Fallback path: if docx-preview throws (corrupted .docx, exotic
+ *      content types it doesn't grok yet), we fall back to mammoth's
+ *      HTML conversion — lower fidelity but more lenient parser.
+ *   3. Last-resort: if mammoth also throws, surface the error with a
+ *      Download CTA so the user is never left at a broken modal.
+ */
+function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boolean }) {
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
+  const [mode, setMode] = React.useState<"loading" | "native" | "fallback" | "error">("loading")
+  const [fallbackHtml, setFallbackHtml] = React.useState<string>("")
   const [err, setErr] = React.useState<string | null>(null)
 
   React.useEffect(() => {
+    let cancelled = false
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
-        // convertImage → embed DOCX media as inline base64 data URIs so
-        // images show in the preview without a separate media-fetch
-        // round-trip. The default mammoth behaviour strips images to
-        // alt text, which loses fidelity for visual documents.
-        const result = await mammoth.convertToHtml(
-          { arrayBuffer: buf },
-          {
-            includeDefaultStyleMap: true,
-            convertImage: (mammoth as any).images?.imgElement
-              ? (mammoth as any).images.imgElement((image: any) =>
-                  image.read("base64").then((data: string) => ({
-                    src: `data:${image.contentType};base64,${data}`,
-                  })),
-                )
-              : undefined,
-          },
-        )
-        setHtml(sanitizeHtml(result.value))
+        // Try docx-preview first (high fidelity). Imported lazily so the
+        // ~250 KB module isn't loaded for any non-DOCX preview.
+        try {
+          const { renderAsync } = await import("docx-preview")
+          if (cancelled || !containerRef.current) return
+          containerRef.current.innerHTML = ""
+          await renderAsync(buf, containerRef.current, undefined, {
+            className: "docx-preview-doc",
+            inWrapper: true,
+            ignoreWidth: false,
+            ignoreHeight: false,
+            ignoreFonts: false,
+            breakPages: true,
+            ignoreLastRenderedPageBreak: true,
+            experimental: true,
+            trimXmlDeclaration: true,
+            useBase64URL: true,
+            renderHeaders: true,
+            renderFooters: true,
+            renderFootnotes: true,
+            renderEndnotes: true,
+            renderChanges: false,
+          })
+          if (!cancelled) setMode("native")
+        } catch (docxErr) {
+          // Fallback to mammoth → sanitized HTML.
+          // eslint-disable-next-line no-console
+          console.warn("[UnifiedDocumentViewer] docx-preview failed, falling back to mammoth:", docxErr)
+          const result = await mammoth.convertToHtml(
+            { arrayBuffer: buf },
+            {
+              includeDefaultStyleMap: true,
+              convertImage: (mammoth as any).images?.imgElement
+                ? (mammoth as any).images.imgElement((image: any) =>
+                    image.read("base64").then((data: string) => ({
+                      src: `data:${image.contentType};base64,${data}`,
+                    })),
+                  )
+                : undefined,
+            },
+          )
+          if (cancelled) return
+          setFallbackHtml(sanitizeDocxHtml(result.value))
+          setMode("fallback")
+        }
       } catch (e: any) {
-        setErr(e?.message || "Error")
+        if (!cancelled) {
+          setErr(e?.message || "Error")
+          setMode("error")
+        }
       }
     })()
+    return () => { cancelled = true }
   }, [a])
 
-  if (err) return <ErrorState error={err} hint="Intenta descargar el archivo y ábrelo en Word / Pages." />
-  if (html === null) return <LoadingState label="Convirtiendo Word a HTML…" />
+  if (mode === "error") {
+    return <ErrorState error={err || "Error"} hint="Intenta descargar el archivo y ábrelo en Word / Pages." />
+  }
 
   return (
-    <div className="h-full overflow-auto">
+    <div className="h-full overflow-auto bg-muted/30">
+      {mode === "loading" && <LoadingState label="Renderizando documento…" />}
+
+      {/* Native docx-preview output. The library generates its own page
+          containers + CSS; we just provide a centered scrollable canvas
+          and a small style override so the page chrome reads in dark
+          mode without re-coloring the document body itself. */}
       <div
+        ref={containerRef}
         className={cn(
-          "prose prose-sm dark:prose-invert mx-auto max-w-3xl px-8 py-8",
-          "[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_th]:border [&_td]:border-border/50 [&_th]:border-border/50",
-          "[&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1",
-          "[&_img]:max-w-full [&_img]:h-auto",
+          "mx-auto py-6 [&_.docx-wrapper]:bg-transparent [&_.docx-wrapper]:p-0",
+          "[&_section.docx]:mx-auto [&_section.docx]:my-3 [&_section.docx]:rounded-sm",
+          "[&_section.docx]:shadow-md [&_section.docx]:ring-1 [&_section.docx]:ring-border/30",
+          mode !== "native" && "hidden",
         )}
-        dangerouslySetInnerHTML={{ __html: html }}
       />
+
+      {/* Mammoth fallback. */}
+      {mode === "fallback" && (
+        <div
+          className={cn(
+            "prose prose-sm dark:prose-invert mx-auto max-w-3xl px-8 py-8",
+            "[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_th]:border [&_td]:border-border/50 [&_th]:border-border/50",
+            "[&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1",
+            "[&_img]:max-w-full [&_img]:h-auto",
+          )}
+          dangerouslySetInnerHTML={{ __html: fallbackHtml }}
+        />
+      )}
     </div>
   )
 }

@@ -1,7 +1,9 @@
 const express = require('express');
+const fsSync = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const fileProcessor = require('../services/fileProcessor');
+const documentRenderer = require('../services/documentRenderer');
 const prisma = require('../config/database');
 const fs = require('fs').promises;
 const path = require('path');
@@ -14,6 +16,43 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// `file-type` v22 is ESM-only; we use a dynamic import wrapped in a
+// memoised promise so it loads once per process and works under CJS.
+let _fileTypePromise = null;
+function loadFileType() {
+  if (!_fileTypePromise) _fileTypePromise = import('file-type');
+  return _fileTypePromise;
+}
+
+/**
+ * Detect a file's true MIME by reading its leading bytes (magic bytes).
+ *
+ * Why we don't trust `file.mimetype` from multer:
+ *   - Browsers often report `application/octet-stream` for clipboard
+ *     pastes, drag-from-other-apps, HEIC on Linux, and some ZIP-based
+ *     office formats.
+ *   - Adversarial uploads can spoof the MIME header.
+ *   - Magic-byte detection is the only reliable source of truth.
+ *
+ * Strategy:
+ *   - Detect → if confidence is high, overwrite the stored mimetype.
+ *   - Plain-text formats (md / csv / json / xml) have NO magic bytes,
+ *     so a `null` detection means "trust the original mimetype".
+ *
+ * Returns the (possibly corrected) mime string. Never throws — failure
+ * just falls back to the multer-reported mimetype.
+ */
+async function detectMime(filePath, fallbackMime) {
+  try {
+    const { fileTypeFromFile } = await loadFileType();
+    const detected = await fileTypeFromFile(filePath);
+    if (detected && detected.mime) return detected.mime;
+  } catch (e) {
+    console.warn('[files] magic-byte detection failed:', e.message);
+  }
+  return fallbackMime;
+}
+
 // Upload files
 router.post('/upload', authenticateToken, upload.array('files', 5), async (req, res) => {
   try {
@@ -25,6 +64,17 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
 
     for (const file of req.files) {
       try {
+        // Magic-byte detection — overrides browser-reported mimetype when
+        // it's wrong (octet-stream, spoofed, or Office ZIP misidentified).
+        // We mutate `file.mimetype` so downstream consumers (file
+        // processor, OpenAI uploader, Prisma row, response payload) all
+        // see the corrected value with no extra plumbing.
+        const detectedMime = await detectMime(file.path, file.mimetype);
+        if (detectedMime && detectedMime !== file.mimetype) {
+          console.log(`[files] mime corrected for ${file.originalname}: ${file.mimetype} → ${detectedMime}`);
+          file.mimetype = detectedMime;
+        }
+
         // Process file content
         const result = await fileProcessor.processFile(file);
 
@@ -196,6 +246,63 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
   }
 });
 
+// Render a non-web-native document (PPTX, DOC, RTF, ODP, …) to PDF for
+// high-fidelity preview in the unified viewer. Conversion runs through
+// the documentRenderer service (LibreOffice or Gotenberg) and the
+// resulting PDF is cached on disk by file id, so a second request is a
+// pure file read. Auth-protected; returns the PDF inline.
+router.get('/:id/render', authenticateToken, async (req, res) => {
+  try {
+    const target = (req.query.target || 'pdf').toString().toLowerCase();
+    if (target !== 'pdf') {
+      return res.status(400).json({ error: `Unsupported render target: ${target}` });
+    }
+
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+
+    if (!documentRenderer.isConvertible(file.mimeType, file.originalName)) {
+      return res.status(415).json({
+        error: 'Format not convertible',
+        mimeType: file.mimeType,
+      });
+    }
+
+    let pdfPath;
+    try {
+      const out = await documentRenderer.renderToPdf({
+        id: file.id,
+        path: file.path,
+        mimeType: file.mimeType,
+        originalName: file.originalName,
+      });
+      pdfPath = out.pdfPath;
+      res.setHeader('X-Render-Engine', out.engine);
+      res.setHeader('X-Render-From-Cache', String(out.fromCache));
+    } catch (err) {
+      if (err instanceof documentRenderer.RendererUnavailableError) {
+        return res.status(503).json({ error: err.message, code: err.code });
+      }
+      if (err instanceof documentRenderer.RendererUnsupportedError) {
+        return res.status(415).json({ error: err.message, code: err.code });
+      }
+      console.error('[files] render failed:', err);
+      return res.status(500).json({ error: 'Render failed', detail: err.message });
+    }
+
+    const baseName = path.basename(file.originalName, path.extname(file.originalName));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${baseName}.pdf"`);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    fsSync.createReadStream(pdfPath).pipe(res);
+  } catch (error) {
+    console.error('Render route error:', error);
+    res.status(500).json({ error: 'Failed to render document' });
+  }
+});
+
 // Delete file
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
@@ -220,6 +327,9 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       } catch (e) {
         // Ignore thumbnail deletion errors
       }
+      // Clear cached PDF render (if any). Best-effort; never blocks.
+      const renderedPdf = path.join(process.env.UPLOAD_DIR || 'uploads', '_rendered', `${file.id}.pdf`);
+      try { await fs.unlink(renderedPdf); } catch (e) { /* not present */ }
     } catch (error) {
       console.error('File deletion error:', error);
     }

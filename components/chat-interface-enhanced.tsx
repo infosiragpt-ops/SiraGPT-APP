@@ -1507,6 +1507,38 @@ function ChatInterfaceContent() {
   // reading from state directly would capture stale values.
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
+
+  // "Reuse-in-prompt" bridge — UnifiedDocumentViewer dispatches a
+  // CustomEvent on the window when the user clicks the Reply icon in
+  // the viewer header. We re-attach the file metadata to the composer's
+  // upload list (without re-uploading the binary; the backend `id` is
+  // already permanent), and surface a toast so the action is visible.
+  // Idempotent: if the same file id is already in the list, we no-op.
+  React.useEffect(() => {
+    const onReuse = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail || {};
+      if (!detail.id) return;
+      const already = uploadedFilesRef.current.some((f: any) => (f.id || f.tempId) === detail.id);
+      if (already) {
+        toast(`"${detail.name}" ya está adjunto al prompt`);
+        return;
+      }
+      const reused = {
+        id: detail.id,
+        tempId: detail.id,
+        name: detail.name,
+        type: detail.mimeType,
+        size: detail.size ?? 0,
+        url: detail.url,
+        extractedText: detail.extractedText,
+        status: 'completed',
+      };
+      setUploadedFiles((cur: any[]) => [...cur, reused]);
+      toast.success(`Adjuntado "${detail.name}" al prompt`);
+    };
+    window.addEventListener('sira:reuse-attachment', onReuse);
+    return () => window.removeEventListener('sira:reuse-attachment', onReuse);
+  }, [setUploadedFiles]);
   // True while the IME is composing a multi-keystroke character (CJK,
   // Spanish accents, dead keys). Paste handler must NOT intercept paste
   // during composition or it scrambles the in-flight character.
