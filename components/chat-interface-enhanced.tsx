@@ -39,6 +39,8 @@ import {
   Zap,
   Brain,
   Crown,
+  PanelLeftOpen,
+  GripVertical,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -104,6 +106,7 @@ import {
   SidebarProvider,
   Sidebar,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { DocumentPreview } from "./document-preview"
 import { CodePreview } from "./code-preview"
@@ -2831,6 +2834,81 @@ But first, you need to connect your Spotify account securely using the button be
   const queueBurstTimestampsRef = React.useRef<number[]>([]);
   const handleSendRef = React.useRef<() => void>(() => {});
 
+  // ────────────────────────────────────────────────────────────
+  // Sidebar auto-collapse — when the user enters a "big-canvas"
+  // tool (Word / Excel / image-gen / video-gen) the left sidebar
+  // steals too much horizontal space. We collapse it on entry and
+  // never auto-reopen — the user pops it back manually via the
+  // floating PanelLeftOpen button pinned to the viewport edge.
+  // ────────────────────────────────────────────────────────────
+  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile } = useSidebar();
+
+  // ────────────────────────────────────────────────────────────
+  // Resizable split — chat ↔ right panel (Word/Excel/preview).
+  // Ratio is the LEFT pane's width as a percentage. Persisted in
+  // localStorage across sessions, defaults to 50/50, clamped to
+  // [25, 75] on drag, resets to 50 on double-click.
+  // ────────────────────────────────────────────────────────────
+  const SPLIT_STORAGE_KEY = 'siraGPT-split-ratio';
+  const [splitRatio, setSplitRatio] = React.useState<number>(50);
+  const [isDraggingSplit, setIsDraggingSplit] = React.useState(false);
+  const splitContainerRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Hydrate from localStorage after mount to avoid SSR/CSR mismatch.
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SPLIT_STORAGE_KEY);
+      const n = raw ? parseFloat(raw) : NaN;
+      if (!Number.isNaN(n) && n >= 25 && n <= 75) setSplitRatio(n);
+    } catch { /* storage unavailable — stick with default */ }
+  }, []);
+
+  const startSplitDrag = React.useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingSplit(true);
+    const onMove = (ev: MouseEvent) => {
+      const el = splitContainerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      const clamped = Math.max(25, Math.min(75, pct));
+      setSplitRatio(clamped);
+    };
+    const onUp = () => {
+      setIsDraggingSplit(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      try { localStorage.setItem(SPLIT_STORAGE_KEY, String(splitRatioRef.current)); } catch { /* ignore */ }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
+
+  const resetSplitRatio = React.useCallback(() => {
+    setSplitRatio(50);
+    try { localStorage.setItem(SPLIT_STORAGE_KEY, '50'); } catch { /* ignore */ }
+  }, []);
+
+  // Mirror ratio into a ref so the mouseup handler closure (set up
+  // at drag-start) can read the latest value without restarting the
+  // effect on every ratio change.
+  const splitRatioRef = React.useRef(splitRatio);
+  React.useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
+
+  // Auto-collapse sidebar when a big-canvas tool activates. Intent:
+  // give Word/Excel/image/video the horizontal real estate they need.
+  // We only react to OFF → ON transitions; reverting all flags back
+  // to OFF does NOT auto-reopen (spec: "user decides when to reopen").
+  // Skip on mobile — the sidebar there is already an overlay that
+  // doesn't squeeze the main content.
+  React.useEffect(() => {
+    if (isSidebarMobile) return;
+    if (isWordConnectorActive || isExcelConnectorActive || isImageGenerationActive || isVideoGenerationActive) {
+      setSidebarOpen(false);
+    }
+  }, [isWordConnectorActive, isExcelConnectorActive, isImageGenerationActive, isVideoGenerationActive, isSidebarMobile, setSidebarOpen]);
+
   const handleSend = async () => {
     const msg = input.trim();
     if (!msg) return;
@@ -4378,8 +4456,32 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden w-full relative">
-        <div className={`relative flex flex-col h-full overflow-hidden ${documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive ? 'w-[40%] shrink-0' : 'w-full'}`}>
+      {/* Floating "reopen sidebar" button — appears when the sidebar
+          is collapsed (we auto-collapse on Word/Excel/image/video to
+          reclaim horizontal real estate). Pinned to the viewport edge
+          so the user can always pop the sidebar back with one click. */}
+      {!sidebarOpen && !isSidebarMobile && (
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          title="Mostrar sidebar"
+          aria-label="Mostrar sidebar"
+          className="fixed left-0 top-1/2 -translate-y-1/2 z-50 flex h-10 w-6 items-center justify-center rounded-r-md border border-l-0 border-border/60 bg-background/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-all duration-200 hover:w-8 hover:bg-background hover:text-foreground"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+        </button>
+      )}
+
+      <div ref={splitContainerRef} className="flex flex-1 overflow-hidden w-full relative">
+        {/* Left pane — chat. When a right-side tool panel is active we
+            share width with it via the resizable divider; otherwise we
+            take the full container. min-w-0 so children can shrink. */}
+        <div
+          style={(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive)
+            ? { width: `${splitRatio}%`, transition: isDraggingSplit ? undefined : 'width 300ms ease' }
+            : undefined}
+          className={`relative flex flex-col h-full min-w-0 overflow-hidden ${(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive) ? 'shrink-0' : 'w-full'}`}
+        >
           {/* Header */}
           <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-4  backdrop-blur-sm ">
             <div className="flex items-center justify-between">
@@ -5134,17 +5236,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           )
           }
         </div>
+        {/* Split view alternatives that take the remaining space
+            without the resizable divider (code preview / computer use).
+            These already use w-full internally. */}
         {splitViewContent && (
           <div className="w-full border-l border-border/40">
             <CodePreview {...splitViewContent} onClose={() => setSplitViewContent(null)} />
-          </div>
-        )}
-        {documentPreviewUrl && (
-          <div className="w-[60%] border-l border-border/40">
-            <DocumentPreview
-              url={documentPreviewUrl}
-              onClose={() => setDocumentPreviewUrl(null)}
-            />
           </div>
         )}
         {isComputerUseActive && (
@@ -5156,25 +5253,65 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             />
           </div>
         )}
-        {isWordConnectorActive && (
-          <WordConnector
-            ref={wordConnectorRef}
-            onClose={() => setIsWordConnectorActive(false)}
-            selectedModel={selectedModel}
-            selectProvider={selectProvider}
-            isGeneratingExternal={isGeneratingWord}
-            onTextSelected={(text) => {
-              setSelectedWordText(text);
-            }}
-          />
-        )}
 
-        {isExcelConnectorActive && (
-          <ExcelConnector
-            ref={excelConnectorRef}
-            onClose={() => setIsExcelConnectorActive(false)}
-            isGeneratingExternal={isGeneratingExcel}
-          />
+        {/* Resizable right panel — Word / Excel / Document preview.
+            Rendered together with the 6px col-resize divider so the
+            user can drag the split from 25% to 75% and double-click
+            to reset to 50/50. Persisted in localStorage. */}
+        {(isWordConnectorActive || isExcelConnectorActive || documentPreviewUrl) && (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Redimensionar paneles"
+              onMouseDown={startSplitDrag}
+              onDoubleClick={resetSplitRatio}
+              className={cn(
+                'group relative flex w-[6px] cursor-col-resize select-none items-center justify-center shrink-0 transition-colors',
+                isDraggingSplit ? 'bg-border/60' : 'bg-transparent hover:bg-border/60',
+              )}
+            >
+              {/* Three dots centered — visual hint for the grab handle.
+                  pointer-events-none so the whole 6px strip stays the
+                  mouse-hit target. */}
+              <div className="pointer-events-none flex flex-col gap-[3px]">
+                <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
+                <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
+                <span className="h-[3px] w-[3px] rounded-full bg-muted-foreground/40" />
+              </div>
+            </div>
+            <div
+              style={{ width: `${100 - splitRatio}%`, transition: isDraggingSplit ? undefined : 'width 300ms ease' }}
+              className="h-full min-w-0 overflow-hidden shrink-0"
+            >
+              {documentPreviewUrl && (
+                <DocumentPreview
+                  url={documentPreviewUrl}
+                  onClose={() => setDocumentPreviewUrl(null)}
+                />
+              )}
+              {isWordConnectorActive && (
+                <WordConnector
+                  ref={wordConnectorRef}
+                  onClose={() => setIsWordConnectorActive(false)}
+                  selectedModel={selectedModel}
+                  selectProvider={selectProvider}
+                  isGeneratingExternal={isGeneratingWord}
+                  isFullPage={true}
+                  onTextSelected={(text) => {
+                    setSelectedWordText(text);
+                  }}
+                />
+              )}
+              {isExcelConnectorActive && (
+                <ExcelConnector
+                  ref={excelConnectorRef}
+                  onClose={() => setIsExcelConnectorActive(false)}
+                  isGeneratingExternal={isGeneratingExcel}
+                />
+              )}
+            </div>
+          </>
         )}
       </div>
     </div >

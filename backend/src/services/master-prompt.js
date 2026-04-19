@@ -55,7 +55,22 @@ const INTENT_RULES = [
 - Wrap the FULL content between [CREATE_DOCUMENT:filename.ext] and [/CREATE_DOCUMENT] — no placeholders, no "add sections here", no apologies for the length.
 - Use proper markdown hierarchy: one H1 title, H2 sections, H3 subsections. Include a cover line (title + author line) at the top and a closing block at the end.
 - For Excel/spreadsheet: produce a markdown table with headers + at least 10 rows of realistic, plausible data that matches the domain.
-- For PowerPoint: structure as H2 per slide, with bullet points under each.`,
+- For PowerPoint: structure as H2 per slide, with bullet points under each.
+
+### Special case: CV / curriculum vitae / resumé
+When the user asks for a CV / currículum vitae / hoja de vida / resumé, lay it out as a two-column invisible table (HTML <table> with cells whose style="border: 0;") so the Word editor renders it like a real designer CV, not a wall of markdown:
+- Outer table: 2 columns, 35% / 65% widths, border: 0, vertical-align: top.
+- Left column (35%) — background #F3F4F6 (gris claro) via style="background-color: #F3F4F6;":
+  - Foto placeholder (an <img> with a neutral silhouette URL if none provided, width 150).
+  - Datos personales: nombre (H2), título profesional, email, teléfono, ubicación, LinkedIn.
+  - Idiomas con indicador visual: "Español ●●●●●" / "English ●●●●○" (use ● for filled, ○ for empty, 5 dots total).
+  - Habilidades como badges inline: cada skill en un <span style="background-color:#E5E7EB; padding:2px 8px; border-radius:12px; margin:2px; display:inline-block;">Skill</span>.
+- Right column (65%) — white background:
+  - Experiencia laboral con H2 "Experiencia"; cada puesto: <strong>cargo</strong> · empresa · fechas, luego bullet list (- …) con logros concretos con métricas.
+  - Educación con H2 "Educación"; cada entrada: <strong>título</strong> · institución · fechas.
+  - Logros / certificaciones con H2 si aplica.
+- Use a horizontal rule (<hr>) between major right-column sections.
+- NEVER ask the user what to include — invent sensible realistic content if details are missing, and note that placeholders can be edited.`,
   },
   {
     intent: 'GENERATE_VISUAL',

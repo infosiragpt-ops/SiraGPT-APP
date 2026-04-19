@@ -26,7 +26,14 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Document, Packer, Paragraph, TextRun } from 'docx';
+import {
+    Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
+    Table as DocxTable,
+    TableRow as DocxTableRow,
+    TableCell as DocxTableCell,
+    WidthType, BorderStyle, ShadingType,
+    ImageRun, ExternalHyperlink, LevelFormat, VerticalAlign,
+} from 'docx';
 import { saveAs } from 'file-saver';
 
 
@@ -158,6 +165,245 @@ const TableGridSelector: React.FC<{ onSelectTable: (rows: number, cols: number) 
     );
 };
 
+// ────────────────────────────────────────────────────────────────
+// TipTap JSON → docx mapper
+//
+// We walk the ProseMirror doc and emit docx blocks faithfully:
+//   - paragraph/heading    → Paragraph
+//   - bulletList/orderedList → Paragraph with numbering reference
+//   - image                → Paragraph { ImageRun } (fetches bytes)
+//   - table                → docx Table with row/cell borders,
+//                            shading (backgroundColor), and widths
+//   - horizontalRule       → Paragraph with bottom border
+//
+// Inline text marks (bold/italic/underline/strike/code/link/color)
+// translate into TextRun options or ExternalHyperlink wrappers.
+// ────────────────────────────────────────────────────────────────
+
+const DXA_PER_PCT = 94.8; // 9480 DXA total (≈ 6.48in usable page width) / 100
+const COLOR_HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+function normalizeColorToHex(input: string | null | undefined): string | null {
+    if (!input) return null;
+    const s = String(input).trim();
+    if (COLOR_HEX_RE.test(s)) return s.replace(/^#/, '').toUpperCase();
+    // Named color → let the browser normalize via a canvas
+    const rgb = s.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    if (rgb) {
+        const toHex = (n: string) => Number(n).toString(16).padStart(2, '0').toUpperCase();
+        return `${toHex(rgb[1])}${toHex(rgb[2])}${toHex(rgb[3])}`;
+    }
+    return null;
+}
+
+function fetchImageBytes(url: string): Promise<{ data: ArrayBuffer; type: 'png' | 'jpg' | 'gif' | 'bmp' }> {
+    return fetch(url).then(r => {
+        if (!r.ok) throw new Error(`image fetch ${r.status}`);
+        const ct = (r.headers.get('content-type') || '').toLowerCase();
+        let type: 'png' | 'jpg' | 'gif' | 'bmp' = 'png';
+        if (ct.includes('jpeg') || ct.includes('jpg')) type = 'jpg';
+        else if (ct.includes('gif')) type = 'gif';
+        else if (ct.includes('bmp')) type = 'bmp';
+        return r.arrayBuffer().then(data => ({ data, type }));
+    });
+}
+
+function textRunsFromInline(nodes: any[] = []): any[] {
+    const runs: any[] = [];
+    for (const n of nodes) {
+        if (!n) continue;
+        if (n.type === 'text') {
+            const marks: any[] = n.marks || [];
+            const opts: any = { text: n.text || '' };
+            for (const m of marks) {
+                if (m.type === 'bold') opts.bold = true;
+                else if (m.type === 'italic') opts.italics = true;
+                else if (m.type === 'underline') opts.underline = {};
+                else if (m.type === 'strike') opts.strike = true;
+                else if (m.type === 'code') opts.font = 'Courier New';
+                else if (m.type === 'textStyle' && m.attrs?.color) {
+                    const hex = normalizeColorToHex(m.attrs.color);
+                    if (hex) opts.color = hex;
+                }
+            }
+            const linkMark = marks.find(m => m.type === 'link');
+            if (linkMark?.attrs?.href) {
+                runs.push(new ExternalHyperlink({
+                    link: linkMark.attrs.href,
+                    children: [new TextRun({ ...opts, style: 'Hyperlink', color: '0563C1', underline: {} })],
+                }));
+            } else {
+                runs.push(new TextRun(opts));
+            }
+        } else if (n.type === 'hardBreak') {
+            runs.push(new TextRun({ break: 1 }));
+        }
+    }
+    return runs;
+}
+
+async function imageRunFromNode(node: any): Promise<any | null> {
+    const src = node.attrs?.src;
+    if (!src) return null;
+    try {
+        const { data, type } = await fetchImageBytes(src);
+        const width = Number(node.attrs?.width) || 320;
+        const height = Number(node.attrs?.height) || 240;
+        return new ImageRun({ data, transformation: { width, height }, type } as any);
+    } catch (e) {
+        console.warn('imageRun fetch failed, skipping:', e);
+        return null;
+    }
+}
+
+function headingLevelFor(level: number) {
+    switch (level) {
+        case 1: return HeadingLevel.HEADING_1;
+        case 2: return HeadingLevel.HEADING_2;
+        case 3: return HeadingLevel.HEADING_3;
+        case 4: return HeadingLevel.HEADING_4;
+        case 5: return HeadingLevel.HEADING_5;
+        case 6: return HeadingLevel.HEADING_6;
+        default: return HeadingLevel.HEADING_3;
+    }
+}
+
+async function paragraphFromNode(node: any, extra: { numbering?: { reference: string; level: number } } = {}): Promise<any> {
+    const children: any[] = [];
+    for (const c of node.content || []) {
+        if (c.type === 'image') {
+            const ir = await imageRunFromNode(c);
+            if (ir) children.push(ir);
+        } else {
+            children.push(...textRunsFromInline([c]));
+        }
+    }
+    const align = node.attrs?.textAlign;
+    const opts: any = { children };
+    if (node.type === 'heading') opts.heading = headingLevelFor(Number(node.attrs?.level) || 3);
+    if (align === 'center') opts.alignment = AlignmentType.CENTER;
+    else if (align === 'right') opts.alignment = AlignmentType.RIGHT;
+    else if (align === 'justify') opts.alignment = AlignmentType.JUSTIFIED;
+    if (extra.numbering) opts.numbering = extra.numbering;
+    return new Paragraph(opts);
+}
+
+async function jsonToDocxBlocks(content: any[]): Promise<any[]> {
+    const out: any[] = [];
+    for (const node of content) {
+        if (!node || !node.type) continue;
+        switch (node.type) {
+            case 'paragraph':
+            case 'heading':
+                out.push(await paragraphFromNode(node));
+                break;
+            case 'bulletList':
+                for (const li of node.content || []) {
+                    for (const inner of li.content || []) {
+                        out.push(await paragraphFromNode(inner, { numbering: { reference: 'default-bullet', level: 0 } }));
+                    }
+                }
+                break;
+            case 'orderedList':
+                for (const li of node.content || []) {
+                    for (const inner of li.content || []) {
+                        out.push(await paragraphFromNode(inner, { numbering: { reference: 'default-ordered', level: 0 } }));
+                    }
+                }
+                break;
+            case 'horizontalRule':
+                out.push(new Paragraph({
+                    children: [],
+                    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: 'D4D4D8' } },
+                }));
+                break;
+            case 'image': {
+                const ir = await imageRunFromNode(node);
+                if (ir) out.push(new Paragraph({ children: [ir] }));
+                break;
+            }
+            case 'table': {
+                out.push(await tableFromNode(node));
+                break;
+            }
+            default:
+                // Unknown node — fall back to a text paragraph so nothing
+                // silently disappears from the export.
+                out.push(new Paragraph({ children: textRunsFromInline(node.content || []) }));
+        }
+    }
+    return out;
+}
+
+async function tableFromNode(table: any): Promise<any> {
+    const rows: any[] = [];
+    // Collect column widths from the first row (colwidth attr is a
+    // TipTap-managed array of pixel widths per colspan).
+    let colWidths: number[] | null = null;
+    for (const row of table.content || []) {
+        const cells: any[] = [];
+        for (const cell of row.content || []) {
+            const colSpan = Number(cell.attrs?.colspan) || 1;
+            const rowSpan = Number(cell.attrs?.rowspan) || 1;
+            const bg = normalizeColorToHex(cell.attrs?.backgroundColor || null);
+            const bw = cell.attrs?.borderWidth;
+            const invisible = bw === 0 || bw === '0' || bw === '0px';
+            const vAlign = (cell.attrs?.verticalAlign || 'top').toLowerCase();
+            const cellContent: any[] = [];
+            for (const inner of cell.content || []) {
+                if (inner.type === 'paragraph' || inner.type === 'heading') {
+                    cellContent.push(await paragraphFromNode(inner));
+                } else if (inner.type === 'bulletList' || inner.type === 'orderedList') {
+                    const ref = inner.type === 'bulletList' ? 'default-bullet' : 'default-ordered';
+                    for (const li of inner.content || []) {
+                        for (const liInner of li.content || []) {
+                            cellContent.push(await paragraphFromNode(liInner, { numbering: { reference: ref, level: 0 } }));
+                        }
+                    }
+                } else if (inner.type === 'image') {
+                    const ir = await imageRunFromNode(inner);
+                    if (ir) cellContent.push(new Paragraph({ children: [ir] }));
+                } else {
+                    cellContent.push(new Paragraph({ children: textRunsFromInline(inner.content || []) }));
+                }
+            }
+            if (cellContent.length === 0) cellContent.push(new Paragraph({ children: [] }));
+
+            const borders = invisible
+                ? {
+                    top: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+                    bottom: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+                    left: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+                    right: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+                }
+                : undefined;
+
+            const cellOpts: any = {
+                children: cellContent,
+                columnSpan: colSpan,
+                rowSpan: rowSpan,
+                verticalAlign: vAlign === 'middle' ? VerticalAlign.CENTER : vAlign === 'bottom' ? VerticalAlign.BOTTOM : VerticalAlign.TOP,
+            };
+            if (borders) cellOpts.borders = borders;
+            if (bg) cellOpts.shading = { type: ShadingType.CLEAR, color: 'auto', fill: bg };
+
+            // Respect colwidth on the cell if present; it's an array
+            // because of colspan. We use the sum as the cell width.
+            const cwArr: number[] | undefined = cell.attrs?.colwidth;
+            if (Array.isArray(cwArr) && cwArr.length > 0) {
+                const sumPx = cwArr.reduce((a, b) => a + (Number(b) || 0), 0);
+                cellOpts.width = { size: Math.max(sumPx * 15, 500), type: WidthType.DXA }; // 1px ≈ 15 DXA
+            }
+            cells.push(new DocxTableCell(cellOpts));
+        }
+        rows.push(new DocxTableRow({ children: cells }));
+    }
+    return new DocxTable({
+        rows,
+        width: { size: 100, type: WidthType.PERCENTAGE },
+    });
+}
+
 export const WordConnector = React.forwardRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; getHTML: () => string; }, WordConnectorProps>(
     function WordConnector({ onClose, selectedModel, selectProvider, onGenerateContent, isFullPage = false, onTextSelected, isGeneratingExternal = false }, ref) {
         const [isGenerating, setIsGenerating] = useState(false);
@@ -222,28 +468,85 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         class: 'max-w-full h-auto rounded-lg',
                     },
                 }),
+                // Table family — extended with the CV-friendly attrs
+                // (backgroundColor, borderWidth, verticalAlign, width).
+                // Tables parse HTML that carries these as inline style
+                // so the LLM can generate CV layouts with invisible
+                // 35/65 two-column tables and coloured skill cells.
                 Table.configure({
                     resizable: true,
                     HTMLAttributes: {
-                        class: 'border-collapse w-full my-4',
-                        style: 'table-layout: fixed; max-width: 100%;',
+                        class: 'w-full my-4',
+                        style: 'table-layout: fixed; max-width: 100%; border-collapse: collapse;',
                     },
                 }),
                 TableRow.configure({
+                    HTMLAttributes: { class: '' },
+                }),
+                TableHeader.extend({
+                    addAttributes() {
+                        return {
+                            ...this.parent?.(),
+                            backgroundColor: {
+                                default: null,
+                                parseHTML: el => (el as HTMLElement).style.backgroundColor || null,
+                                renderHTML: attrs => attrs.backgroundColor ? { style: `background-color: ${attrs.backgroundColor}` } : {},
+                            },
+                            borderWidth: {
+                                default: null,
+                                parseHTML: el => (el as HTMLElement).style.borderWidth || null,
+                                renderHTML: attrs => attrs.borderWidth != null ? { style: `border-width: ${attrs.borderWidth}${String(attrs.borderWidth).endsWith('px') ? '' : 'px'}; border-style: solid; border-color: #d4d4d8;` } : {},
+                            },
+                            verticalAlign: {
+                                default: 'top',
+                                parseHTML: el => (el as HTMLElement).style.verticalAlign || 'top',
+                                renderHTML: attrs => attrs.verticalAlign ? { style: `vertical-align: ${attrs.verticalAlign}` } : {},
+                            },
+                        };
+                    },
+                }).configure({
                     HTMLAttributes: {
-                        class: 'border border-zinc-300 dark:border-zinc-700',
+                        class: 'border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-2 font-bold text-left align-top',
+                        style: 'word-wrap: break-word; overflow-wrap: break-word; word-break: break-word;',
                     },
                 }),
-                TableHeader.configure({
-                    HTMLAttributes: {
-                        class: 'border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-2 font-bold text-left',
-                        style: 'word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; min-width: 50px;',
+                TableCell.extend({
+                    addAttributes() {
+                        return {
+                            ...this.parent?.(),
+                            backgroundColor: {
+                                default: null,
+                                parseHTML: el => (el as HTMLElement).style.backgroundColor || null,
+                                renderHTML: attrs => attrs.backgroundColor ? { style: `background-color: ${attrs.backgroundColor}` } : {},
+                            },
+                            // Support `borderWidth: 0` to produce invisible
+                            // layout tables — Word-style two-column CV shell.
+                            borderWidth: {
+                                default: null,
+                                parseHTML: el => {
+                                    const s = (el as HTMLElement).style.borderWidth;
+                                    if (s === '' || s == null) return null;
+                                    return s;
+                                },
+                                renderHTML: attrs => {
+                                    if (attrs.borderWidth == null) return {};
+                                    const bw = String(attrs.borderWidth);
+                                    const withUnit = bw.endsWith('px') ? bw : `${bw}px`;
+                                    const isZero = bw === '0' || bw === '0px';
+                                    return { style: isZero ? 'border: 0; border-style: none;' : `border: ${withUnit} solid #d4d4d8;` };
+                                },
+                            },
+                            verticalAlign: {
+                                default: 'top',
+                                parseHTML: el => (el as HTMLElement).style.verticalAlign || 'top',
+                                renderHTML: attrs => attrs.verticalAlign ? { style: `vertical-align: ${attrs.verticalAlign}` } : {},
+                            },
+                        };
                     },
-                }),
-                TableCell.configure({
+                }).configure({
                     HTMLAttributes: {
-                        class: 'border border-zinc-300 dark:border-zinc-700 p-2',
-                        style: 'word-wrap: break-word; overflow-wrap: break-word; word-break: break-word; min-width: 50px;',
+                        class: 'border border-zinc-300 dark:border-zinc-700 p-2 align-top',
+                        style: 'word-wrap: break-word; overflow-wrap: break-word; word-break: break-word;',
                     },
                 }),
             ],
@@ -437,25 +740,44 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
             if (!editor) return;
 
             try {
-                const textContent = editor.getText();
+                // Walk the TipTap JSON document and map each node kind
+                // to its docx equivalent. Preserves tables (with widths,
+                // borders, shading), images, headings, lists, and inline
+                // marks (bold/italic/underline/strike/link/color).
+                const json = editor.getJSON();
+                const children = await jsonToDocxBlocks(json.content || []);
 
                 const doc = new Document({
-                    sections: [{
-                        properties: {},
-                        children: textContent.split('\n').map(line =>
-                            new Paragraph({
-                                children: [new TextRun(line || ' ')],
-                            })
-                        ),
-                    }],
+                    numbering: {
+                        config: [{
+                            reference: 'default-bullet',
+                            levels: [{
+                                level: 0,
+                                format: LevelFormat.BULLET,
+                                text: '\u2022',
+                                alignment: AlignmentType.LEFT,
+                                style: { paragraph: { indent: { left: 720, hanging: 360 } } },
+                            }],
+                        }, {
+                            reference: 'default-ordered',
+                            levels: [{
+                                level: 0,
+                                format: LevelFormat.DECIMAL,
+                                text: '%1.',
+                                alignment: AlignmentType.LEFT,
+                                style: { paragraph: { indent: { left: 720, hanging: 360 } } },
+                            }],
+                        }],
+                    },
+                    sections: [{ properties: {}, children }],
                 });
 
                 const blob = await Packer.toBlob(doc);
                 saveAs(blob, 'document.docx');
-                toast.success('Document downloaded as Word file');
+                toast.success('Documento descargado como Word');
             } catch (error) {
                 console.error('Error downloading Word document:', error);
-                toast.error('Failed to download Word document');
+                toast.error('No se pudo descargar el documento');
             }
         }, [editor]);
 
