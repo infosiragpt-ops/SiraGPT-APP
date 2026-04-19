@@ -55,6 +55,8 @@ import {
   ChevronRight,
   Minus,
   Plus,
+  Check,
+  Copy,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
@@ -63,6 +65,7 @@ import * as XLSX from "xlsx"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneLight, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
 import mammoth from "mammoth"
+import JSZip from "jszip"
 
 // ─── Format detection ────────────────────────────────────────────────
 
@@ -202,6 +205,23 @@ export default function UnifiedDocumentViewer({
     if (next) onNavigate(next)
   }
 
+  // Keyboard navigation — arrow Left/Right between siblings while the
+  // viewer is open. Ignored when focus is inside an input/textarea or
+  // contenteditable (so arrow keys still work for text selection in
+  // the renderer itself, e.g. moving the cursor within code viewer).
+  React.useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return
+      if (e.key === "ArrowLeft" && canPrev) { e.preventDefault(); go(-1) }
+      if (e.key === "ArrowRight" && canNext) { e.preventDefault(); go(1) }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [open, idx, canPrev, canNext, siblings])
+
   const downloadUrl = attachment.url ? absUrl(attachment.url) : null
   const canDownload = !!downloadUrl || !!attachment.file
 
@@ -316,6 +336,7 @@ function RendererDispatch({
     case "pdf":      return <PdfRenderer a={attachment} />
     case "csv":      return <CsvRenderer a={attachment} />
     case "xlsx":     return <XlsxRenderer a={attachment} />
+    case "pptx":     return <PptxRenderer a={attachment} />
     case "docx":     return <DocxRenderer a={attachment} isDark={isDark} />
     case "md":       return <MarkdownRenderer a={attachment} />
     case "html":     return <HtmlRenderer a={attachment} />
@@ -325,6 +346,31 @@ function RendererDispatch({
     case "text":     return <TextRenderer a={attachment} />
     default:         return <FallbackRenderer a={attachment} />
   }
+}
+
+// ─── Reusable CopyButton (code/json/text copy) ───────────────────────
+
+function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = React.useState(false)
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch { /* user gesture / permissions missing */ }
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={onCopy}
+      className={cn("h-7 gap-1.5 px-2 text-[11.5px] font-medium", className)}
+      aria-label="Copiar al portapapeles"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+      <span>{copied ? "Copiado" : "Copiar"}</span>
+    </Button>
+  )
 }
 
 // ─── Utilities for loading raw content ───────────────────────────────
@@ -460,11 +506,12 @@ function TextRenderer({ a }: { a: AttachmentLike }) {
   if (text === null) return <LoadingState />
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-end border-b border-border/40 px-3 py-1.5">
+      <div className="flex items-center justify-between gap-3 border-b border-border/40 px-3 py-1.5">
         <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
           <input type="checkbox" checked={wrap} onChange={e => setWrap(e.target.checked)} />
           Ajustar líneas
         </label>
+        <CopyButton text={text} />
       </div>
       <pre
         className={cn(
@@ -520,10 +567,15 @@ function JsonRenderer({ a, isDark }: { a: AttachmentLike; isDark: boolean }) {
   if (err) return <ErrorState error={err} />
   if (text === null) return <LoadingState />
   return (
-    <div className="h-full overflow-auto">
-      <SyntaxHighlighter language="json" style={isDark ? oneDark : oneLight} showLineNumbers customStyle={{ margin: 0, padding: "1rem", background: "transparent" }}>
-        {text}
-      </SyntaxHighlighter>
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-end border-b border-border/40 px-3 py-1.5">
+        <CopyButton text={text} />
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        <SyntaxHighlighter language="json" style={isDark ? oneDark : oneLight} showLineNumbers customStyle={{ margin: 0, padding: "1rem", background: "transparent" }}>
+          {text}
+        </SyntaxHighlighter>
+      </div>
     </div>
   )
 }
@@ -544,15 +596,21 @@ function CodeRenderer({ a, kind, isDark }: { a: AttachmentLike; kind: Kind; isDa
   if (err) return <ErrorState error={err} />
   if (text === null) return <LoadingState />
   return (
-    <div className="h-full overflow-auto">
-      <SyntaxHighlighter
-        language={lang}
-        style={isDark ? oneDark : oneLight}
-        showLineNumbers
-        customStyle={{ margin: 0, padding: "1rem", background: "transparent", fontSize: "12.5px" }}
-      >
-        {text}
-      </SyntaxHighlighter>
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between border-b border-border/40 px-3 py-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{lang}</span>
+        <CopyButton text={text} />
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        <SyntaxHighlighter
+          language={lang}
+          style={isDark ? oneDark : oneLight}
+          showLineNumbers
+          customStyle={{ margin: 0, padding: "1rem", background: "transparent", fontSize: "12.5px" }}
+        >
+          {text}
+        </SyntaxHighlighter>
+      </div>
     </div>
   )
 }
@@ -654,6 +712,15 @@ function CsvRenderer({ a }: { a: AttachmentLike }) {
 
 // ─── XLSX (SheetJS) ──────────────────────────────────────────────────
 
+/**
+ * XLSX renderer — honors:
+ *   • merged cells (rowspan / colspan) via sheet['!merges']
+ *   • formatted display values (sheet[addr].w) so a cell formatted as
+ *     "1,234.50" or "15%" renders the way Excel shows it, not the raw
+ *     0.15 / 1234.5 number
+ *   • column widths (sheet['!cols'].wpx) for realistic layout
+ *   • number/date/currency alignment by underlying cell type
+ */
 function XlsxRenderer({ a }: { a: AttachmentLike }) {
   const [wb, setWb] = React.useState<XLSX.WorkBook | null>(null)
   const [active, setActive] = React.useState<string | null>(null)
@@ -663,7 +730,8 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
-        const parsed = XLSX.read(buf, { type: "array" })
+        // cellStyles + cellNF → retains formatted display strings (.w)
+        const parsed = XLSX.read(buf, { type: "array", cellStyles: true, cellNF: true, cellDates: true })
         setWb(parsed)
         setActive(parsed.SheetNames[0] || null)
       } catch (e: any) {
@@ -673,12 +741,33 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
   }, [a])
 
   if (err) return <ErrorState error={err} />
-  if (!wb || !active) return <LoadingState />
+  if (!wb || !active) return <LoadingState label="Leyendo hoja de cálculo…" />
 
   const sheet = wb.Sheets[active]
-  const data: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" })
-  const head = (data[0] || []) as any[]
-  const body = data.slice(1)
+  const ref = sheet["!ref"] || "A1"
+  const range = XLSX.utils.decode_range(ref)
+  const merges = sheet["!merges"] || []
+  const cols = sheet["!cols"] || []
+
+  // Build a lookup of cells occluded by a merge (render as "skipped"),
+  // plus the anchor cell that should get rowspan/colspan.
+  const occluded = new Set<string>()
+  const mergeAt: Record<string, { rowspan: number; colspan: number }> = {}
+  merges.forEach(m => {
+    const key = XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c })
+    mergeAt[key] = { rowspan: m.e.r - m.s.r + 1, colspan: m.e.c - m.s.c + 1 }
+    for (let r = m.s.r; r <= m.e.r; r++) {
+      for (let c = m.s.c; c <= m.e.c; c++) {
+        const k = XLSX.utils.encode_cell({ r, c })
+        if (k !== key) occluded.add(k)
+      }
+    }
+  })
+
+  const rows: number[] = []
+  for (let r = range.s.r; r <= range.e.r; r++) rows.push(r)
+  const colIdx: number[] = []
+  for (let c = range.s.c; c <= range.e.c; c++) colIdx.push(c)
 
   return (
     <div className="flex h-full flex-col">
@@ -698,26 +787,223 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="min-w-full border-collapse text-[12px]">
-          <thead className="sticky top-0 bg-muted/70 backdrop-blur">
+        <table className="min-w-full border-collapse text-[12px]" style={{ fontVariantNumeric: "tabular-nums" }}>
+          <thead className="sticky top-0 z-20 bg-muted/80 backdrop-blur">
             <tr>
-              <th className="sticky left-0 z-10 border-b border-r border-border/60 bg-muted/70 px-2 py-1.5 text-[10px] font-semibold text-muted-foreground">#</th>
-              {head.map((h, i) => (
-                <th key={i} className="border-b border-border/60 px-3 py-1.5 text-left font-semibold">{String(h)}</th>
+              <th className="sticky left-0 z-30 border-b border-r border-border/60 bg-muted/80 px-2 py-1 text-[10px] font-semibold text-muted-foreground w-10">#</th>
+              {colIdx.map(c => (
+                <th
+                  key={c}
+                  className="border-b border-r border-border/40 px-3 py-1 text-left font-semibold text-[10px] uppercase tracking-wide text-muted-foreground"
+                  style={cols[c]?.wpx ? { minWidth: cols[c].wpx, maxWidth: Math.max(cols[c].wpx!, 80) } : undefined}
+                >
+                  {XLSX.utils.encode_col(c)}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {body.map((r, i) => (
-              <tr key={i} className="odd:bg-background even:bg-muted/20">
-                <td className="sticky left-0 z-10 border-b border-r border-border/30 bg-inherit px-2 py-1 text-[10px] text-muted-foreground">{i + 2}</td>
-                {head.map((_, j) => (
-                  <td key={j} className="border-b border-border/30 px-3 py-1 align-top">{String(r[j] ?? "")}</td>
-                ))}
+            {rows.map(r => (
+              <tr key={r} className="odd:bg-background even:bg-muted/10">
+                <td className="sticky left-0 z-10 border-b border-r border-border/30 bg-inherit px-2 py-1 text-[10px] text-muted-foreground text-right">{r + 1}</td>
+                {colIdx.map(c => {
+                  const key = XLSX.utils.encode_cell({ r, c })
+                  if (occluded.has(key)) return null
+                  const cell = sheet[key]
+                  const span = mergeAt[key]
+                  // Formatted display (.w) preferred; fallback to raw (.v).
+                  const display = cell?.w ?? (cell?.v != null ? String(cell.v) : "")
+                  const isNumber = cell?.t === "n"
+                  return (
+                    <td
+                      key={c}
+                      rowSpan={span?.rowspan}
+                      colSpan={span?.colspan}
+                      className={cn(
+                        "border-b border-r border-border/20 px-3 py-1 align-top",
+                        isNumber && "text-right",
+                      )}
+                      title={cell?.v != null ? `Valor bruto: ${cell.v}` : undefined}
+                    >
+                      {display}
+                    </td>
+                  )
+                })}
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  )
+}
+
+// ─── PPTX (client-side text + image extraction via JSZip) ────────────
+
+interface SlideExtract {
+  index: number
+  title: string | null
+  paragraphs: Array<{ text: string; level: number }>
+  images: string[]   // data URIs
+}
+
+async function extractPptx(buf: ArrayBuffer): Promise<SlideExtract[]> {
+  const zip = await JSZip.loadAsync(buf)
+  const slideNames = Object.keys(zip.files)
+    .filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .sort((a, b) => {
+      const na = parseInt(a.match(/slide(\d+)\.xml$/)?.[1] || "0", 10)
+      const nb = parseInt(b.match(/slide(\d+)\.xml$/)?.[1] || "0", 10)
+      return na - nb
+    })
+
+  // Build a filename → data URI map for all media referenced by slides.
+  const mediaEntries = Object.keys(zip.files).filter(n => n.startsWith("ppt/media/"))
+  const mediaDataUris: Record<string, string> = {}
+  await Promise.all(mediaEntries.map(async (name) => {
+    const ext = name.split(".").pop()?.toLowerCase() || ""
+    const mimeMap: Record<string, string> = {
+      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+      gif: "image/gif", bmp: "image/bmp", webp: "image/webp", svg: "image/svg+xml",
+    }
+    const mime = mimeMap[ext]
+    if (!mime) return
+    const b64 = await zip.files[name].async("base64")
+    const shortName = name.replace(/^ppt\/media\//, "")
+    mediaDataUris[shortName] = `data:${mime};base64,${b64}`
+  }))
+
+  const slides: SlideExtract[] = []
+  for (let i = 0; i < slideNames.length; i++) {
+    const xml = await zip.files[slideNames[i]].async("string")
+    // Extract paragraphs with text runs, preserving list level.
+    const paras: Array<{ text: string; level: number }> = []
+    // <a:p> paragraph → contains <a:pPr lvl="N"> (optional) + <a:r>/<a:t>runs
+    const pMatches = xml.match(/<a:p\b[\s\S]*?<\/a:p>/g) || []
+    for (const p of pMatches) {
+      const lvlMatch = p.match(/<a:pPr[^>]*\blvl="(\d+)"/)
+      const level = lvlMatch ? parseInt(lvlMatch[1], 10) : 0
+      // All <a:t>...</a:t> joined — skips formatting but keeps text order.
+      const tRuns = [...p.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)].map(m => m[1])
+      const text = tRuns.join("").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+      if (text.trim()) paras.push({ text, level })
+    }
+    // Images — every <p:pic> element references media via r:embed — but
+    // we need slideN.xml.rels to resolve. Quick-and-dirty: just pull any
+    // media file that the slide's rels file references.
+    const relsPath = slideNames[i].replace("slides/", "slides/_rels/") + ".rels"
+    const relsZip = zip.files[relsPath]
+    const images: string[] = []
+    if (relsZip) {
+      const rels = await relsZip.async("string")
+      const matches = [...rels.matchAll(/Target="\.\.\/media\/([^"]+)"/g)]
+      matches.forEach(m => {
+        const uri = mediaDataUris[m[1]]
+        if (uri) images.push(uri)
+      })
+    }
+    // First paragraph is often the title — use it as the slide title.
+    const title = paras[0]?.text || null
+    const body = paras.length > 0 ? paras.slice(1) : []
+    slides.push({ index: i + 1, title, paragraphs: body, images })
+  }
+  return slides
+}
+
+function PptxRenderer({ a }: { a: AttachmentLike }) {
+  const [slides, setSlides] = React.useState<SlideExtract[] | null>(null)
+  const [active, setActive] = React.useState(0)
+  const [err, setErr] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    ;(async () => {
+      try {
+        const buf = await readAsArrayBuffer(a)
+        setSlides(await extractPptx(buf))
+      } catch (e: any) {
+        setErr(e?.message || "Error")
+      }
+    })()
+  }, [a])
+
+  // Keyboard nav WITHIN the deck — overrides the outer sibling-nav in
+  // this renderer because slide-by-slide nav is more contextual here.
+  React.useEffect(() => {
+    if (!slides || slides.length <= 1) return
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return
+      if (e.key === "ArrowLeft") { e.preventDefault(); setActive(i => Math.max(0, i - 1)) }
+      if (e.key === "ArrowRight") { e.preventDefault(); setActive(i => Math.min(slides.length - 1, i + 1)) }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [slides])
+
+  if (err) return <ErrorState error={err} hint="Descarga y abre con PowerPoint / Keynote para fidelidad completa." />
+  if (!slides) return <LoadingState label="Extrayendo diapositivas…" />
+  if (slides.length === 0) return <FallbackRenderer a={a} />
+
+  const slide = slides[active]
+
+  return (
+    <div className="flex h-full">
+      {/* Slide strip (left) */}
+      <div className="flex w-44 shrink-0 flex-col overflow-y-auto border-r border-border/40 bg-muted/20 py-2">
+        {slides.map((s, i) => (
+          <button
+            key={i}
+            onClick={() => setActive(i)}
+            className={cn(
+              "mx-2 mb-1.5 rounded-md border px-2 py-1.5 text-left text-[11px] transition-all",
+              i === active
+                ? "border-foreground/40 bg-background shadow-sm font-semibold"
+                : "border-transparent hover:border-border/60 hover:bg-background/50 text-muted-foreground",
+            )}
+          >
+            <div className="text-[9px] uppercase tracking-wider text-muted-foreground/80">
+              Slide {s.index}
+            </div>
+            <div className="mt-0.5 truncate">
+              {s.title || <span className="italic text-muted-foreground/70">(sin título)</span>}
+            </div>
+          </button>
+        ))}
+      </div>
+      {/* Slide body (right) — 16:9 frame so the viewport feels like a slide */}
+      <div className="min-w-0 flex-1 overflow-auto bg-muted/10 p-6">
+        <div className="mx-auto flex aspect-[16/9] max-w-4xl flex-col rounded-lg border border-border/50 bg-background p-8 shadow-sm">
+          {slide.title && (
+            <h2 className="mb-4 text-[22px] font-semibold leading-tight tracking-tight">
+              {slide.title}
+            </h2>
+          )}
+          <div className="flex-1 space-y-2 overflow-auto">
+            {slide.paragraphs.map((p, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-2 text-[14px] leading-[1.55]"
+                style={{ paddingLeft: `${p.level * 18}px` }}
+              >
+                <span className="mt-[8px] h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/60" />
+                <span>{p.text}</span>
+              </div>
+            ))}
+            {slide.images.length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-3">
+                {slide.images.map((src, i) => (
+                  <img key={i} src={src} alt="" className="max-h-48 max-w-full rounded-md border border-border/40" />
+                ))}
+              </div>
+            )}
+            {slide.paragraphs.length === 0 && slide.images.length === 0 && !slide.title && (
+              <p className="text-[13px] italic text-muted-foreground">(Diapositiva sin contenido de texto)</p>
+            )}
+          </div>
+          <div className="mt-3 text-right text-[10px] text-muted-foreground/70">
+            {slide.index} / {slides.length}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -733,9 +1019,22 @@ function DocxRenderer({ a, isDark }: { a: AttachmentLike; isDark: boolean }) {
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
+        // convertImage → embed DOCX media as inline base64 data URIs so
+        // images show in the preview without a separate media-fetch
+        // round-trip. The default mammoth behaviour strips images to
+        // alt text, which loses fidelity for visual documents.
         const result = await mammoth.convertToHtml(
           { arrayBuffer: buf },
-          { includeDefaultStyleMap: true },
+          {
+            includeDefaultStyleMap: true,
+            convertImage: (mammoth as any).images?.imgElement
+              ? (mammoth as any).images.imgElement((image: any) =>
+                  image.read("base64").then((data: string) => ({
+                    src: `data:${image.contentType};base64,${data}`,
+                  })),
+                )
+              : undefined,
+          },
         )
         setHtml(sanitizeHtml(result.value))
       } catch (e: any) {
