@@ -338,15 +338,19 @@ class ApiClient {
   }
 
 
-  // ✅ YEH NAYA METHOD STREAMING KE LIYE HAI
+  // Stream chat completions from /ai/generate. Resilient by design:
+  // automatically reconnects at the transport layer BEFORE the user sees
+  // any tokens (HTTP 429, 5xx, network errors), while never duplicating
+  // content that has already been rendered. Mid-stream interruptions
+  // surface to the caller so the UI can show the per-message error +
+  // retry affordance without losing the user's message.
   async generateAIStream(
     data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean },
-    onData: (chunk: string) => void, // Jab data ka naya tukra aaye
-    onClose: () => void, // Jab stream band ho jaye
-    onError: (error: Error) => void, // Jab koi error aaye
-    signal?: AbortSignal // Add AbortSignal support
+    onData: (chunk: string) => void,
+    onClose: () => void,
+    onError: (error: Error) => void,
+    signal?: AbortSignal
   ) {
-
     const url = `${this.baseURL}/ai/generate`;
     const config: RequestInit = {
       method: 'POST',
@@ -355,123 +359,151 @@ class ApiClient {
         ...(this.token && { Authorization: `Bearer ${this.token}` }),
       },
       body: JSON.stringify(data),
-      ...(signal && { signal }) // Include signal if provided
+      ...(signal && { signal }),
     };
 
-    try {
-      const response = await fetch(url, config);
+    const MAX_CONNECT_ATTEMPTS = 2;
+    const RECONNECT_DELAY_MS = 1000;
+    let hasDeliveredAnyContent = false;
+    let lastError: any = null;
 
-      if (!response.ok) {
-        let details: any = {};
-        try { details = await response.json(); } catch { }
-        const message = details.error || `HTTP ${response.status}`;
+    for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt++) {
+      if (signal?.aborted) { onError(new Error('Request aborted')); return; }
+      if (hasDeliveredAnyContent) break;
 
-        // Notify UI to open upgrade modal if the message indicates exhaustion
-        try {
-          if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
-            window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
-          }
-        } catch (e) {
-          console.warn('Failed to dispatch open-upgrade-modal event', e);
-        }
+      try {
+        const response = await fetch(url, config);
 
-        const error: any = new Error(message);
-        if (details.code) error.code = details.code;
-        throw error;
-      }
+        if (!response.ok) {
+          let details: any = {};
+          try { details = await response.json(); } catch { }
+          const message = details.error || `HTTP ${response.status}`;
 
-      // Check if request was aborted before processing
-      if (signal?.aborted) {
-        throw new Error('Request aborted');
-      }
-
-      // response.body ek ReadableStream hai, hum isko padhenge
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('Response body is not readable');
-      }
-
-      const decoder = new TextDecoder('utf-8');
-
-      // Optimized streaming without content limits
-      let batchBuffer = '';
-      let processedChunks = 0;
-      const batchProcessingDelay = 20; // Slightly slower for stability
-      let lastProcessTime = Date.now();
-
-      while (true) {
-        // Check if request was aborted during streaming
-        if (signal?.aborted) {
-          reader.cancel();
-          throw new Error('Request aborted');
-        }
-
-        const { done, value } = await reader.read();
-
-        if (done) {
-          // Process any remaining batched content
-          if (batchBuffer.trim()) {
-            onData(batchBuffer);
-          }
-          onClose();
-          break;
-        }
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n\n');
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const payload = line.substring(6);
-          // Sentinel the backend emits at the very end of every stream,
-          // including error / recovered cases. Flush pending buffer, close,
-          // and return — anything after is a leftover from a broken proxy.
-          if (payload === '[DONE]') {
-            if (batchBuffer.trim()) {
-              onData(batchBuffer);
-              batchBuffer = '';
-            }
-            onClose();
-            return;
-          }
           try {
-            const jsonData = JSON.parse(payload);
-            if (jsonData.content) {
-              batchBuffer += jsonData.content;
-              processedChunks++;
-
-              // Simple batch processing for performance
-              const timeSinceLastProcess = Date.now() - lastProcessTime;
-              const shouldProcess =
-                batchBuffer.length >= 150 || // Process every ~150 characters
-                timeSinceLastProcess >= batchProcessingDelay || // Or every 20ms
-                jsonData.content.includes('\n'); // Process on newlines
-
-              if (shouldProcess && batchBuffer.trim()) {
-                onData(batchBuffer);
-                batchBuffer = '';
-                lastProcessTime = Date.now();
-              }
-            } else if (jsonData.error) {
-              // When the backend recovered the turn with a localized
-              // fallback message, we've already delivered a useful reply
-              // to the user — don't surface a red toast on top of it.
-              if (jsonData.recovered) {
-                console.warn('[ai-stream] recovered from provider error:', jsonData.error);
-              } else {
-                onError(new Error(jsonData.error));
-              }
+            if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+              window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
             }
           } catch (e) {
-            // JSON parse error ko ignore karein
-            console.warn('Failed to parse streaming data:', e);
+            console.warn('Failed to dispatch open-upgrade-modal event', e);
+          }
+
+          const err: any = new Error(message);
+          err.status = response.status;
+          if (details.code) err.code = details.code;
+
+          // Retriable transport failures: 429 (rate-limit) and 5xx
+          // (server error) — only BEFORE any content has reached the
+          // user, and only once per turn. Anything else bubbles up
+          // (auth/validation/quota-exhaustion are terminal).
+          const retriable = !hasDeliveredAnyContent
+            && (response.status === 429 || response.status >= 500)
+            && attempt < MAX_CONNECT_ATTEMPTS;
+          if (retriable) {
+            console.warn(`[ai-stream] HTTP ${response.status} on attempt ${attempt} — auto-reconnecting in ${RECONNECT_DELAY_MS}ms`);
+            await new Promise(r => setTimeout(r, RECONNECT_DELAY_MS));
+            lastError = err;
+            continue;
+          }
+          throw err;
+        }
+
+        if (signal?.aborted) throw new Error('Request aborted');
+
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error('Response body is not readable');
+
+        const decoder = new TextDecoder('utf-8');
+        let batchBuffer = '';
+        let processedChunks = 0;
+        const batchProcessingDelay = 20;
+        let lastProcessTime = Date.now();
+
+        const flushBatch = () => {
+          if (batchBuffer.trim()) {
+            onData(batchBuffer);
+            hasDeliveredAnyContent = true;
+            batchBuffer = '';
+            lastProcessTime = Date.now();
+          }
+        };
+
+        while (true) {
+          if (signal?.aborted) { reader.cancel(); throw new Error('Request aborted'); }
+
+          const { done, value } = await reader.read();
+          if (done) { flushBatch(); onClose(); return; }
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n\n');
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.substring(6);
+            // Sentinel the backend emits at the very end of every stream,
+            // including error / recovered cases. Flush pending buffer,
+            // close, and return — anything after is a leftover from a
+            // broken proxy or a retransmit.
+            if (payload === '[DONE]') {
+              flushBatch();
+              onClose();
+              return;
+            }
+            try {
+              const jsonData = JSON.parse(payload);
+              if (jsonData.content) {
+                batchBuffer += jsonData.content;
+                processedChunks++;
+
+                const timeSinceLastProcess = Date.now() - lastProcessTime;
+                const shouldProcess =
+                  batchBuffer.length >= 150 ||
+                  timeSinceLastProcess >= batchProcessingDelay ||
+                  jsonData.content.includes('\n');
+
+                if (shouldProcess) flushBatch();
+              } else if (jsonData.error) {
+                // When the backend recovered the turn with a localized
+                // fallback message, we've already delivered a useful
+                // reply to the user — don't surface a red toast on top.
+                if (jsonData.recovered) {
+                  console.warn('[ai-stream] recovered from provider error:', jsonData.error);
+                } else {
+                  onError(new Error(jsonData.error));
+                }
+              }
+            } catch (e) {
+              console.warn('Failed to parse streaming data:', e);
+            }
           }
         }
+      } catch (error: any) {
+        lastError = error;
+        if (error?.name === 'AbortError' || signal?.aborted) {
+          onError(error);
+          return;
+        }
+
+        // Transport-layer network failure BEFORE any content reached
+        // the user? Reconnect once. The backend already retried + fell
+        // back at the provider level, so this reconnect layer only
+        // matters for things like dropped sockets between client and
+        // our own edge.
+        const isNetworkError = error?.name === 'TypeError'
+          || /fetch failed|network|socket|ECONN|ETIMEDOUT|ENOTFOUND/i.test(error?.message || '');
+        if (!hasDeliveredAnyContent && isNetworkError && attempt < MAX_CONNECT_ATTEMPTS) {
+          console.warn(`[ai-stream] network error on attempt ${attempt}: "${error.message}" — auto-reconnecting in ${RECONNECT_DELAY_MS}ms`);
+          await new Promise(r => setTimeout(r, RECONNECT_DELAY_MS));
+          continue;
+        }
+
+        console.error('API stream failed:', error);
+        onError(error);
+        return;
       }
-    } catch (error: any) {
-      console.error('API stream failed:', error);
-      onError(error);
     }
+
+    // Fallthrough: loop exited without a successful return.
+    if (lastError) onError(lastError);
   }
   async generateImage(data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string }) {
     const response = await this.request('/ai/generate-image', {

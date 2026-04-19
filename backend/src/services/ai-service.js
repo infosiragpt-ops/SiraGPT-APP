@@ -66,13 +66,18 @@ function isTransientProviderError(err) {
  * language so the user isn't suddenly spoken to in English mid-chat.
  */
 function getFallbackMessage(language) {
+    // Phrasing from the siraGPT brain spec — kept identical to what the
+    // product promises, translated per language-policy resolution. No
+    // technical detail leaks into this copy; the real error is logged
+    // server-side and surfaced on the SSE error channel with
+    // `recovered: true` for UI telemetry.
     const messages = {
-        es: 'Disculpa, tuve un problema momentáneo al procesar tu consulta. ¿Podrías reformularla o intentarlo de nuevo en unos segundos?',
-        en: "Sorry, I hit a momentary issue processing your request. Could you rephrase it or try again in a few seconds?",
-        pt: 'Desculpe, tive um problema momentâneo ao processar sua solicitação. Poderia reformulá-la ou tentar novamente em alguns segundos?',
-        fr: "Désolé, j'ai rencontré un problème momentané. Pourriez-vous reformuler ou réessayer dans quelques secondes ?",
-        de: 'Entschuldigung, es gab ein kurzes Problem bei der Verarbeitung. Könnten Sie die Anfrage umformulieren oder es gleich erneut versuchen?',
-        it: 'Scusa, ho avuto un problema momentaneo. Potresti riformulare la richiesta o riprovare tra qualche secondo?',
+        es: 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.',
+        en: 'There was a problem processing your request. Please try again.',
+        pt: 'Houve um problema ao processar sua solicitação. Por favor, tente novamente.',
+        fr: "Un problème est survenu lors du traitement de votre demande. Veuillez réessayer.",
+        de: 'Bei der Verarbeitung Ihrer Anfrage ist ein Problem aufgetreten. Bitte versuchen Sie es erneut.',
+        it: 'Si è verificato un problema durante l\'elaborazione della richiesta. Riprova.',
     };
     return messages[language] || messages.es;
 }
@@ -262,12 +267,14 @@ class AIService {
             console.log(`📝 Messages count: ${workingMessages.length}`);
 
             // Outer loop: walk the model chain. Inner loop: retry each
-            // model up to 2 times on transient errors. We only advance to
-            // the next model if NO content has been streamed yet — once
-            // the user sees text, we commit to the current model even if
-            // it fails mid-stream (a partial answer is always better than
-            // a fresh one that duplicates it).
+            // model up to 2 times on transient errors (spec: "reintenta
+            // una vez con el mismo modelo"). We only advance to the next
+            // model if NO content has been streamed yet — once the user
+            // sees text, we commit to the current model even if it fails
+            // mid-stream (a partial answer is always better than a fresh
+            // one that duplicates it).
             const MAX_ATTEMPTS_PER_MODEL = 2;
+            const FIRST_BYTE_TIMEOUT_MS = 30_000;
             let lastError = null;
             for (let m = 0; m < modelChain.length; m++) {
                 const currentModel = modelChain[m];
@@ -278,13 +285,29 @@ class AIService {
 
                 for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
                     if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+
+                    // Per-attempt controller: composes the client signal with a
+                    // 30s first-byte timer. If the provider hasn't emitted a
+                    // single token within FIRST_BYTE_TIMEOUT_MS we abort THIS
+                    // attempt — not the whole turn — so the retry/fallback
+                    // chain can try the next slot.
+                    const attemptCtrl = new AbortController();
+                    const onParentAbort = () => attemptCtrl.abort(new Error('client aborted'));
+                    if (signal) signal.addEventListener('abort', onParentAbort, { once: true });
+                    let firstByteSeen = false;
+                    let timedOut = false;
+                    const firstByteTimer = setTimeout(() => {
+                        if (!firstByteSeen) { timedOut = true; attemptCtrl.abort(new Error(`First-byte timeout after ${FIRST_BYTE_TIMEOUT_MS}ms`)); }
+                    }, FIRST_BYTE_TIMEOUT_MS);
+
                     try {
                         const client = this.getClient(currentProvider);
-                        const stream = await client.chat.completions.create(payload, { signal });
+                        const stream = await client.chat.completions.create(payload, { signal: attemptCtrl.signal });
 
                         for await (const chunk of stream) {
                             const contentChunk = chunk.choices[0]?.delta?.content || '';
                             if (contentChunk) {
+                                if (!firstByteSeen) { firstByteSeen = true; clearTimeout(firstByteTimer); }
                                 fullResponseContent += contentChunk;
                                 hasStreamedAnyContent = true;
                                 res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
@@ -297,10 +320,14 @@ class AIService {
 
                         console.log(`✅ Response on ${currentProvider}:${currentModel} attempt ${attempt} (${fullResponseContent.length} chars)`);
 
-                        // Quality guard: if the answer looks weak/refusal
-                        // and we haven't already done a corrective pass,
-                        // try ONCE more with an augmented user message.
-                        if (qualityGuard && !hasStreamedAnyContent === false) {
+                        // Quality guard — rule #10 of the spec. Runs once,
+                        // after a successful primary stream. If the reply
+                        // looks weak (refusal template, too short for a
+                        // non-yes/no question, punctuation-only), we kick
+                        // off a corrective non-streaming pass and, if it
+                        // produced something richer, append it to the
+                        // stream the user is already reading.
+                        if (qualityGuard) {
                             const verdict = evaluateResponse({ response: fullResponseContent, userPrompt });
                             if (verdict.weak) {
                                 console.warn(`🧪 quality-guard flagged: ${verdict.reason} — running corrective pass`);
@@ -311,12 +338,8 @@ class AIService {
                                     userPrompt,
                                     language,
                                     signal,
-                                    res,
                                 });
                                 if (corrected && corrected.length > fullResponseContent.length) {
-                                    // Prefix a soft separator so the user
-                                    // sees the richer answer replacing the
-                                    // short one without a visible jump.
                                     res.write(`data: ${JSON.stringify({ content: '\n\n' })}\n\n`);
                                     res.write(`data: ${JSON.stringify({ content: corrected })}\n\n`);
                                     fullResponseContent += '\n\n' + corrected;
@@ -327,18 +350,28 @@ class AIService {
                         return fullResponseContent;
                     } catch (err) {
                         lastError = err;
-                        if (err && err.name === 'AbortError') throw err;
+
+                        // Distinguish OUR first-byte timeout (retriable) from
+                        // the external client abort (terminal) — both show
+                        // up as AbortError from the SDK.
+                        const isOurTimeout = timedOut || err.code === 'TIMEOUT';
+                        const isClientCancel = !isOurTimeout && signal?.aborted;
+                        if (isClientCancel) throw err;
                         if (hasStreamedAnyContent) throw err;
 
-                        const retryable = isTransientProviderError(err) || err.code === 'EMPTY_COMPLETION';
+                        const retryable = isOurTimeout || isTransientProviderError(err) || err.code === 'EMPTY_COMPLETION';
                         const isLastAttemptForModel = attempt >= MAX_ATTEMPTS_PER_MODEL;
-                        console.warn(`⚠️ ${currentProvider}:${currentModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${err.status || err.code || 'unknown'}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
+                        const reason = isOurTimeout ? 'first-byte timeout' : (err.status || err.code || err.name || 'unknown');
+                        console.warn(`⚠️ ${currentProvider}:${currentModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${reason}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
 
                         if (!retryable || isLastAttemptForModel) break; // break attempt loop → try next model
 
                         // Exponential backoff with jitter: ~400ms, ~900ms
                         const backoff = 400 * attempt * attempt + Math.floor(Math.random() * 200);
                         await new Promise(r => setTimeout(r, backoff));
+                    } finally {
+                        clearTimeout(firstByteTimer);
+                        if (signal) signal.removeEventListener('abort', onParentAbort);
                     }
                 }
             }

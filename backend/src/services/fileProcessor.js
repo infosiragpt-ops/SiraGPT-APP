@@ -86,10 +86,15 @@ class FileProcessor {
       const dataBuffer = await fs.readFile(filePath);
       const data = await pdf(dataBuffer);
 
-      console.log(`PDF processed: ${filePath}, extracted text length: ${data.text.length}`);
+      console.log(`PDF processed: ${filePath}, extracted text length: ${data.text.length}, pages: ${data.numpages}`);
 
-      // ✅ If real text exists (not just images)
-      if (data.text.trim().length > 100) return data.text;
+      // ✅ If real text exists (not just images), prepend a lightweight
+      // header so the LLM can reason about file size without having to
+      // count lines itself.
+      if (data.text.trim().length > 100) {
+        const header = `PDF document — ${data.numpages} page(s), ${data.text.length} characters extracted\n---\n`;
+        return header + data.text;
+      }
 
       console.log(`Detected scanned PDF → running OCR...`);
 
@@ -164,22 +169,38 @@ class FileProcessor {
   async processExcel(filePath) {
     try {
       const workbook = XLSX.readFile(filePath);
-      let text = '';
+      const MAX_DATA_ROWS_PER_SHEET = 50; // per brain spec — headers + 50 rows
 
+      const sheetSummaries = [];
       workbook.SheetNames.forEach(sheetName => {
         const worksheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const nonEmptyRows = jsonData.filter(row => Array.isArray(row) && row.length > 0);
 
-        text += `Sheet: ${sheetName}\n`;
-        jsonData.forEach(row => {
-          if (row.length > 0) {
-            text += row.join('\t') + '\n';
-          }
-        });
-        text += '\n';
+        if (nonEmptyRows.length === 0) {
+          sheetSummaries.push(`Sheet: ${sheetName}\n(empty)\n`);
+          return;
+        }
+
+        // First row is treated as header; everything after is data.
+        const [headerRow, ...dataRows] = nonEmptyRows;
+        const totalDataRows = dataRows.length;
+        const shown = dataRows.slice(0, MAX_DATA_ROWS_PER_SHEET);
+        const truncated = totalDataRows > MAX_DATA_ROWS_PER_SHEET;
+
+        let block = `Sheet: ${sheetName}\n`;
+        block += `Columns (${headerRow.length}): ${headerRow.join(' | ')}\n`;
+        block += `Total data rows: ${totalDataRows}${truncated ? ` (showing first ${MAX_DATA_ROWS_PER_SHEET})` : ''}\n`;
+        block += `---\n`;
+        shown.forEach(row => { block += row.join('\t') + '\n'; });
+        if (truncated) {
+          block += `... [${totalDataRows - MAX_DATA_ROWS_PER_SHEET} more row(s) omitted for context-window efficiency] ...\n`;
+        }
+        sheetSummaries.push(block);
       });
 
-      return text;
+      const header = `Excel workbook — ${workbook.SheetNames.length} sheet(s): ${workbook.SheetNames.join(', ')}\n\n`;
+      return header + sheetSummaries.join('\n');
     } catch (error) {
       throw new Error(`Excel processing failed: ${error.message}`);
     }
