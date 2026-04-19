@@ -28,11 +28,11 @@ const ABSOLUTE_RULES = `You are siraGPT, a professional, high-capability AI assi
 3. **When the user asks for a diagram, chart, or visual, produce the code directly.** Use Mermaid for flowcharts/sequences/gantt, SVG for custom shapes, and HTML+CSS for layouts. Output the complete code inline — never describe what the diagram would look like.
 4. **When the user asks for code, ship complete, runnable code.** Include imports, error handling, and a brief comment above each non-obvious block explaining the why. No "the rest is left as an exercise" and no skeletons.
 5. **When a file is attached, analyze EVERY record in it.** Do not sample the first N rows, do not summarize only the top, do not ignore sheets. If the file is huge, say so explicitly and describe your coverage — never silently truncate.
-6. **When the user asks you to regenerate, produce a genuinely new version.** Do not ask for preferences, do not offer A/B choices — rewrite from scratch with a distinct angle, structure, or approach from the previous version.
+6. **When the user asks you to regenerate, produce a genuinely new version — this includes visual content (diagrams, charts, code for visuals, generated images, presentation layouts).** Do not ask for preferences, do not offer A/B choices — rewrite from scratch with a distinct angle, structure, palette, or approach from the previous version and ship it.
 7. **Always respond in the user's language** (enforced above by the LANGUAGE POLICY section — do not override it).
-8. **For academic, legal, medical, or scientific topics, include real citations and references.** Use author-year or numeric citation style, reference real works, and group them into a "Referencias" / "References" block at the end. Never invent publications.
+8. **For academic, legal, medical, or scientific topics, include real citations in APA 7 format.** Use in-text citations (Author, YYYY) and close with a "Referencias" / "References" section where every entry follows APA 7: Author, A. A. (Year). *Title of work* (edition). Publisher. https://doi.org/xx.xxxx. Never invent authors, titles, DOIs, or journals — if unsure, cite a canonical real work close to the topic and flag the uncertainty.
 9. **When uncertain, state your confidence level and give the best available answer.** Do not refuse for lack of certainty. Format: a direct answer first, then "Nivel de confianza: alto/medio/bajo" with a one-line justification.
-10. **Format every response with professional markdown.** Use headings (##, ###), bullet or numbered lists, tables for comparative data, and fenced code blocks with language hints. Never ship a wall of plain text for anything longer than two short paragraphs.`;
+10. **Format every response with professional markdown.** Use headings (##, ###), bullet or numbered lists, tables for comparative data, and fenced code blocks with language hints (\`\`\`python, \`\`\`ts, \`\`\`bash). Never ship a wall of plain text for anything longer than two short paragraphs.`;
 
 // ────────────────────────────────────────────────────────────────────
 // Intent taxonomy. Order matters: the first matching intent wins, so
@@ -160,6 +160,29 @@ function classifyIntent(userMessage) {
 }
 
 /**
+ * Build the USER PROFILE block if the user has any personalization set.
+ * Returns the empty string when nothing is worth injecting so we don't
+ * pollute the prompt with an empty header. All fields are optional —
+ * anonymous users get no block at all.
+ */
+function buildUserProfileBlock(profile) {
+  if (!profile) return '';
+  const lines = [];
+  if (profile.name) lines.push(`- Name: ${profile.name.trim()}`);
+  if (profile.locale) lines.push(`- Preferred language (user-set): ${profile.locale}`);
+  if (profile.preferredTone) lines.push(`- Preferred tone: ${profile.preferredTone}`);
+  if (profile.customInstructions && profile.customInstructions.trim()) {
+    // Custom instructions can be multi-line free-form prose. Indent them
+    // so the LLM reads them as a sub-block rather than as a list entry
+    // that could be re-interpreted as a bullet in the response.
+    const cleaned = profile.customInstructions.trim().replace(/\r\n/g, '\n');
+    lines.push(`- Custom instructions from the user (respect them unless they conflict with a higher-priority rule above):\n${cleaned.split('\n').map(l => `  ${l}`).join('\n')}`);
+  }
+  if (lines.length === 0) return '';
+  return `\n\n## USER PROFILE\n${lines.join('\n')}`;
+}
+
+/**
  * Assemble the full system prompt for a chat turn. The order matters —
  * LANGUAGE POLICY must be FIRST so the model can't drift into English
  * when a user has asked for Spanish.
@@ -168,9 +191,10 @@ function classifyIntent(userMessage) {
  * @param {string} opts.language   — ISO 639-1 code from language-policy
  * @param {string} [opts.userMessage] — current user message (for intent detection)
  * @param {object} [opts.customGpt] — optional custom GPT wrapper
+ * @param {object} [opts.userProfile] — { name, locale, preferredTone, customInstructions }
  * @returns {{ system: string, intent: string }}
  */
-function buildSystemPrompt({ language, userMessage, customGpt }) {
+function buildSystemPrompt({ language, userMessage, customGpt, userProfile }) {
   const lang = language || 'es';
   const { intent, context: intentContext } = classifyIntent(userMessage || '');
 
@@ -178,9 +202,15 @@ function buildSystemPrompt({ language, userMessage, customGpt }) {
 
   let body = ABSOLUTE_RULES;
 
+  // User profile — per-user personalization loaded from the database at
+  // request time. Lives above custom GPT persona so user preferences
+  // can't be stomped on by a generic GPT author's instructions.
+  body += buildUserProfileBlock(userProfile);
+
   // Custom GPT — the author's instructions become a persona layer UNDER
-  // the absolute rules. They can steer tone and scope but can't override
-  // the 10 rules or the language policy.
+  // the absolute rules + user profile. They can steer tone and scope
+  // but can't override the 10 rules, the language policy, or the
+  // user's own preferences.
   if (customGpt && customGpt.name) {
     const customBlock = `\n\n## CUSTOM GPT PERSONA: "${customGpt.name}"\n${customGpt.instructions || ''}`;
     body += customBlock;
@@ -215,6 +245,7 @@ function buildSystemPrompt({ language, userMessage, customGpt }) {
 
 module.exports = {
   buildSystemPrompt,
+  buildUserProfileBlock,
   classifyIntent,
   ABSOLUTE_RULES,
   LANG_NAMES,

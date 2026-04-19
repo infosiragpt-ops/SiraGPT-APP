@@ -38,7 +38,13 @@ model User {
   stripeSubscriptionId String?  @unique
   subscriptionStatus   String?  // active, inactive, canceled, past_due
   subscriptionEndDate  DateTime?
-  
+
+  // Personalization — injected into the master system prompt per turn so
+  // every LLM call hears the user's voice (not just their chat history).
+  locale              String?  // ISO 639-1, e.g. "es", "en". Null → auto-detect from message.
+  preferredTone       String?  // e.g. "casual", "formal", "technical", "pedagogical"
+  customInstructions  String?  @db.Text  // free-form "what should the assistant know about you"
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

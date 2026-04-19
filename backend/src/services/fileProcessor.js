@@ -157,13 +157,71 @@ class FileProcessor {
 
   async processWord(filePath) {
     try {
-      const result = await mammoth.extractRawText({ path: filePath });
-      console.log(`Word file processed: ${filePath}, length: ${result.value.length}`);
-      return result.value;
+      // convertToHtml preserves document structure (headings, lists,
+      // emphasis, tables) which extractRawText discards. We then run
+      // a minimal HTML → markdown pass so the LLM sees the document as
+      // structured text instead of a flat paragraph soup.
+      const { value: html } = await mammoth.convertToHtml({ path: filePath });
+      const markdown = this._htmlToMarkdown(html);
+      console.log(`Word file processed: ${filePath}, html=${html.length} chars, md=${markdown.length} chars`);
+      const header = `Word document — ${markdown.length} characters extracted, structure preserved as markdown\n---\n`;
+      return header + markdown;
     } catch (error) {
       console.error(`Word file processing error for ${filePath}:`, error);
-      throw new Error(`Word document processing failed: ${error.message}`);
+      // Fallback to raw text so the user doesn't lose the file entirely
+      // if mammoth's HTML pipeline chokes on a weird input.
+      try {
+        const fallback = await mammoth.extractRawText({ path: filePath });
+        return fallback.value;
+      } catch {
+        throw new Error(`Word document processing failed: ${error.message}`);
+      }
     }
+  }
+
+  /**
+   * Minimal HTML → markdown transformer tuned for mammoth's output.
+   * Mammoth emits a small, predictable subset of tags (h1-h6, p, ul,
+   * ol, li, strong, em, table, tr, td, th, a, br) so a hand-written
+   * reducer is both smaller and more predictable than pulling in
+   * turndown or a full DOM parser.
+   */
+  _htmlToMarkdown(html) {
+    if (!html) return '';
+    let md = html;
+    // Headings
+    md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n# $1\n');
+    md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n');
+    md = md.replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n### $1\n');
+    md = md.replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n#### $1\n');
+    md = md.replace(/<h5[^>]*>([\s\S]*?)<\/h5>/gi, '\n##### $1\n');
+    md = md.replace(/<h6[^>]*>([\s\S]*?)<\/h6>/gi, '\n###### $1\n');
+    // Emphasis
+    md = md.replace(/<(strong|b)[^>]*>([\s\S]*?)<\/\1>/gi, '**$2**');
+    md = md.replace(/<(em|i)[^>]*>([\s\S]*?)<\/\1>/gi, '*$2*');
+    // Lists — list items first so surrounding ul/ol strip cleanly
+    md = md.replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n');
+    md = md.replace(/<\/?(ul|ol)[^>]*>/gi, '\n');
+    // Tables: rows → newline-separated; cells → pipe-separated
+    md = md.replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, (_, row) => {
+      const cells = [];
+      row.replace(/<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi, (__, ___, cell) => { cells.push(cell.trim()); return ''; });
+      return `\n| ${cells.join(' | ')} |`;
+    });
+    md = md.replace(/<\/?(table|tbody|thead)[^>]*>/gi, '\n');
+    // Links
+    md = md.replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)');
+    // Paragraphs and line breaks
+    md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '$1\n\n');
+    md = md.replace(/<br\s*\/?>/gi, '\n');
+    // Strip any remaining tags; we've handled the load-bearing ones.
+    md = md.replace(/<[^>]+>/g, '');
+    // Decode the five HTML entities mammoth actually emits.
+    md = md.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&nbsp;/g, ' ');
+    // Collapse runs of blank lines to at most two — mammoth loves to
+    // emit empty paragraphs around headings.
+    md = md.replace(/\n{3,}/g, '\n\n').trim();
+    return md;
   }
 
   async processExcel(filePath) {

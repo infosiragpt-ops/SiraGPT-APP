@@ -357,17 +357,35 @@ router.post(
         });
       }
 
+      // ✅ Load per-user personalization so every turn carries the
+      // user's name, preferred tone, and any custom instructions they
+      // set in /settings. Anonymous users get an empty profile and fall
+      // through to the default master prompt.
+      let userProfile = null;
+      if (isAuth && userId) {
+        try {
+          const u = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { name: true, locale: true, preferredTone: true, customInstructions: true },
+          });
+          if (u) userProfile = u;
+        } catch (profileErr) {
+          console.warn('[user-profile] failed to load, continuing without:', profileErr.message);
+        }
+      }
+
       // ✅ Master prompt — the single source of truth for siraGPT's voice.
       // Injects the 10 absolute rules, language policy, intent-specialized
-      // context, and the custom GPT persona (when applicable) into the
-      // system message for THIS turn.
+      // context, the user's personalization, and the custom GPT persona
+      // (when applicable) into the system message for THIS turn.
       const promptBundle = masterPrompt.buildSystemPrompt({
         language: langResolution.language,
         userMessage: prompt,
         customGpt,
+        userProfile,
       });
       const systemInstruction = { role: 'system', content: promptBundle.system };
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${promptBundle.system.length}`);
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${promptBundle.system.length} profile=${userProfile ? 'yes' : 'no'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
