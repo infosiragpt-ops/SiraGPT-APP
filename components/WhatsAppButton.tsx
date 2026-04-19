@@ -50,7 +50,7 @@ const WhatsAppButton: React.FC<Props> = ({ number, message, className = "" }) =>
       title="Chat en WhatsApp"
       role="button"
       className={cn(
-        "inline-flex h-9 w-9 items-center justify-center rounded-full",
+        "inline-flex h-11 w-11 items-center justify-center rounded-full",
         "text-muted-foreground transition-all duration-200",
         "hover:bg-foreground/[0.06] hover:text-foreground",
         "active:scale-[0.96]",
@@ -58,7 +58,7 @@ const WhatsAppButton: React.FC<Props> = ({ number, message, className = "" }) =>
         className,
       )}
     >
-      <WhatsAppIcon className="h-[18px] w-[18px]" />
+      <WhatsAppIcon className="h-[22px] w-[22px]" />
     </a>
   )
 }

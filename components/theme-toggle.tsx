@@ -20,17 +20,17 @@ export function ThemeToggle() {
           aria-label="Cambiar tema"
           title="Cambiar tema"
           className={cn(
-            "relative h-9 w-9 rounded-full text-muted-foreground transition-all duration-200",
+            "relative h-11 w-11 rounded-full text-muted-foreground transition-all duration-200",
             "hover:bg-foreground/[0.06] hover:text-foreground",
             "active:scale-[0.96]",
           )}
         >
           <Sun
-            className="h-[17px] w-[17px] rotate-0 scale-100 transition-transform duration-300 dark:-rotate-90 dark:scale-0"
+            className="h-[21px] w-[21px] rotate-0 scale-100 transition-transform duration-300 dark:-rotate-90 dark:scale-0"
             strokeWidth={1.75}
           />
           <Moon
-            className="absolute h-[17px] w-[17px] rotate-90 scale-0 transition-transform duration-300 dark:rotate-0 dark:scale-100"
+            className="absolute h-[21px] w-[21px] rotate-90 scale-0 transition-transform duration-300 dark:rotate-0 dark:scale-100"
             strokeWidth={1.75}
           />
           <span className="sr-only">Cambiar tema</span>

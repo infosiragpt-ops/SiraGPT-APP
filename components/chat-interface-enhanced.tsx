@@ -2823,9 +2823,37 @@ But first, you need to connect your Spotify account securely using the button be
     return () => document.removeEventListener('paste', onDocPaste);
   }, [handleClipboardPaste]);
 
+  // Soft rate-limit queue — instead of dropping a message when the
+  // composer is busy streaming a prior turn, we park it in this ref and
+  // flush it automatically when the pipeline goes idle. This keeps the
+  // "user types 3 things quickly" flow working without losing text.
+  const pendingMsgQueueRef = React.useRef<Array<{ msg: string; files: any[] }>>([]);
+  const queueBurstTimestampsRef = React.useRef<number[]>([]);
+  const handleSendRef = React.useRef<() => void>(() => {});
+
   const handleSend = async () => {
     const msg = input.trim();
-    if (!msg || isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting) return;
+    if (!msg) return;
+
+    const isBusy = isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
+
+    if (isBusy) {
+      // Park the message — we'll drain the queue once the busy flags
+      // flip back to idle (see the useEffect watching busy state).
+      pendingMsgQueueRef.current.push({ msg, files: [...uploadedFiles] });
+      setInput("");
+      setUploadedFiles([]);
+      const now = Date.now();
+      queueBurstTimestampsRef.current = queueBurstTimestampsRef.current.filter(t => now - t < 5000);
+      queueBurstTimestampsRef.current.push(now);
+      // Only surface the toast when the user actually triggers the
+      // "3+ in 5s" burst condition — otherwise a single queued message
+      // during a long stream would nag them.
+      if (queueBurstTimestampsRef.current.length >= 3 && pendingMsgQueueRef.current.length === 1) {
+        toast.info("Procesando tus mensajes…", { duration: 2500 });
+      }
+      return;
+    }
 
     // Handle rewrite request
     if (selectedWordText) {
@@ -4090,6 +4118,27 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   };
 
+  // Keep a ref to the latest handleSend so the queue-drain effect below
+  // can invoke the closure that sees current state — React declarations
+  // would otherwise freeze the version from initial render.
+  React.useEffect(() => { handleSendRef.current = handleSend; });
+
+  // Drain queued messages when the pipeline goes idle. Each drain
+  // re-populates the composer from the queue and fires handleSend on the
+  // next tick so React has a chance to commit the setInput/setFiles
+  // updates before the send guard reads them.
+  React.useEffect(() => {
+    const isBusy = isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
+    if (isBusy) return;
+    if (pendingMsgQueueRef.current.length === 0) return;
+    const next = pendingMsgQueueRef.current.shift();
+    if (!next) return;
+    setInput(next.msg);
+    setUploadedFiles(next.files || []);
+    const t = setTimeout(() => { handleSendRef.current(); }, 0);
+    return () => clearTimeout(t);
+  }, [isLoading, isGeneratingImage, isGeneratingVideo, isGeneratingWebDev, isStreaming, isProcessingGmail, isProcessingGoogleServices, isProcessingSpotify, isGeneratingWord, isGeneratingExcel, isRewriting]);
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
@@ -4329,7 +4378,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-0.5">
                 {/* Complete Chat Share Button - only show if there's a chat with messages */}
                 {currentChat?.id && currentChat?.messages && currentChat.messages.length > 0 && !showAudioPanel && (
                   <Button
@@ -4337,9 +4386,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     size="icon"
                     onClick={handleCompleteShare}
                     title="Share complete chat"
-                    className="h-9 w-9"
+                    className="h-11 w-11 rounded-full"
                   >
-                    <Share className="h-4 w-4" />
+                    <Share className="h-5 w-5" />
                   </Button>
                 )}
                 <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
@@ -4367,8 +4416,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       aria-label={isFree ? 'Subir de plan' : 'Gestionar plan'}
                       title={isFree ? 'Subir de plan' : 'Gestionar plan'}
                       className={cn(
-                        !showTextCta && 'h-9 w-9 rounded-full text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.96]',
-                        showTextCta && 'h-9 gap-1.5 rounded-full px-3 text-[13px] font-semibold',
+                        !showTextCta && 'h-11 w-11 rounded-full text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.96]',
+                        showTextCta && 'h-11 gap-1.5 rounded-full px-3 text-[13px] font-semibold',
                         warn && 'border-red-500/70 text-red-600 hover:bg-red-500/10 hover:text-red-600',
                         caution && 'border-amber-500/70 text-amber-600 hover:bg-amber-500/10 hover:text-amber-600',
                         'transition-all duration-200',
@@ -4376,11 +4425,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     >
                       {showTextCta ? (
                         <>
-                          <PremiumCardIcon className="h-4 w-[22px] shrink-0 drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
+                          <PremiumCardIcon className="h-[18px] w-[24px] shrink-0 drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
                           <span>{isFree ? 'Subir de plan' : 'Upgrade Now'}</span>
                         </>
                       ) : (
-                        <PremiumCardIcon className="h-[14px] w-[20px] drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
+                        <PremiumCardIcon className="h-[18px] w-[24px] drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
                       )}
                     </Button>
                   )

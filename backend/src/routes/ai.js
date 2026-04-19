@@ -10,6 +10,7 @@ const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const googleMCPService = require('../services/google-mcp');
 const documentService = require('../services/document-service');
 const langPolicy = require('../services/language-policy');
+const masterPrompt = require('../services/master-prompt');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -356,135 +357,17 @@ router.post(
         });
       }
 
-      // ✅ Prepare system instruction - Custom GPT or Default
-      let systemInstruction;
-      if (customGpt) {
-        let customSystemPrompt = `You are "${customGpt.name}".\n\n${customGpt.instructions}`;
-
-        if (customGpt.knowledgeFiles && customGpt.knowledgeFiles.length > 0) {
-          const knowledgeContext = customGpt.knowledgeFiles
-            .map(file => `Knowledge: ${file.originalName}\n${file.extractedText || ''}`)
-            .join('\n\n');
-
-          customSystemPrompt += `\n\nKnowledge Base:\n${knowledgeContext}`;
-          console.log(`📚 Added knowledge base with ${customGpt.knowledgeFiles.length} files`);
-        }
-
-        if (customGpt.conversationStarters && customGpt.conversationStarters.length > 0) {
-          customSystemPrompt += `\n\nSuggested conversation topics: ${customGpt.conversationStarters.join(', ')}`;
-        }
-
-        // ✅ ADD FILE CREATION CAPABILITIES TO CUSTOM GPTS
-        customSystemPrompt += `
-
-**CRITICAL DOCUMENT CREATION RULES:**
-⚠️ ONLY create downloadable documents when the user EXPLICITLY requests a file format (Word, PDF, DOCX, etc.)
-
-**When to CREATE A DOCUMENT FILE:**
-- User explicitly says: "make a Word document", "create a PDF", "download as DOCX"
-- User says: "convert to Word/PDF", "export as document", "save as file"
-- User references file formats: ".docx", ".pdf", "Word file", "PDF file"
-
-**When to DISPLAY IN CHAT (DO NOT create document):**
-- User says: "show me", "create a table", "generate a list", "make a chart"
-- User asks for: "sales projections", "data table", "comparison", "summary"
-- General content requests WITHOUT mentioning file formats
-
-**Document Creation Process (ONLY when file explicitly requested):**
-1. If user references previous content ("the information you gave me", "above data", etc.), extract that content from conversation history
-2. If user provides content in their current message, use that exact content
-3. Use markdown for structure (# for Heading 1, ## for Heading 2)
-4. Wrap the ENTIRE document content in: [CREATE_DOCUMENT:filename.ext]...content...[/CREATE_DOCUMENT]
-5. Replace 'filename.ext' with appropriate filename (e.g., 'report.docx', 'summary.pdf')
-6. Give brief acknowledgment: "I'll create a Document with the content"
-
-**EXAMPLES:**
-✅ CREATE FILE:
-- "Create a Word document with sales projections" → Generate Word file
-- "Make a PDF from the data above" → Generate PDF file
-- "Download this as a DOCX file" → Generate Word file
-
-❌ DISPLAY IN CHAT:
-- "Create a sales projection table" → Display markdown table in chat
-- "Show me revenue trends" → Display content in chat
-- "Generate a comparison chart" → Display in chat
-
-IMPORTANT: Default to displaying content in chat. Only create downloadable files when user explicitly requests a file format.
-
-Writing math formulas:
-You have a MathJax render environment.
-- Any LaTeX text between single dollar sign ($) will be rendered as a TeX formula;
-- Use $(tex_formula)$ in-line delimiters to display equations instead of backslash;
-- The render environment only uses $ (single dollarsign) as a container delimiter, never output $$.
-Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX.`;
-
-        systemInstruction = {
-          role: 'system',
-          // Language rule MUST be first — overrides every other instruction,
-          // including any language defaults the GPT author may have baked
-          // into customSystemPrompt.
-          content: `${langPolicy.buildSystemRule(langResolution.language)}\n\n${customSystemPrompt}`,
-        };
-
-        console.log(`📝 Custom GPT system prompt length: ${customSystemPrompt.length} characters (lang=${langResolution.language})`);
-      } else {
-        systemInstruction = {
-          role: 'system',
-          content: `${langPolicy.buildSystemRule(langResolution.language)}
-
-You are an expert AI assistant.
-Writing math formulas:
-You have a MathJax render environment.
-- Any LaTeX text between single dollar sign ($) will be rendered as a TeX formula;
-- Use $(tex_formula)$ in-line delimiters to display equations instead of backslash;
-- The render environment only uses $ (single dollarsign) as a container delimiter, never output $$.
-Example: $x^2 + 3x$ is output for "x² + 3x" to appear as TeX. You don't need to define who you are act like a simple just example some
-say hello so give the answer hello how can i help you
-Some Give like this
-Derivative of ( f(x) )
-Given: [ f(x) = 7x^6 - 5x^8 + 9x^3 + 14x - 2 ]
-The derivative is: [ f'(x) = -40x^7 + 42x^5 + 27x^2 + 14 ]
-but i dont want to give like this give the answer like this
-Derivative of $f(x)$  
-Given: $f(x) = 7x^{6} - 5x^{8} + 9x^{3} + 14x - 2$  
-The derivative is: $f'(x) = -40x^{7} + 42x^{5} + 27x^{2} + 14$
-
-
-**CRITICAL DOCUMENT CREATION RULES:**
-⚠️ ONLY create downloadable documents when the user EXPLICITLY requests a file format (Word, PDF, DOCX, etc.)
-
-**When to CREATE A DOCUMENT FILE:**
-- User explicitly says: "make a Word document", "create a PDF", "download as DOCX"
-- User says: "convert to Word/PDF", "export as document", "save as file"
-- User references file formats: ".docx", ".pdf", "Word file", "PDF file"
-
-**When to DISPLAY IN CHAT (DO NOT create document):**
-- User says: "show me", "create a table", "generate a list", "make a chart"
-- User asks for: "sales projections", "data table", "comparison", "summary"
-- General content requests WITHOUT mentioning file formats
-
-**Document Creation Process (ONLY when file explicitly requested):**
-1. If user references previous content ("the information you gave me", "above data", etc.), extract that content from conversation history
-2. If user provides content in their current message, use that exact content
-3. Use markdown for structure (# for Heading 1, ## for Heading 2)
-4. Wrap the ENTIRE document content in: [CREATE_DOCUMENT:filename.ext]...content...[/CREATE_DOCUMENT]
-5. Replace 'filename.ext' with appropriate filename (e.g., 'report.docx', 'summary.pdf')
-6. Give brief acknowledgment: "I'll create a Document with the content"
-
-**EXAMPLES:**
-✅ CREATE FILE:
-- "Create a Word document with sales projections" → Generate Word file
-- "Make a PDF from the data above" → Generate PDF file
-- "Download this as a DOCX file" → Generate Word file
-
-❌ DISPLAY IN CHAT:
-- "Create a sales projection table" → Display markdown table in chat
-- "Show me revenue trends" → Display content in chat
-- "Generate a comparison chart" → Display in chat
-
-IMPORTANT: Default to displaying content in chat. Only create downloadable files when user explicitly requests a file format.`
-        };
-      }
+      // ✅ Master prompt — the single source of truth for siraGPT's voice.
+      // Injects the 10 absolute rules, language policy, intent-specialized
+      // context, and the custom GPT persona (when applicable) into the
+      // system message for THIS turn.
+      const promptBundle = masterPrompt.buildSystemPrompt({
+        language: langResolution.language,
+        userMessage: prompt,
+        customGpt,
+      });
+      const systemInstruction = { role: 'system', content: promptBundle.system };
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${promptBundle.system.length}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
@@ -658,13 +541,16 @@ IMPORTANT: Default to displaying content in chat. Only create downloadable files
       let fullResponseContent = '';
       try {
         fullResponseContent = await aiService.generateStream({
-          provider: actualProvider, // ✅ updated
-          model: actualModel,       // ✅ updated
+          provider: actualProvider,
+          model: actualModel,
           messages,
           res,
           signal,
           temperature: actualTemperature,
-          files: processedFiles
+          files: processedFiles,
+          language: langResolution.language,
+          userPrompt: prompt,
+          qualityGuard: true,
         });
       } catch (apiError) {
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {

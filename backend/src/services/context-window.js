@@ -1,0 +1,160 @@
+/**
+ * context-window.js — keeps the payload sent to the LLM under each
+ * model's context limit, even on long conversations.
+ *
+ * The tokenizer is deliberately approximate: tiktoken is heavyweight
+ * and not worth loading for this. We estimate tokens as ceil(chars/4)
+ * which is the industry-accepted rule-of-thumb for English/Spanish.
+ *
+ * Truncation strategy when a thread goes over 80% of the model's
+ * context:
+ *   - Always keep the FIRST message (system prompt / initial brief).
+ *   - Always keep the LAST 5 messages (recent conversational ground).
+ *   - Drop messages from the MIDDLE, oldest-first, replacing them with
+ *     a single "[Se omitieron N mensajes antiguos para mantener el
+ *     contexto dentro del límite del modelo.]" breadcrumb so the LLM
+ *     knows the thread is longer than what it's seeing.
+ *
+ * This is not a precision tool — it's a safety rail so the request
+ * never 4xx's with "context_length_exceeded" in front of the user.
+ */
+
+// Context windows for the model families we route through. Values are
+// the published MAX context; we operate at 80% of this so prompt +
+// completion both fit. Unknown models fall back to a conservative 8k.
+const MODEL_CONTEXT_LIMITS = {
+  // OpenAI
+  'gpt-4o': 128000,
+  'gpt-4o-mini': 128000,
+  'gpt-4-turbo': 128000,
+  'gpt-4': 8192,
+  'gpt-3.5-turbo': 16385,
+  'o1': 200000,
+  'o1-mini': 128000,
+  'o1-preview': 128000,
+  'o3-mini': 200000,
+  'o3': 200000,
+  'gpt-5': 400000,
+  'gpt-5-mini': 400000,
+  // Anthropic (via OpenRouter)
+  'anthropic/claude-3.5-sonnet': 200000,
+  'anthropic/claude-3.7-sonnet': 200000,
+  'anthropic/claude-sonnet-4': 200000,
+  'anthropic/claude-opus-4': 200000,
+  // Google
+  'gemini-1.5-pro': 2000000,
+  'gemini-1.5-flash': 1000000,
+  'gemini-2.0-flash': 1000000,
+  'gemini-2.5-pro': 2000000,
+  'gemini-2.5-flash': 1000000,
+  // Meta / DeepSeek / other OpenRouter
+  'meta-llama/llama-3.1-70b-instruct': 131000,
+  'meta-llama/llama-3.3-70b-instruct': 131000,
+  'deepseek/deepseek-chat': 65000,
+  'deepseek/deepseek-r1': 65000,
+  'x-ai/grok-2': 131000,
+  'x-ai/grok-beta': 131000,
+};
+
+const DEFAULT_CONTEXT_LIMIT = 8192;
+const SAFETY_RATIO = 0.8;
+const KEEP_HEAD = 1;   // first message (usually system)
+const KEEP_TAIL = 5;   // last N conversational messages
+
+/** Estimate tokens as ceil(chars/4) — same heuristic the route uses. */
+function estimateTokens(text) {
+  if (!text) return 0;
+  if (typeof text !== 'string') {
+    // message.content can be an array (vision payloads). Estimate on
+    // textual parts only; image parts count under a separate budget
+    // server-side and aren't meaningful for text truncation.
+    if (Array.isArray(text)) {
+      return text.reduce((acc, part) => {
+        if (part && typeof part.text === 'string') return acc + Math.ceil(part.text.length / 4);
+        return acc;
+      }, 0);
+    }
+    try { return Math.ceil(JSON.stringify(text).length / 4); } catch { return 0; }
+  }
+  return Math.ceil(text.length / 4);
+}
+
+/** Look up the context limit for a model name, tolerant to prefixes. */
+function getContextLimit(model) {
+  if (!model) return DEFAULT_CONTEXT_LIMIT;
+  if (MODEL_CONTEXT_LIMITS[model]) return MODEL_CONTEXT_LIMITS[model];
+  // Partial match — e.g., "gpt-4o-2024-08-06" maps to "gpt-4o".
+  for (const [key, value] of Object.entries(MODEL_CONTEXT_LIMITS)) {
+    if (model.includes(key) || key.includes(model)) return value;
+  }
+  return DEFAULT_CONTEXT_LIMIT;
+}
+
+/** Per-message token count (role + content). */
+function tokensOfMessage(msg) {
+  if (!msg) return 0;
+  const roleBudget = 4; // role + field overhead in OpenAI's format
+  return roleBudget + estimateTokens(msg.content);
+}
+
+/**
+ * Trim `messages` so total estimated tokens stay under 80% of the
+ * model's context. Keeps the head (system) and tail (recent turns);
+ * drops oldest-from-middle first and leaves a breadcrumb message in
+ * its place so the model sees the gap instead of being confused by
+ * sudden topic jumps.
+ *
+ * Returns { messages, droppedCount, totalTokens, budget }.
+ */
+function fitMessagesToContext(messages, model, { reservedCompletionTokens = 1024 } = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { messages: messages || [], droppedCount: 0, totalTokens: 0, budget: 0 };
+  }
+
+  const limit = getContextLimit(model);
+  const budget = Math.floor(limit * SAFETY_RATIO) - reservedCompletionTokens;
+
+  let total = messages.reduce((acc, m) => acc + tokensOfMessage(m), 0);
+  if (total <= budget) {
+    return { messages, droppedCount: 0, totalTokens: total, budget };
+  }
+
+  const head = messages.slice(0, KEEP_HEAD);
+  const tail = messages.slice(Math.max(messages.length - KEEP_TAIL, KEEP_HEAD));
+  const middle = messages.slice(KEEP_HEAD, Math.max(messages.length - KEEP_TAIL, KEEP_HEAD));
+
+  // Drop oldest-from-middle first until we fit.
+  let droppedCount = 0;
+  const kept = [];
+  // Walk middle from newest → oldest; include while under budget.
+  for (let i = middle.length - 1; i >= 0; i--) {
+    const candidate = middle[i];
+    const candidateTokens = tokensOfMessage(candidate);
+    const currentTotal = head.reduce((a, m) => a + tokensOfMessage(m), 0)
+      + tail.reduce((a, m) => a + tokensOfMessage(m), 0)
+      + kept.reduce((a, m) => a + tokensOfMessage(m), 0);
+    if (currentTotal + candidateTokens <= budget - 60) {
+      kept.unshift(candidate);
+    } else {
+      droppedCount++;
+    }
+  }
+
+  const breadcrumb = droppedCount > 0 ? [{
+    role: 'system',
+    content: `[Nota interna: se omitieron ${droppedCount} mensaje(s) antiguo(s) de este hilo para mantener el contexto dentro del límite del modelo. Los mensajes iniciales y los últimos ${KEEP_TAIL} turnos se conservan íntegros.]`,
+  }] : [];
+
+  const next = [...head, ...breadcrumb, ...kept, ...tail];
+  const newTotal = next.reduce((acc, m) => acc + tokensOfMessage(m), 0);
+
+  return { messages: next, droppedCount, totalTokens: newTotal, budget };
+}
+
+module.exports = {
+  estimateTokens,
+  getContextLimit,
+  tokensOfMessage,
+  fitMessagesToContext,
+  MODEL_CONTEXT_LIMITS,
+};

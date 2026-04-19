@@ -421,32 +421,50 @@ class ApiClient {
         const lines = chunk.split('\n\n');
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const jsonData = JSON.parse(line.substring(6));
-              if (jsonData.content) {
-                batchBuffer += jsonData.content;
-                processedChunks++;
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.substring(6);
+          // Sentinel the backend emits at the very end of every stream,
+          // including error / recovered cases. Flush pending buffer, close,
+          // and return — anything after is a leftover from a broken proxy.
+          if (payload === '[DONE]') {
+            if (batchBuffer.trim()) {
+              onData(batchBuffer);
+              batchBuffer = '';
+            }
+            onClose();
+            return;
+          }
+          try {
+            const jsonData = JSON.parse(payload);
+            if (jsonData.content) {
+              batchBuffer += jsonData.content;
+              processedChunks++;
 
-                // Simple batch processing for performance
-                const timeSinceLastProcess = Date.now() - lastProcessTime;
-                const shouldProcess =
-                  batchBuffer.length >= 150 || // Process every ~150 characters
-                  timeSinceLastProcess >= batchProcessingDelay || // Or every 20ms
-                  jsonData.content.includes('\n'); // Process on newlines
+              // Simple batch processing for performance
+              const timeSinceLastProcess = Date.now() - lastProcessTime;
+              const shouldProcess =
+                batchBuffer.length >= 150 || // Process every ~150 characters
+                timeSinceLastProcess >= batchProcessingDelay || // Or every 20ms
+                jsonData.content.includes('\n'); // Process on newlines
 
-                if (shouldProcess && batchBuffer.trim()) {
-                  onData(batchBuffer);
-                  batchBuffer = '';
-                  lastProcessTime = Date.now();
-                }
-              } else if (jsonData.error) {
+              if (shouldProcess && batchBuffer.trim()) {
+                onData(batchBuffer);
+                batchBuffer = '';
+                lastProcessTime = Date.now();
+              }
+            } else if (jsonData.error) {
+              // When the backend recovered the turn with a localized
+              // fallback message, we've already delivered a useful reply
+              // to the user — don't surface a red toast on top of it.
+              if (jsonData.recovered) {
+                console.warn('[ai-stream] recovered from provider error:', jsonData.error);
+              } else {
                 onError(new Error(jsonData.error));
               }
-            } catch (e) {
-              // JSON parse error ko ignore karein
-              console.warn('Failed to parse streaming data:', e);
             }
+          } catch (e) {
+            // JSON parse error ko ignore karein
+            console.warn('Failed to parse streaming data:', e);
           }
         }
       }

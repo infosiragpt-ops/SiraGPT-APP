@@ -10,6 +10,72 @@ const axios = require('axios');
 const FormData = require('form-data');
 const PptxGenJS = require('pptxgenjs');
 const vectorPPTService = require('./vector-ppt-service');
+const { fitMessagesToContext } = require('./context-window');
+const { evaluateResponse, buildCorrectivePrompt } = require('./quality-guard');
+
+const HEARTBEAT_INTERVAL_MS = 15000;
+
+/**
+ * Resolve the fallback model chain from env. Comma-separated names,
+ * e.g. FALLBACK_MODELS=gpt-4o-mini,anthropic/claude-3.5-sonnet,gpt-3.5-turbo.
+ * Empty / missing returns a sensible default that favors cheap+fast OpenAI
+ * models so a degraded reply still reaches the user.
+ */
+function getFallbackChain() {
+    const raw = (process.env.FALLBACK_MODELS || '').trim();
+    if (!raw) return ['gpt-4o-mini', 'gpt-3.5-turbo'];
+    return raw.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/**
+ * Route a model name to the provider the siraGPT backend uses for it.
+ * Keeps the fallback chain provider-agnostic: the caller passes a list of
+ * model names and we figure out which SDK base URL + key to use.
+ */
+function providerForModel(model) {
+    if (!model) return 'OpenAI';
+    if (/^(x-ai|openrouter|anthropic|meta-llama|deepseek|mistralai|qwen|nvidia|microsoft|cohere)\//i.test(model)) return 'OpenRouter';
+    if (/^\/?(gpt-oss|zephyr)/i.test(model)) return 'OpenRouter';
+    if (/^(gemini|imagen)/i.test(model)) return 'Gemini';
+    return 'OpenAI';
+}
+
+/**
+ * Classify a provider error as transient (safe to retry) vs terminal.
+ * Transient: rate limits (429), request timeouts (408), server errors
+ * (500-504), and network-level failures. Terminal errors (401 auth,
+ * 400 bad request, content-filter refusals) are NOT retried — retrying
+ * them won't change the outcome and just delays the user-facing error.
+ */
+function isTransientProviderError(err) {
+    if (!err) return false;
+    if (err.name === 'AbortError') return false;
+    const status = err.status || err.response?.status;
+    if (status === 429 || status === 408 || status === 409) return true;
+    if (status >= 500 && status < 600) return true;
+    const code = err.code || err.cause?.code;
+    if (['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN', 'EPIPE', 'ENOTFOUND', 'UND_ERR_SOCKET'].includes(code)) return true;
+    const msg = (err.message || '').toLowerCase();
+    if (msg.includes('timeout') || msg.includes('network error') || msg.includes('socket hang up') || msg.includes('fetch failed')) return true;
+    return false;
+}
+
+/**
+ * Localized, professional fallback message for when every retry fails
+ * and no content has been streamed yet. Uses the resolved response
+ * language so the user isn't suddenly spoken to in English mid-chat.
+ */
+function getFallbackMessage(language) {
+    const messages = {
+        es: 'Disculpa, tuve un problema momentáneo al procesar tu consulta. ¿Podrías reformularla o intentarlo de nuevo en unos segundos?',
+        en: "Sorry, I hit a momentary issue processing your request. Could you rephrase it or try again in a few seconds?",
+        pt: 'Desculpe, tive um problema momentâneo ao processar sua solicitação. Poderia reformulá-la ou tentar novamente em alguns segundos?',
+        fr: "Désolé, j'ai rencontré un problème momentané. Pourriez-vous reformuler ou réessayer dans quelques secondes ?",
+        de: 'Entschuldigung, es gab ein kurzes Problem bei der Verarbeitung. Könnten Sie die Anfrage umformulieren oder es gleich erneut versuchen?',
+        it: 'Scusa, ho avuto un problema momentaneo. Potresti riformulare la richiesta o riprovare tra qualche secondo?',
+    };
+    return messages[language] || messages.es;
+}
 
 class AIService {
 
@@ -119,10 +185,29 @@ class AIService {
      * @param {Array<object>} options.files - Uploaded files ka array (optional)
      * @returns {Promise<string>} - Poora generate kiya hua content
      */
-    async generateStream({ provider, model, messages, res, signal, streamId, files }) {
+    async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true }) {
         let fullResponseContent = '';
+        let hasStreamedAnyContent = false;
+
+        // Heartbeat: SSE comment line sent every 15s so intermediaries
+        // (nginx, Cloudflare, load balancers) don't close the connection
+        // as idle during long-tail completions. Comments are `: text\n\n`
+        // and are ignored by EventSource parsers, so they never show up
+        // as content on the client.
+        const writeHeartbeat = () => { try { res.write(`: ping ${Date.now()}\n\n`); } catch { /* socket gone */ } };
+        const heartbeat = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
+
+        // Fit the payload to the target model's context window BEFORE we
+        // pick the client. Running this before vision expansion keeps the
+        // token estimate honest for the text portion — images are added
+        // after and the provider handles their size separately.
+        const fit = fitMessagesToContext(messages, model);
+        if (fit.droppedCount > 0) {
+            console.log(`✂️  context trim: dropped ${fit.droppedCount} middle message(s), ${fit.totalTokens}/${fit.budget} tokens after fit`);
+        }
+        let workingMessages = fit.messages;
+
         try {
-            const client = this.getClient(provider);
             // ✅ IMPROVED: Handle images properly for vision API
             if (files && files.length > 0) {
                 const imageFiles = files.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
@@ -130,7 +215,7 @@ class AIService {
                 if (imageFiles.length > 0) {
                     console.log(`📸 Processing ${imageFiles.length} image(s) for vision API`);
 
-                    const lastMessage = messages[messages.length - 1];
+                    const lastMessage = workingMessages[workingMessages.length - 1];
                     const textContent = typeof lastMessage.content === 'string'
                         ? lastMessage.content
                         : lastMessage.content.find(item => item.type === 'text')?.text || '';
@@ -168,102 +253,155 @@ class AIService {
                 }
             }
 
-            const payload = {
-                model: model,
-                messages: messages,
-                stream: true,
-            };
+            // Build the model chain: primary first, then env-configured
+            // fallbacks. Deduped so the primary doesn't get tried twice.
+            const fallbackModels = getFallbackChain().filter(m => m !== model);
+            const modelChain = [model, ...fallbackModels];
 
-            console.log(`🤖 Generating response with ${provider} - ${model}`);
-            console.log(`📝 Messages count: ${messages.length}`);
+            console.log(`🤖 Generating with primary=${provider}:${model}, fallback=[${fallbackModels.join(', ') || 'none'}]`);
+            console.log(`📝 Messages count: ${workingMessages.length}`);
 
-            const stream = await client.chat.completions.create(payload, { signal });
+            // Outer loop: walk the model chain. Inner loop: retry each
+            // model up to 2 times on transient errors. We only advance to
+            // the next model if NO content has been streamed yet — once
+            // the user sees text, we commit to the current model even if
+            // it fails mid-stream (a partial answer is always better than
+            // a fresh one that duplicates it).
+            const MAX_ATTEMPTS_PER_MODEL = 2;
+            let lastError = null;
+            for (let m = 0; m < modelChain.length; m++) {
+                const currentModel = modelChain[m];
+                const currentProvider = m === 0 ? provider : providerForModel(currentModel);
+                const payload = { model: currentModel, messages: workingMessages, stream: true };
 
-            // Stream se data parhein aur client ko bhejein
-            for await (const chunk of stream) {
-                const contentChunk = chunk.choices[0]?.delta?.content || '';
-                if (contentChunk) {
-                    fullResponseContent += contentChunk;
-                    // Client ko data chunk bhejein
-                    res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+                if (hasStreamedAnyContent) break;
+
+                for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
+                    if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+                    try {
+                        const client = this.getClient(currentProvider);
+                        const stream = await client.chat.completions.create(payload, { signal });
+
+                        for await (const chunk of stream) {
+                            const contentChunk = chunk.choices[0]?.delta?.content || '';
+                            if (contentChunk) {
+                                fullResponseContent += contentChunk;
+                                hasStreamedAnyContent = true;
+                                res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+                            }
+                        }
+
+                        if (!hasStreamedAnyContent) {
+                            throw Object.assign(new Error('Empty completion — model returned no content'), { code: 'EMPTY_COMPLETION' });
+                        }
+
+                        console.log(`✅ Response on ${currentProvider}:${currentModel} attempt ${attempt} (${fullResponseContent.length} chars)`);
+
+                        // Quality guard: if the answer looks weak/refusal
+                        // and we haven't already done a corrective pass,
+                        // try ONCE more with an augmented user message.
+                        if (qualityGuard && !hasStreamedAnyContent === false) {
+                            const verdict = evaluateResponse({ response: fullResponseContent, userPrompt });
+                            if (verdict.weak) {
+                                console.warn(`🧪 quality-guard flagged: ${verdict.reason} — running corrective pass`);
+                                const corrected = await this._runCorrectivePass({
+                                    provider: currentProvider,
+                                    model: currentModel,
+                                    baseMessages: workingMessages,
+                                    userPrompt,
+                                    language,
+                                    signal,
+                                    res,
+                                });
+                                if (corrected && corrected.length > fullResponseContent.length) {
+                                    // Prefix a soft separator so the user
+                                    // sees the richer answer replacing the
+                                    // short one without a visible jump.
+                                    res.write(`data: ${JSON.stringify({ content: '\n\n' })}\n\n`);
+                                    res.write(`data: ${JSON.stringify({ content: corrected })}\n\n`);
+                                    fullResponseContent += '\n\n' + corrected;
+                                }
+                            }
+                        }
+
+                        return fullResponseContent;
+                    } catch (err) {
+                        lastError = err;
+                        if (err && err.name === 'AbortError') throw err;
+                        if (hasStreamedAnyContent) throw err;
+
+                        const retryable = isTransientProviderError(err) || err.code === 'EMPTY_COMPLETION';
+                        const isLastAttemptForModel = attempt >= MAX_ATTEMPTS_PER_MODEL;
+                        console.warn(`⚠️ ${currentProvider}:${currentModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${err.status || err.code || 'unknown'}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
+
+                        if (!retryable || isLastAttemptForModel) break; // break attempt loop → try next model
+
+                        // Exponential backoff with jitter: ~400ms, ~900ms
+                        const backoff = 400 * attempt * attempt + Math.floor(Math.random() * 200);
+                        await new Promise(r => setTimeout(r, backoff));
+                    }
                 }
             }
 
-            console.log(`✅ Response generated successfully (${fullResponseContent.length} characters)`);
-            return fullResponseContent;
-            // const payload = {
-            //     model: model,
-            //     messages: messages,
-            //     stream: true,
-            // };
-
-            // console.log(`🤖 Generating response with ${provider} - ${model}`);
-            // console.log(`📝 Messages count: ${messages.length}`);
-
-            // const stream = await client.chat.completions.create(payload, { signal });
-
-            // // ✅ Model-specific streaming configuration
-            // const isGPT5 = model.includes('o3') || model.includes('gpt-5') || model.includes('o1');
-            // const isSlowerModel = isGPT5 || model.includes('claude-3-opus');
-
-            // let isFirstChunk = true;
-            // let batchBuffer = '';
-            // let lastFlush = Date.now();
-
-            // // ✅ Adjust batching for slower models
-            // const batchSize = isSlowerModel ? 1 : 80; // Immediate flush for GPT-5
-            // const flushInterval = isSlowerModel ? 1 : 50; // Minimal delay for GPT-5
-
-            // for await (const chunk of stream) {
-            //     const contentChunk = chunk.choices[0]?.delta?.content || '';
-
-            //     if (contentChunk) {
-            //         fullResponseContent += contentChunk;
-
-            //         if (isFirstChunk) {
-            //             // Immediately send the first chunk for instant feedback
-            //             res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
-            //             isFirstChunk = false;
-            //             lastFlush = Date.now();
-            //         } else {
-            //             // For subsequent chunks, use batching (or immediate for slower models)
-            //             batchBuffer += contentChunk;
-            //             const timeSinceLastFlush = Date.now() - lastFlush;
-            //             const hasNewlines = contentChunk.includes('\n');
-
-            //             const shouldFlush = isSlowerModel || // ✅ Always flush for GPT-5
-            //                 batchBuffer.length >= batchSize ||
-            //                 timeSinceLastFlush >= flushInterval ||
-            //                 (hasNewlines && batchBuffer.length > 40);
-
-            //             if (shouldFlush && batchBuffer.trim()) {
-            //                 res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
-            //                 batchBuffer = '';
-            //                 lastFlush = Date.now();
-            //             }
-            //         }
-            //     }
-
-            //     if (signal && signal.aborted) {
-            //         console.log('Stream aborted by client');
-            //         break;
-            //     }
-            // }
-
-            // // Flush any remaining content in the buffer
-            // if (batchBuffer.trim()) {
-            //     res.write(`data: ${JSON.stringify({ content: batchBuffer })}\n\n`);
-            // }
-            // console.log(`✅ Response generated successfully (${fullResponseContent.length} characters)`);
-            // return fullResponseContent;
+            // All models exhausted with no content streamed.
+            throw lastError || new Error('AI generation failed after exhausting fallback chain');
         } catch (apiError) {
             if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
                 console.warn(`AI stream aborted by client for provider: ${provider}.`);
                 return fullResponseContent;
             }
             console.error(`❌ Error from ${provider} API:`, apiError.message || apiError);
-            res.write(`data: ${JSON.stringify({ error: `AI service (${provider}) is temporarily unavailable or stream was interrupted.` })}\n\n`);
-            throw apiError;
+
+            // If we already streamed part of the answer, append a short,
+            // in-language note so the user understands why the reply cut off,
+            // instead of just getting a silent truncation.
+            if (hasStreamedAnyContent) {
+                const note = '\n\n' + getFallbackMessage(language);
+                try { res.write(`data: ${JSON.stringify({ content: note })}\n\n`); } catch { /* socket may be gone */ }
+                return fullResponseContent + note;
+            }
+
+            // Nothing was streamed — deliver a professional fallback as the
+            // assistant's reply AND surface the technical error on a side
+            // channel so the UI can toast/retry if it wants to.
+            const fallback = getFallbackMessage(language);
+            try {
+                res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
+                res.write(`data: ${JSON.stringify({ error: `AI service (${provider}) is temporarily unavailable.`, recovered: true })}\n\n`);
+            } catch { /* socket may be gone */ }
+            return fallback;
+        } finally {
+            clearInterval(heartbeat);
+            // Signal end-of-stream so the client can cleanly close its
+            // reader and unblock the composer. Swallow write errors — the
+            // socket may already be gone if the client aborted.
+            try { res.write(`data: [DONE]\n\n`); } catch { /* socket gone */ }
+        }
+    }
+
+    /**
+     * Run a single corrective pass when the primary response was flagged
+     * as weak (refusal template, too short, empty). Uses a one-shot
+     * non-streaming completion so we can validate the length before
+     * committing it back to the user's chat stream. This is NOT streamed
+     * to the UI — the caller streams the returned string itself.
+     */
+    async _runCorrectivePass({ provider, model, baseMessages, userPrompt, language, signal }) {
+        try {
+            const client = this.getClient(provider);
+            const correctivePrompt = buildCorrectivePrompt(userPrompt || '', language);
+            const messages = [
+                ...baseMessages.slice(0, -1),
+                { role: 'user', content: correctivePrompt },
+            ];
+            const resp = await client.chat.completions.create(
+                { model, messages, stream: false },
+                { signal }
+            );
+            return resp.choices?.[0]?.message?.content || '';
+        } catch (err) {
+            console.warn('corrective pass failed:', err.message || err);
+            return '';
         }
     }
 
