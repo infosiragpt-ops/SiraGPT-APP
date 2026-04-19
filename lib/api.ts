@@ -222,51 +222,74 @@ class ApiClient {
 
 
   // File endpoints
-  async uploadFiles(files: FileList) {
+  /**
+   * Upload files to the backend with REAL progress (XHR-based — `fetch`
+   * has no upload progress events as of late-2025 Safari/Firefox).
+   *
+   * @param files          FileList from picker / drop / paste
+   * @param opts.sourceChannel  Telemetry tag: where the file came from
+   *                            ('picker' | 'drop' | 'paste-files' | …)
+   * @param opts.idempotencyKey  Stable per-batch key — server can dedupe
+   *                            retries against the SAME upload attempt
+   * @param opts.onProgress  Called with (percent 0-100, loadedBytes,
+   *                         totalBytes) — wire to the chip's progress bar
+   * @param opts.signal      AbortSignal — cancel mid-upload
+   */
+  async uploadFiles(
+    files: FileList,
+    opts: {
+      sourceChannel?: string
+      idempotencyKey?: string
+      onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
+      signal?: AbortSignal
+    } = {}
+  ): Promise<any> {
     const formData = new FormData();
-
-    // Debug: Check files
-    console.log('Files to upload:', files.length);
-    Array.from(files).forEach((file, index) => {
-      console.log(`File ${index}:`, file.name, file.type, file.size);
-      formData.append('files', file);
-    });
+    Array.from(files).forEach((file) => formData.append('files', file));
+    if (opts.sourceChannel) formData.append('sourceChannel', opts.sourceChannel);
 
     const url = `${this.baseURL}/files/upload`;
-    const headers: HeadersInit = {};
 
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
-      console.log('Token present:', this.token.substring(0, 20) + '...');
-    } else {
-      console.warn('No token found!');
-    }
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+      if (this.token) xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+      if (opts.idempotencyKey) xhr.setRequestHeader('Idempotency-Key', opts.idempotencyKey);
+      xhr.withCredentials = true;
+      // Don't set Content-Type — XHR sets it with boundary for FormData.
 
-    // Debug: Check FormData
-    console.log('FormData entries:');
-    for (let pair of formData.entries()) {
-      console.log(pair[0], pair[1]);
-    }
+      if (opts.onProgress && xhr.upload) {
+        xhr.upload.onprogress = (ev) => {
+          if (!ev.lengthComputable) return;
+          const pct = Math.round((ev.loaded / ev.total) * 100);
+          opts.onProgress!(pct, ev.loaded, ev.total);
+        };
+      }
 
-    // Don't set Content-Type - browser will set it with boundary for FormData
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-      body: formData,
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch { resolve(xhr.responseText); }
+        } else {
+          let msg = `HTTP ${xhr.status}`;
+          try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+          reject(new Error(msg));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.ontimeout = () => reject(new Error('Upload timed out'));
+      xhr.onabort = () => reject(Object.assign(new Error('Upload aborted'), { name: 'AbortError' }));
+
+      if (opts.signal) {
+        if (opts.signal.aborted) {
+          reject(Object.assign(new Error('Upload aborted'), { name: 'AbortError' }));
+          return;
+        }
+        opts.signal.addEventListener('abort', () => xhr.abort(), { once: true });
+      }
+
+      xhr.send(formData);
     });
-
-    console.log('Upload response status:', response.status);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Upload failed' }));
-      console.error('Upload error:', error);
-      throw new Error(error.error || `HTTP ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('Upload result:', result);
-    return result;
   }
 
   async getFiles(params?: { page?: number; limit?: number; type?: string }) {

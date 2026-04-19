@@ -4,6 +4,7 @@ import * as React from "react"
 import { useState, useEffect, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
 import { Badge } from "@/components/ui/badge"
@@ -54,6 +55,7 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
+import MessageActionRail from "./MessageActionRail"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
@@ -670,12 +672,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
 
         return (
-            <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
+            // [&_p:last-child]:!mb-0 trims the trailing 1em margin that
+            // `prose-sm` adds to the final paragraph — that margin was
+            // pushing the action rail visually too far from the message.
+            // We keep all other prose typography intact.
+            <div className={cn(
+                "prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed",
+                "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
+                "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
+            )}>
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex, rehypeRaw]}
-
-                    // rehypePlugins={[rehypeKatex, rehypeRaw]} //for advacne show website in our app
                     components={components}
                 >
                     {content}
@@ -1866,7 +1874,25 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             </div>
                         )}
                         {hasContent && (
-                            <Card className="relative px-4 pt-3 w-auto max-w-[85%] md:max-w-2xl rounded-2xl  bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white shadow-sm">
+                            // User-message bubble — tight to content.
+                            //   `w-fit`            shrinks to the natural text width
+                            //   max-w[min(70%,…)]  caps at 70% of conv width / 32rem
+                            //   px-3 py-1.5        snug padding (12px / 6px)
+                            //   [&_p]:m-0          KILLS the `prose` <p> margins
+                            //                      that were ballooning the bubble
+                            //                      around short text like "hola".
+                            //   rounded-br-[6px]   subtle "tail" toward sender side
+                            <Card className={cn(
+                                "relative w-fit max-w-[min(70%,32rem)] rounded-[16px] rounded-br-[6px]",
+                                "px-3 py-1.5",
+                                "bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white",
+                                "border border-transparent shadow-none",
+                                "text-[14.5px] leading-[1.5]",
+                                // Strip prose margins so the bubble hugs the
+                                // text on every line of content.
+                                "[&_.prose]:!m-0 [&_p]:!my-0 [&_p:first-child]:!mt-0 [&_p:last-child]:!mb-0",
+                                "[&_ul]:!my-1 [&_ol]:!my-1 [&_pre]:!my-1.5",
+                            )}>
                                 {isEditing ? (
                                     <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
                                         <Textarea
@@ -1953,82 +1979,29 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         )}
 
 
-                        {/* Action buttons for assistant messages */}
+                        {/* Premium message action rail — every button is
+                            a real, instrumented action. Visibility is
+                            contextual (Copy hides on empty; Speak hides
+                            on pure-code; everything hides during
+                            streaming-only state). See MessageActionRail
+                            for telemetry contract. */}
                         {!isVideoMessage && (
-                            <div className="mt-3 flex items-center gap-1">
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                    onClick={handleGlobalCopy}
-                                    title="Copy response"
-                                >
-                                    {isCopied ? <Check size={16} /> : <Clipboard size={16} />}
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                    onClick={handleSpeak}
-                                    title="Read aloud"
-                                >
-                                    <Volume2 size={16} />
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    title="Like"
-                                    onClick={() => handleFeedback('liked')}
-                                    className={`h-7 w-7 p-1  ${feedbackSent === 'liked'
-                                        ? 'bg-muted text-foreground'
-                                        : 'text-muted-foreground hover:text-foreground'
-                                        }`}
-                                >
-                                    <ThumbsUp size={16} />
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    title="Dislike"
-                                    className={`h-7 w-7 p-1  ${feedbackSent === 'disliked'
-                                        ? 'bg-muted text-foreground text-red-500'
-                                        : 'text-muted-foreground hover:text-foreground '
-                                        }`}
-                                    onClick={() => handleFeedback('disliked')}
-                                >
-                                    <ThumbsDown size={16} />
-                                </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                    title="Regenerate"
-                                    onClick={() => onRegenerate(message.id)}
-                                >
-                                    <RefreshCw size={16} />
-                                </Button>
-                                {/* <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                    title="Edit/Customize"
-                                >
-                                    <Wand2 size={16} />
-                                </Button> */}
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 w-7 p-1 text-muted-foreground hover:text-foreground"
-                                    onClick={handleShare}
-                                    title="Share"
-                                >
-                                    <Share2 size={16} />
-                                </Button>
-                                {/* <DownloadButtons
-                                    content={message.content}
-                                    messageId={message.id}
-                                /> */}
-                            </div>
+                            <MessageActionRail
+                                messageId={message.id}
+                                chatId={message.chatId}
+                                model={(message as any).model}
+                                content={message.content || ""}
+                                hasError={!!message.error}
+                                isStreaming={isStreaming}
+                                feedback={feedbackSent}
+                                isSpeaking={isSpeaking}
+                                isLoadingAudio={isLoadingAudio}
+                                onCopy={handleGlobalCopy}
+                                onSpeak={handleSpeak}
+                                onFeedback={async (kind) => { await handleFeedback(kind) }}
+                                onRegenerate={() => onRegenerate(message.id)}
+                                onShare={handleShare}
+                            />
                         )}
                     </div>
                 )}

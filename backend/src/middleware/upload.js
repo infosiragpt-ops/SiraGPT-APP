@@ -24,41 +24,76 @@ const storage = multer.diskStorage({
   }
 });
 
-// File filter
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = [
-    // Images
-    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-    // Documents
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.ms-powerpoint',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'text/plain',
-    'text/csv',
-    // Audio
-    'audio/mpeg', 'audio/wav', 'audio/ogg',
-    // Video
-    'video/mp4', 'video/mpeg', 'video/quicktime'
-  ];
+// File filter — accepts the full multimodal-ingestion allowlist.
+// Validates by MIME first; falls back to extension when the browser
+// reports octet-stream / empty (common for clipboard pastes, drag from
+// some non-Finder sources, and HEIC files on Linux/Windows).
+const ALLOWED_MIMES = new Set([
+  // Images
+  'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+  'image/bmp', 'image/tiff', 'image/svg+xml',
+  'image/heic', 'image/heif',
+  // Documents
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  // OpenDocument
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+  // Plain text + structured text
+  'text/plain', 'text/csv', 'text/markdown',
+  'text/html', 'text/xml', 'application/xml',
+  'application/json',
+  'application/rtf', 'text/rtf',
+  // Email
+  'message/rfc822',
+  'application/vnd.ms-outlook',
+  // Audio (used for STT + voice)
+  'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/mp4',
+  // Video
+  'video/mp4', 'video/mpeg', 'video/quicktime', 'video/webm',
+]);
 
-  if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(new Error(`File type ${file.mimetype} not allowed`), false);
+// Extension-based fallback when MIME is missing/wrong. Lowercase, no dot.
+const ALLOWED_EXTENSIONS = new Set([
+  // Images
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff',
+  'svg', 'heic', 'heif',
+  // Office / OpenDocument
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  'odt', 'ods', 'odp',
+  // Text
+  'txt', 'md', 'markdown', 'csv', 'rtf',
+  // Web/structured
+  'html', 'htm', 'json', 'xml',
+  // Email
+  'eml', 'msg',
+  // Media
+  'mp3', 'wav', 'ogg', 'webm', 'mp4', 'm4a', 'mov', 'mpeg', 'mpg',
+]);
+
+const fileFilter = (req, file, cb) => {
+  const mime = (file.mimetype || '').toLowerCase();
+  const ext = (file.originalname.split('.').pop() || '').toLowerCase();
+
+  if (ALLOWED_MIMES.has(mime) || ALLOWED_EXTENSIONS.has(ext)) {
+    return cb(null, true);
   }
+  return cb(new Error(`Tipo no permitido: ${mime || ext || 'desconocido'}`), false);
 };
 
 const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE)  * 1024 * 1024|| 50 * 1024 * 1024, // 50MB default
-    files: 5 // Maximum 5 files per request
-  }
+    fileSize: parseInt(process.env.MAX_FILE_SIZE) * 1024 * 1024 || 50 * 1024 * 1024, // 50MB default
+    files: 10, // Up to 10 files per request — multimodal ingestion can batch
+  },
 });
 
 module.exports = upload;

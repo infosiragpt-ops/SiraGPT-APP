@@ -59,46 +59,40 @@
 
 import { useEffect, useState } from "react"
 import clsx from "clsx"
+import { ThinkingBarsIcon } from "@/components/icons/thinking-bars-icon"
 
+// Localized to Spanish to match the default language policy. The
+// rotating copy is intentionally short and product-neutral so it reads
+// well even when the conversation is technical, casual, or RAG-driven.
 const messages = [
-    "Analyzing your input...",
-    "Analyzing information...",
-    "Processing data...",
-    "Generating response...",
-    "Refining answer...",
-    "Almost ready...",
-    "Double-checking context...",
-    "Summarizing key points...",
-    "Making sure everything’s accurate...",
-    "Finalizing response...",
-    "Done! Presenting your result..."
+    "Pensando…",
+    "Analizando tu mensaje…",
+    "Procesando información…",
+    "Construyendo la respuesta…",
+    "Refinando la respuesta…",
+    "Revisando el contexto…",
+    "Resumiendo puntos clave…",
+    "Verificando precisión…",
+    "Casi listo…",
 ]
 
 export const ThinkingPlaceholder = () => {
     const [phase, setPhase] = useState<"dots" | "text">("dots")
     const [message, setMessage] = useState(messages[0])
     const [fade, setFade] = useState(false)
-    const [dotCount, setDotCount] = useState(1)
 
-    // Handle dots animation for first 3 seconds
+    // First ~3s show only the animated bars, then start rotating
+    // contextual messages so the user knows the system is still working
+    // on long generations.
     useEffect(() => {
         if (phase === "dots") {
-            const dotInterval = setInterval(() => {
-                setDotCount(prev => (prev % 3) + 1)
-            }, 400)
-
             const timeout = setTimeout(() => {
                 setPhase("text")
             }, 3000)
-
-            return () => {
-                clearInterval(dotInterval)
-                clearTimeout(timeout)
-            }
+            return () => clearTimeout(timeout)
         }
     }, [phase])
 
-    // Handle rotating text messages after dots phase
     useEffect(() => {
         if (phase === "text") {
             let index = 0
@@ -115,33 +109,18 @@ export const ThinkingPlaceholder = () => {
     }, [phase])
 
     return (
-        <div className="flex items-center gap-3 my-4">
-            {phase === "dots" ? (
-                <div className="flex space-x-1">
-                    {/* {[...Array(3)].map((_, i) => (
-                        <span
-                            key={i}
-                            className={clsx(
-                                "w-2 h-2 bg-muted-foreground rounded-full",
-                                i < dotCount ? "opacity-100" : "opacity-30",
-                                "transition-opacity duration-300"
-                            )}
-                        />
-                    ))} */}
-                    <div className="relative  w-6 h-6  subtle-pulse">
-                        <img
-                            src="/icons/dot.png"
-                            alt="thinking icon"
-                            className="w-full h-full animate-heartbeat"
-                        />
-
-                    </div>
-                </div>
-            ) : (
+        <div
+            role="status"
+            aria-live="polite"
+            aria-label="Generando respuesta"
+            className="flex items-center gap-2.5 my-4 text-muted-foreground"
+        >
+            <ThinkingBarsIcon className="h-5 w-5 shrink-0" />
+            {phase === "text" && (
                 <p
                     className={clsx(
-                        "text-sm text-muted-foreground transition-all duration-500",
-                        fade ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"
+                        "text-[13.5px] font-medium tracking-tight transition-all duration-300",
+                        fade ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0",
                     )}
                 >
                     {message}

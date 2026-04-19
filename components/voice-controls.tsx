@@ -243,36 +243,44 @@ useEffect(() => {
 
   return (
     <TooltipProvider>
-      <div className={`flex items-center gap-2 ${className}`}>
-        {/* Recording Button */}
+      <div className={`flex items-center gap-1 ${className}`}>
+        {/* Mic — ghost icon button, matches the rest of the composer's
+            icon vocabulary (h-9 w-9 rounded-full, no border, hover bg
+            on the foreground tint). When recording, swaps to a Square
+            stop glyph and the recording counter floats over the corner. */}
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              variant={isRecording ? "destructive" : "outline"}
-              size="sm"
+              variant="ghost"
+              size="icon"
               onClick={isRecording ? stopRecording : startRecording}
               disabled={isLoading}
-              className="relative"
+              aria-label={isRecording ? "Detener grabación" : "Dictar al chat"}
+              className={`relative h-9 w-9 rounded-full p-0 transition-all duration-200 active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
+                isRecording
+                  ? "bg-red-500/10 text-red-500 hover:bg-red-500/15 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+                  : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+              }`}
             >
               {isRecording ? (
                 <>
-                  <Square className="w-4 h-4" />
+                  <Square className="h-[14px] w-[14px] fill-current" strokeWidth={0} />
                   {recordingTime > 0 && (
                     <Badge
                       variant="destructive"
-                      className="absolute -top-2 -right-2 text-xs px-1"
+                      className="absolute -top-1.5 -right-1.5 text-[10px] px-1 h-4 leading-tight"
                     >
                       {formatTime(recordingTime)}
                     </Badge>
                   )}
                 </>
               ) : (
-                <Mic className="w-4 h-4" />
+                <Mic className="h-[17px] w-[17px]" strokeWidth={1.75} />
               )}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">
-            <p>{isRecording ? "Stop recording" : "Record audio"}</p>
+            <p>{isRecording ? "Detener grabación" : "Dictar al chat"}</p>
           </TooltipContent>
         </Tooltip>
 

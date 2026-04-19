@@ -33,6 +33,8 @@ import {
   BookOpen,
   Download,
   Sparkles,
+  AudioLines,
+  RefreshCw,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -44,6 +46,13 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
+import {
+  extractFilesFromDataTransfer,
+  extractFromClipboardEvent,
+  validateBatch,
+  filesToFileList,
+  logIngest,
+} from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { aiService } from "@/lib/ai-service"
@@ -720,47 +729,44 @@ const getFileIcon = (file: any) => {
 const ActiveOptionsDisplay = ({
   uploadedFiles,
   removeFile,
-  uploadProgress
+  uploadProgress,
+  retryUpload,
 }: {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
   uploadProgress: { [key: string]: number };
+  retryUpload?: (file: any) => void;
 }) => {
   if (uploadedFiles.length === 0) return null;
 
   return (
     <div className="p-3  bg-background">
       <div className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto">
-        {/* Uploaded Files iterate karein */}
         {uploadedFiles.map((file, index) => {
           const isImage = file.type?.startsWith('image/');
           const fileId = file.id || file.tempId;
           const progress = uploadProgress[fileId] || 0;
           const isUploading = progress > 0 && progress < 100;
-          const isComplete = progress === 100 || file.url;
+          const isFailed = file.status === 'failed';
           const imageSizeClass = uploadedFiles.length > 1 ? 'h-20 w-20' : 'h-32 w-32';
 
           return (
             <div
               key={index}
               className={`
-                relative // 'X' button ki absolute positioning ke liye
-                border border-gray-200
+                relative
+                border ${isFailed ? 'border-red-300 dark:border-red-700/50' : 'border-gray-200 dark:border-border/60'}
                 rounded-xl
                 text-sm
-                ${isImage ? `${imageSizeClass} p-0` : 'flex items-center gap-2 px-2 py-1'} // Conditional sizing aur padding
+                ${isImage ? `${imageSizeClass} p-0` : 'flex items-center gap-2 px-2 py-1'}
               `}
+              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : undefined}
             >
               {isImage ? (
                 <>
-                  {/* Image files ke liye: badi image aur uske upar progress/X button */}
-                  <div className="h-full w-full rounded-md overflow-hidden bg-gray-100 flex items-center justify-center relative">
+                  <div className="h-full w-full rounded-md overflow-hidden bg-gray-100 dark:bg-muted/40 flex items-center justify-center relative">
                     {file.preview ? (
-                      <img
-                        src={file.preview}
-                        alt={file.name}
-                        className="h-full w-full object-cover"
-                      />
+                      <img src={file.preview} alt={file.name} className="h-full w-full object-cover" />
                     ) : file.url ? (
                       <img
                         src={`${process.env.NEXT_PUBLIC_IMAGE_URL || ""}${file.url}`}
@@ -771,7 +777,6 @@ const ActiveOptionsDisplay = ({
                       getFileIcon(file)
                     )}
 
-                    {/* Upload Progress Overlay */}
                     {isUploading && (
                       <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                         <div className="text-center">
@@ -780,30 +785,48 @@ const ActiveOptionsDisplay = ({
                         </div>
                       </div>
                     )}
+
+                    {/* Failed overlay — retry CTA over the thumbnail */}
+                    {isFailed && retryUpload && (
+                      <div className="absolute inset-0 bg-red-900/55 flex flex-col items-center justify-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 w-7 p-0 rounded-full bg-white/95 hover:bg-white text-red-600"
+                          onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
+                          title="Reintentar subida"
+                          aria-label="Reintentar subida"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        </Button>
+                        <span className="text-[9.5px] text-white font-medium">Reintentar</span>
+                      </div>
+                    )}
                   </div>
 
                   {!isUploading && (
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="absolute top-1 right-1 h-6 w-6 p-0 bg-white rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
-                      onClick={() => removeFile(index)}
+                      className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                      onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                      title="Quitar"
+                      aria-label="Quitar archivo"
                     >
-                      <X className="h-4 w-4 text-gray-600" />
+                      <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
                     </Button>
                   )}
                 </>
               ) : (
                 <>
-                  {/* Non-image files ke liye: purana structure (icon, naam, progress aur 'X' button) */}
                   {getFileIcon(file)}
                   <div className="flex flex-col flex-1 min-w-0">
-                    <span className="truncate font-medium text-[13px]">
+                    <span className={`truncate font-medium text-[13px] ${isFailed ? 'text-red-600 dark:text-red-400' : ''}`}>
                       {file.name}
                     </span>
                     {isUploading && (
                       <div className="flex items-center gap-1 mt-1">
-                        <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="flex-1 h-1 bg-gray-200 dark:bg-muted rounded-full overflow-hidden">
                           <div
                             className="h-full bg-blue-500 transition-all duration-300"
                             style={{ width: `${progress}%` }}
@@ -812,16 +835,37 @@ const ActiveOptionsDisplay = ({
                         <span className="text-[10px] text-muted-foreground">{Math.round(progress)}%</span>
                       </div>
                     )}
+                    {isFailed && (
+                      <span className="text-[10px] text-red-500 dark:text-red-400 mt-0.5 truncate">
+                        {file.uploadError || 'Error de subida'}
+                      </span>
+                    )}
                   </div>
                   {!isUploading && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-5 w-5 p-0 hover:bg-gray-200 rounded-full ml-1"
-                      onClick={() => removeFile(index)}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
+                    <div className="flex items-center gap-0.5 ml-1">
+                      {isFailed && retryUpload && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-5 w-5 p-0 hover:bg-red-500/10 rounded-full text-red-600 dark:text-red-400"
+                          onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
+                          title="Reintentar subida"
+                          aria-label="Reintentar subida"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 w-5 p-0 hover:bg-gray-200 dark:hover:bg-muted rounded-full"
+                        onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                        title="Quitar"
+                        aria-label="Quitar archivo"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
                   )}
                 </>
               )}
@@ -1406,6 +1450,15 @@ function ChatInterfaceContent() {
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
+  // Mirror of `uploadedFiles` for use inside async/event handlers that
+  // outlive the render closure (paste listener, drop handler, etc.) —
+  // reading from state directly would capture stale values.
+  const uploadedFilesRef = React.useRef<any[]>([]);
+  React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
+  // True while the IME is composing a multi-keystroke character (CJK,
+  // Spanish accents, dead keys). Paste handler must NOT intercept paste
+  // during composition or it scrambles the in-flight character.
+  const isComposingRef = React.useRef(false);
 
   // Auto-scroll to bottom function
   const scrollToBottom = React.useCallback(() => {
@@ -2245,137 +2298,149 @@ But first, you need to connect your Spotify account securely using the button be
     };
   }, [currentChat?.id, selectChat]);
 
-  // File upload logic with instant preview and progress
-  const handleAndUploadFiles = async (files: FileList) => {
+  // File upload logic with instant preview, REAL progress, retry, and
+  // source-channel telemetry. All state writes use functional updates
+  // so concurrent drops/pastes can't clobber each other.
+  const handleAndUploadFiles = async (
+    files: FileList,
+    sourceChannel: string = 'picker',
+  ) => {
     if (files.length === 0) return;
 
     let filesToUpload = Array.from(files);
 
     if (chatType === 'video' || chatType === 'image') {
       const imageFiles = filesToUpload.filter(file => file.type.startsWith('image/'));
-
       if (imageFiles.length === 0) {
-        toast.error("Only image files are allowed in image/video mode.");
+        toast.error("Solo se permiten imágenes en este modo.");
         return;
       }
-
       filesToUpload = imageFiles;
     }
 
-    // Create temporary file objects with previews immediately
-    const tempFiles = await Promise.all(
-      filesToUpload.map(async (file) => {
-        const tempId = `temp-${Date.now()}-${Math.random()}`;
-        let preview = null;
+    // Idempotency key — backend dedupes retries of the SAME batch attempt.
+    const idempotencyKey = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-        // Create preview for images
-        if (file.type.startsWith('image/')) {
-          preview = URL.createObjectURL(file);
-        }
-
-        return {
-          tempId,
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          preview,
-          file, // Keep reference to original file
-        };
-      })
-    );
-
-    // Add temp files to UI immediately
-    setUploadedFiles([...uploadedFiles, ...tempFiles]);
-
-    // Initialize progress for each file
-    const initialProgress: { [key: string]: number } = {};
-    tempFiles.forEach(tf => {
-      initialProgress[tf.tempId] = 0;
+    // Build temp objects with stable IDs we can map to per-file progress.
+    const tempFiles = filesToUpload.map((file) => {
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+      return {
+        tempId,
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        preview,
+        file,
+        sourceChannel,
+        status: 'uploading' as 'uploading' | 'ready' | 'failed',
+      };
     });
-    setUploadProgress(prev => ({ ...prev, ...initialProgress }));
+
+    setUploadedFiles((cur: any[]) => [...cur, ...tempFiles]);
+
+    // Initialize per-temp progress at 0.
+    setUploadProgress(prev => {
+      const next = { ...prev };
+      tempFiles.forEach(tf => { next[tf.tempId] = 0; });
+      return next;
+    });
 
     setIsUploading(true);
 
     try {
-      // Simulate upload progress (since we don't have real progress from API)
-      const progressInterval = setInterval(() => {
-        setUploadProgress(prev => {
-          const newProgress = { ...prev };
-          tempFiles.forEach(tf => {
-            if (newProgress[tf.tempId] < 90) {
-              newProgress[tf.tempId] = Math.min(90, newProgress[tf.tempId] + 10);
-            }
-          });
-          return newProgress;
-        });
-      }, 200);
+      const dt = new DataTransfer();
+      filesToUpload.forEach(file => dt.items.add(file));
 
-      // Create a new FileList-like object from the actual File objects
-      const dataTransfer = new DataTransfer();
-      filesToUpload.forEach(file => {
-        dataTransfer.items.add(file);
+      // Real upload progress via XHR (see lib/api.ts uploadFiles).
+      // The total covers all files in this batch — we apply the same
+      // percent to every temp chip in the batch (multipart form makes
+      // per-file progress impossible without a chunked endpoint).
+      const response: any = await apiClient.uploadFiles(dt.files, {
+        sourceChannel,
+        idempotencyKey,
+        onProgress: (pct) => {
+          setUploadProgress(prev => {
+            const next = { ...prev };
+            tempFiles.forEach(tf => { next[tf.tempId] = pct; });
+            return next;
+          });
+        },
       });
 
-      // Actual upload with proper FileList
-      const response = await apiClient.uploadFiles(dataTransfer.files);
-
-      clearInterval(progressInterval);
-
       if (response.files) {
-        // Update progress to 100%
-        const finalProgress: { [key: string]: number } = {};
-        tempFiles.forEach(tf => {
-          finalProgress[tf.tempId] = 100;
+        // Snap to 100% and swap temps for server entries — preserve the
+        // original File blob and preview so the chip thumbnail doesn't
+        // flash off during the swap.
+        setUploadProgress(prev => {
+          const next = { ...prev };
+          tempFiles.forEach(tf => { next[tf.tempId] = 100; });
+          return next;
         });
-        setUploadProgress(prev => ({ ...prev, ...finalProgress }));
+        const merged = response.files.map((f: any, idx: number) => ({
+          ...f,
+          file: tempFiles[idx]?.file ?? f.file,
+          preview: tempFiles[idx]?.preview ?? f.preview,
+          sourceChannel,
+          status: 'ready' as const,
+        }));
+        const tempIds = new Set(tempFiles.map(tf => tf.tempId));
+        setUploadedFiles((cur: any[]) => [
+          ...cur.filter((f: any) => !tempIds.has(f.tempId)),
+          ...merged,
+        ]);
 
-        // Replace temp files with actual uploaded files
-        const withoutTemp = uploadedFiles.filter((f: any) => !tempFiles.find(tf => tf.tempId === f.tempId));
-        setUploadedFiles([...withoutTemp, ...response.files]);
-
-        // Clean up previews
-        tempFiles.forEach(tf => {
-          if (tf.preview) {
-            URL.revokeObjectURL(tf.preview);
-          }
-        });
-
-        // Clear progress after a short delay
         setTimeout(() => {
           setUploadProgress(prev => {
-            const newProgress = { ...prev };
-            tempFiles.forEach(tf => {
-              delete newProgress[tf.tempId];
-            });
-            return newProgress;
+            const next = { ...prev };
+            tempFiles.forEach(tf => { delete next[tf.tempId]; });
+            return next;
           });
         }, 500);
 
-        toast.success(`${response.files.length} file(s) uploaded successfully`);
+        // Quiet on success — the chip itself is the confirmation.
+        // (Toast was noisy after every drag-drop.)
       } else {
-        toast.error('File upload failed');
-        // Remove temp files on failure
-        const filteredFiles = uploadedFiles.filter((f: any) => !tempFiles.find(tf => tf.tempId === f.tempId));
-        setUploadedFiles(filteredFiles);
+        // Mark temps as failed so the chip shows a retry button.
+        const tempIds = new Set(tempFiles.map(tf => tf.tempId));
+        setUploadedFiles((cur: any[]) =>
+          cur.map(f => tempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: 'Respuesta sin archivos' } : f)
+        );
+        toast.error('La subida falló. Toca el ícono de reintento en el archivo.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('File upload failed:', error);
-      toast.error('File upload failed');
-
-      // Remove temp files on error
-      const filteredFiles = uploadedFiles.filter((f: any) => !tempFiles.find(tf => tf.tempId === f.tempId));
-      setUploadedFiles(filteredFiles);
-
-      // Clean up previews
-      tempFiles.forEach(tf => {
-        if (tf.preview) {
-          URL.revokeObjectURL(tf.preview);
-        }
-      });
+      const reason = error?.message || 'Error de subida';
+      toast.error(reason);
+      // Mark as failed (don't remove) so the user can retry without
+      // re-dragging the file.
+      const tempIds = new Set(tempFiles.map(tf => tf.tempId));
+      setUploadedFiles((cur: any[]) =>
+        cur.map(f => tempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: reason } : f)
+      );
+      // Previews are intentionally KEPT alive on failure so the chip
+      // can render its thumbnail next to the retry button.
     } finally {
       setIsUploading(false);
     }
   };
+
+  /**
+   * Retry an upload that previously failed. Reuses the in-memory File
+   * object stored on the chip — no need for the user to re-drop.
+   */
+  const retryUpload = React.useCallback((failedFile: any) => {
+    if (!failedFile?.file || !(failedFile.file instanceof File)) {
+      toast.error('No se puede reintentar — el archivo se perdió. Vuelve a arrastrarlo.');
+      return;
+    }
+    setUploadedFiles((cur: any[]) =>
+      cur.filter(f => f.tempId !== failedFile.tempId && f.id !== failedFile.id)
+    );
+    const dt = new DataTransfer();
+    dt.items.add(failedFile.file);
+    handleAndUploadFiles(dt.files, failedFile.sourceChannel || 'retry');
+  }, []);
 
   // Drag and Drop event handlers with drag counter to prevent flickering
   const dragCounter = React.useRef(0);
@@ -2408,10 +2473,154 @@ But first, you need to connect your Spotify account securely using the button be
     e.stopPropagation();
     setIsDragging(false);
     dragCounter.current = 0;
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleAndUploadFiles(e.dataTransfer.files);
+    // Use the unified extractor — pulls from BOTH .files and .items so
+    // we catch files dragged from sources where one is empty (Linux
+    // Firefox + Edge legacy expose only via .items; Safari often only
+    // via .files). Then run the validate-batch gate for clean errors.
+    const all = extractFilesFromDataTransfer(e.dataTransfer);
+    if (all.length === 0) return;
+    const { accepted, rejected } = validateBatch(all, {
+      existingCount: uploadedFilesRef.current.length,
+    });
+    if (rejected.length > 0) {
+      // Group identical reasons into a single toast so 8 rejected files
+      // don't spam 8 toasts.
+      const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
+        acc[r.reason] = (acc[r.reason] || 0) + 1;
+        return acc;
+      }, {});
+      Object.entries(grouped).forEach(([reason, n]) => {
+        toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
+      });
+    }
+    if (accepted.length > 0) {
+      logIngest({
+        source: 'drop',
+        count: accepted.length,
+        total_bytes: accepted.reduce((s, f) => s + f.size, 0),
+        rejected_count: rejected.length,
+        rejected_codes: rejected.map(r => r.code),
+      });
+      handleAndUploadFiles(filesToFileList(accepted), 'drop');
     }
   };
+
+  /**
+   * Clipboard paste handler — wired to BOTH the textarea (so it fires
+   * even when text is pasted) AND a document-level listener (so paste
+   * works when the input isn't focused, matching Slack/Discord UX).
+   *
+   * Behavior matrix:
+   *   pure text         → default (browser inserts into textarea)
+   *   pure files        → ingest, prevent default
+   *   text + files      → ingest files AND let text insert (combined send)
+   *   image blob only   → ingest as a synthesized "pasted-<ts>.png" file
+   *   pure HTML         → strip to plain text, prevent default
+   */
+  const handleClipboardPaste = React.useCallback((e: ClipboardEvent | React.ClipboardEvent) => {
+    // CRITICAL: never intercept paste while the IME is composing — would
+    // scramble the in-flight character (Spanish accent, CJK, etc.).
+    if (isComposingRef.current) return;
+
+    const native = ('nativeEvent' in e ? e.nativeEvent : e) as ClipboardEvent;
+    const cd = native.clipboardData;
+    if (!cd) return;
+
+    const { files, text, html } = extractFromClipboardEvent(native, { includeHtml: true });
+
+    // ─── No files ───────────────────────────────────────────────────
+    if (files.length === 0) {
+      // text/uri-list — user copied a link from the address bar or a
+      // browser tab tab strip. Insert the URL(s) as plain text instead
+      // of letting Chrome paste the HTML <a> wrapper.
+      const uriList = cd.getData('text/uri-list');
+      if (uriList && !text) {
+        const urls = uriList.split('\n').map(s => s.trim()).filter(Boolean).filter(u => !u.startsWith('#'));
+        if (urls.length > 0) {
+          e.preventDefault();
+          setInput(prev => prev + (prev ? ' ' : '') + urls.join(' '));
+          return;
+        }
+      }
+      // HTML-only paste (rare — usually browsers attach text/plain too).
+      // Strip to text via DOM parsing so we don't lose the content.
+      if (!text && html) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        const fallbackText = (tmp.textContent || tmp.innerText || '').trim();
+        if (fallbackText) {
+          e.preventDefault();
+          setInput(prev => prev + fallbackText);
+        }
+      }
+      // Otherwise let the browser do its native plain-text paste.
+      return;
+    }
+
+    // ─── Files present — ingest ─────────────────────────────────────
+    const { accepted, rejected } = validateBatch(files, {
+      existingCount: uploadedFilesRef.current.length,
+    });
+    if (rejected.length > 0) {
+      const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
+        acc[r.reason] = (acc[r.reason] || 0) + 1;
+        return acc;
+      }, {});
+      Object.entries(grouped).forEach(([reason, n]) => {
+        toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
+      });
+    }
+    if (accepted.length > 0) {
+      // Source-channel taxonomy: synthesized "pasted-…" filename means
+      // an image blob arrived without a name (clipboard image, screenshot).
+      const isImageOnly = accepted.every(f =>
+        f.type.startsWith('image/') && /^pasted-/.test(f.name),
+      );
+      const channel = isImageOnly ? 'paste-image' : 'paste-files';
+      logIngest({
+        source: channel,
+        count: accepted.length,
+        total_bytes: accepted.reduce((s, f) => s + f.size, 0),
+        rejected_count: rejected.length,
+        rejected_codes: rejected.map(r => r.code),
+        had_text: !!text,
+      });
+      // Prevent default so the OS file path string doesn't get pasted
+      // as text next to the file. Then handle text ourselves if present.
+      if ('preventDefault' in e) e.preventDefault();
+      if (text) setInput(prev => prev + text);
+      handleAndUploadFiles(filesToFileList(accepted), channel);
+    }
+  }, []);
+
+  // Document-level paste listener — catches pastes when the textarea
+  // isn't focused (e.g., user paste into the canvas while reading a
+  // previous message). Matches Slack/Discord UX.
+  React.useEffect(() => {
+    const onDocPaste = (e: ClipboardEvent) => {
+      // CRITICAL: skip if the React onPaste handler on the textarea
+      // already handled this event — `defaultPrevented` is set by the
+      // React handler when it ingests files. Without this guard the
+      // same screenshot ends up duplicated (React handler + document
+      // handler both ingest it).
+      if (e.defaultPrevented) return;
+      // Also skip when the focused element is one of OUR textareas —
+      // even if the React handler decided not to preventDefault (pure
+      // text paste), we don't want the doc-level handler stealing it.
+      const target = e.target as HTMLElement | null;
+      if (target && (target as HTMLTextAreaElement) === textareaRef.current) return;
+
+      const cd = e.clipboardData;
+      if (!cd) return;
+      const hasFile =
+        (cd.files && cd.files.length > 0) ||
+        (cd.items && Array.from(cd.items).some(i => i.kind === 'file'));
+      if (!hasFile) return;
+      handleClipboardPaste(e);
+    };
+    document.addEventListener('paste', onDocPaste);
+    return () => document.removeEventListener('paste', onDocPaste);
+  }, [handleClipboardPaste]);
 
   const handleSend = async () => {
     const msg = input.trim();
@@ -4054,205 +4263,220 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     The focus state is the ONLY place accent color appears —
                     idle never glows.
                   */}
+                  {/*
+                    Composer — pill-styled card. rounded-3xl gives the
+                    single-row state a pill feel AND looks balanced when
+                    chips/tools push it taller. All ingestion artifacts
+                    (file chips, selected-text, active tools) live INSIDE
+                    the same surface so the user sees one coherent input
+                    area, not stacked floating elements above the bar.
+                  */}
                   <div
                     className={cn(
-                      "composer-surface group/composer relative overflow-hidden rounded-[24px]",
+                      "composer-surface group/composer relative overflow-hidden rounded-3xl",
                       "bg-background",
-                      "ring-1 ring-border/70 dark:ring-0",
-                      "shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.10)] dark:shadow-none",
-                      "transition-[border-color,background-color,box-shadow] duration-200 ease-out",
-                      "hover:ring-border dark:hover:ring-0",
-                      "hover:shadow-[0_1px_2px_rgba(0,0,0,0.05),0_10px_32px_-12px_rgba(0,0,0,0.14)] dark:hover:shadow-none",
-                      "focus-within:ring-foreground/25 dark:focus-within:ring-0",
-                      "focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.05),0_12px_36px_-10px_rgba(0,0,0,0.18)] dark:focus-within:shadow-none",
+                      "ring-1 ring-black/[0.08] dark:ring-0",
+                      "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-none",
+                      "transition-[border-color,background-color,box-shadow,ring-color] duration-200 ease-out",
+                      "hover:ring-black/[0.12] dark:hover:ring-0",
+                      "focus-within:ring-2 focus-within:ring-foreground/[0.14] dark:focus-within:ring-0",
                     )}
-                    style={{ minHeight: "96px" }}
                   >
+                    {/* Chips zone — rendered ABOVE the input row, INSIDE
+                        the same rounded card. Hidden entirely when there
+                        are no files / selected text / active tools, so
+                        empty composer stays as a clean single line. */}
                     <ActiveOptionsDisplay
                       uploadedFiles={uploadedFiles}
                       removeFile={removeFile}
                       uploadProgress={uploadProgress}
+                      retryUpload={retryUpload}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    <Textarea
-                      ref={textareaRef}
-                      value={input}
-                      onChange={handleTextareaChange}
-                      onKeyDown={handleKeyDown}
-                      onKeyPress={handleKeyPress}
-                      placeholder={
-                        isImageGenerationActive
-                          ? "Describe la imagen que quieres crear"
-                          : isVideoGenerationActive
-                            ? "Describe el video que quieres crear"
-                            : isWebSearchActive
-                              ? "Busca en la web…"
-                              : isGmailActive
-                                ? "Comando de Gmail"
-                                : (isGoogleCalendarActive || isGoogleDriveActive)
-                                  ? "Comando de Google"
-                                  : isSpotifyActive
-                                    ? "Comando de Spotify"
-                                    : isWordConnectorActive
-                                      ? "Escribe un mensaje (Word Connector activo)"
-                                      : chatType === 'thesis'
-                                        ? "Introduce el tema de investigación"
-                                        : "Pregunta a Sira GPT"
-                      }
-                      className={cn(
-                        "w-full resize-none border-none bg-transparent",
-                        "px-5 pt-4 pb-14",
-                        "text-[15px] leading-[1.55] tracking-[-0.005em] text-foreground",
-                        // Placeholder — weight medium, dark-mode token #667085
-                        "placeholder:text-muted-foreground/60 placeholder:font-medium",
-                        "dark:placeholder:text-[hsl(var(--text-tertiary))] dark:placeholder:font-medium",
-                        "outline-none ring-0 focus:outline-none focus:ring-0",
-                        "rounded-none transition-colors duration-200",
-                      )}
-                      style={{
-                        minHeight: "60px",
-                        maxHeight: "320px",
-                        overflowY: "auto",
-                        overflowX: "hidden",
-                        wordWrap: "break-word",
-                        border: "none",
-                        outline: "none",
-                        boxShadow: "none",
-                      }}
-                      rows={1}
-                      disabled={
-                        isLoading ||
-                        isGeneratingImage ||
-                        isGeneratingVideo ||
-
-                        isWebSearching
-                      }
+                    <ActiveToolsDisplay
+                      isWebSearchActive={isWebSearchActive}
+                      setIsWebSearchActive={setIsWebSearchActive}
+                      isImageGenerationActive={isImageGenerationActive}
+                      setIsImageGenerationActive={setIsImageGenerationActive}
+                      isVideoGenerationActive={isVideoGenerationActive}
+                      setIsVideoGenerationActive={setIsVideoGenerationActive}
+                      isComputerUseActive={isComputerUseActive}
+                      setIsComputerUseActive={setIsComputerUseActive}
+                      computerUseStatus={computerUseStatus}
+                      isGmailActive={isGmailActive}
+                      setIsGmailActive={setIsGmailActive}
+                      isGoogleCalendarActive={isGoogleCalendarActive}
+                      setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                      isGoogleDriveActive={isGoogleDriveActive}
+                      setIsGoogleDriveActive={setIsGoogleDriveActive}
+                      isSpotifyActive={isSpotifyActive}
+                      setIsSpotifyActive={setIsSpotifyActive}
+                      isWordConnectorActive={isWordConnectorActive}
+                      setIsWordConnectorActive={setIsWordConnectorActive}
+                      isExcelConnectorActive={isExcelConnectorActive}
+                      setIsExcelConnectorActive={setIsExcelConnectorActive}
+                      chatType={chatType}
+                      setChatType={setChatType}
+                      handleComputerUseToggle={handleComputerUseToggle}
+                      handleGmailToggle={handleGmailToggle}
+                      handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                      handleGoogleDriveToggle={handleGoogleDriveToggle}
+                      handleSpotifyToggle={handleSpotifyToggle}
+                      handleWordConnectorToggle={handleWordConnectorToggle}
+                      handleExcelConnectorToggle={handleExcelConnectorToggle}
                     />
                     <TooltipProvider>
-                      <div className="absolute bottom-0 left-0 right-0 flex items-center gap-1.5 bg-transparent px-2.5 pb-2.5 pt-1">
-                          <ActionsDropdown
-                            chatType={chatType}
-                            setChatType={setChatType}
-                            currentPlan={currentPlan}
-                            isWebSearchActive={isWebSearchActive}
-                            setIsWebSearchActive={setIsWebSearchActive}
-                            isImageGenerationActive={isImageGenerationActive}
-                            setIsImageGenerationActive={setIsImageGenerationActive}
-                            isVideoGenerationActive={isVideoGenerationActive}
-                            setIsVideoGenerationActive={setIsVideoGenerationActive}
-                            isComputerUseActive={isComputerUseActive}
-                            setIsComputerUseActive={setIsComputerUseActive}
-                            computerUseStatus={computerUseStatus}
-                            isGmailActive={isGmailActive}
-                            setIsGmailActive={setIsGmailActive}
-                            isGoogleCalendarActive={isGoogleCalendarActive}
-                            setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                            isGoogleDriveActive={isGoogleDriveActive}
-                            setIsGoogleDriveActive={setIsGoogleDriveActive}
-                            isSpotifyActive={isSpotifyActive}
-                            setIsSpotifyActive={setIsSpotifyActive}
-                            isWordConnectorActive={isWordConnectorActive}
-                            setIsWordConnectorActive={setIsWordConnectorActive}
-                            isExcelConnectorActive={isExcelConnectorActive}
-                            setIsExcelConnectorActive={setIsExcelConnectorActive}
-                            setShowAudioPanel={setShowAudioPanel}
+                      <div className="flex items-center gap-2 pl-2 pr-2 py-1.5">
+                        {/* LEFT — Plus / attach + tool selector */}
+                        <ActionsDropdown
+                          chatType={chatType}
+                          setChatType={setChatType}
+                          currentPlan={currentPlan}
+                          isWebSearchActive={isWebSearchActive}
+                          setIsWebSearchActive={setIsWebSearchActive}
+                          isImageGenerationActive={isImageGenerationActive}
+                          setIsImageGenerationActive={setIsImageGenerationActive}
+                          isVideoGenerationActive={isVideoGenerationActive}
+                          setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isComputerUseActive={isComputerUseActive}
+                          setIsComputerUseActive={setIsComputerUseActive}
+                          computerUseStatus={computerUseStatus}
+                          isGmailActive={isGmailActive}
+                          setIsGmailActive={setIsGmailActive}
+                          isGoogleCalendarActive={isGoogleCalendarActive}
+                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                          isGoogleDriveActive={isGoogleDriveActive}
+                          setIsGoogleDriveActive={setIsGoogleDriveActive}
+                          isSpotifyActive={isSpotifyActive}
+                          setIsSpotifyActive={setIsSpotifyActive}
+                          isWordConnectorActive={isWordConnectorActive}
+                          setIsWordConnectorActive={setIsWordConnectorActive}
+                          isExcelConnectorActive={isExcelConnectorActive}
+                          setIsExcelConnectorActive={setIsExcelConnectorActive}
+                          setShowAudioPanel={setShowAudioPanel}
+                          handleComputerUseToggle={handleComputerUseToggle}
+                          handleGmailToggle={handleGmailToggle}
+                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                          handleGoogleDriveToggle={handleGoogleDriveToggle}
+                          handleSpotifyToggle={handleSpotifyToggle}
+                          handleWordConnectorToggle={handleWordConnectorToggle}
+                          handleExcelConnectorToggle={handleExcelConnectorToggle}
+                          closeAllToolsAndConnectors={closeAllToolsAndConnectors}
+                          setAudioTab={setAudioTab}
+                          handleAndUploadFiles={handleAndUploadFiles}
+                          isUploading={isUploading}
+                          isWebSearching={isWebSearching}
+                          isLoading={isLoading}
+                          isGeneratingImage={isGeneratingImage}
+                          isGeneratingVideo={isGeneratingVideo}
+                          isGeneratingPPT={isGeneratingPPT}
+                          isProcessingGmail={isProcessingGmail}
+                        />
 
-                            handleComputerUseToggle={handleComputerUseToggle}
-                            handleGmailToggle={handleGmailToggle}
-                            handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                            handleGoogleDriveToggle={handleGoogleDriveToggle}
-                            handleSpotifyToggle={handleSpotifyToggle}
-                            handleWordConnectorToggle={handleWordConnectorToggle}
-                            handleExcelConnectorToggle={handleExcelConnectorToggle}
-                            closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                            setAudioTab={setAudioTab}
-                            handleAndUploadFiles={handleAndUploadFiles}
-                            isUploading={isUploading}
-                            isWebSearching={isWebSearching}
-                            isLoading={isLoading}
-                            isGeneratingImage={isGeneratingImage}
-                            isGeneratingVideo={isGeneratingVideo}
-                            isGeneratingPPT={isGeneratingPPT}
-                            isProcessingGmail={isProcessingGmail}
-                          />
-                          <ActiveToolsDisplay
-                            isWebSearchActive={isWebSearchActive}
-                            setIsWebSearchActive={setIsWebSearchActive}
-                            isImageGenerationActive={isImageGenerationActive}
-                            setIsImageGenerationActive={setIsImageGenerationActive}
-                            isVideoGenerationActive={isVideoGenerationActive}
-                            setIsVideoGenerationActive={setIsVideoGenerationActive}
-                            isComputerUseActive={isComputerUseActive}
-                            setIsComputerUseActive={setIsComputerUseActive}
-                            computerUseStatus={computerUseStatus}
-                            isGmailActive={isGmailActive}
-                            setIsGmailActive={setIsGmailActive}
-                            isGoogleCalendarActive={isGoogleCalendarActive}
-                            setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                            isGoogleDriveActive={isGoogleDriveActive}
-                            setIsGoogleDriveActive={setIsGoogleDriveActive}
-                            isSpotifyActive={isSpotifyActive}
-                            setIsSpotifyActive={setIsSpotifyActive}
-                            isWordConnectorActive={isWordConnectorActive}
-                            setIsWordConnectorActive={setIsWordConnectorActive}
-                            isExcelConnectorActive={isExcelConnectorActive}
-                            setIsExcelConnectorActive={setIsExcelConnectorActive}
-                            chatType={chatType}
-                            setChatType={setChatType}
+                        {/* CENTER — single-line textarea, expands vertically up to 200px */}
+                        <Textarea
+                          ref={textareaRef}
+                          value={input}
+                          onChange={handleTextareaChange}
+                          onKeyDown={handleKeyDown}
+                          onKeyPress={handleKeyPress}
+                          onPaste={handleClipboardPaste}
+                          onCompositionStart={() => { isComposingRef.current = true }}
+                          onCompositionEnd={() => { isComposingRef.current = false }}
+                          placeholder={
+                            isImageGenerationActive
+                              ? "Describe la imagen que quieres crear"
+                              : isVideoGenerationActive
+                                ? "Describe el video que quieres crear"
+                                : isWebSearchActive
+                                  ? "Busca en la web"
+                                  : isGmailActive
+                                    ? "Comando de Gmail"
+                                    : (isGoogleCalendarActive || isGoogleDriveActive)
+                                      ? "Comando de Google"
+                                      : isSpotifyActive
+                                        ? "Comando de Spotify"
+                                        : isWordConnectorActive
+                                          ? "Escribe un mensaje (Word Connector activo)"
+                                          : chatType === 'thesis'
+                                            ? "Introduce el tema de investigación"
+                                            : "Pregunta lo que quieras"
+                          }
+                          className={cn(
+                            "min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
+                            "py-1.5 px-1",
+                            "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
+                            "placeholder:text-muted-foreground/65 placeholder:font-normal",
+                            "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+                            "outline-none ring-0 focus:outline-none focus:ring-0",
+                            "rounded-none transition-colors duration-200",
+                          )}
+                          style={{
+                            minHeight: "24px",
+                            maxHeight: "200px",
+                            overflowY: "auto",
+                            overflowX: "hidden",
+                            wordWrap: "break-word",
+                            border: "none",
+                            outline: "none",
+                            boxShadow: "none",
+                          }}
+                          rows={1}
+                          disabled={isLoading || isGeneratingImage || isGeneratingVideo || isWebSearching}
+                        />
 
-                            handleComputerUseToggle={handleComputerUseToggle}
-                            handleGmailToggle={handleGmailToggle}
-                            handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                            handleGoogleDriveToggle={handleGoogleDriveToggle}
-                            handleSpotifyToggle={handleSpotifyToggle}
-                            handleWordConnectorToggle={handleWordConnectorToggle}
-                            handleExcelConnectorToggle={handleExcelConnectorToggle}
-                          />
-                          <div className="flex-grow" />
-                          {!(isLoading && isStreaming) && (
-                            <>
-                              <VoiceControls
-                                onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                                className="flex items-center gap-0.5"
-                              />
-                              {/* Thin divider between secondary actions and the
-                                  primary Send button — visual anchor that
-                                  separates "compose" from "commit". */}
-                              <div className="mx-1 h-5 w-px bg-border/60" aria-hidden="true" />
+                        {/* RIGHT — VoiceControls (mic, ghost) + primary action.
+                            Primary swaps glyph based on state — never a
+                            decorative button. */}
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {!(isLoading || isStreaming || pendingStop || isSending) && (
+                            <VoiceControls
+                              onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                              className="flex items-center"
+                            />
+                          )}
+
+                          {!(isLoading || isStreaming || pendingStop || isSending) && (() => {
+                            const hasText = input.trim().length > 0
+                            const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
+                            // When the user has typed → Send. When idle → open Voice Studio.
+                            const action = hasText
+                              ? handleSend
+                              : () => { setShowAudioPanel(true); setAudioTab('stt') }
+                            const label = hasText ? 'Enviar (⏎)' : 'Modo de voz'
+                            const Icon = hasText ? ArrowUp : AudioLines
+                            return (
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
-                                    onClick={handleSend}
-                                    disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
+                                    onClick={action}
+                                    disabled={hasText && (isLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
                                     size="icon"
-                                    aria-label="Enviar mensaje"
-                                    title="Enviar (⏎)"
+                                    aria-label={label}
+                                    title={label}
                                     className={cn(
                                       "h-9 w-9 rounded-full p-0 transition-all duration-200",
                                       "bg-foreground text-background",
-                                      "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_2px_6px_-2px_rgba(0,0,0,0.14)]",
-                                      "hover:bg-foreground/90 hover:shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_12px_-4px_rgba(0,0,0,0.22)]",
+                                      "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
+                                      "hover:bg-foreground/90 hover:shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.18)]",
                                       "active:scale-[0.96]",
                                       "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100",
                                     )}
                                   >
-                                    {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
+                                    {busy ? (
                                       <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
                                     ) : (
-                                      <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
+                                      <Icon className="h-[16px] w-[16px]" strokeWidth={hasText ? 2.25 : 1.75} />
                                     )}
                                   </Button>
                                 </TooltipTrigger>
                                 <TooltipContent side="top">
-                                  <p>Enviar · ⏎</p>
+                                  <p>{label}</p>
                                 </TooltipContent>
                               </Tooltip>
-                            </>
-                          )}
+                            )
+                          })()}
 
-                          {/* Stop Button — shown during any in-flight state.
-                              Matches Send in size/radius so the swap reads as
-                              a single button morphing, not two different ones. */}
                           {(isLoading || isStreaming || pendingStop || isSending) && (
                             <Button
                               onClick={() => {
@@ -4270,7 +4494,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               className={cn(
                                 "h-9 w-9 rounded-full p-0 transition-all duration-200",
                                 "bg-foreground text-background",
-                                "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_2px_6px_-2px_rgba(0,0,0,0.14)]",
+                                "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
                                 "hover:bg-foreground/90 active:scale-[0.96]",
                                 "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
                               )}
@@ -4282,10 +4506,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               )}
                             </Button>
                           )}
-
                         </div>
-                      </TooltipProvider>
-                    </div>
+                      </div>
+                    </TooltipProvider>
+                  </div>
 
                   {/* <p className="text-center text-xs text-muted-foreground">
                 {isWebSearchActive
@@ -4432,213 +4656,233 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <div className="max-w-3xl mx-auto space-y-2 bg-background">
                       {/* Input Area */}
 
-                      {/* <div className="relative rounded-3xl border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden"> */}
-                      <div className="border-wrapper">
-                        <div className="relative  rounded-3xl .card border bg-background focus-within:ring-1 focus-within:ring-ring overflow-hidden ">
-                          <ActiveOptionsDisplay
-                            uploadedFiles={uploadedFiles}
-                            removeFile={removeFile}
-                            uploadProgress={uploadProgress}
-                          />
-                          <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                          <Textarea
-                            ref={textareaRef}
-                            value={input}
-                            onChange={handleTextareaChange}
-                            onKeyDown={handleKeyDown}
-                            onKeyPress={handleKeyPress}
-                            placeholder={
-                              isImageGenerationActive
-                                ? "Describe the image you want to create..."
-                                :
-                                isVideoGenerationActive
-                                  ? "Describe the video you want to create..."
-                                  : isWebSearchActive
-                                    ? "Enter your search query..."
-                                    : isGmailActive
-                                      ? "Enter Gmail command (e.g., 'send email to john@example.com about meeting')..."
-                                      : (isGoogleCalendarActive || isGoogleDriveActive)
-                                        ? "Enter Google command (e.g., 'show my meetings for tomorrow')..."
-                                        : isSpotifyActive
-                                          ? "Enter Spotify command (e.g., 'search for a song by Queen')..."
-                                          : isWordConnectorActive
-                                            ? "Type your message here (Word Connector is active)..."
-                                            : chatType === 'thesis'
-                                              ? "Enter research topic(s) (e.g., 'AI in Healthcare' or multiple topics: 'AI in Healthcare, ML Ethics')..."
-                                              : "Type your message here..."
-                            }
-                            className={`resize-none w-full bg-transparent border-none outline-none ring-0 focus:outline-none focus:ring-0  py-4 pb-14 transition-all duration-200 textarea-scrollbar`}
-                            style={{
-                              minHeight: "60px",
-                              maxHeight: "350px",
-                              overflowY: "auto",
-                              overflowX: "hidden",
-                              wordWrap: "break-word",
-                              border: "none",           // Inline style border remove
-                              outline: "none",          // Inline style outline remove
-                              boxShadow: "none",        // Remove focus shadow if any
-                            }}
-                            rows={1}
-                            disabled={
-                              isLoading ||
-                              isGeneratingVideo ||
-                              isGeneratingWord ||
-                              isGeneratingExcel ||
-                              isWebSearching
-                            }
-                          />
-                          <TooltipProvider>
-                            <div className="absolute bottom-0 left-0 right-0 flex items-center gap-2 rounded-b-xl bg-background/95 p-2 backdrop-blur-sm">
-                              <ActionsDropdown
-                                chatType={chatType}
-                                setChatType={setChatType}
-                                currentPlan={currentPlan}
-                                isWebSearchActive={isWebSearchActive}
-                                setIsWebSearchActive={setIsWebSearchActive}
-                                isImageGenerationActive={isImageGenerationActive}
-                                setIsImageGenerationActive={setIsImageGenerationActive}
-                                isVideoGenerationActive={isVideoGenerationActive}
-                                setIsVideoGenerationActive={setIsVideoGenerationActive}
-                                isComputerUseActive={isComputerUseActive}
-                                setIsComputerUseActive={setIsComputerUseActive}
-                                computerUseStatus={computerUseStatus}
-                                isGmailActive={isGmailActive}
-                                setIsGmailActive={setIsGmailActive}
-                                isGoogleCalendarActive={isGoogleCalendarActive}
-                                setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                                isGoogleDriveActive={isGoogleDriveActive}
-                                setIsGoogleDriveActive={setIsGoogleDriveActive}
-                                isSpotifyActive={isSpotifyActive}
-                                setIsSpotifyActive={setIsSpotifyActive}
-                                isWordConnectorActive={isWordConnectorActive}
-                                setIsWordConnectorActive={setIsWordConnectorActive}
-                                isExcelConnectorActive={isExcelConnectorActive}
-                                setIsExcelConnectorActive={setIsExcelConnectorActive}
-                                setShowAudioPanel={setShowAudioPanel}
-
-                                handleComputerUseToggle={handleComputerUseToggle}
-                                handleGmailToggle={handleGmailToggle}
-                                handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                                handleGoogleDriveToggle={handleGoogleDriveToggle}
-                                handleSpotifyToggle={handleSpotifyToggle}
-                                handleWordConnectorToggle={handleWordConnectorToggle}
-                                handleExcelConnectorToggle={handleExcelConnectorToggle}
-                                closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                                setAudioTab={setAudioTab}
-                                handleAndUploadFiles={handleAndUploadFiles}
-                                isUploading={isUploading}
-                                isWebSearching={isWebSearching}
-                                isLoading={isLoading}
-                                isGeneratingImage={isGeneratingImage}
-                                isGeneratingVideo={isGeneratingVideo}
-                                isGeneratingPPT={isGeneratingPPT}
-                                isProcessingGmail={isProcessingGmail}
-                              />
-                              <ActiveToolsDisplay
-                                isWebSearchActive={isWebSearchActive}
-                                setIsWebSearchActive={setIsWebSearchActive}
-                                isImageGenerationActive={isImageGenerationActive}
-                                setIsImageGenerationActive={setIsImageGenerationActive}
-                                isVideoGenerationActive={isVideoGenerationActive}
-                                setIsVideoGenerationActive={setIsVideoGenerationActive}
-                                isComputerUseActive={isComputerUseActive}
-                                setIsComputerUseActive={setIsComputerUseActive}
-                                computerUseStatus={computerUseStatus}
-                                isGmailActive={isGmailActive}
-                                setIsGmailActive={setIsGmailActive}
-                                isGoogleCalendarActive={isGoogleCalendarActive}
-                                setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                                isGoogleDriveActive={isGoogleDriveActive}
-                                setIsGoogleDriveActive={setIsGoogleDriveActive}
-                                isSpotifyActive={isSpotifyActive}
-                                setIsSpotifyActive={setIsSpotifyActive}
-                                isWordConnectorActive={isWordConnectorActive}
-                                setIsWordConnectorActive={setIsWordConnectorActive}
-                                isExcelConnectorActive={isExcelConnectorActive}
-                                setIsExcelConnectorActive={setIsExcelConnectorActive}
-                                chatType={chatType}
-                                setChatType={setChatType}
-
-                                handleComputerUseToggle={handleComputerUseToggle}
-                                handleGmailToggle={handleGmailToggle}
-                                handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                                handleGoogleDriveToggle={handleGoogleDriveToggle}
-                                handleSpotifyToggle={handleSpotifyToggle}
-                                handleWordConnectorToggle={handleWordConnectorToggle}
-                                handleExcelConnectorToggle={handleExcelConnectorToggle}
-                              />
-                              <div className="flex-grow" />
+                      {/* Same composer as the initial state — chips
+                          render INSIDE the same rounded card. */}
+                      <div
+                        className={cn(
+                          "composer-surface group/composer relative overflow-hidden rounded-3xl",
+                          "bg-background",
+                          "ring-1 ring-black/[0.08] dark:ring-0",
+                          "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-none",
+                          "transition-[border-color,background-color,box-shadow,ring-color] duration-200 ease-out",
+                          "hover:ring-black/[0.12] dark:hover:ring-0",
+                          "focus-within:ring-2 focus-within:ring-foreground/[0.14] dark:focus-within:ring-0",
+                        )}
+                      >
+                        <ActiveOptionsDisplay
+                          uploadedFiles={uploadedFiles}
+                          removeFile={removeFile}
+                          uploadProgress={uploadProgress}
+                          retryUpload={retryUpload}
+                        />
+                        <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+                        <ActiveToolsDisplay
+                          isWebSearchActive={isWebSearchActive}
+                          setIsWebSearchActive={setIsWebSearchActive}
+                          isImageGenerationActive={isImageGenerationActive}
+                          setIsImageGenerationActive={setIsImageGenerationActive}
+                          isVideoGenerationActive={isVideoGenerationActive}
+                          setIsVideoGenerationActive={setIsVideoGenerationActive}
+                          isComputerUseActive={isComputerUseActive}
+                          setIsComputerUseActive={setIsComputerUseActive}
+                          computerUseStatus={computerUseStatus}
+                          isGmailActive={isGmailActive}
+                          setIsGmailActive={setIsGmailActive}
+                          isGoogleCalendarActive={isGoogleCalendarActive}
+                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                          isGoogleDriveActive={isGoogleDriveActive}
+                          setIsGoogleDriveActive={setIsGoogleDriveActive}
+                          isSpotifyActive={isSpotifyActive}
+                          setIsSpotifyActive={setIsSpotifyActive}
+                          isWordConnectorActive={isWordConnectorActive}
+                          setIsWordConnectorActive={setIsWordConnectorActive}
+                          isExcelConnectorActive={isExcelConnectorActive}
+                          setIsExcelConnectorActive={setIsExcelConnectorActive}
+                          chatType={chatType}
+                          setChatType={setChatType}
+                          handleComputerUseToggle={handleComputerUseToggle}
+                          handleGmailToggle={handleGmailToggle}
+                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                          handleGoogleDriveToggle={handleGoogleDriveToggle}
+                          handleSpotifyToggle={handleSpotifyToggle}
+                          handleWordConnectorToggle={handleWordConnectorToggle}
+                          handleExcelConnectorToggle={handleExcelConnectorToggle}
+                        />
+                        <TooltipProvider>
+                          <div className="flex items-center gap-2 pl-2 pr-2 py-1.5">
+                            <ActionsDropdown
+                              chatType={chatType}
+                              setChatType={setChatType}
+                              currentPlan={currentPlan}
+                              isWebSearchActive={isWebSearchActive}
+                              setIsWebSearchActive={setIsWebSearchActive}
+                              isImageGenerationActive={isImageGenerationActive}
+                              setIsImageGenerationActive={setIsImageGenerationActive}
+                              isVideoGenerationActive={isVideoGenerationActive}
+                              setIsVideoGenerationActive={setIsVideoGenerationActive}
+                              isComputerUseActive={isComputerUseActive}
+                              setIsComputerUseActive={setIsComputerUseActive}
+                              computerUseStatus={computerUseStatus}
+                              isGmailActive={isGmailActive}
+                              setIsGmailActive={setIsGmailActive}
+                              isGoogleCalendarActive={isGoogleCalendarActive}
+                              setIsGoogleCalendarActive={setIsGoogleCalendarActive}
+                              isGoogleDriveActive={isGoogleDriveActive}
+                              setIsGoogleDriveActive={setIsGoogleDriveActive}
+                              isSpotifyActive={isSpotifyActive}
+                              setIsSpotifyActive={setIsSpotifyActive}
+                              isWordConnectorActive={isWordConnectorActive}
+                              setIsWordConnectorActive={setIsWordConnectorActive}
+                              isExcelConnectorActive={isExcelConnectorActive}
+                              setIsExcelConnectorActive={setIsExcelConnectorActive}
+                              setShowAudioPanel={setShowAudioPanel}
+                              handleComputerUseToggle={handleComputerUseToggle}
+                              handleGmailToggle={handleGmailToggle}
+                              handleGoogleCalendarToggle={handleGoogleCalendarToggle}
+                              handleGoogleDriveToggle={handleGoogleDriveToggle}
+                              handleSpotifyToggle={handleSpotifyToggle}
+                              handleWordConnectorToggle={handleWordConnectorToggle}
+                              handleExcelConnectorToggle={handleExcelConnectorToggle}
+                              closeAllToolsAndConnectors={closeAllToolsAndConnectors}
+                              setAudioTab={setAudioTab}
+                              handleAndUploadFiles={handleAndUploadFiles}
+                              isUploading={isUploading}
+                              isWebSearching={isWebSearching}
+                              isLoading={isLoading}
+                              isGeneratingImage={isGeneratingImage}
+                              isGeneratingVideo={isGeneratingVideo}
+                              isGeneratingPPT={isGeneratingPPT}
+                              isProcessingGmail={isProcessingGmail}
+                            />
+                            <Textarea
+                              ref={textareaRef}
+                              value={input}
+                              onChange={handleTextareaChange}
+                              onKeyDown={handleKeyDown}
+                              onKeyPress={handleKeyPress}
+                              onPaste={handleClipboardPaste}
+                              placeholder={
+                                isImageGenerationActive
+                                  ? "Describe la imagen que quieres crear"
+                                  : isVideoGenerationActive
+                                    ? "Describe el video que quieres crear"
+                                    : isWebSearchActive
+                                      ? "Busca en la web"
+                                      : isGmailActive
+                                        ? "Comando de Gmail"
+                                        : (isGoogleCalendarActive || isGoogleDriveActive)
+                                          ? "Comando de Google"
+                                          : isSpotifyActive
+                                            ? "Comando de Spotify"
+                                            : isWordConnectorActive
+                                              ? "Escribe un mensaje (Word Connector activo)"
+                                              : chatType === 'thesis'
+                                                ? "Introduce el tema de investigación"
+                                                : "Pregunta lo que quieras"
+                              }
+                              className={cn(
+                                "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
+                                "py-1.5 px-1",
+                                "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
+                                "placeholder:text-muted-foreground/65 placeholder:font-normal",
+                                "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+                                "outline-none ring-0 focus:outline-none focus:ring-0",
+                                "rounded-none transition-colors duration-200",
+                              )}
+                              style={{
+                                minHeight: "24px",
+                                maxHeight: "200px",
+                                overflowY: "auto",
+                                overflowX: "hidden",
+                                wordWrap: "break-word",
+                                border: "none",
+                                outline: "none",
+                                boxShadow: "none",
+                              }}
+                              rows={1}
+                              disabled={isLoading || isGeneratingVideo || isGeneratingWord || isGeneratingExcel || isWebSearching}
+                            />
+                            <div className="flex shrink-0 items-center gap-1.5">
                               {!(isLoading || isStreaming || pendingStop || isSending) && (
-                                <>
-                                  <VoiceControls
-                                    onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                                    className="flex items-center gap-1"
-                                  />
+                                <VoiceControls
+                                  onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
+                                  className="flex items-center"
+                                />
+                              )}
+
+                              {!(isLoading || isStreaming || pendingStop || isSending) && (() => {
+                                const hasText = input.trim().length > 0
+                                const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
+                                const action = hasText
+                                  ? handleSend
+                                  : () => { setShowAudioPanel(true); setAudioTab('stt') }
+                                const label = hasText ? 'Enviar (⏎)' : 'Modo de voz'
+                                const Icon = hasText ? ArrowUp : AudioLines
+                                return (
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <Button
-                                        onClick={handleSend}
-                                        disabled={!input.trim() || isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting}
-                                        size="sm"
-                                        className="h-8 w-8 p-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted disabled:text-muted-foreground"
+                                        onClick={action}
+                                        disabled={hasText && (isLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
+                                        size="icon"
+                                        aria-label={label}
+                                        title={label}
+                                        className={cn(
+                                          "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                          "bg-foreground text-background",
+                                          "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
+                                          "hover:bg-foreground/90 hover:shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.18)]",
+                                          "active:scale-[0.96]",
+                                          "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100",
+                                        )}
                                       >
-                                        {isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices ? (
-                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        {busy ? (
+                                          <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
                                         ) : (
-                                          <ArrowUp className="h-4 w-4" />
+                                          <Icon className="h-[16px] w-[16px]" strokeWidth={hasText ? 2.25 : 1.75} />
                                         )}
                                       </Button>
                                     </TooltipTrigger>
                                     <TooltipContent side="top">
-                                      <p>Send message</p>
+                                      <p>{label}</p>
                                     </TooltipContent>
                                   </Tooltip>
-                                </>
-                              )}
+                                )
+                              })()}
 
-                              {/* Stop Button - Show during loading, streaming, sending intent, or when stop is pending */}
                               {(isLoading || isStreaming || pendingStop || isSending) && (
                                 <Button
                                   onClick={() => {
-                                    // Abort intent classification if running
                                     if (intentAbortControllerRef.current) {
                                       intentAbortControllerRef.current.abort();
                                       intentAbortControllerRef.current = null;
                                     }
-                                    // Always trigger stream stop as well (no-op if not streaming)
                                     stopStreaming();
                                     setIsSending(false);
                                   }}
                                   size="icon"
-                                  className="h-8 w-8 rounded-full text-foreground hover:text-foreground bg-muted hover:bg-muted/80 transition-colors"
-                                  title="Stop Generating"
+                                  aria-label="Detener generación"
+                                  title="Detener"
                                   disabled={pendingStop}
+                                  className={cn(
+                                    "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                    "bg-foreground text-background",
+                                    "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
+                                    "hover:bg-foreground/90 active:scale-[0.96]",
+                                    "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
+                                  )}
                                 >
                                   {pendingStop ? (
-                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
                                   ) : (
-                                    <Square className="h-4 w-4" />
+                                    <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
                                   )}
                                 </Button>
                               )}
                             </div>
-                          </TooltipProvider>
-                        </div>
+                          </div>
+                        </TooltipProvider>
                       </div>
-
-                      <p className="text-center text-xs text-muted-foreground">
-                        {isImageGenerationActive
-                          ? 'Press Enter to generate image, Shift+Enter for new line'
-                          :
-                          isVideoGenerationActive
-                            ? 'Press Enter to generate video, Shift+Enter for new line'
-                            : isWebSearchActive
-                              ? 'Press Enter to search the web, Shift+Enter for new line'
-                              : chatType === 'thesis'
-                                ? 'Press Enter to generate thesis, Shift+Enter for new line'
-                                : 'Press Enter to send, Shift+Enter for new line'
-                        }
-                      </p>
                     </div>
                   </div>
                 </>
