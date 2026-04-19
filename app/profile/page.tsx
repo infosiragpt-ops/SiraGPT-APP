@@ -21,6 +21,7 @@ import Link from "next/link"
 import { toast } from 'sonner'
 import { apiClient } from '@/lib/api'
 import { cn } from "@/lib/utils"
+import { useTranslations } from "next-intl"
 
 export default function ProfilePage() {
   return (
@@ -41,6 +42,9 @@ const PLAN_META: Record<string, { label: string; icon: typeof Crown; accent: str
 }
 
 function ProfileContent() {
+  const t = useTranslations("profile")
+  const tc = useTranslations("common")
+  const tset = useTranslations("settings")
   const { user, refreshUser } = useAuth()
   const router = useRouter()
   const [loading, setLoading] = useState(false)
@@ -184,12 +188,12 @@ function ProfileContent() {
           <Link href="/chat">
             <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground">
               <ArrowLeft className="h-4 w-4" />
-              Volver al chat
+              {tset("backToChat")}
             </Button>
           </Link>
           <div className="text-xs text-muted-foreground hidden sm:flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            Sincronizado
+            {t("synced")}
           </div>
         </div>
 
@@ -236,7 +240,7 @@ function ProfileContent() {
                 {user.email}
               </p>
               <p className="mt-3 text-sm text-muted-foreground">
-                Gestiona tu información, seguridad y suscripción desde un solo lugar.
+                {t("subtitle")}
               </p>
             </div>
           </div>
@@ -252,14 +256,14 @@ function ProfileContent() {
                   <UserIcon className="h-5 w-5" />
                 </div>
                 <div>
-                  <CardTitle>Información personal</CardTitle>
-                  <CardDescription>Tus datos de perfil en siraGPT</CardDescription>
+                  <CardTitle>{t("personalInfo.title")}</CardTitle>
+                  <CardDescription>{t("personalInfo.desc")}</CardDescription>
                 </div>
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="name">Nombre completo</Label>
+                    <Label htmlFor="name">{t("fullName")}</Label>
                     <Input
                       id="name"
                       value={profileData.name}
@@ -282,7 +286,7 @@ function ProfileContent() {
                     Descartar
                   </Button>
                   <Button onClick={handleSaveProfile} disabled={loading || profileData.name === user.name}>
-                    {loading ? 'Guardando…' : 'Guardar cambios'}
+                    {loading ? t("saving") : t("save")}
                   </Button>
                 </div>
               </CardContent>

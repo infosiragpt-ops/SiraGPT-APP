@@ -61,6 +61,36 @@
     "networkError": "Erro de conexão. Verifique sua internet.",
     "unauthorized": "Sessão expirada. Entre novamente.", "notFound": "Recurso não encontrado."
   },
+  "profile": {
+    "title": "Configurações do perfil", "subtitle": "Gerencie as configurações e preferências da sua conta.",
+    "synced": "Sincronizado", "admin": "Admin",
+    "personalInfo": { "title": "Informações pessoais", "desc": "Seus dados de perfil no siraGPT" },
+    "fullName": "Nome completo", "fullNamePlaceholder": "Seu nome",
+    "emailImmutable": "O e-mail não pode ser alterado por motivos de segurança.",
+    "discard": "Descartar", "save": "Salvar alterações", "saving": "Salvando…",
+    "security": { "title": "Segurança", "desc": "Atualize sua senha periodicamente" },
+    "currentPassword": "Senha atual", "newPassword": "Nova senha", "confirmPassword": "Confirmar senha",
+    "minChars": "Mínimo de 8 caracteres", "updatePassword": "Atualizar senha", "updatingPassword": "Atualizando…",
+    "subscription": { "title": "Assinatura", "desc": "Plano e faturamento" },
+    "nextBilling": "Próximo faturamento", "manageSubscription": "Gerenciar assinatura",
+    "usage": { "title": "Uso mensal", "subtitleCalls": "Chamadas consumidas", "subtitleTokens": "Tokens consumidos" },
+    "used": "usado", "remaining": "restantes",
+    "usageWarning": "Você já passou de 70% da sua cota mensal.",
+    "usageDanger": "Sua cota deste mês está acabando. Considere atualizar seu plano.",
+    "adminAccess": { "title": "Acesso de administrador", "desc": "Privilégios ativos" },
+    "openAdmin": "Abrir painel admin"
+  },
+  "messageActions": {
+    "copy": "Copiar", "copied": "Copiado", "speak": "Ler em voz alta", "stopSpeak": "Parar leitura",
+    "regenerate": "Regenerar", "share": "Compartilhar", "feedbackGood": "Resposta útil", "feedbackBad": "Resposta pouco útil"
+  },
+  "composer": {
+    "placeholderDefault": "Digite uma mensagem", "placeholderImage": "Descreva a imagem que deseja criar",
+    "placeholderVideo": "Descreva o vídeo que deseja criar", "placeholderWebSearch": "Pesquisar na web",
+    "placeholderGmail": "Comando do Gmail", "placeholderGoogle": "Comando do Google", "placeholderSpotify": "Comando do Spotify",
+    "placeholderWord": "Descreva o documento que deseja criar", "sendHint": "Enviar", "stopHint": "Parar",
+    "dropFiles": "Solte os arquivos para enviar"
+  },
   "common": {
     "loading": "Carregando…", "noResults": "Sem resultados", "confirm": "Confirmar", "cancel": "Cancelar",
     "delete": "Excluir", "edit": "Editar", "save": "Salvar", "close": "Fechar", "open": "Abrir",

@@ -108,6 +108,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { useTranslations } from "next-intl"
 import { DocumentPreview } from "./document-preview"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
@@ -1583,6 +1584,7 @@ export default function ChatInterface() {
 }
 
 function ChatInterfaceContent() {
+  const tComposer = useTranslations("composer")
   const { user } = useAuth()
 
   const {
@@ -4741,22 +4743,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           onCompositionEnd={() => { isComposingRef.current = false }}
                           placeholder={
                             isImageGenerationActive
-                              ? "Describe la imagen que quieres crear"
+                              ? tComposer("placeholderImage")
                               : isVideoGenerationActive
-                                ? "Describe el video que quieres crear"
+                                ? tComposer("placeholderVideo")
                                 : isWebSearchActive
-                                  ? "Busca en la web"
+                                  ? tComposer("placeholderWebSearch")
                                   : isGmailActive
-                                    ? "Comando de Gmail"
+                                    ? tComposer("placeholderGmail")
                                     : (isGoogleCalendarActive || isGoogleDriveActive)
-                                      ? "Comando de Google"
+                                      ? tComposer("placeholderGoogle")
                                       : isSpotifyActive
-                                        ? "Comando de Spotify"
+                                        ? tComposer("placeholderSpotify")
                                         : isWordConnectorActive
-                                          ? "Escribe un mensaje (Word Connector activo)"
-                                          : chatType === 'thesis'
-                                            ? "Introduce el tema de investigación"
-                                            : "Pregunta lo que quieras"
+                                          ? tComposer("placeholderWord")
+                                          : tComposer("placeholderDefault")
                           }
                           className={cn(
                             "min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
@@ -5099,22 +5099,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               onPaste={handleClipboardPaste}
                               placeholder={
                                 isImageGenerationActive
-                                  ? "Describe la imagen que quieres crear"
+                                  ? tComposer("placeholderImage")
                                   : isVideoGenerationActive
-                                    ? "Describe el video que quieres crear"
+                                    ? tComposer("placeholderVideo")
                                     : isWebSearchActive
-                                      ? "Busca en la web"
+                                      ? tComposer("placeholderWebSearch")
                                       : isGmailActive
-                                        ? "Comando de Gmail"
+                                        ? tComposer("placeholderGmail")
                                         : (isGoogleCalendarActive || isGoogleDriveActive)
-                                          ? "Comando de Google"
+                                          ? tComposer("placeholderGoogle")
                                           : isSpotifyActive
-                                            ? "Comando de Spotify"
+                                            ? tComposer("placeholderSpotify")
                                             : isWordConnectorActive
-                                              ? "Escribe un mensaje (Word Connector activo)"
-                                              : chatType === 'thesis'
-                                                ? "Introduce el tema de investigación"
-                                                : "Pregunta lo que quieras"
+                                              ? tComposer("placeholderWord")
+                                              : tComposer("placeholderDefault")
                               }
                               className={cn(
                                 "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",

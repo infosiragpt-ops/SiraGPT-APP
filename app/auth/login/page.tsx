@@ -11,8 +11,10 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { toast } from "sonner"
+import { useTranslations } from "next-intl"
 
 export default function LoginPage() {
+  const t = useTranslations("auth")
   const [showPassword, setShowPassword] = React.useState(false)
   const [email, setEmail] = React.useState("")
   const [password, setPassword] = React.useState("")
@@ -40,15 +42,13 @@ export default function LoginPage() {
       const success = await login(email, password)
       console.log("Login success:", success);
       if (success) {
-        toast.success("Login successful!")
-        // router.push("/chat")
+        toast.success(t("signIn"))
       } else {
-        toast.error("Invalid credentials.")
+        toast.error(t("invalidCreds"))
       }
     } catch (error) {
-      console.log("Login failed. Please try again.", error);
-
-      toast.error("Login failed. Please try again.")
+      console.log("Login failed.", error);
+      toast.error(t("invalidCreds"))
     } finally {
       setIsLoading(false)
     }
@@ -69,24 +69,18 @@ export default function LoginPage() {
 
             </div>
           </div>
-          <CardTitle className="text-2xl">Welcome back</CardTitle>
-          <CardDescription>Sign in to your Sira Gpt account</CardDescription>
+          <CardTitle className="text-2xl">{t("welcomeBack")}</CardTitle>
+          <CardDescription>{t("tagline")}</CardDescription>
         </CardHeader>
 
         <CardContent>
-          {/* <div className="mb-4 p-3 bg-muted rounded-lg text-sm">
-            <p className="font-medium mb-1">Demo Credentials:</p>
-            <p>Email: admin@example.com</p>
-            <p>Password: password</p>
-          </div> */}
-
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">{t("email")}</Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="Enter your email"
+                placeholder={t("emailPlaceholder")}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -95,12 +89,12 @@ export default function LoginPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t("password")}</Label>
               <div className="relative">
                 <Input
                   id="password"
                   type={showPassword ? "text" : "password"}
-                  placeholder="Enter your password"
+                  placeholder={t("passwordPlaceholder")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -121,7 +115,7 @@ export default function LoginPage() {
 
             <div className="flex items-center justify-between">
               <Link href="/auth/forgot-password" className="text-sm text-muted-foreground hover:text-primary">
-                Forgot password?
+                {t("forgotPassword")}
               </Link>
             </div>
 
@@ -129,10 +123,10 @@ export default function LoginPage() {
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Signing In...
+                  {t("signingIn")}
                 </>
               ) : (
-                "Sign In"
+                t("signIn")
               )}
             </Button>
           </form>
@@ -143,7 +137,7 @@ export default function LoginPage() {
                 <Separator className="w-full" />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
+                <span className="bg-background px-2 text-muted-foreground">{t("orContinueWith")}</span>
               </div>
             </div>
 
@@ -171,7 +165,7 @@ export default function LoginPage() {
                     fill="#EA4335"
                   />
                 </svg>
-                Continue with Google
+                {t("continueWithGoogle")}
               </Button>
 
             </div>
@@ -180,9 +174,9 @@ export default function LoginPage() {
 
         <CardFooter className="text-center">
           <p className="text-sm text-muted-foreground">
-            Don't have an account?{" "}
+            {t("noAccount")}{" "}
             <Link href="/auth/register" className="text-primary hover:underline">
-              Sign up
+              {t("signUp")}
             </Link>
           </p>
         </CardFooter>

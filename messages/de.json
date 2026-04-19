@@ -61,6 +61,36 @@
     "networkError": "Verbindungsfehler. Überprüfen Sie Ihr Internet.",
     "unauthorized": "Sitzung abgelaufen. Bitte melden Sie sich erneut an.", "notFound": "Ressource nicht gefunden."
   },
+  "profile": {
+    "title": "Profileinstellungen", "subtitle": "Verwalten Sie Ihre Kontoeinstellungen und Präferenzen.",
+    "synced": "Synchronisiert", "admin": "Admin",
+    "personalInfo": { "title": "Persönliche Informationen", "desc": "Ihre Profildaten in siraGPT" },
+    "fullName": "Vollständiger Name", "fullNamePlaceholder": "Ihr Name",
+    "emailImmutable": "Die E-Mail-Adresse kann aus Sicherheitsgründen nicht geändert werden.",
+    "discard": "Verwerfen", "save": "Änderungen speichern", "saving": "Speichern…",
+    "security": { "title": "Sicherheit", "desc": "Aktualisieren Sie Ihr Passwort regelmäßig" },
+    "currentPassword": "Aktuelles Passwort", "newPassword": "Neues Passwort", "confirmPassword": "Passwort bestätigen",
+    "minChars": "Mindestens 8 Zeichen", "updatePassword": "Passwort aktualisieren", "updatingPassword": "Aktualisieren…",
+    "subscription": { "title": "Abonnement", "desc": "Plan und Abrechnung" },
+    "nextBilling": "Nächste Abrechnung", "manageSubscription": "Abonnement verwalten",
+    "usage": { "title": "Monatliche Nutzung", "subtitleCalls": "Verbrauchte Anfragen", "subtitleTokens": "Verbrauchte Tokens" },
+    "used": "verwendet", "remaining": "verbleibend",
+    "usageWarning": "Sie haben 70 % Ihres monatlichen Kontingents überschritten.",
+    "usageDanger": "Ihr Kontingent ist fast aufgebraucht. Erwägen Sie ein Upgrade.",
+    "adminAccess": { "title": "Administrator-Zugang", "desc": "Berechtigungen aktiv" },
+    "openAdmin": "Admin-Bereich öffnen"
+  },
+  "messageActions": {
+    "copy": "Kopieren", "copied": "Kopiert", "speak": "Vorlesen", "stopSpeak": "Vorlesen stoppen",
+    "regenerate": "Neu generieren", "share": "Teilen", "feedbackGood": "Hilfreiche Antwort", "feedbackBad": "Nicht hilfreiche Antwort"
+  },
+  "composer": {
+    "placeholderDefault": "Nachricht schreiben", "placeholderImage": "Beschreiben Sie das gewünschte Bild",
+    "placeholderVideo": "Beschreiben Sie das gewünschte Video", "placeholderWebSearch": "Web durchsuchen",
+    "placeholderGmail": "Gmail-Befehl", "placeholderGoogle": "Google-Befehl", "placeholderSpotify": "Spotify-Befehl",
+    "placeholderWord": "Beschreiben Sie das gewünschte Dokument", "sendHint": "Senden", "stopHint": "Stopp",
+    "dropFiles": "Dateien hier ablegen"
+  },
   "common": {
     "loading": "Lädt…", "noResults": "Keine Ergebnisse", "confirm": "Bestätigen", "cancel": "Abbrechen",
     "delete": "Löschen", "edit": "Bearbeiten", "save": "Speichern", "close": "Schließen", "open": "Öffnen",

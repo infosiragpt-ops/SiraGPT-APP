@@ -61,6 +61,36 @@
     "networkError": "Erreur de connexion. Vérifiez votre Internet.",
     "unauthorized": "Session expirée. Veuillez vous reconnecter.", "notFound": "Ressource introuvable."
   },
+  "profile": {
+    "title": "Paramètres du profil", "subtitle": "Gérez les paramètres et préférences de votre compte.",
+    "synced": "Synchronisé", "admin": "Admin",
+    "personalInfo": { "title": "Informations personnelles", "desc": "Vos données de profil dans siraGPT" },
+    "fullName": "Nom complet", "fullNamePlaceholder": "Votre nom",
+    "emailImmutable": "L'e-mail ne peut pas être modifié pour des raisons de sécurité.",
+    "discard": "Annuler", "save": "Enregistrer les modifications", "saving": "Enregistrement…",
+    "security": { "title": "Sécurité", "desc": "Mettez à jour votre mot de passe régulièrement" },
+    "currentPassword": "Mot de passe actuel", "newPassword": "Nouveau mot de passe", "confirmPassword": "Confirmer le mot de passe",
+    "minChars": "8 caractères minimum", "updatePassword": "Mettre à jour le mot de passe", "updatingPassword": "Mise à jour…",
+    "subscription": { "title": "Abonnement", "desc": "Formule et facturation" },
+    "nextBilling": "Prochaine facturation", "manageSubscription": "Gérer l'abonnement",
+    "usage": { "title": "Utilisation mensuelle", "subtitleCalls": "Appels consommés", "subtitleTokens": "Tokens consommés" },
+    "used": "utilisé", "remaining": "restants",
+    "usageWarning": "Vous avez dépassé 70 % de votre quota mensuel.",
+    "usageDanger": "Il vous reste peu de quota ce mois-ci. Pensez à passer à un plan supérieur.",
+    "adminAccess": { "title": "Accès administrateur", "desc": "Privilèges actifs" },
+    "openAdmin": "Ouvrir le panneau d'administration"
+  },
+  "messageActions": {
+    "copy": "Copier", "copied": "Copié", "speak": "Lire à voix haute", "stopSpeak": "Arrêter la lecture",
+    "regenerate": "Régénérer", "share": "Partager", "feedbackGood": "Réponse utile", "feedbackBad": "Réponse peu utile"
+  },
+  "composer": {
+    "placeholderDefault": "Écrivez un message", "placeholderImage": "Décrivez l'image à créer",
+    "placeholderVideo": "Décrivez la vidéo à créer", "placeholderWebSearch": "Rechercher sur le web",
+    "placeholderGmail": "Commande Gmail", "placeholderGoogle": "Commande Google", "placeholderSpotify": "Commande Spotify",
+    "placeholderWord": "Décrivez le document à créer", "sendHint": "Envoyer", "stopHint": "Arrêter",
+    "dropFiles": "Déposez les fichiers pour les téléverser"
+  },
   "common": {
     "loading": "Chargement…", "noResults": "Aucun résultat", "confirm": "Confirmer", "cancel": "Annuler",
     "delete": "Supprimer", "edit": "Modifier", "save": "Enregistrer", "close": "Fermer", "open": "Ouvrir",

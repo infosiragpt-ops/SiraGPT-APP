@@ -11,8 +11,10 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Checkbox } from "@/components/ui/checkbox"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { toast } from "sonner"
+import { useTranslations } from "next-intl"
 
 export default function RegisterPage() {
+  const t = useTranslations("auth")
   const [showPassword, setShowPassword] = React.useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(false)
@@ -82,18 +84,18 @@ export default function RegisterPage() {
               />
             </div>
           </div>
-          <CardTitle className="text-2xl">Create account</CardTitle>
-          <CardDescription>Join Sira Gpt and start chatting with AI</CardDescription>
+          <CardTitle className="text-2xl">{t("createYourAccount")}</CardTitle>
+          <CardDescription>{t("registerTagline")}</CardDescription>
         </CardHeader>
 
         <CardContent>
           <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="name">Full Name</Label>
+              <Label htmlFor="name">{t("name")}</Label>
               <Input
                 id="name"
                 type="text"
-                placeholder="Enter your full name"
+                placeholder={t("namePlaceholder")}
                 value={formData.name}
                 onChange={(e) => handleInputChange("name", e.target.value)}
                 required
@@ -102,11 +104,11 @@ export default function RegisterPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">{t("email")}</Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="Enter your email"
+                placeholder={t("emailPlaceholder")}
                 value={formData.email}
                 onChange={(e) => handleInputChange("email", e.target.value)}
                 required
@@ -115,12 +117,12 @@ export default function RegisterPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t("password")}</Label>
               <div className="relative">
                 <Input
                   id="password"
                   type={showPassword ? "text" : "password"}
-                  placeholder="Create a password"
+                  placeholder={t("passwordPlaceholder")}
                   value={formData.password}
                   onChange={(e) => handleInputChange("password", e.target.value)}
                   required
@@ -140,12 +142,12 @@ export default function RegisterPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm Password</Label>
+              <Label htmlFor="confirmPassword">{t("confirmPassword")}</Label>
               <div className="relative">
                 <Input
                   id="confirmPassword"
                   type={showConfirmPassword ? "text" : "password"}
-                  placeholder="Confirm your password"
+                  placeholder={t("passwordPlaceholder")}
                   value={formData.confirmPassword}
                   onChange={(e) => handleInputChange("confirmPassword", e.target.value)}
                   required
@@ -172,14 +174,7 @@ export default function RegisterPage() {
                 disabled={isLoading}
               />
               <Label htmlFor="terms" className="text-sm">
-                I agree to the{" "}
-                <Link href="/terms" className="text-primary hover:underline">
-                  Terms of Service
-                </Link>{" "}
-                and{" "}
-                <Link href="/privacy" className="text-primary hover:underline">
-                  Privacy Policy
-                </Link>
+                {t("agreeTerms")}
               </Label>
             </div>
 
@@ -187,10 +182,10 @@ export default function RegisterPage() {
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating Account...
+                  {t("signingIn")}
                 </>
               ) : (
-                "Create Account"
+                t("signUp")
               )}
             </Button>
           </form>
@@ -198,9 +193,9 @@ export default function RegisterPage() {
 
         <CardFooter className="text-center">
           <p className="text-sm text-muted-foreground">
-            Already have an account?{" "}
+            {t("haveAccount")}{" "}
             <Link href="/auth/login" className="text-primary hover:underline">
-              Sign in
+              {t("signIn")}
             </Link>
           </p>
         </CardFooter>

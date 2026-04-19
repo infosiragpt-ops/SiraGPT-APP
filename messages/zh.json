@@ -60,6 +60,36 @@
     "networkError": "连接错误，请检查网络。",
     "unauthorized": "会话已过期，请重新登录。", "notFound": "未找到资源。"
   },
+  "profile": {
+    "title": "个人资料设置", "subtitle": "管理你的账号设置和偏好。",
+    "synced": "已同步", "admin": "管理员",
+    "personalInfo": { "title": "个人信息", "desc": "你在 siraGPT 的资料" },
+    "fullName": "全名", "fullNamePlaceholder": "你的名字",
+    "emailImmutable": "出于安全原因，邮箱无法修改。",
+    "discard": "放弃", "save": "保存更改", "saving": "保存中…",
+    "security": { "title": "安全", "desc": "请定期更新密码" },
+    "currentPassword": "当前密码", "newPassword": "新密码", "confirmPassword": "确认密码",
+    "minChars": "至少 8 个字符", "updatePassword": "更新密码", "updatingPassword": "更新中…",
+    "subscription": { "title": "订阅", "desc": "套餐与账单" },
+    "nextBilling": "下次扣款", "manageSubscription": "管理订阅",
+    "usage": { "title": "每月使用量", "subtitleCalls": "已用调用次数", "subtitleTokens": "已用 Token" },
+    "used": "已用", "remaining": "剩余",
+    "usageWarning": "你已使用每月配额的 70% 以上。",
+    "usageDanger": "本月配额所剩无几，建议升级套餐以免中断。",
+    "adminAccess": { "title": "管理员权限", "desc": "特权已启用" },
+    "openAdmin": "打开管理面板"
+  },
+  "messageActions": {
+    "copy": "复制", "copied": "已复制", "speak": "朗读", "stopSpeak": "停止朗读",
+    "regenerate": "重新生成", "share": "分享", "feedbackGood": "有帮助", "feedbackBad": "无帮助"
+  },
+  "composer": {
+    "placeholderDefault": "输入消息", "placeholderImage": "描述你想创建的图像",
+    "placeholderVideo": "描述你想创建的视频", "placeholderWebSearch": "搜索网络",
+    "placeholderGmail": "Gmail 指令", "placeholderGoogle": "Google 指令", "placeholderSpotify": "Spotify 指令",
+    "placeholderWord": "描述你想创建的文档", "sendHint": "发送", "stopHint": "停止",
+    "dropFiles": "将文件拖到此处上传"
+  },
   "common": {
     "loading": "加载中…", "noResults": "无结果", "confirm": "确认", "cancel": "取消",
     "delete": "删除", "edit": "编辑", "save": "保存", "close": "关闭", "open": "打开",

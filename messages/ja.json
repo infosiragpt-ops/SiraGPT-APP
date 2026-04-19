@@ -61,6 +61,36 @@
     "networkError": "接続エラー。インターネットを確認してください。",
     "unauthorized": "セッションが期限切れです。再度ログインしてください。", "notFound": "リソースが見つかりません。"
   },
+  "profile": {
+    "title": "プロフィール設定", "subtitle": "アカウントの設定と環境設定を管理します。",
+    "synced": "同期済み", "admin": "管理者",
+    "personalInfo": { "title": "個人情報", "desc": "siraGPT 内のプロフィール情報" },
+    "fullName": "氏名", "fullNamePlaceholder": "あなたの名前",
+    "emailImmutable": "セキュリティ上の理由でメールは変更できません。",
+    "discard": "破棄", "save": "変更を保存", "saving": "保存中…",
+    "security": { "title": "セキュリティ", "desc": "パスワードを定期的に更新してください" },
+    "currentPassword": "現在のパスワード", "newPassword": "新しいパスワード", "confirmPassword": "パスワードの確認",
+    "minChars": "8文字以上", "updatePassword": "パスワードを更新", "updatingPassword": "更新中…",
+    "subscription": { "title": "サブスクリプション", "desc": "プランと請求" },
+    "nextBilling": "次回請求", "manageSubscription": "サブスクリプションを管理",
+    "usage": { "title": "月間利用状況", "subtitleCalls": "消費した呼び出し", "subtitleTokens": "消費したトークン" },
+    "used": "使用済み", "remaining": "残り",
+    "usageWarning": "月間クォータの70%を超えました。",
+    "usageDanger": "今月の残量が非常に少ないです。プランのアップグレードをご検討ください。",
+    "adminAccess": { "title": "管理者アクセス", "desc": "権限が有効" },
+    "openAdmin": "管理パネルを開く"
+  },
+  "messageActions": {
+    "copy": "コピー", "copied": "コピーしました", "speak": "読み上げる", "stopSpeak": "読み上げを停止",
+    "regenerate": "再生成", "share": "共有", "feedbackGood": "役に立った", "feedbackBad": "役に立たなかった"
+  },
+  "composer": {
+    "placeholderDefault": "メッセージを入力", "placeholderImage": "生成したい画像を記述",
+    "placeholderVideo": "生成したい動画を記述", "placeholderWebSearch": "ウェブを検索",
+    "placeholderGmail": "Gmail コマンド", "placeholderGoogle": "Google コマンド", "placeholderSpotify": "Spotify コマンド",
+    "placeholderWord": "作成したい文書を記述", "sendHint": "送信", "stopHint": "停止",
+    "dropFiles": "ファイルをここにドロップ"
+  },
   "common": {
     "loading": "読み込み中…", "noResults": "結果なし", "confirm": "確認", "cancel": "キャンセル",
     "delete": "削除", "edit": "編集", "save": "保存", "close": "閉じる", "open": "開く",

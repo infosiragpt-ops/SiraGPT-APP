@@ -2366,3 +2366,28 @@ html[dir="rtl"] .lucide-arrow-left { transform: scaleX(-1); }
 html[dir="rtl"] .lucide-arrow-right { transform: scaleX(-1); }
 html[dir="rtl"] .lucide-chevron-left { transform: scaleX(-1); }
 html[dir="rtl"] .lucide-chevron-right { transform: scaleX(-1); }
+
+/* ────────────────────────────────────────────────────────────
+ * Deeper RTL: flip physical margins on the handful of places
+ * tailwind still emits with `ml-/mr-` literals. Uses pure CSS
+ * attribute selectors so no HTML change is required.
+ * ──────────────────────────────────────────────────────────── */
+html[dir="rtl"] .ml-auto { margin-left: 0 !important; margin-right: auto !important; }
+html[dir="rtl"] .mr-auto { margin-right: 0 !important; margin-left: auto !important; }
+html[dir="rtl"] [class*="pl-"] { padding-left: 0; }
+html[dir="rtl"] .pl-2 { padding-right: 0.5rem; }
+html[dir="rtl"] .pl-3 { padding-right: 0.75rem; }
+html[dir="rtl"] .pl-4 { padding-right: 1rem; }
+html[dir="rtl"] .pl-9 { padding-right: 2.25rem; }
+html[dir="rtl"] [class*="pr-"] { padding-right: 0; }
+html[dir="rtl"] .pr-2 { padding-left: 0.5rem; }
+html[dir="rtl"] .pr-3 { padding-left: 0.75rem; }
+html[dir="rtl"] .pr-4 { padding-left: 1rem; }
+html[dir="rtl"] .pr-10 { padding-left: 2.5rem; }
+
+/* Absolute positioning: swap left/right on common helpers so the
+ * password-eye icon and the search icon sit on the correct side. */
+html[dir="rtl"] .left-0 { right: 0; left: auto; }
+html[dir="rtl"] .left-3 { right: 0.75rem; left: auto; }
+html[dir="rtl"] .right-0 { left: 0; right: auto; }
+html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
