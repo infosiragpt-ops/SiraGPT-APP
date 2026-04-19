@@ -45,6 +45,12 @@ model User {
   preferredTone       String?  // e.g. "casual", "formal", "technical", "pedagogical"
   customInstructions  String?  @db.Text  // free-form "what should the assistant know about you"
 
+  // Flexible settings bag — stores the full settings tree from /settings
+  // (theme, accent, density, font size, notification prefs, app toggles,
+  // etc.). JSON lets us evolve the shape without migrations. Controls
+  // that need to be queryable (locale, tone) live in their own columns.
+  settings            Json?
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

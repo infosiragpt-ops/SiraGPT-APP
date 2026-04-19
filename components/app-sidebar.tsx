@@ -406,14 +406,20 @@ export function AppSidebar() {
         )}
       >
         <TooltipProvider>
+          {/* Shared pattern for nav items — the `group` enables
+              hover-coordinated transforms on the icon and color fade on
+              the label without spreading timing logic across children:
+              - row: bg-muted/40 on hover with rounded-lg (150ms)
+              - icon: scale 1.15 + -translateY(1px) on hover (200ms ease-out), scale 0.95 on active for press feedback
+              - label: color fade to primary on hover */}
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <SidebarMenuButton
                 onClick={handleNewChat}
-                className="w-full justify-start h-9 px-3"
+                className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
               >
-                <PenSquare className="h-4 w-4" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2">New Chat</span>
+                <PenSquare className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">New Chat</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
@@ -425,11 +431,11 @@ export function AppSidebar() {
             <TooltipTrigger asChild>
               <SidebarMenuButton
                 onClick={handleSearchClick}
-                className="w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors"
+                className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
                 variant="default"
               >
-                <Search className="h-4 w-4" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2">Search chats</span>
+                <Search className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">Search chats</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
@@ -441,11 +447,11 @@ export function AppSidebar() {
             <TooltipTrigger asChild>
               <SidebarMenuButton
                 onClick={handleLibraryClick}
-                className="w-full justify-start h-9 px-3"
+                className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
                 variant="default"
               >
-                <Images className="h-4 w-4" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2">Library</span>
+                <Images className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">Library</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
@@ -458,13 +464,13 @@ export function AppSidebar() {
               <SidebarMenuButton
                 onClick={handleGPTsClick}
                 className={cn(
-                  "w-full justify-start h-9 px-3 hover:bg-accent hover:text-accent-foreground transition-colors",
+                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
                   isOnGPTsPage && "bg-accent text-accent-foreground"
                 )}
                 variant="default"
               >
-                <LayoutGrid className="h-4 w-4" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2">GPTs</span>
+                <LayoutGrid className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">GPTs</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
@@ -657,11 +663,12 @@ export function AppSidebar() {
             <div className="flex items-center w-full">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <SidebarMenuButton className="flex-1 justify-start h-auto py-3">
+                  <SidebarMenuButton className="group/user flex-1 justify-start h-auto py-3">
                     <Avatar
-                      className={
-                        state === "closed" && "hidden" ? "h-6 w-6" : "h-9 w-9"
-                      }
+                      className={cn(
+                        "ring-2 ring-primary/0 transition-all duration-200 group-hover/user:ring-primary/40",
+                        state === "closed" && "hidden" ? "h-6 w-6" : "h-9 w-9",
+                      )}
                     >
                       <AvatarImage src={user?.avatar || "/placeholder.svg"} />
                       <AvatarFallback>

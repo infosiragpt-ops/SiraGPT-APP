@@ -223,4 +223,95 @@ router.delete('/account', authenticateToken, async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────
+// User settings — stored as a single flexible JSON blob on the
+// User row. GET returns the current tree; PUT merges the request
+// body into the existing tree (so a client can send just one
+// section instead of the full state). Locale/tone/customInstructions
+// live in their own columns for query-side use and are mirrored
+// here when present so the UI has a single source to render.
+// ────────────────────────────────────────────────────────────
+router.get('/settings', authenticateToken, async (req, res) => {
+  try {
+    const u = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { settings: true, locale: true, preferredTone: true, customInstructions: true, name: true, avatar: true, plan: true },
+    });
+    if (!u) return res.status(404).json({ error: 'User not found' });
+    const settings = (u.settings && typeof u.settings === 'object') ? u.settings : {};
+    // Mirror top-level personalization columns into the response so
+    // the client renders from one merged object.
+    res.json({
+      settings: {
+        ...settings,
+        locale: u.locale ?? settings.locale ?? null,
+        preferredTone: u.preferredTone ?? settings.preferredTone ?? null,
+        customInstructions: u.customInstructions ?? settings.customInstructions ?? null,
+      },
+      user: { name: u.name, avatar: u.avatar, plan: u.plan },
+    });
+  } catch (error) {
+    console.error('Get settings error:', error);
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+router.put('/settings', authenticateToken, async (req, res) => {
+  try {
+    const patch = req.body && typeof req.body === 'object' ? req.body : {};
+    const current = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { settings: true },
+    });
+    const merged = deepMerge(
+      (current?.settings && typeof current.settings === 'object') ? current.settings : {},
+      patch,
+    );
+
+    // Promote three well-known keys to their typed columns so the chat
+    // pipeline can pick them up without parsing JSON.
+    const scalarUpdates = {};
+    if (typeof patch.locale === 'string' || patch.locale === null) scalarUpdates.locale = patch.locale;
+    if (typeof patch.preferredTone === 'string' || patch.preferredTone === null) scalarUpdates.preferredTone = patch.preferredTone;
+    if (typeof patch.customInstructions === 'string' || patch.customInstructions === null) scalarUpdates.customInstructions = patch.customInstructions;
+
+    const updated = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { settings: merged, ...scalarUpdates },
+      select: { settings: true, locale: true, preferredTone: true, customInstructions: true },
+    });
+
+    res.json({
+      settings: {
+        ...(updated.settings && typeof updated.settings === 'object' ? updated.settings : {}),
+        locale: updated.locale,
+        preferredTone: updated.preferredTone,
+        customInstructions: updated.customInstructions,
+      },
+    });
+  } catch (error) {
+    console.error('Update settings error:', error);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+/**
+ * Recursive deep-merge — arrays are replaced (not concatenated), plain
+ * objects are merged key-by-key, everything else is assigned. Avoids
+ * pulling in a lodash dep for this single use.
+ */
+function deepMerge(target, source) {
+  if (source == null) return target;
+  const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+  if (!isObj(target) || !isObj(source)) return source;
+  const out = { ...target };
+  for (const k of Object.keys(source)) {
+    const sv = source[k];
+    const tv = target[k];
+    if (isObj(sv) && isObj(tv)) out[k] = deepMerge(tv, sv);
+    else out[k] = sv;
+  }
+  return out;
+}
+
 module.exports = router;
