@@ -46,6 +46,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
+import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -737,6 +738,36 @@ const ActiveOptionsDisplay = ({
   uploadProgress: { [key: string]: number };
   retryUpload?: (file: any) => void;
 }) => {
+  // Viewer state — same reusable viewer used by sent-message chips, so
+  // the user gets identical high-fidelity preview in both contexts.
+  const [viewingIndex, setViewingIndex] = React.useState<number | null>(null);
+  const viewingAttachment: AttachmentLike | null = React.useMemo(() => {
+    if (viewingIndex === null) return null;
+    const f = uploadedFiles[viewingIndex];
+    if (!f) return null;
+    return {
+      id: f.id || f.tempId,
+      name: f.name,
+      mimeType: f.type,
+      size: f.size,
+      file: f.file instanceof File ? f.file : null,
+      url: f.url || null,
+      extractedText: f.extractedText || null,
+    };
+  }, [viewingIndex, uploadedFiles]);
+  const viewerSiblings: AttachmentLike[] = React.useMemo(
+    () => uploadedFiles.map((f: any) => ({
+      id: f.id || f.tempId,
+      name: f.name,
+      mimeType: f.type,
+      size: f.size,
+      file: f.file instanceof File ? f.file : null,
+      url: f.url || null,
+      extractedText: f.extractedText || null,
+    })),
+    [uploadedFiles]
+  );
+
   if (uploadedFiles.length === 0) return null;
 
   return (
@@ -753,14 +784,25 @@ const ActiveOptionsDisplay = ({
           return (
             <div
               key={index}
-              className={`
-                relative
-                border ${isFailed ? 'border-red-300 dark:border-red-700/50' : 'border-gray-200 dark:border-border/60'}
-                rounded-xl
-                text-sm
-                ${isImage ? `${imageSizeClass} p-0` : 'flex items-center gap-2 px-2 py-1'}
-              `}
-              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : undefined}
+              className={cn(
+                "relative text-sm rounded-xl",
+                "border",
+                isFailed ? "border-red-300 dark:border-red-700/50" : "border-gray-200 dark:border-border/60",
+                isImage ? `${imageSizeClass} p-0` : "flex items-center gap-2 px-2 py-1",
+                // Clickable chip — opens the unified high-fidelity viewer.
+                !isUploading && !isFailed && "cursor-pointer hover:border-foreground/40 hover:shadow-sm transition-all",
+              )}
+              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : 'Ver documento'}
+              onClick={() => {
+                if (isUploading || isFailed) return;
+                setViewingIndex(index);
+              }}
+              role={!isUploading && !isFailed ? 'button' : undefined}
+              tabIndex={!isUploading && !isFailed ? 0 : undefined}
+              onKeyDown={(e) => {
+                if (isUploading || isFailed) return;
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewingIndex(index); }
+              }}
             >
               {isImage ? (
                 <>
@@ -873,6 +915,16 @@ const ActiveOptionsDisplay = ({
           );
         })}
       </div>
+      <UnifiedDocumentViewer
+        open={viewingIndex !== null}
+        onClose={() => setViewingIndex(null)}
+        attachment={viewingAttachment}
+        siblings={viewerSiblings}
+        onNavigate={(next) => {
+          const newIdx = viewerSiblings.findIndex(s => s === next);
+          if (newIdx >= 0) setViewingIndex(newIdx);
+        }}
+      />
     </div>
   );
 };

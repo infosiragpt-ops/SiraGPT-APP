@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
+import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
 import { Badge } from "@/components/ui/badge"
@@ -151,6 +152,65 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
 
 
 // Enhanced Message Component with Video Support
+/**
+ * Document chips under a user message. Click opens UnifiedDocumentViewer
+ * — the SAME viewer the composer uses. Skips images (they render inline
+ * via FileDisplay) and Gmail-payload entries.
+ */
+const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
+    const [idx, setIdx] = React.useState<number | null>(null);
+    const chips = React.useMemo(() => {
+        if (!Array.isArray(parsedFiles)) return [];
+        return parsedFiles.filter((f: any) => {
+            const mt = (f?.mimeType || f?.type || '').toLowerCase();
+            if (mt.startsWith('image/')) return false;
+            if (['gmail_emails', 'gmail_search_results', 'chart'].includes(f?.type)) return false;
+            return !!(f?.name || f?.originalName);
+        });
+    }, [parsedFiles]);
+
+    const attachments: AttachmentLike[] = React.useMemo(() => chips.map(f => ({
+        id: f.id || f.attachmentId,
+        name: String(f.originalName || f.name || 'archivo'),
+        mimeType: f.mimeType || f.type || null,
+        size: f.size ?? null,
+        url: f.url || null,
+        file: f.file instanceof File ? f.file : null,
+        extractedText: f.extractedText || null,
+    })), [chips]);
+
+    if (chips.length === 0) return null;
+
+    return (
+        <div className="mb-2 flex flex-wrap justify-end gap-2">
+            {attachments.map((att, i) => (
+                <button
+                    key={att.id || i}
+                    type="button"
+                    onClick={() => setIdx(i)}
+                    className="group/chip inline-flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5 text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-foreground/30 hover:shadow-sm transition-all max-w-[260px]"
+                    aria-label={`Abrir ${att.name}`}
+                >
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80 shrink-0">
+                        {(att.name.split('.').pop() || '?').slice(0, 4)}
+                    </span>
+                    <span className="truncate text-[12.5px] font-medium">{att.name}</span>
+                </button>
+            ))}
+            <UnifiedDocumentViewer
+                open={idx !== null}
+                onClose={() => setIdx(null)}
+                attachment={idx !== null ? attachments[idx] : null}
+                siblings={attachments}
+                onNavigate={(next) => {
+                    const j = attachments.findIndex(s => s === next);
+                    if (j >= 0) setIdx(j);
+                }}
+            />
+        </div>
+    );
+};
+
 const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, children }: {
     message: any;
     user: any;
@@ -1873,6 +1933,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <FileDisplay />
                             </div>
                         )}
+                        {/* Document chips — clickable, open the same
+                            UnifiedDocumentViewer as the composer. Filters
+                            out images (FileDisplay renders them inline). */}
+                        <MessageDocChips parsedFiles={parsedFiles} />
+
                         {hasContent && (
                             // User-message bubble — tight to content.
                             //   `w-fit`            shrinks to the natural text width
