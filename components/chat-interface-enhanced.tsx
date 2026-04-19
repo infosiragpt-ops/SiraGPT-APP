@@ -750,7 +750,7 @@ const ActiveOptionsDisplay = ({
       name: f.name,
       mimeType: f.type,
       size: f.size,
-      file: f.file instanceof File ? f.file : null,
+      file: f.file instanceof globalThis.File ? f.file : null,
       url: f.url || null,
       extractedText: f.extractedText || null,
     };
@@ -761,7 +761,7 @@ const ActiveOptionsDisplay = ({
       name: f.name,
       mimeType: f.type,
       size: f.size,
-      file: f.file instanceof File ? f.file : null,
+      file: f.file instanceof globalThis.File ? f.file : null,
       url: f.url || null,
       extractedText: f.extractedText || null,
     })),
@@ -2514,7 +2514,7 @@ But first, you need to connect your Spotify account securely using the button be
    * object stored on the chip — no need for the user to re-drop.
    */
   const retryUpload = React.useCallback((failedFile: any) => {
-    if (!failedFile?.file || !(failedFile.file instanceof File)) {
+    if (!failedFile?.file || !(failedFile.file instanceof globalThis.File)) {
       toast.error('No se puede reintentar — el archivo se perdió. Vuelve a arrastrarlo.');
       return;
     }

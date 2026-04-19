@@ -210,6 +210,11 @@ export default function UnifiedDocumentViewer({
   siblings,
   onNavigate,
 }: UnifiedDocumentViewerProps) {
+  // ALL hooks must run unconditionally — the early-return for null
+  // attachment must come AFTER every hook below, otherwise toggling
+  // the viewer between open/closed (which alternates attachment
+  // between a value and null) flips the hook count and throws
+  // "rendered more/fewer hooks than during the previous render".
   const isDark = useIsDark()
   // Retry counter used as React key on the renderer subtree — bumping
   // it forces a clean remount, which resets all internal state and
@@ -222,27 +227,26 @@ export default function UnifiedDocumentViewer({
   // attachment — otherwise an old "I retried 3x" state would carry over.
   React.useEffect(() => { setRetryKey(0) }, [attachment?.id, attachment?.name])
 
-  if (!attachment) return null
-
-  const kind = detectKind(attachment)
-  const Icon = iconForKind(kind)
-
-  // Navigation indices for multi-attachment browsing.
-  const idx = siblings?.findIndex(a => a === attachment || a.id === attachment.id) ?? -1
-  const canPrev = siblings && idx > 0
-  const canNext = siblings && idx >= 0 && idx < siblings.length - 1
-  const go = (delta: number) => {
+  // Navigation indices for multi-attachment browsing. These compute
+  // safely on null attachment (idx = -1) so we can keep them outside
+  // the early-return guard.
+  const idx = (siblings && attachment)
+    ? siblings.findIndex(a => a === attachment || a.id === attachment.id)
+    : -1
+  const canPrev = !!siblings && idx > 0
+  const canNext = !!siblings && idx >= 0 && idx < siblings.length - 1
+  const go = React.useCallback((delta: number) => {
     if (!siblings || !onNavigate) return
     const next = siblings[idx + delta]
     if (next) onNavigate(next)
-  }
+  }, [siblings, onNavigate, idx])
 
   // Keyboard navigation — arrow Left/Right between siblings while the
   // viewer is open. Ignored when focus is inside an input/textarea or
   // contenteditable (so arrow keys still work for text selection in
   // the renderer itself, e.g. moving the cursor within code viewer).
   React.useEffect(() => {
-    if (!open) return
+    if (!open || !attachment) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
       const t = e.target as HTMLElement | null
@@ -252,7 +256,14 @@ export default function UnifiedDocumentViewer({
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [open, idx, canPrev, canNext, siblings])
+  }, [open, attachment, canPrev, canNext, go])
+
+  // Safe early-return — every hook above ran, so React's hook count
+  // stays constant across renders regardless of attachment state.
+  if (!attachment) return null
+
+  const kind = detectKind(attachment)
+  const Icon = iconForKind(kind)
 
   const downloadUrl = attachment.url ? absUrl(attachment.url) : null
   const canDownload = !!downloadUrl || !!attachment.file
