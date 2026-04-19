@@ -376,21 +376,34 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
     return (
       <div className="w-full min-w-0 border-l border-border/40 bg-background flex flex-col h-full">
-        <div className="flex items-center justify-between p-4 border-b border-border/40">
+        {/* Minimal header — matches WordConnector: icon + label left,
+            two ghost icon-only buttons right (Descargar, Cerrar). */}
+        <div className="flex items-center justify-between p-3 border-b border-border/40">
           <div className="flex items-center gap-2">
-            <img src="/icons/Excel.png" alt="Excel Connector" className="h-6 w-6" />
-            <h2 className="text-lg font-semibold">Excel File</h2>
+            <img src="/icons/Excel.png" alt="Excel" className="h-5 w-5" />
+            <h3 className="font-semibold text-sm text-foreground">Excel File</h3>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             <Button
-              variant="outline"
-              size="sm"
+              variant="ghost"
+              size="icon"
               onClick={handleDownloadXlsx}
               disabled={isGeneratingExternal}
-              className="flex items-center gap-2"
+              className="h-8 w-8 hover:bg-muted/60"
+              title="Descargar"
+              aria-label="Descargar"
             >
               <Download className="h-4 w-4" />
-              Download
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onClose}
+              className="h-8 w-8 hover:bg-muted/60"
+              title="Cerrar"
+              aria-label="Cerrar"
+            >
+              <X className="h-4 w-4" />
             </Button>
           </div>
         </div>
