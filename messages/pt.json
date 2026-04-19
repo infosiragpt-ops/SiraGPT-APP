@@ -1,0 +1,73 @@
+{
+  "sidebar": {
+    "newChat": "Novo chat", "searchChats": "Pesquisar chats", "library": "Biblioteca", "gpts": "GPTs",
+    "recentChats": "Chats recentes", "noChats": "Ainda não há chats. Inicie uma conversa!",
+    "settings": "Configurações", "profile": "Perfil", "billing": "Faturamento", "logout": "Sair"
+  },
+  "chat": {
+    "placeholder": "Digite uma mensagem", "send": "Enviar", "stop": "Parar", "regenerate": "Regenerar",
+    "copy": "Copiar", "delete": "Excluir", "edit": "Editar", "share": "Compartilhar", "thinking": "Pensando…",
+    "attachFile": "Anexar arquivo", "voiceInput": "Entrada de voz", "webSearch": "Pesquisa na web",
+    "imageGeneration": "Gerar imagem", "videoGeneration": "Gerar vídeo",
+    "connectorActive": "Conector ativo", "showSidebar": "Mostrar barra lateral"
+  },
+  "settings": {
+    "title": "Configurações", "subtitle": "Personalize o siraGPT para trabalhar como você.",
+    "searchPlaceholder": "Buscar ajuste…", "noResults": "Sem resultados", "backToChat": "Voltar ao chat",
+    "autoSync": "Sincronizado automaticamente", "saving": "Salvando…", "saved": "Salvo",
+    "offline": "Sem conexão — alterações locais",
+    "sections": {
+      "general":         { "label": "Geral",           "desc": "Aparência, idioma e acessibilidade" },
+      "models":          { "label": "Modelos IA",      "desc": "Modelos disponíveis e favoritos" },
+      "notifications":   { "label": "Notificações",    "desc": "Canais e alertas" },
+      "personalization": { "label": "Personalização",  "desc": "Estilo, tom e recursos" },
+      "apps":            { "label": "Aplicativos",     "desc": "Conexões e conectores" },
+      "schedules":       { "label": "Agendamentos",    "desc": "Execuções programadas" },
+      "data":            { "label": "Controle de dados","desc": "Privacidade, histórico e dados" },
+      "security":        { "label": "Segurança",       "desc": "MFA e sessões" },
+      "account":         { "label": "Conta",           "desc": "Perfil do criador" }
+    },
+    "general": {
+      "display": { "title": "Exibição", "desc": "Aparência visual do aplicativo" },
+      "theme": { "label": "Tema", "desc": "Tema claro, escuro ou do sistema", "light": "Claro", "dark": "Escuro", "system": "Sistema" },
+      "accent": { "label": "Cor de destaque", "desc": "Cor primária dos botões" },
+      "fontSize": { "label": "Tamanho da fonte", "desc": "Tamanho base", "small": "Pequeno", "medium": "Médio", "large": "Grande" },
+      "density": { "label": "Densidade", "desc": "Espaçamento vertical", "compact": "Compacto", "comfortable": "Confortável", "spacious": "Espaçoso" },
+      "region": { "title": "Idioma e região", "desc": "Formato de data, fuso horário e idioma" },
+      "interfaceLanguage": "Idioma da interface",
+      "spokenLanguage": { "label": "Idioma falado", "desc": "Para reconhecimento de voz", "automatic": "Automático" },
+      "dateFormat": "Formato de data",
+      "timeZone": { "label": "Fuso horário", "desc": "Detectado automaticamente" },
+      "timeFormat": { "label": "Formato de hora", "h12": "12 horas", "h24": "24 horas" },
+      "voice": { "title": "Voz e áudio", "assistantVoice": "Voz do assistente", "autoPlay": "Reproduzir respostas automaticamente", "autoPlayDesc": "Ler respostas em voz alta", "standalone": "Modo de voz independente", "standaloneDesc": "Tela cheia sem elementos visuais" },
+      "aiModels": { "title": "Modelos IA", "showExtras": "Mostrar modelos adicionais", "showExtrasDesc": "Ver todos os modelos disponíveis", "stream": "Transmitir respostas", "streamDesc": "Ver respostas durante a geração" },
+      "accessibility": { "title": "Acessibilidade", "shortcuts": "Atalhos de teclado", "shortcutsDesc": "Habilitar navegação por teclado", "reduceMotion": "Reduzir movimento", "reduceMotionDesc": "Minimizar animações", "highContrast": "Alto contraste", "highContrastDesc": "Melhorar a visibilidade" }
+    }
+  },
+  "auth": {
+    "welcomeBack": "Bem-vindo de volta", "login": "Entrar", "signIn": "Entrar", "register": "Registrar",
+    "signUp": "Criar conta", "logout": "Sair", "email": "E-mail", "emailPlaceholder": "Digite seu e-mail",
+    "password": "Senha", "passwordPlaceholder": "Digite sua senha", "forgotPassword": "Esqueceu a senha?",
+    "orContinueWith": "Ou continue com", "continueWithGoogle": "Continuar com Google",
+    "noAccount": "Não tem conta?", "haveAccount": "Já tem uma conta?", "tagline": "Entre na sua conta Sira Gpt"
+  },
+  "documents": {
+    "download": "Baixar", "close": "Fechar", "wordDocument": "Documento Word", "excelFile": "Arquivo Excel",
+    "presentation": "Apresentação", "pdfFile": "Arquivo PDF", "downloadAsWord": "Baixar como Word (.docx)",
+    "downloadAsPdf": "Baixar como PDF", "generating": "Gerando…"
+  },
+  "errors": {
+    "serverError": "Houve um problema ao processar sua solicitação. Por favor, tente novamente.",
+    "networkError": "Erro de conexão. Verifique sua internet.",
+    "unauthorized": "Sessão expirada. Entre novamente.", "notFound": "Recurso não encontrado."
+  },
+  "common": {
+    "loading": "Carregando…", "noResults": "Sem resultados", "confirm": "Confirmar", "cancel": "Cancelar",
+    "delete": "Excluir", "edit": "Editar", "save": "Salvar", "close": "Fechar", "open": "Abrir",
+    "back": "Voltar", "next": "Próximo", "previous": "Anterior", "search": "Pesquisar", "filter": "Filtrar",
+    "export": "Exportar", "import": "Importar", "create": "Criar", "update": "Atualizar", "yes": "Sim",
+    "no": "Não", "all": "Todos", "none": "Nenhum", "select": "Selecionar", "upload": "Enviar",
+    "dragDrop": "Arraste arquivos aqui", "or": "ou", "processing": "Processando suas mensagens…",
+    "tryAgain": "Tentar novamente"
+  }
+}

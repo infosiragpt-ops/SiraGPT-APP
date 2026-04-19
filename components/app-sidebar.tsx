@@ -1,5 +1,6 @@
 "use client"
 import * as React from "react"
+import { useTranslations } from "next-intl"
 import {
   Bot,
   MessageSquare,
@@ -105,6 +106,7 @@ const generationTypes = [
 ]
 
 export function AppSidebar() {
+  const t = useTranslations("sidebar")
   const { user, logout } = useAuth()
   const {
     chats,
@@ -419,11 +421,11 @@ export function AppSidebar() {
                 className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
               >
                 <PenSquare className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">New Chat</span>
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("newChat")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>New Chat</p>
+              <p>{t("newChat")}</p>
             </TooltipContent>
           </Tooltip>
 
@@ -435,11 +437,11 @@ export function AppSidebar() {
                 variant="default"
               >
                 <Search className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">Search chats</span>
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("searchChats")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>Search chats</p>
+              <p>{t("searchChats")}</p>
             </TooltipContent>
           </Tooltip>
 
@@ -451,11 +453,11 @@ export function AppSidebar() {
                 variant="default"
               >
                 <Images className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">Library</span>
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("library")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>Library</p>
+              <p>{t("library")}</p>
             </TooltipContent>
           </Tooltip>
 
@@ -470,11 +472,11 @@ export function AppSidebar() {
                 variant="default"
               >
                 <LayoutGrid className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">GPTs</span>
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("gpts")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>GPTs</p>
+              <p>{t("gpts")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -496,7 +498,7 @@ export function AppSidebar() {
                 state === "closed" && "hidden"
               )}
             >
-              Recent Chats
+              {t("recentChats")}
             </SidebarGroupLabel>
             <SidebarGroupContent
               className={cn(state === "closed" && "hidden")}

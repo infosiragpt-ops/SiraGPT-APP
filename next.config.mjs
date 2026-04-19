@@ -1,3 +1,9 @@
+import createNextIntlPlugin from 'next-intl/plugin'
+
+// Point next-intl at our request-config loader (reads cookie / headers
+// and merges the per-locale message bundle with the English fallback).
+const withNextIntl = createNextIntlPlugin('./lib/i18n/request.ts')
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   eslint: {
@@ -22,4 +28,4 @@ const nextConfig = {
   },
 }
 
-export default nextConfig
+export default withNextIntl(nextConfig)

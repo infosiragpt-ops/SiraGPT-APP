@@ -1,0 +1,71 @@
+{
+  "sidebar": {
+    "newChat": "Новый чат", "searchChats": "Поиск чатов", "library": "Библиотека", "gpts": "GPTs",
+    "recentChats": "Недавние чаты", "noChats": "Пока нет чатов. Начните разговор!",
+    "settings": "Настройки", "profile": "Профиль", "billing": "Оплата", "logout": "Выйти"
+  },
+  "chat": {
+    "placeholder": "Напишите сообщение", "send": "Отправить", "stop": "Остановить", "regenerate": "Перегенерировать",
+    "copy": "Копировать", "delete": "Удалить", "edit": "Редактировать", "share": "Поделиться", "thinking": "Думаю…",
+    "attachFile": "Прикрепить файл", "voiceInput": "Голосовой ввод", "webSearch": "Веб-поиск",
+    "imageGeneration": "Создать изображение", "videoGeneration": "Создать видео",
+    "connectorActive": "Коннектор активен", "showSidebar": "Показать боковую панель"
+  },
+  "settings": {
+    "title": "Настройки", "subtitle": "Настройте siraGPT под свой стиль работы.",
+    "searchPlaceholder": "Поиск настройки…", "noResults": "Ничего не найдено", "backToChat": "Вернуться к чату",
+    "autoSync": "Автосинхронизация", "saving": "Сохранение…", "saved": "Сохранено", "offline": "Нет соединения — локальные изменения",
+    "sections": {
+      "general":         { "label": "Общие",             "desc": "Оформление, язык и специальные возможности" },
+      "models":          { "label": "Модели ИИ",         "desc": "Доступные модели и избранное" },
+      "notifications":   { "label": "Уведомления",       "desc": "Каналы и оповещения" },
+      "personalization": { "label": "Персонализация",    "desc": "Стиль, тон и возможности" },
+      "apps":            { "label": "Приложения",        "desc": "Подключения и коннекторы" },
+      "schedules":       { "label": "Расписания",        "desc": "Запланированные запуски" },
+      "data":            { "label": "Управление данными","desc": "Приватность, история и данные" },
+      "security":        { "label": "Безопасность",      "desc": "MFA и сеансы" },
+      "account":         { "label": "Аккаунт",           "desc": "Профиль создателя" }
+    },
+    "general": {
+      "display": { "title": "Отображение", "desc": "Визуальное оформление приложения" },
+      "theme": { "label": "Тема", "desc": "Светлая, тёмная или системная", "light": "Светлая", "dark": "Тёмная", "system": "Системная" },
+      "accent": { "label": "Акцентный цвет", "desc": "Основной цвет кнопок" },
+      "fontSize": { "label": "Размер шрифта", "desc": "Базовый размер", "small": "Мелкий", "medium": "Средний", "large": "Крупный" },
+      "density": { "label": "Плотность", "desc": "Вертикальные отступы", "compact": "Компактная", "comfortable": "Удобная", "spacious": "Просторная" },
+      "region": { "title": "Язык и регион", "desc": "Дата, часовой пояс и язык" },
+      "interfaceLanguage": "Язык интерфейса",
+      "spokenLanguage": { "label": "Язык речи", "desc": "Для распознавания голоса", "automatic": "Автоматически" },
+      "dateFormat": "Формат даты",
+      "timeZone": { "label": "Часовой пояс", "desc": "Определяется автоматически" },
+      "timeFormat": { "label": "Формат времени", "h12": "12 часов", "h24": "24 часа" },
+      "voice": { "title": "Голос и звук", "assistantVoice": "Голос ассистента", "autoPlay": "Автовоспроизведение ответов", "autoPlayDesc": "Читать ответы вслух", "standalone": "Автономный голосовой режим", "standaloneDesc": "Во весь экран без визуальных элементов" },
+      "aiModels": { "title": "Модели ИИ", "showExtras": "Показать дополнительные модели", "showExtrasDesc": "Показать все доступные модели", "stream": "Потоковая передача ответов", "streamDesc": "Видеть ответы во время генерации" },
+      "accessibility": { "title": "Специальные возможности", "shortcuts": "Горячие клавиши", "shortcutsDesc": "Включить навигацию с клавиатуры", "reduceMotion": "Меньше движения", "reduceMotionDesc": "Минимизировать анимации", "highContrast": "Высокий контраст", "highContrastDesc": "Улучшить видимость элементов" }
+    }
+  },
+  "auth": {
+    "welcomeBack": "С возвращением", "login": "Войти", "signIn": "Войти", "register": "Регистрация",
+    "signUp": "Создать аккаунт", "logout": "Выйти", "email": "Эл. почта", "emailPlaceholder": "Введите email",
+    "password": "Пароль", "passwordPlaceholder": "Введите пароль", "forgotPassword": "Забыли пароль?",
+    "orContinueWith": "Или продолжите через", "continueWithGoogle": "Продолжить с Google",
+    "noAccount": "Нет аккаунта?", "haveAccount": "Уже есть аккаунт?", "tagline": "Войдите в свой аккаунт Sira Gpt"
+  },
+  "documents": {
+    "download": "Скачать", "close": "Закрыть", "wordDocument": "Документ Word", "excelFile": "Файл Excel",
+    "presentation": "Презентация", "pdfFile": "PDF-файл", "downloadAsWord": "Скачать как Word (.docx)",
+    "downloadAsPdf": "Скачать как PDF", "generating": "Генерация…"
+  },
+  "errors": {
+    "serverError": "При обработке запроса возникла проблема. Пожалуйста, попробуйте ещё раз.",
+    "networkError": "Ошибка соединения. Проверьте интернет.",
+    "unauthorized": "Сеанс истёк. Войдите снова.", "notFound": "Ресурс не найден."
+  },
+  "common": {
+    "loading": "Загрузка…", "noResults": "Ничего не найдено", "confirm": "Подтвердить", "cancel": "Отмена",
+    "delete": "Удалить", "edit": "Редактировать", "save": "Сохранить", "close": "Закрыть", "open": "Открыть",
+    "back": "Назад", "next": "Далее", "previous": "Предыдущий", "search": "Поиск", "filter": "Фильтр",
+    "export": "Экспорт", "import": "Импорт", "create": "Создать", "update": "Обновить", "yes": "Да",
+    "no": "Нет", "all": "Все", "none": "Нет", "select": "Выбрать", "upload": "Загрузить",
+    "dragDrop": "Перетащите файлы сюда", "or": "или", "processing": "Обработка сообщений…", "tryAgain": "Повторить"
+  }
+}

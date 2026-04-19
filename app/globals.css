@@ -2347,3 +2347,22 @@ footer {
 .high-contrast :is(button, a, [role="button"]) {
   box-shadow: 0 0 0 1px hsl(var(--border) / 0.6);
 }
+
+/* ────────────────────────────────────────────────────────────
+ * RTL support — applied automatically via <html dir="rtl"> when
+ * the resolved locale is ar, he, fa, ur or ps. We rely mostly on
+ * CSS logical properties (margin-inline, padding-inline) from
+ * Tailwind; these rules handle the handful of places where
+ * physical directions still show up.
+ * ──────────────────────────────────────────────────────────── */
+html[dir="rtl"] .composer-surface,
+html[dir="rtl"] .group\/composer {
+  direction: rtl;
+}
+html[dir="rtl"] [data-sidebar="sidebar"] {
+  direction: rtl;
+}
+html[dir="rtl"] .lucide-arrow-left { transform: scaleX(-1); }
+html[dir="rtl"] .lucide-arrow-right { transform: scaleX(-1); }
+html[dir="rtl"] .lucide-chevron-left { transform: scaleX(-1); }
+html[dir="rtl"] .lucide-chevron-right { transform: scaleX(-1); }

@@ -10,6 +10,9 @@ import 'katex/dist/katex.min.css';
 import { ChatProvider } from "@/lib/chat-context-integrated"
 import { SettingsProvider } from "@/lib/settings-context"
 import { SyncfusionBannerRemover } from "@/components/SyncfusionBannerRemover"
+import { NextIntlClientProvider } from "next-intl"
+import { getLocale, getMessages } from "next-intl/server"
+import { isRTL } from "@/lib/i18n/locales"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -19,13 +22,21 @@ export const metadata: Metadata = {
   generator: 'v0.dev'
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  // Resolve the per-request locale + messages on the server so the
+  // first paint already ships in the right language. The messages
+  // object is handed to the client provider; any hook call via
+  // useTranslations() reads from it without an extra round-trip.
+  const locale = await getLocale()
+  const messages = await getMessages()
+  const dir = isRTL(locale) ? "rtl" : "ltr"
+
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang={locale} dir={dir} suppressHydrationWarning>
       <head>
         {/* Fallback CDN if local CSS fails */}
         <link
@@ -37,18 +48,20 @@ export default function RootLayout({
       </head>
       <body className={inter.className}>
         <SyncfusionBannerRemover />
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-          <AuthProvider>
-            <SettingsProvider>
-              <ChatProvider>
-                <AppWrapper>
-                  {children}
-                </AppWrapper>
-              </ChatProvider>
-              <Toaster />
-            </SettingsProvider>
-          </AuthProvider>
-        </ThemeProvider>
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+            <AuthProvider>
+              <SettingsProvider>
+                <ChatProvider>
+                  <AppWrapper>
+                    {children}
+                  </AppWrapper>
+                </ChatProvider>
+                <Toaster />
+              </SettingsProvider>
+            </AuthProvider>
+          </ThemeProvider>
+        </NextIntlClientProvider>
       </body>
     </html>
   )

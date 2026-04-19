@@ -25,6 +25,9 @@ import {
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
+import { useTranslations } from "next-intl"
+import { useRouter as useNextRouter } from "next/navigation"
+import { LOCALES } from "@/lib/i18n/locales"
 
 // ────────────────────────────────────────────────────────────
 // Section registry
@@ -33,16 +36,18 @@ type SectionKey =
   | "general" | "models" | "notifications" | "personalization" | "apps"
   | "schedules" | "data" | "security" | "account"
 
-const SECTIONS: { key: SectionKey; label: string; icon: any; desc: string; keywords: string }[] = [
-  { key: "general",         label: "General",         icon: Sliders,     desc: "Apariencia, idioma y accesibilidad", keywords: "theme accent font size density language region voice audio accessibility" },
-  { key: "models",          label: "Modelos AI",      icon: Brain,       desc: "Modelos disponibles y favoritos",    keywords: "modelo default openai gemini anthropic openrouter favorito" },
-  { key: "notifications",   label: "Notifications",   icon: Bell,        desc: "Canales y alertas",                   keywords: "notificaciones push email toast sonido escritorio horas silenciosas" },
-  { key: "personalization", label: "Personalization", icon: Sparkles,    desc: "Estilo, tono y capacidades",          keywords: "personalizar estilo tono memoria instrucciones voz lienzo busqueda" },
-  { key: "apps",            label: "Apps",            icon: Plug,        desc: "Conexiones y conectores",             keywords: "apps conectores gmail drive calendar slack github notion canva figma whatsapp" },
-  { key: "schedules",       label: "Schedules",       icon: Clock,       desc: "Ejecuciones programadas",             keywords: "programar schedule cron tarea" },
-  { key: "data",            label: "Data controls",   icon: Database,    desc: "Privacidad, historial y datos",       keywords: "datos privacidad historial archivo borrar exportar descargar politica" },
-  { key: "security",        label: "Security",        icon: ShieldCheck, desc: "MFA y sesiones",                      keywords: "seguridad mfa 2fa sesion dispositivos contraseña" },
-  { key: "account",         label: "Account",         icon: UserCircle2, desc: "Perfil de constructor",               keywords: "cuenta perfil nombre avatar foto constructor gpt sitio linkedin github" },
+// Section metadata; labels and descriptions come from next-intl at
+// render time so a language switch flips the nav instantly.
+const SECTION_KEYS = [
+  { key: "general" as const,         icon: Sliders,     keywords: "theme accent font size density language region voice audio accessibility" },
+  { key: "models" as const,          icon: Brain,       keywords: "modelo default openai gemini anthropic openrouter favorito" },
+  { key: "notifications" as const,   icon: Bell,        keywords: "notificaciones push email toast sonido escritorio horas silenciosas" },
+  { key: "personalization" as const, icon: Sparkles,    keywords: "personalizar estilo tono memoria instrucciones voz lienzo busqueda" },
+  { key: "apps" as const,            icon: Plug,        keywords: "apps conectores gmail drive calendar slack github notion canva figma whatsapp" },
+  { key: "schedules" as const,       icon: Clock,       keywords: "programar schedule cron tarea" },
+  { key: "data" as const,            icon: Database,    keywords: "datos privacidad historial archivo borrar exportar descargar politica" },
+  { key: "security" as const,        icon: ShieldCheck, keywords: "seguridad mfa 2fa sesion dispositivos contraseña" },
+  { key: "account" as const,         icon: UserCircle2, keywords: "cuenta perfil nombre avatar foto constructor gpt sitio linkedin github" },
 ]
 
 export default function SettingsPage() {
@@ -54,12 +59,27 @@ export default function SettingsPage() {
 }
 
 function SettingsContent() {
+  const t = useTranslations("settings")
+  const tc = useTranslations("common")
   const { user } = useAuth()
   const router = useRouter()
   const search = useSearchParams()
   const urlSection = (search.get("s") as SectionKey) || "general"
   const [section, setSection] = React.useState<SectionKey>(urlSection)
   const [query, setQuery] = React.useState("")
+
+  // Compose sections from key + i18n labels so a language swap flips
+  // the nav instantly without re-mounting.
+  const SECTIONS = React.useMemo(() =>
+    SECTION_KEYS.map((s) => ({
+      key: s.key,
+      icon: s.icon,
+      keywords: s.keywords,
+      label: t(`sections.${s.key}.label`),
+      desc: t(`sections.${s.key}.desc`),
+    })),
+    [t],
+  )
 
   React.useEffect(() => {
     const sp = new URLSearchParams(search.toString())
@@ -86,7 +106,7 @@ function SettingsContent() {
           <Link href="/chat">
             <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground">
               <ArrowLeft className="h-4 w-4" />
-              Volver al chat
+              {t("backToChat")}
             </Button>
           </Link>
           <SaveIndicator />
@@ -94,8 +114,8 @@ function SettingsContent() {
 
         {/* Page header */}
         <div className="mb-6">
-          <h1 className="text-3xl font-bold tracking-tight">Configuración</h1>
-          <p className="text-muted-foreground">Personaliza siraGPT para que trabaje como tú.</p>
+          <h1 className="text-3xl font-bold tracking-tight">{t("title")}</h1>
+          <p className="text-muted-foreground">{t("subtitle")}</p>
         </div>
 
         <div className="grid grid-cols-12 gap-6">
@@ -107,7 +127,7 @@ function SettingsContent() {
                 <Input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Buscar ajuste…"
+                  placeholder={t("searchPlaceholder")}
                   className="pl-9 h-9"
                 />
               </div>
@@ -138,7 +158,7 @@ function SettingsContent() {
                   )
                 })}
                 {filteredSections.length === 0 && (
-                  <div className="text-xs text-muted-foreground px-3 py-4">Sin resultados para "{query}"</div>
+                  <div className="text-xs text-muted-foreground px-3 py-4">{t("noResults")} · "{query}"</div>
                 )}
               </nav>
             </div>
@@ -168,6 +188,7 @@ function SettingsContent() {
 // timestamp that self-refreshes every 10s.
 // ────────────────────────────────────────────────────────────
 function SaveIndicator() {
+  const t = useTranslations("settings")
   const { saveStatus, savedAt } = useSettings()
   const [tick, setTick] = React.useState(0)
   React.useEffect(() => {
@@ -189,7 +210,7 @@ function SaveIndicator() {
     return (
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" />
-        Guardando…
+        {t("saving")}
       </div>
     )
   }
@@ -197,7 +218,7 @@ function SaveIndicator() {
     return (
       <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
         <AlertTriangle className="h-3 w-3" />
-        Sin conexión — cambios locales
+        {t("offline")}
       </div>
     )
   }
@@ -205,14 +226,14 @@ function SaveIndicator() {
     return (
       <div className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-        Guardado {agoLabel}
+        {t("saved")} {agoLabel}
       </div>
     )
   }
   return (
     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-      Auto-sincronizado
+      {t("autoSync")}
     </div>
   )
 }
@@ -252,6 +273,46 @@ function SwitchRow({ title, desc, checked, onChange }: { title: string; desc?: s
   return (
     <Row title={title} desc={desc}>
       <Switch checked={checked} onCheckedChange={onChange} />
+    </Row>
+  )
+}
+
+/**
+ * Interface-language picker with all 60 supported locales by native
+ * name. Sets the NEXT_LOCALE cookie (year-long) and reloads so the
+ * SSR-rendered messages swap on the next paint. Also mirrors the choice
+ * into settings.interfaceLanguage so the backend sees the user's
+ * explicit preference on top of the cookie.
+ */
+function InterfaceLanguageRow() {
+  const t = useTranslations("settings.general")
+  const { settings, update } = useSettings()
+  const router = useNextRouter()
+
+  const onChange = (code: string) => {
+    try {
+      document.cookie = `NEXT_LOCALE=${code}; path=/; max-age=${60 * 60 * 24 * 365}; samesite=lax`
+    } catch { /* cookies disabled — provider still reads settings */ }
+    update({ interfaceLanguage: code })
+    // next-intl's messages are resolved server-side; a hard reload is
+    // the only way to swap them instantly without a full <Suspense>
+    // refactor. router.refresh() is enough to re-fetch the server tree.
+    setTimeout(() => router.refresh(), 50)
+  }
+
+  return (
+    <Row title={t("interfaceLanguage")}>
+      <Select value={settings.interfaceLanguage} onValueChange={onChange}>
+        <SelectTrigger className="w-[240px]"><SelectValue /></SelectTrigger>
+        <SelectContent className="max-h-[360px]">
+          {LOCALES.map((l) => (
+            <SelectItem key={l.code} value={l.code}>
+              {l.name}
+              <span className="text-xs text-muted-foreground ml-2">{l.code.toUpperCase()}</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </Row>
   )
 }
@@ -437,21 +498,7 @@ function GeneralSection() {
       </SectionCard>
 
       <SectionCard title="Language & region" desc="Formato de fecha, zona horaria e idioma">
-        <SelectRow
-          title="Interface language"
-          value={settings.interfaceLanguage}
-          onChange={(v) => update({ interfaceLanguage: v })}
-          options={[
-            { value: "es", label: "Español" },
-            { value: "en", label: "English" },
-            { value: "pt", label: "Português" },
-            { value: "fr", label: "Français" },
-            { value: "de", label: "Deutsch" },
-            { value: "ja", label: "日本語" },
-            { value: "zh", label: "中文" },
-            { value: "ko", label: "한국어" },
-          ]}
-        />
+        <InterfaceLanguageRow />
         <SelectRow
           title="Spoken language"
           desc="Para reconocimiento de voz"

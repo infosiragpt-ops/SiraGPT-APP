@@ -206,10 +206,24 @@ router.post(
       // applicable) persisted to the Chat row so short follow-ups
       // ("hola", "resúmelo", "continúa") never drift from the
       // conversation's established language.
+      // Read the UI locale off the NEXT_LOCALE cookie that the
+      // middleware sets — this is what the user sees in the interface,
+      // which should match the voice of the assistant when nothing
+      // stronger (explicit instruction / thread pref / message
+      // detection) applies.
+      let uiLocale = null;
+      try {
+        const rawCookies = req.headers.cookie ? cookie.parse(req.headers.cookie) : {};
+        if (rawCookies.NEXT_LOCALE && /^[a-z]{2,3}$/i.test(rawCookies.NEXT_LOCALE)) {
+          uiLocale = rawCookies.NEXT_LOCALE.toLowerCase();
+        }
+      } catch { /* malformed cookie — fall through */ }
+
       const langResolution = await langPolicy.resolveResponseLanguage({
         userMessage: prompt,
         chatId: canPersist ? chatId : null,
-        userLocale: (req.user && req.user.locale) || 'es',
+        // Priority: explicit user column > UI locale cookie > Spanish.
+        userLocale: (req.user && req.user.locale) || uiLocale || 'es',
         prisma,
       });
       console.log('[language_policy_resolved]', JSON.stringify({
