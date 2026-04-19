@@ -699,36 +699,52 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
 
         return (
             <div className={`flex flex-col h-full min-h-0 bg-background border-l border-border/40 transition-all duration-300 ${isCollapsed ? 'w-0' : (isFullPage ? 'w-full' : 'w-[60%]')}`}>
-                {/* Fixed Top Header */}
+                {/* Fixed Top Header — minimalist: icon + label left,
+                    two ghost icon buttons (download, close) right.
+                    Download still exposes the .docx/.pdf choice via the
+                    dropdown, but through a single icon trigger instead
+                    of a labeled button. */}
                 <div className="flex items-center justify-between p-3 border-b border-border/40 bg-white dark:bg-zinc-900">
                     <div className="flex items-center gap-2">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src="/icons/Word.png" alt="Word" className="h-5 w-5" />
-                        <h3 className="font-semibold text-base text-blue-600 dark:text-blue-400">Word Document</h3>
+                        <h3 className="font-semibold text-sm text-foreground">Word Document</h3>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
                         {isGenerating && (
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                                <span>Generating...</span>
-                            </div>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground mr-1" aria-label="Generating" />
                         )}
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button size="sm" variant="outline" className="h-8">
-                                    <Download className="h-3 w-3 mr-1" />
-                                    Download
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 hover:bg-muted/60"
+                                    title="Descargar"
+                                    aria-label="Descargar"
+                                >
+                                    <Download className="h-4 w-4" />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                                 <DropdownMenuItem onClick={downloadAsWord}>
-                                    Download as Word (.docx)
+                                    Descargar como Word (.docx)
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={downloadAsPDF}>
-                                    Download as PDF
+                                    Descargar como PDF
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 hover:bg-muted/60"
+                            title="Cerrar"
+                            aria-label="Cerrar"
+                            onClick={onClose}
+                        >
+                            <X className="h-4 w-4" />
+                        </Button>
                     </div>
                 </div>
 

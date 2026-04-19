@@ -4160,6 +4160,38 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   const isInitial = !currentChat && !showAudioPanel && !isWordConnectorActive && !isExcelConnectorActive
 
+  // Any active tool/connector/thesis mode? Used to conditionally render
+  // the "tool pills" row below the input — if nothing is active, we
+  // hide the entire bar so the composer stays a clean pill.
+  const hasActiveTools = (
+    isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || isComputerUseActive
+    || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
+    || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
+    || chatType === 'thesis'
+  );
+
+  // Shared props bundle for <ActiveToolsDisplay /> — the component is
+  // now rendered in a different spot (below the input instead of above)
+  // but the prop contract is identical, so centralising it avoids
+  // drift between the two composer instances (initial vs in-chat).
+  const activeToolsProps = {
+    isWebSearchActive, setIsWebSearchActive,
+    isImageGenerationActive, setIsImageGenerationActive,
+    isVideoGenerationActive, setIsVideoGenerationActive,
+    isComputerUseActive, setIsComputerUseActive,
+    computerUseStatus,
+    isGmailActive, setIsGmailActive,
+    isGoogleCalendarActive, setIsGoogleCalendarActive,
+    isGoogleDriveActive, setIsGoogleDriveActive,
+    isSpotifyActive, setIsSpotifyActive,
+    isWordConnectorActive, setIsWordConnectorActive,
+    isExcelConnectorActive, setIsExcelConnectorActive,
+    chatType, setChatType,
+    handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
+    handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
+    handleExcelConnectorToggle,
+  };
+
   const handleWebSearch = async (searchQuery: string) => {
     if (!searchQuery) {
       toast.error('Please enter a search query');
@@ -4543,38 +4575,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       retryUpload={retryUpload}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    <ActiveToolsDisplay
-                      isWebSearchActive={isWebSearchActive}
-                      setIsWebSearchActive={setIsWebSearchActive}
-                      isImageGenerationActive={isImageGenerationActive}
-                      setIsImageGenerationActive={setIsImageGenerationActive}
-                      isVideoGenerationActive={isVideoGenerationActive}
-                      setIsVideoGenerationActive={setIsVideoGenerationActive}
-                      isComputerUseActive={isComputerUseActive}
-                      setIsComputerUseActive={setIsComputerUseActive}
-                      computerUseStatus={computerUseStatus}
-                      isGmailActive={isGmailActive}
-                      setIsGmailActive={setIsGmailActive}
-                      isGoogleCalendarActive={isGoogleCalendarActive}
-                      setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                      isGoogleDriveActive={isGoogleDriveActive}
-                      setIsGoogleDriveActive={setIsGoogleDriveActive}
-                      isSpotifyActive={isSpotifyActive}
-                      setIsSpotifyActive={setIsSpotifyActive}
-                      isWordConnectorActive={isWordConnectorActive}
-                      setIsWordConnectorActive={setIsWordConnectorActive}
-                      isExcelConnectorActive={isExcelConnectorActive}
-                      setIsExcelConnectorActive={setIsExcelConnectorActive}
-                      chatType={chatType}
-                      setChatType={setChatType}
-                      handleComputerUseToggle={handleComputerUseToggle}
-                      handleGmailToggle={handleGmailToggle}
-                      handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                      handleGoogleDriveToggle={handleGoogleDriveToggle}
-                      handleSpotifyToggle={handleSpotifyToggle}
-                      handleWordConnectorToggle={handleWordConnectorToggle}
-                      handleExcelConnectorToggle={handleExcelConnectorToggle}
-                    />
+                    {/* Tool pills used to live ABOVE the input; moved to
+                        a secondary row BELOW the input (see after the
+                        TooltipProvider) so the top surface is dedicated
+                        to drag-and-drop of files / audio / images. */}
                     <TooltipProvider>
                       <div className="flex items-center gap-2 pl-2 pr-2 py-1.5">
                         {/* LEFT — Plus / attach + tool selector */}
@@ -4759,6 +4763,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         </div>
                       </div>
                     </TooltipProvider>
+
+                    {/* Secondary row — active tool / connector pills.
+                        Only rendered when something is active, so the
+                        composer stays a clean pill in the idle state. */}
+                    {hasActiveTools && (
+                      <div className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-muted/30 px-2 py-1">
+                        <ActiveToolsDisplay {...activeToolsProps} />
+                      </div>
+                    )}
                   </div>
 
                   {/* <p className="text-center text-xs text-muted-foreground">
@@ -4926,38 +4939,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           retryUpload={retryUpload}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                        <ActiveToolsDisplay
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
-                          isVideoGenerationActive={isVideoGenerationActive}
-                          setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          isComputerUseActive={isComputerUseActive}
-                          setIsComputerUseActive={setIsComputerUseActive}
-                          computerUseStatus={computerUseStatus}
-                          isGmailActive={isGmailActive}
-                          setIsGmailActive={setIsGmailActive}
-                          isGoogleCalendarActive={isGoogleCalendarActive}
-                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                          isGoogleDriveActive={isGoogleDriveActive}
-                          setIsGoogleDriveActive={setIsGoogleDriveActive}
-                          isSpotifyActive={isSpotifyActive}
-                          setIsSpotifyActive={setIsSpotifyActive}
-                          isWordConnectorActive={isWordConnectorActive}
-                          setIsWordConnectorActive={setIsWordConnectorActive}
-                          isExcelConnectorActive={isExcelConnectorActive}
-                          setIsExcelConnectorActive={setIsExcelConnectorActive}
-                          chatType={chatType}
-                          setChatType={setChatType}
-                          handleComputerUseToggle={handleComputerUseToggle}
-                          handleGmailToggle={handleGmailToggle}
-                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                          handleGoogleDriveToggle={handleGoogleDriveToggle}
-                          handleSpotifyToggle={handleSpotifyToggle}
-                          handleWordConnectorToggle={handleWordConnectorToggle}
-                          handleExcelConnectorToggle={handleExcelConnectorToggle}
-                        />
+                        {/* Tool pills relocated below the input — see
+                            the matching block after the TooltipProvider
+                            closes. Top surface is reserved for drop-zone. */}
                         <TooltipProvider>
                           <div className="flex items-center gap-2 pl-2 pr-2 py-1.5">
                             <ActionsDropdown
@@ -5132,6 +5116,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             </div>
                           </div>
                         </TooltipProvider>
+
+                        {/* Secondary row — active tool / connector pills.
+                            Mirrors the in-chat composer above so both
+                            states feel identical to the user. */}
+                        {hasActiveTools && (
+                          <div className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-muted/30 px-2 py-1">
+                            <ActiveToolsDisplay {...activeToolsProps} />
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
