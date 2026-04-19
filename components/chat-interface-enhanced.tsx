@@ -35,6 +35,10 @@ import {
   Sparkles,
   AudioLines,
   RefreshCw,
+  Check,
+  Zap,
+  Brain,
+  Crown,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -1368,17 +1372,123 @@ const NavbarModelSelector = ({
     );
   }
 
+  // Recents — last 3 selected models, persisted in localStorage so the
+  // user's preferred picks float to the top across sessions.
+  const RECENTS_KEY = "sira:model-recents";
+  const [recents, setRecents] = React.useState<string[]>([]);
+  const refreshRecents = React.useCallback(() => {
+    if (typeof window === "undefined") return;
+    try { setRecents(JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]")); } catch { setRecents([]); }
+  }, []);
+  React.useEffect(() => { refreshRecents(); }, [refreshRecents]);
+  const recordRecent = (modelName: string) => {
+    if (typeof window === "undefined") return;
+    try {
+      const cur: string[] = JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]");
+      const next = [modelName, ...cur.filter(n => n !== modelName)].slice(0, 3);
+      localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+      setRecents(next);
+    } catch {}
+  };
+
+  // Tier inference — derives a one-glance capability tag + ES subtitle
+  // from the model name, so the picker reads like ChatGPT's tiered
+  // selector (Instant / Thinking / Pro) instead of an opaque flat list.
+  const inferTier = (model: any): { label: string; hint: string; icon: typeof Zap } => {
+    const n = String(model?.name || model?.displayName || "").toLowerCase();
+    if (/(opus|o1\b|o3\b|o4\b|\br1\b|reason|think|deepseek-r)/.test(n)) {
+      return { label: "Thinking", hint: "Para razonamiento profundo", icon: Brain };
+    }
+    if (/(mini|fast|flash|haiku|lite|nano|8b|7b|turbo|gemma)/.test(n)) {
+      return { label: "Instant", hint: "Rápido para chats cotidianos", icon: Zap };
+    }
+    if (/(\bpro\b|ultra|max|405b|70b|sonnet)/.test(n)) {
+      return { label: "Pro", hint: "Máxima capacidad", icon: Crown };
+    }
+    return { label: "", hint: "Equilibrado", icon: Bot };
+  };
+
+  // Stable provider order. Unknown providers fall to the end alphabetically.
+  const providerOrder = ["OpenAI", "Anthropic", "Google", "Gemini", "xAI", "Groq", "OpenRouter"];
+  const groupByProvider = (models: any[]): Array<[string, any[]]> => {
+    const groups: Record<string, any[]> = {};
+    for (const m of models) {
+      const p = m.provider || "Otros";
+      (groups[p] ||= []).push(m);
+    }
+    return Object.entries(groups).sort(([a], [b]) => {
+      const ia = providerOrder.indexOf(a); const ib = providerOrder.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+  };
+
   // Filter models based on search query
   const filteredModels = availableModels.filter((model: any) =>
     model.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     model.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     model.provider?.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const grouped = groupByProvider(filteredModels);
+  const recentModels = !searchQuery
+    ? recents
+        .map(n => filteredModels.find((m: any) => m.name === n))
+        .filter(Boolean) as any[]
+    : [];
+
+  const onPick = (model: any) => {
+    setSelectedModel(model.name);
+    setSelectedProvider(model.provider);
+    recordRecent(model.name);
+    setSearchQuery("");
+  };
+
+  // ModelRow — single picker entry. Active state = subtle bg + Check on
+  // the right; tier chip on the right of the name when not "Balanced".
+  const ModelRow = ({ model }: { model: any }) => {
+    const tier = inferTier(model);
+    const isSelected = model.name === selectedModel;
+    const TierIcon = tier.icon;
+    return (
+      <DropdownMenuItem
+        onSelect={() => onPick(model)}
+        className={cn(
+          "group/row flex items-center gap-2.5 rounded-md px-2 py-1.5 cursor-pointer",
+          "focus:bg-muted/60 data-[highlighted]:bg-muted/60",
+          isSelected && "bg-muted/40",
+        )}
+      >
+        <IconProvider name={model.icon} className="h-5 w-5 shrink-0" />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[13px] font-semibold leading-tight">
+              {model.displayName || model.name}
+            </span>
+            {tier.label && (
+              <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border/50 bg-muted/40 px-1.5 py-[1px] text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/85">
+                <TierIcon className="h-2.5 w-2.5" strokeWidth={2.5} />
+                {tier.label}
+              </span>
+            )}
+          </div>
+          <span className="truncate text-[11px] leading-tight text-muted-foreground/85">
+            {tier.hint}
+          </span>
+        </div>
+        {isSelected && (
+          <Check className="h-4 w-4 shrink-0 text-foreground/85" strokeWidth={2.5} />
+        )}
+      </DropdownMenuItem>
+    );
+  };
 
   // Default model selector for regular chats
   return (
     <DropdownMenu onOpenChange={(open) => {
       if (!open) setSearchQuery("");
+      if (open) refreshRecents();
     }}>
       {/* Model selector trigger — h-10, medium weight, subtle surface.
           The always-on red dot was removed: it was a dead indicator
@@ -1401,53 +1511,60 @@ const NavbarModelSelector = ({
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-56 p-0">
-        <div className="p-2 border-b">
+      <DropdownMenuContent align="end" className="w-[340px] p-0 overflow-hidden rounded-xl border-border/60 shadow-lg">
+        <div className="border-b border-border/50 p-2">
           <div className="relative">
-            <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
             <Input
-              placeholder="Search models..."
+              placeholder="Buscar modelos…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-8 h-8 text-sm"
+              className="h-8 border-border/50 bg-background pl-8 text-[13px]"
+              autoFocus
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
             />
           </div>
         </div>
-        <ScrollArea className="h-[300px]">
-          <div className="p-1">
-            {filteredModels.length > 0 ? (
-              filteredModels.map((model: any) => (
-                <DropdownMenuItem
-                  key={model.name}
-                  onSelect={() => {
-                    setSelectedModel(model.name);
-                    console.log("model", model);
-                    setSelectedProvider(model.provider);
-                    setSearchQuery("");
-                  }}
-                  className="flex items-center gap-2 py-2"
-                >
-                  <IconProvider name={model.icon} className="h-5 w-5 flex-shrink-0" />
-                  <div className="flex flex-col flex-1 min-w-0">
-                    <span className="text-[13.5px] font-medium truncate">{model.displayName}</span>
-                    <span className="text-[11px] text-muted-foreground truncate">{model.provider}</span>
-                  </div>
-                  {model.name === selectedModel && (
-                    <span
-                      aria-hidden="true"
-                      className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet))] shadow-[0_0_0_3px_hsl(var(--accent-violet)/0.18)]"
-                    />
-                  )}
-                </DropdownMenuItem>
-              ))
-            ) : (
-              <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-                No models found
+
+        <ScrollArea className="max-h-[440px]">
+          {/* Recents — only shown when no search query is active. */}
+          {recentModels.length > 0 && (
+            <div className="px-1.5 pt-2">
+              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Recientes
               </div>
-            )}
-          </div>
+              <div className="flex flex-col gap-0.5">
+                {recentModels.map((m: any) => (
+                  <ModelRow key={`recent-${m.name}`} model={m} />
+                ))}
+              </div>
+              <div className="mx-2 my-2 border-t border-border/40" />
+            </div>
+          )}
+
+          {/* Provider-grouped sections. */}
+          {grouped.length > 0 ? (
+            <div className="px-1.5 pb-2">
+              {grouped.map(([provider, models]) => (
+                <div key={provider} className="mt-2 first:mt-0">
+                  <div className="flex items-center gap-1.5 px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    <span>{provider}</span>
+                    <span className="text-muted-foreground/40">· {models.length}</span>
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    {models.map((m: any) => (
+                      <ModelRow key={m.name} model={m} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="px-3 py-10 text-center text-[12.5px] text-muted-foreground">
+              {searchQuery ? "Sin coincidencias" : "Sin modelos disponibles"}
+            </div>
+          )}
         </ScrollArea>
       </DropdownMenuContent>
     </DropdownMenu>
