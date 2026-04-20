@@ -55,6 +55,8 @@ router.post(
     body('useMMR').optional().isBoolean(),
     body('mmrLambda').optional().isFloat({ min: 0, max: 1 }),
     body('rerank').optional().isBoolean(),
+    body('useHybrid').optional().isBoolean(),
+    body('rrfK').optional().isInt({ min: 1, max: 200 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -72,11 +74,41 @@ router.post(
         mmrLambda: typeof req.body.mmrLambda === 'number' ? req.body.mmrLambda : undefined,
         rerank: !!req.body.rerank,
         rerankOpenAI,
+        useHybrid: !!req.body.useHybrid,
+        rrfK: typeof req.body.rrfK === 'number' ? req.body.rrfK : undefined,
       });
       res.json({ ok: true, collection, hits });
     } catch (err) {
       console.error('[rag] retrieve failed:', err);
       res.status(500).json({ error: err.message || 'retrieve failed' });
+    }
+  }
+);
+
+/**
+ * POST /api/rag/ingest-code
+ *   body: { collection?: string, files: [{ filename, content, language? }] }
+ * Chunks each file on function/class boundaries before embedding, so the
+ * retriever returns whole symbols instead of mid-function paragraphs.
+ */
+router.post(
+  '/ingest-code',
+  authenticateToken,
+  [
+    body('files').isArray({ min: 1 }).withMessage('files must be a non-empty array'),
+    body('collection').optional().isString().isLength({ min: 1, max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    try {
+      const { files } = req.body;
+      const collection = req.body.collection || 'code';
+      const result = await rag.ingestCode(req.user.id, collection, files);
+      res.json({ ok: true, collection, ...result });
+    } catch (err) {
+      console.error('[rag] ingest-code failed:', err);
+      res.status(500).json({ error: err.message || 'ingest-code failed' });
     }
   }
 );

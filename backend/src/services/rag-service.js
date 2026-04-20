@@ -29,6 +29,8 @@ const OpenAI = require('openai');
 const { mmrRerank } = require('./mmr');
 const { expandQuery } = require('./query-expansion');
 const llmReranker = require('./llm-reranker');
+const bm25 = require('./bm25');
+const codeChunker = require('./code-chunker');
 
 const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
@@ -213,12 +215,15 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     rerank = false,
     rerankOpenAI = null,
     overfetchK,
+    useHybrid = false,
+    rrfK = 60,
+    hybridWeights = { semantic: 1.0, bm25: 1.0 },
   } = opts;
 
-  // Overfetch a pool to feed downstream MMR/reranker with real choice.
+  // Overfetch a pool to feed downstream MMR/reranker/RRF with real choice.
   // When all post-processing is off, we still cap the pool at k to match
   // the old behaviour byte-for-byte.
-  const needsPool = useMMR || rerank;
+  const needsPool = useMMR || rerank || useHybrid;
   const poolSize = needsPool
     ? (overfetchK || Math.max(k * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR))
     : k;
@@ -234,13 +239,14 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
   }
   const queryVecs = await embed(toEmbed);
 
-  const scored = entries.map(e => {
+  const scored = entries.map((e, idx) => {
     let best = -Infinity;
     for (const qv of queryVecs) {
       const s = cosine(qv, e.embedding);
       if (s > best) best = s;
     }
     return {
+      _idx: idx,
       text: e.text,
       source: e.source,
       title: e.title,
@@ -249,7 +255,63 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
   });
   scored.sort((a, b) => b.score - a.score);
 
-  let pool = scored.slice(0, Math.max(1, cappedPool));
+  let pool;
+
+  if (useHybrid) {
+    // Build a BM25 ranking over ALL entries (not just the semantic pool),
+    // then fuse both rankings via Reciprocal Rank Fusion:
+    //   RRF(d) = Σ_rankers  w / (rrfK + rank_ranker(d))
+    // RRF is score-agnostic: it only cares about each ranker's position,
+    // so we don't need to normalise BM25 raw scores against cosine.
+    const bmIndex = bm25.buildIndex(entries.map(e => ({ text: e.text, _idx: entries.indexOf(e) })));
+    const bmHits = bm25.searchIndex(bmIndex, query, { k: entries.length });
+
+    const fused = new Map(); // _idx → { scored-like, fusedScore }
+    const wSem = hybridWeights.semantic ?? 1.0;
+    const wBm = hybridWeights.bm25 ?? 1.0;
+
+    // Rank from semantic (scored is already sorted desc by cosine).
+    scored.forEach((s, rank) => {
+      fused.set(s._idx, {
+        ...s,
+        score: s.score,
+        semRank: rank + 1,
+        bmRank: null,
+        fusedScore: wSem / (rrfK + (rank + 1)),
+      });
+    });
+    // Add BM25 ranks.
+    bmHits.forEach((h, rank) => {
+      const idx = h.doc._idx;
+      const existing = fused.get(idx);
+      const contrib = wBm / (rrfK + (rank + 1));
+      if (existing) {
+        existing.bmRank = rank + 1;
+        existing.fusedScore += contrib;
+      } else {
+        const entry = entries[idx];
+        fused.set(idx, {
+          _idx: idx,
+          text: entry.text,
+          source: entry.source,
+          title: entry.title,
+          score: 0,
+          semRank: null,
+          bmRank: rank + 1,
+          fusedScore: contrib,
+        });
+      }
+    });
+
+    pool = [...fused.values()]
+      .sort((a, b) => b.fusedScore - a.fusedScore)
+      .slice(0, Math.max(1, cappedPool))
+      // Surface the fusion score as `score` so downstream MMR/reranker
+      // see a unified metric.
+      .map(e => ({ ...e, score: e.fusedScore }));
+  } else {
+    pool = scored.slice(0, Math.max(1, cappedPool));
+  }
 
   if (rerank) {
     // Reranker may drop candidates below its cutoff — we still honour k.
@@ -260,7 +322,60 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     pool = mmrRerank(pool, { lambda: mmrLambda, k: Math.max(1, k) });
   }
 
-  return pool.slice(0, Math.max(1, k));
+  // Strip internal-only fields before returning.
+  return pool.slice(0, Math.max(1, k)).map(({ _idx, semRank, bmRank, fusedScore, ...rest }) => rest);
+}
+
+/**
+ * Ingest source code files with AST-lite chunking.
+ *
+ * Each file is `{ filename, content, language? }`. Chunks are split on
+ * function/class boundaries when the language is recognised, otherwise
+ * a line-sliding-window fallback kicks in. Each resulting chunk carries
+ * `source` (filename), `title` (a "filename:startLine-endLine (nodeType
+ * name)" label), and a `meta` blob with language/nodeType/name flags
+ * that downstream callers (citation engine) can use.
+ */
+async function ingestCode(userId, collection, files, opts = {}) {
+  if (!Array.isArray(files) || files.length === 0) return { chunksAdded: 0, totalChunks: 0 };
+
+  const allChunks = [];
+  for (const f of files) {
+    if (!f || typeof f.content !== 'string') continue;
+    const pieces = codeChunker.chunkCode(f.filename, f.content, { language: f.language, ...opts });
+    for (const p of pieces) {
+      const label = p.name
+        ? `${f.filename || 'code'}:${p.startLine}-${p.endLine} (${p.nodeType} ${p.name})`
+        : `${f.filename || 'code'}:${p.startLine}-${p.endLine}`;
+      allChunks.push({
+        text: p.text,
+        source: f.filename || null,
+        title: label,
+        meta: {
+          language: p.language,
+          nodeType: p.nodeType,
+          name: p.name,
+          startLine: p.startLine,
+          endLine: p.endLine,
+          isExported: p.isExported,
+          isAsync: p.isAsync,
+        },
+      });
+    }
+  }
+  if (allChunks.length === 0) return { chunksAdded: 0, totalChunks: 0 };
+
+  const vectors = await embed(allChunks.map(c => c.text));
+  const key = storeKey(userId, collection);
+  const existing = store.get(key) || [];
+
+  const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
+  const trimmed = merged.length > MAX_COLLECTION_CHUNKS
+    ? merged.slice(merged.length - MAX_COLLECTION_CHUNKS)
+    : merged;
+
+  store.set(key, trimmed);
+  return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
 }
 
 function clear(userId, collection) {
@@ -276,6 +391,7 @@ module.exports = {
   chunk,
   embed,
   ingest,
+  ingestCode,
   retrieve,
   clear,
   stats,
