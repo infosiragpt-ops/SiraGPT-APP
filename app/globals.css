@@ -181,7 +181,28 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size: 16px;
     line-height: 1.5;
+    /* Prevent the whole page from rubber-band-scrolling when an
+       inner container (chat ScrollArea, document preview, sidebar
+       chat list) reaches its edge. Without this, Safari chains the
+       scroll to the body and the URL bar / overlay UI visibly jumps
+       up and down while the user keeps wheeling — which feels like
+       the app itself is unstable. `none` is stronger than `contain`
+       because it also kills the pull-to-refresh gesture. */
+    overscroll-behavior: none;
   }
+
+  html {
+    overscroll-behavior: none;
+  }
+}
+
+/* Any scrolling viewport inside the app: contain the scroll so wheel
+   events at the bottom don't bubble to the window. Applied via class
+   on explicit scrollers + as an attribute selector so radix's
+   auto-generated ScrollArea viewport inherits the same behavior. */
+[data-radix-scroll-area-viewport],
+.scroll-contain {
+  overscroll-behavior: contain;
 }
 
 /* Custom scrollbar for chat */
@@ -488,6 +509,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: rgba(120, 120, 120, 0.5) transparent;
+  /* Keep the wheel inside the sidebar chat list so reaching the end
+     doesn't chain-scroll the window. Fixes the Safari "page jumps
+     up/down" bounce when the user wheels past the last chat item. */
+  overscroll-behavior: contain;
 }
 
 .custom-scrollbar::-webkit-scrollbar {

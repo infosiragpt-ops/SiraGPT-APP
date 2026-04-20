@@ -134,7 +134,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="scroll-contain min-h-0 flex-1 overflow-auto">
         {state.kind === "loading" && (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
