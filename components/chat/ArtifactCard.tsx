@@ -79,6 +79,38 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
   const artifactTitle = title || deriveTitle(code) || (isMermaid ? "Diagrama" : "Artefacto")
   const fileName = useMemo(() => sanitizeFilename(artifactTitle) + (isMermaid ? ".svg" : ".html"), [artifactTitle, isMermaid])
 
+  // ── Safety guard ───────────────────────────────────────────
+  // If the block is too short or doesn't look like a self-contained
+  // artifact (e.g. a partial fragment arrived via streaming before
+  // the stream-branch detector could short-circuit it), degrade to
+  // the plain syntax-highlighted CodeBlock instead of shoving a
+  // broken fragment through the iframe. Mermaid skips this check —
+  // mermaid code is just a short DSL, not HTML.
+  if (!isMermaid) {
+    const trimmed = (code || "").trim()
+    const looksExecutable =
+      trimmed.length >= 20 &&
+      (trimmed.includes("<!DOCTYPE") ||
+       trimmed.includes("<html") ||
+       trimmed.includes("<svg") ||
+       trimmed.includes("<canvas") ||
+       trimmed.includes("<style"))
+    if (!looksExecutable) {
+      return <InlineSource code={code || ""} language={lang || "markup"} />
+    }
+  }
+
+  // Build the srcDoc once per code change. If the model emitted a
+  // raw fragment we wrap it in a minimal HTML shell; full documents
+  // with <!DOCTYPE or <html> pass through untouched. useMemo keeps
+  // the iframe key stable across re-renders that don't change code.
+  const sanitizedSrcDoc = useMemo(() => {
+    const trimmed = (code || "").trim()
+    if (lang === "svg") return toFullDocument(trimmed, "svg")
+    if (trimmed.startsWith("<!DOCTYPE") || /^<html[\s>]/i.test(trimmed)) return trimmed
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0">${trimmed}</body></html>`
+  }, [code, lang])
+
   // ── Reset / reload ─────────────────────────────────────────
   const onReset = () => setGeneration((g) => g + 1)
 
@@ -126,6 +158,7 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
           <ArtifactPreview
             key={`preview-${generation}`}
             code={code}
+            srcDoc={sanitizedSrcDoc}
             language={lang}
             heightClass="h-[400px]"
           />
@@ -173,6 +206,7 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
       {expanded && (
         <ArtifactModal
           code={code}
+          srcDoc={sanitizedSrcDoc}
           language={lang}
           title={artifactTitle}
           onClose={() => setExpanded(false)}
@@ -190,17 +224,23 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
 
 // ────────────────────────────────────────────────────────────
 // Preview surface — iframe for html/svg, Mermaid div otherwise.
+//
+// Sandbox contract: "allow-scripts" is intentionally the ONLY
+// permission. No "allow-same-origin" — the iframe is forced into
+// an opaque origin so even a worst-case prompt injection cannot
+// reach window.parent, document.cookie, localStorage, or the
+// rest of the siraGPT app. Scripts still run (needed for
+// interactive artifacts), but they're fully quarantined.
 // ────────────────────────────────────────────────────────────
-function ArtifactPreview({ code, language, heightClass, fillHeight }: {
-  code: string; language: string; heightClass?: string; fillHeight?: boolean
+function ArtifactPreview({ code, srcDoc, language, heightClass, fillHeight }: {
+  code: string; srcDoc: string; language: string; heightClass?: string; fillHeight?: boolean
 }) {
   if (language === "mermaid") return <MermaidRender code={code} heightClass={heightClass} fillHeight={fillHeight} />
-  const srcDoc = useMemo(() => toFullDocument(code, language), [code, language])
   return (
     <iframe
       title="artifact"
       srcDoc={srcDoc}
-      sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+      sandbox="allow-scripts"
       className={`w-full border-0 bg-white ${fillHeight ? "h-full" : heightClass || "h-[400px]"}`}
       style={{ aspectRatio: fillHeight ? undefined : "16 / 9" }}
     />
@@ -336,9 +376,9 @@ function InlineSource({ code, language }: { code: string; language: string }) {
 // 4 actions in the header. Closed by X or Esc.
 // ────────────────────────────────────────────────────────────
 function ArtifactModal({
-  code, language, title, onClose, generation, onReset, onToggleCode, showCode, onDownload, onOpenNewTab,
+  code, srcDoc, language, title, onClose, generation, onReset, onToggleCode, showCode, onDownload, onOpenNewTab,
 }: {
-  code: string; language: string; title: string; onClose: () => void; generation: number
+  code: string; srcDoc: string; language: string; title: string; onClose: () => void; generation: number
   onReset: () => void; onToggleCode: () => void; showCode: boolean
   onDownload: () => void; onOpenNewTab: () => void
 }) {
@@ -382,7 +422,7 @@ function ArtifactModal({
         </div>
 
         <div className="relative flex-1 bg-white">
-          <ArtifactPreview key={`modal-preview-${generation}`} code={code} language={language} fillHeight />
+          <ArtifactPreview key={`modal-preview-${generation}`} code={code} srcDoc={srcDoc} language={language} fillHeight />
         </div>
 
         {showCode && (

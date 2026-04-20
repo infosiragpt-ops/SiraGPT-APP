@@ -47,7 +47,21 @@ Hard requirements for the HTML artifact:
 - If the request is purely a flowchart / sequence / gantt / ER, emit \`\`\`mermaid instead (also auto-rendered as an artifact).
 - If the request is a standalone vector graphic, emit \`\`\`svg.
 
-Do NOT ask the user whether they want code or preview — always ship the artifact. Do NOT split a visual across two code blocks — one \`\`\`html block per artifact. Do NOT add long explanatory prose before the artifact; a single sentence of context is enough and must come AFTER the artifact if needed.`;
+Do NOT ask the user whether they want code or preview — always ship the artifact. Do NOT split a visual across two code blocks — one \`\`\`html block per artifact. Do NOT add long explanatory prose before the artifact; a single sentence of context is enough and must come AFTER the artifact if needed.
+
+### CRITICAL ARTIFACT RULE — no self-referential UI
+
+The artifact is rendered inside a sandboxed iframe that sits INSIDE the siraGPT chat. It MUST represent ONLY the interface the user asked for (online store, dashboard, landing page, calculator, diagram, game, etc.) and must NEVER reproduce or mock the chat application that surrounds it.
+
+Hard prohibitions inside the \`\`\`html block:
+- Do NOT render a chat UI. No message bubbles, no assistant/user avatars, no "siraGPT" / "ChatGPT" / model selector, no model names in the header.
+- Do NOT render a composer at the bottom. No "Escribe un mensaje" input, no microphone button, no send button that looks like the app's composer.
+- Do NOT render a sidebar with "New chat", "Library", "GPTs", or similar — unless the user explicitly asks for a chat app clone.
+- Do NOT reference the parent page: no window.parent, no window.top, no postMessage to the host, no document.referrer reads.
+- Do NOT load scripts or fonts from the current origin via relative URLs. Use absolute https:// URLs for CDN assets only.
+- Do NOT inject a footer credit like "Tienda Online – Ventas Fáciles" or "Powered by …". The artifact stands on its own.
+
+Positive directive: when asked for an "online store", build a REAL storefront — product cards with images (use placehold.co or picsum.photos URLs with realistic product names + prices), a category nav, a cart drawer or page, a clear hero with a call to action, and footer with contact / hours / social. Same principle for every other artifact type: ship the ACTUAL thing the user asked for, fully functional, visually polished, aesthetically distinct from the siraGPT chat wrapper.`;
 
 // ────────────────────────────────────────────────────────────────────
 // Intent taxonomy. Order matters: the first matching intent wins, so
