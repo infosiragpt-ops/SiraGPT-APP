@@ -51,6 +51,10 @@ router.post(
     body('query').trim().isLength({ min: 2 }).withMessage('query too short'),
     body('collection').optional().isString(),
     body('k').optional().isInt({ min: 1, max: 20 }),
+    body('useExpansion').optional().isBoolean(),
+    body('useMMR').optional().isBoolean(),
+    body('mmrLambda').optional().isFloat({ min: 0, max: 1 }),
+    body('rerank').optional().isBoolean(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -59,7 +63,16 @@ router.post(
     try {
       const collection = req.body.collection || 'default';
       const k = req.body.k || 5;
-      const hits = await rag.retrieve(req.user.id, collection, req.body.query, k);
+      // Pass the shared OpenAI client when reranking is requested so the
+      // reranker uses the same configured key/instance as embeddings.
+      const rerankOpenAI = req.body.rerank ? rag.getOpenAI() : null;
+      const hits = await rag.retrieve(req.user.id, collection, req.body.query, k, {
+        useExpansion: !!req.body.useExpansion,
+        useMMR: !!req.body.useMMR,
+        mmrLambda: typeof req.body.mmrLambda === 'number' ? req.body.mmrLambda : undefined,
+        rerank: !!req.body.rerank,
+        rerankOpenAI,
+      });
       res.json({ ok: true, collection, hits });
     } catch (err) {
       console.error('[rag] retrieve failed:', err);

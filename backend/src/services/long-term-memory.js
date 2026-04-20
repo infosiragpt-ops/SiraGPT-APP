@@ -28,11 +28,87 @@
  */
 
 const rag = require('./rag-service');
+const { mmrRerank } = require('./mmr');
 
 const COLLECTION_PREFIX = 'facts:';
 const DEFAULT_RECALL_K = 5;
 const MIN_CONFIDENCE = 0.6;
 const MAX_FACTS_PER_TURN = 8;
+
+// ─── Importance + decay ───────────────────────────────────────────────────────
+//
+// We layer two per-fact signals on top of plain cosine similarity:
+//
+//   importance = min(mentionCount / 10, 1)
+//     Facts the user has reinforced across turns (same normalised text
+//     extracted again) climb toward 1.0. A fact mentioned once caps at 0.1,
+//     a fact mentioned ten or more times caps at 1.0.
+//
+//   decay = exp(-ageDays / HALF_LIFE_DAYS * ln(2))
+//     Classic half-life decay: a fact's weight halves every HALF_LIFE_DAYS.
+//     Prevents ancient single-mention facts from outranking fresh context.
+//
+// Final recall score = cosine * (0.6 + 0.2 * importance + 0.2 * decay).
+// The 0.6 floor keeps cosine as the dominant signal; importance and decay
+// each tilt the ranking by up to 20%.
+//
+// Pattern reference: Iliagpt.io server/memory/ImportanceScorer.ts + temporalDecay.ts.
+
+const HALF_LIFE_DAYS = 30;
+const DECAY_LN2 = Math.log(2);
+// Per-user registry keyed by normalised fact text. We track mention
+// count + last-seen time so ingestion can upsert and recall can re-weight.
+// Swap to Redis or Postgres when rag-service swaps its in-memory store.
+const factMeta = new Map(); // userId → Map<normText, { mentions, firstSeen, lastSeen }>
+
+function normalizeFact(text) {
+  return (text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function getUserMeta(userId) {
+  let m = factMeta.get(userId);
+  if (!m) {
+    m = new Map();
+    factMeta.set(userId, m);
+  }
+  return m;
+}
+
+function upsertFactMeta(userId, factText) {
+  const norm = normalizeFact(factText);
+  if (!norm) return { mentions: 1, ageDays: 0 };
+  const meta = getUserMeta(userId);
+  const now = Date.now();
+  const existing = meta.get(norm);
+  if (existing) {
+    existing.mentions += 1;
+    existing.lastSeen = now;
+    return {
+      mentions: existing.mentions,
+      ageDays: (now - existing.firstSeen) / (1000 * 60 * 60 * 24),
+    };
+  }
+  meta.set(norm, { mentions: 1, firstSeen: now, lastSeen: now });
+  return { mentions: 1, ageDays: 0 };
+}
+
+function getFactMeta(userId, factText) {
+  const norm = normalizeFact(factText);
+  const meta = getUserMeta(userId).get(norm);
+  if (!meta) return { mentions: 1, ageDays: 0 };
+  return {
+    mentions: meta.mentions,
+    ageDays: (Date.now() - meta.firstSeen) / (1000 * 60 * 60 * 24),
+  };
+}
+
+function importanceScore(mentions) {
+  return Math.min(mentions / 10, 1);
+}
+
+function decayScore(ageDays) {
+  return Math.exp(-ageDays / HALF_LIFE_DAYS * DECAY_LN2);
+}
 
 const EXTRACTION_SYSTEM_PROMPT = `Extract durable facts about the user from the conversation turn below. Durable = useful across future conversations (preferences, personal/work context, explicit instructions about how the assistant should behave). Skip greetings, acknowledgments, one-off task details, and facts about the assistant.
 
@@ -115,11 +191,17 @@ function extractFactsAsync({ openai, userId, userMessage, assistantMessage }) {
     try {
       const facts = await extractFacts(openai, userMessage, assistantMessage);
       if (facts.length === 0) return;
-      const docs = facts.map(f => ({
-        text: f.fact,
-        title: f.category,
-        source: `mem:${f.confidence.toFixed(2)}`,
-      }));
+      const docs = facts.map(f => {
+        // Upsert importance tracking BEFORE ingesting so the source
+        // field carries the current mention count — useful later when
+        // we migrate to pgvector and need to seed the table.
+        const { mentions } = upsertFactMeta(userId, f.fact);
+        return {
+          text: f.fact,
+          title: f.category,
+          source: `mem:${f.confidence.toFixed(2)}:m${mentions}`,
+        };
+      });
       await rag.ingest(userId, collectionFor(userId), docs, { size: 2000, overlap: 0 });
       console.log(`🧠 long-term-memory: stored ${facts.length} fact(s) for user ${userId}`);
     } catch (err) {
@@ -133,15 +215,37 @@ function extractFactsAsync({ openai, userId, userMessage, assistantMessage }) {
  * Returns an array of `{ text, category, score }`. Caller decides how
  * to splice these into the system prompt.
  */
-async function recallFacts(userId, userMessage, k = DEFAULT_RECALL_K) {
+async function recallFacts(userId, userMessage, k = DEFAULT_RECALL_K, opts = {}) {
   if (!userId || !userMessage) return [];
+  const { useDiversity = true, overfetch = k * 3 } = opts;
   try {
-    const hits = await rag.retrieve(userId, collectionFor(userId), userMessage, k);
-    return hits.map(h => ({
-      text: h.text,
-      category: h.title || 'knowledge',
-      score: h.score,
-    }));
+    // Overfetch, then re-weight with importance + decay, then optionally
+    // MMR for diversity so we don't return 5 near-duplicate facts.
+    const raw = await rag.retrieve(userId, collectionFor(userId), userMessage, overfetch);
+    const weighted = raw.map(h => {
+      const { mentions, ageDays } = getFactMeta(userId, h.text);
+      const imp = importanceScore(mentions);
+      const dec = decayScore(ageDays);
+      // Cosine stays the dominant signal (60%); importance and decay
+      // nudge the ranking by 20% each. See header comment for rationale.
+      const weightedScore = h.score * (0.6 + 0.2 * imp + 0.2 * dec);
+      return {
+        text: h.text,
+        category: h.title || 'knowledge',
+        score: weightedScore,
+        cosine: h.score,
+        importance: imp,
+        decay: dec,
+        mentions,
+      };
+    });
+    weighted.sort((a, b) => b.score - a.score);
+
+    const finalList = useDiversity && weighted.length > 1
+      ? mmrRerank(weighted, { lambda: 0.75, k })
+      : weighted.slice(0, k);
+
+    return finalList;
   } catch (err) {
     console.warn('[long-term-memory] recall failed:', err.message);
     return [];
@@ -161,6 +265,7 @@ function buildMemoryBlock(facts) {
 
 function clearUserMemory(userId) {
   rag.clear(userId, collectionFor(userId));
+  factMeta.delete(userId);
 }
 
 function memoryStats(userId) {
@@ -175,5 +280,12 @@ module.exports = {
   clearUserMemory,
   memoryStats,
   collectionFor,         // exported for tests
+  // scoring internals — exported for tests and for potential reuse
+  importanceScore,
+  decayScore,
+  upsertFactMeta,
+  getFactMeta,
+  normalizeFact,
+  HALF_LIFE_DAYS,
   EXTRACTION_SYSTEM_PROMPT,
 };

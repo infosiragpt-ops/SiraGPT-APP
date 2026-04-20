@@ -26,11 +26,23 @@
 
 const OpenAI = require('openai');
 
+const { mmrRerank } = require('./mmr');
+const { expandQuery } = require('./query-expansion');
+const llmReranker = require('./llm-reranker');
+
 const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
 const DEFAULT_CHUNK_SIZE = 1200;                 // approx tokens (~4 chars each)
 const DEFAULT_CHUNK_OVERLAP = 200;
 const MAX_COLLECTION_CHUNKS = 2000;              // safety cap per (user, collection)
+
+// When query expansion is enabled we run *two* embeddings (original + expanded)
+// and take the max-similarity across both as each chunk's relevance. The
+// over-fetch multiplier ensures we pull enough candidates before reranking
+// so the downstream reranker/MMR has real choice, not just the top-K again.
+const OVERFETCH_MULTIPLIER = 3;
+const OVERFETCH_FLOOR = 12;
+const OVERFETCH_CEILING = 40;
 
 const store = new Map(); // key = `${userId}:${collection}` → Array<Chunk>
 
@@ -171,22 +183,84 @@ async function ingest(userId, collection, docs, opts = {}) {
 /**
  * Retrieve the top-K most similar chunks for a query.
  * Returns `[{ text, source, title, score }]` sorted descending by score.
+ *
+ * Options (all opt-in, defaults match legacy cosine-only behaviour):
+ *   - useExpansion: boolean — embed the original query AND a keyword-
+ *     expanded variant, take max cosine across both. Boosts recall on
+ *     conversational queries.
+ *   - useMMR: boolean — reshuffle top results for diversity (λ=0.7).
+ *     Use when the caller needs breadth, e.g. "everything about X".
+ *   - mmrLambda: number — override λ (0..1). 1 = pure relevance,
+ *     0 = pure diversity.
+ *   - rerank: boolean — run the LLM reranker on the over-fetched pool
+ *     before returning top-K. Most expensive, biggest quality lift.
+ *   - rerankOpenAI: OpenAI client instance — required if `rerank` is
+ *     true. We don't wire the internal client because callers may want
+ *     to reuse their own instance / key.
+ *   - overfetchK: number — how many to retrieve before reranking.
+ *     Default: max(k * 3, 12), capped at 40.
  */
-async function retrieve(userId, collection, query, k = 5) {
+async function retrieve(userId, collection, query, k = 5, opts = {}) {
   if (!query || typeof query !== 'string') return [];
   const key = storeKey(userId, collection);
   const entries = store.get(key);
   if (!entries || entries.length === 0) return [];
 
-  const [qVec] = await embed([query]);
-  const scored = entries.map(e => ({
-    text: e.text,
-    source: e.source,
-    title: e.title,
-    score: cosine(qVec, e.embedding),
-  }));
+  const {
+    useExpansion = false,
+    useMMR = false,
+    mmrLambda = 0.7,
+    rerank = false,
+    rerankOpenAI = null,
+    overfetchK,
+  } = opts;
+
+  // Overfetch a pool to feed downstream MMR/reranker with real choice.
+  // When all post-processing is off, we still cap the pool at k to match
+  // the old behaviour byte-for-byte.
+  const needsPool = useMMR || rerank;
+  const poolSize = needsPool
+    ? (overfetchK || Math.max(k * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR))
+    : k;
+  const cappedPool = Math.min(poolSize, OVERFETCH_CEILING, entries.length);
+
+  // Embed the query once, and optionally the keyword-expanded variant
+  // once more. Max-similarity fusion keeps it a single cosine pass per
+  // chunk — we don't blend scores, we take the winner.
+  const toEmbed = [query];
+  if (useExpansion) {
+    const { expanded, keywords } = expandQuery(query);
+    if (keywords.length > 0 && expanded !== query) toEmbed.push(expanded);
+  }
+  const queryVecs = await embed(toEmbed);
+
+  const scored = entries.map(e => {
+    let best = -Infinity;
+    for (const qv of queryVecs) {
+      const s = cosine(qv, e.embedding);
+      if (s > best) best = s;
+    }
+    return {
+      text: e.text,
+      source: e.source,
+      title: e.title,
+      score: best,
+    };
+  });
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, Math.max(1, k));
+
+  let pool = scored.slice(0, Math.max(1, cappedPool));
+
+  if (rerank) {
+    // Reranker may drop candidates below its cutoff — we still honour k.
+    pool = await llmReranker.rerank(rerankOpenAI, query, pool, { k: pool.length });
+  }
+
+  if (useMMR) {
+    pool = mmrRerank(pool, { lambda: mmrLambda, k: Math.max(1, k) });
+  }
+
+  return pool.slice(0, Math.max(1, k));
 }
 
 function clear(userId, collection) {
@@ -205,7 +279,8 @@ module.exports = {
   retrieve,
   clear,
   stats,
-  cosine,   // exported for tests
+  cosine,        // exported for tests
+  getOpenAI,     // exported so callers can pass the shared client to rerank
   EMBED_MODEL,
   EMBED_DIM,
 };
