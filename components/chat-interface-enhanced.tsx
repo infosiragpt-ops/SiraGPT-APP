@@ -5022,16 +5022,22 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               />
                             ))}
                             {streamingMessage && (
-                              <MessageComponent
-                                key={streamingMessage.id}
-                                message={streamingMessage}
-                                user={user}
-                                onRegenerate={regenerateMessage}
-                                updateMessageInChat={editAndRegenerate}
-                                isStreaming={true}
-                                onToggleSplitView={handleToggleSplitView}
-                                onDocumentPreview={handleDocumentPreview}
-                              />
+                              // Isolate layout for the streaming bubble so
+                              // each token delta doesn't relayout the whole
+                              // message list above. See .streaming-message
+                              // in globals.css (contain: layout style).
+                              <div className="streaming-message">
+                                <MessageComponent
+                                  key={streamingMessage.id}
+                                  message={streamingMessage}
+                                  user={user}
+                                  onRegenerate={regenerateMessage}
+                                  updateMessageInChat={editAndRegenerate}
+                                  isStreaming={true}
+                                  onToggleSplitView={handleToggleSplitView}
+                                  onDocumentPreview={handleDocumentPreview}
+                                />
+                              </div>
                             )}
                           </>
                         );

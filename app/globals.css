@@ -176,33 +176,76 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     @apply border-border;
   }
 
+  /*
+   * APP-SHELL LOCK — the same pattern WhatsApp Web / ChatGPT /
+   * Linear / Slack use to keep the window rock-solid while inner
+   * containers do the scrolling.
+   *
+   * Goals:
+   *   - Window NEVER scrolls. Inner chat list + preview panel do.
+   *   - No rubber-band bounce on Safari/iOS.
+   *   - Safari's dynamic address bar can't resize the viewport and
+   *     push content: we freeze to 100dvh (dynamic viewport units,
+   *     supported in Safari 15.4+, Chrome 108+, FF 101+). The 100vh
+   *     fallback stays for older browsers.
+   *   - No pull-to-refresh gesture hijacking the chat.
+   *   - No layout shift when a scrollbar appears/disappears.
+   *
+   * Critical: the chat composer is absolute-positioned inside the
+   * chat pane; this only works if the pane itself has a deterministic
+   * viewport height — hence pinning html/body.
+   */
+  html, body {
+    height: 100%;
+    height: 100dvh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    scrollbar-gutter: stable;
+    /* Forces the layout engine to treat the body as the viewport
+       origin; prevents iOS from treating body scroll as "the page"
+       when there are nested scrollers. */
+    position: relative;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size: 16px;
     line-height: 1.5;
-    /* Prevent the whole page from rubber-band-scrolling when an
-       inner container (chat ScrollArea, document preview, sidebar
-       chat list) reaches its edge. Without this, Safari chains the
-       scroll to the body and the URL bar / overlay UI visibly jumps
-       up and down while the user keeps wheeling — which feels like
-       the app itself is unstable. `none` is stronger than `contain`
-       because it also kills the pull-to-refresh gesture. */
-    overscroll-behavior: none;
   }
 
-  html {
-    overscroll-behavior: none;
+  /* Next.js mounts the tree into body > [some wrappers]; make sure
+     every ancestor of the app-shell takes the full locked height so
+     h-screen / h-full children don't collapse. */
+  body > div:first-child {
+    height: 100%;
   }
 }
 
-/* Any scrolling viewport inside the app: contain the scroll so wheel
-   events at the bottom don't bubble to the window. Applied via class
-   on explicit scrollers + as an attribute selector so radix's
-   auto-generated ScrollArea viewport inherits the same behavior. */
+/*
+ * Scroll containers inside the app — contain the wheel so reaching
+ * the edge doesn't chain up to the body (which is locked anyway, but
+ * this suppresses the bounce attempt entirely on some browsers).
+ */
 [data-radix-scroll-area-viewport],
 .scroll-contain {
   overscroll-behavior: contain;
+  /* Disable the browser's scroll-anchor feature so the viewport
+     doesn't silently jump when streamed content above the viewport
+     grows. We manage auto-scroll-to-bottom explicitly where needed. */
+  overflow-anchor: none;
+}
+
+/*
+ * A streaming assistant message grows one token at a time. Isolate
+ * its layout so each chunk doesn't trigger a relayout of every
+ * element above — that's what makes long generations feel janky.
+ */
+.streaming-message {
+  contain: layout style;
+  overflow-anchor: none;
 }
 
 /* Custom scrollbar for chat */
