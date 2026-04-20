@@ -489,6 +489,56 @@ function fuseByRRF(poolA, poolB, { rrfK = 60, k = Infinity } = {}) {
 }
 
 /**
+ * passageLink (GEAR §5.4 Eq. 8) — given a proximal triple from the
+ * final gist memory, return the top-k passages most similar to the
+ * triple's natural-language form. Uses the same retrieve() plumbing as
+ * normal query retrieval (hybrid on + graph off so we don't recurse).
+ */
+async function passageLink(userId, collection, triple, { k = 5 } = {}) {
+  if (!triple || !triple.subject || !triple.predicate || !triple.object) return [];
+  const sentence = `${triple.subject} ${triple.predicate} ${triple.object}`.replace(/\s+/g, ' ').trim();
+  if (!sentence) return [];
+  return retrieve(userId, collection, sentence, k, {
+    useHybrid: true,
+    // No graph expansion here — we're already operating on graph output,
+    // recursing would blow up without new information.
+    useGraph: false,
+  });
+}
+
+/**
+ * finalFuseGEAR (§5.4 Eq. 9) — fuse the per-iteration retrieved pools
+ * C_q^(1)...C_q^(n) with the per-triple linked pools C_t1...C_t|G| via
+ * Reciprocal Rank Fusion. Each pool contributes 1/(k + rank + 1) to
+ * every doc it contains; duplicates across pools accumulate.
+ *
+ * This is the final step of the agent loop — the return value is the
+ * ranked passage list that callers hand to the downstream LLM.
+ */
+function finalFuseGEAR({ perIterPools = [], tripleLinkedPools = [], k = 10, rrfK = 60 }) {
+  const fused = new Map();
+  const id = (e) => e._idx != null ? `idx:${e._idx}` : `src:${e.source || ''}|${(e.text || '').slice(0, 40)}`;
+
+  const add = (pool) => {
+    if (!Array.isArray(pool)) return;
+    pool.forEach((e, rank) => {
+      const key = id(e);
+      const contrib = 1 / (rrfK + rank + 1);
+      const existing = fused.get(key);
+      if (existing) existing.fusedScore += contrib;
+      else fused.set(key, { ...e, fusedScore: contrib });
+    });
+  };
+  for (const p of perIterPools) add(p);
+  for (const p of tripleLinkedPools) add(p);
+
+  return [...fused.values()]
+    .sort((a, b) => b.fusedScore - a.fusedScore)
+    .slice(0, k)
+    .map(({ _idx, fusedScore, ...rest }) => ({ ...rest, score: fusedScore }));
+}
+
+/**
  * Ingest source code files with AST-lite chunking.
  *
  * Each file is `{ filename, content, language? }`. Chunks are split on
@@ -606,6 +656,8 @@ module.exports = {
   // exported for tests / advanced callers
   fuseByRRF,
   expandWithGraph,
+  passageLink,
+  finalFuseGEAR,
   EMBED_MODEL,
   EMBED_DIM,
 };

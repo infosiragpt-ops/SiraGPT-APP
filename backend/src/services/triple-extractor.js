@@ -39,16 +39,29 @@ Rules:
 - Use the same language as the passage.
 - Return at most 20 triples. Return an empty array when the passage has no factual content.`;
 
-const PROXIMAL_EXTRACTION_SYSTEM_PROMPT = `You are helping a retrieval system answer a QUERY by extracting from the PASSAGES the knowledge triples that would most directly support a correct answer.
+// Aligned with the GEAR paper's "Reader with and without Gist Memory"
+// prompt (Shen et al., ACL 2025, Appendix K.2). The paper uses a
+// free-form tuple style ("subject","predicate","object"); we wrap the
+// same instructions in JSON to make the output trivially parseable
+// without losing the structure. The one-shot example is copied
+// verbatim from the paper.
+const PROXIMAL_EXTRACTION_SYSTEM_PROMPT = `Your task is to find facts that help answer an input question.
+
+You should present these facts as knowledge triples, which are structured as ("subject", "predicate", "object").
+
+Example:
+Question: When was Neville A. Stanton's employer founded?
+Facts: ("Neville A. Stanton", "employer", "University of Southampton"), ("University of Southampton", "founded in", "1862")
 
 Return STRICT JSON:
 {"triples":[{"subject":"<entity>","predicate":"<relation, <=4 words>","object":"<entity or value>","confidence":0.0-1.0}]}
 
 Rules:
-- Extract ONLY triples relevant to the query. Ignore unrelated facts.
+- Extract ONLY triples that help answer the question. Ignore unrelated facts.
 - Each element (subject/predicate/object) must be <= 60 chars.
-- Use the same language as the query.
-- Return at most 12 triples. If the passages do not contain anything relevant to the query, return an empty array.`;
+- Use the same language as the question.
+- If the information given is insufficient, output only the relevant facts you can find (possibly an empty array).
+- Return at most 12 triples.`;
 
 const MAX_TRIPLES = 20;
 const MAX_ELEMENT_CHARS = 60;

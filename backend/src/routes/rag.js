@@ -138,6 +138,63 @@ router.get(
 );
 
 /**
+ * POST /api/rag/gear
+ *   body: {
+ *     query: string,              // user question
+ *     collection?: string,
+ *     k?: number,                 // top-k final passages
+ *     maxIters?: number,          // hop budget (default 3)
+ *     sessionId?: string,         // persist gist memory across turns
+ *     retrieveOpts?: {            // forwarded to rag.retrieve each hop
+ *       useHybrid?: bool, useMMR?: bool, rerank?: bool, useExpansion?: bool
+ *     }
+ *   }
+ * Runs the full GEAR agent loop (retrieve → reason → rewrite → repeat,
+ * then §5.4 final passageLink + RRF) and returns:
+ *   { passages, answer, iterations, history, gist }
+ *
+ * Requires that both /api/rag/ingest AND /api/rag/ingest-triples have
+ * been called for the collection; otherwise retrieval degrades to the
+ * base pool (still works, just no graph benefit).
+ */
+router.post(
+  '/gear',
+  authenticateToken,
+  [
+    body('query').trim().isLength({ min: 2 }).withMessage('query too short'),
+    body('collection').optional().isString().isLength({ min: 1, max: 64 }),
+    body('k').optional().isInt({ min: 1, max: 50 }),
+    body('maxIters').optional().isInt({ min: 1, max: 6 }),
+    body('sessionId').optional().isString().isLength({ max: 128 }),
+    body('retrieveOpts').optional().isObject(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const gearAgent = require('../services/gear-agent');
+    try {
+      const collection = req.body.collection || 'default';
+      const k = req.body.k || 10;
+      const maxIters = req.body.maxIters || 3;
+      const result = await gearAgent.agentLoop({
+        userId: req.user.id,
+        collection,
+        query: req.body.query,
+        openai: rag.getOpenAI(),
+        k,
+        maxIters,
+        sessionId: req.body.sessionId || null,
+        retrieveOpts: req.body.retrieveOpts || {},
+      });
+      res.json({ ok: true, collection, ...result });
+    } catch (err) {
+      console.error('[rag] gear failed:', err);
+      res.status(500).json({ error: err.message || 'gear failed' });
+    }
+  }
+);
+
+/**
  * POST /api/rag/ingest-triples
  *   body: { collection?: string, sources?: string[] }
  * Runs LLM-based triple extraction over chunks already ingested into
