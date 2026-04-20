@@ -7,6 +7,8 @@
     "dev": "next dev",
     "lint": "next lint",
     "test": "rm -rf .test-dist && node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node --test .test-dist/tests/**/*.test.js",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
     "start": "next start",
     "export": "next export"
   },
@@ -123,6 +125,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/typography": "^0.5.16",
     "@types/dom-speech-recognition": "^0.0.6",
     "@types/dompurify": "^3.0.5",

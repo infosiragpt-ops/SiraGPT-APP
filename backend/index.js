@@ -34,6 +34,7 @@ const { router: computerUseRoutes, initializeWebSocketServer } = require('./src/
 const thesisRoutes = require('./src/routes/thesis');
 const researchRoutes = require('./src/routes/research');
 const ragRoutes = require('./src/routes/rag');
+const agentRoutes = require('./src/routes/agent');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -141,6 +142,7 @@ app.use('/api/computer-use', computerUseRoutes);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/research', researchRoutes);
 app.use('/api/rag', ragRoutes);
+app.use('/api/agent', agentRoutes);
 app.use('/api/document-ai', documentGenerateAiRoutes);
 
 

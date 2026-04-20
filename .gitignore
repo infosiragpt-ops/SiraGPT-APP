@@ -11,6 +11,8 @@
 /.test-dist/
 /.playwright-cli/
 /output/
+/playwright-report/
+/test-results/
 backend/prisma/dev.db
 backend/prisma/*.db-journal
 
