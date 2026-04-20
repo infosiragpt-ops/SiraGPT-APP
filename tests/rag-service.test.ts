@@ -1,0 +1,176 @@
+import assert from "node:assert/strict"
+import { describe, it } from "node:test"
+import { createRequire } from "node:module"
+
+const cjsRequire = createRequire(__filename)
+
+type Rag = {
+  chunk: (text: string, opts?: { size?: number; overlap?: number }) => string[]
+  cosine: (a: Float32Array | number[], b: Float32Array | number[]) => number
+  stats: (userId: string, collection: string) => { chunks: number; dim: number }
+  EMBED_DIM: number
+}
+
+type StreamCache = {
+  start: (
+    userId: string,
+    chatId: string,
+    opts?: { ttlMs?: number; title?: string }
+  ) => { append: (c: string) => void; complete: () => void; fail: (m: string) => void; forget: () => void }
+  resume: (userId: string, chatId: string) => null | {
+    status: "streaming" | "done" | "error"
+    content: string
+    title: string
+    error: string | null
+    startedAt: number
+    updatedAt: number
+  }
+  _reset: () => void
+  _size: () => number
+}
+
+const rag = cjsRequire("../../backend/src/services/rag-service") as Rag
+const streamCache = cjsRequire("../../backend/src/services/stream-cache") as StreamCache
+
+describe("rag-service · chunk", () => {
+  it("returns an empty array for empty / non-string input", () => {
+    assert.deepEqual(rag.chunk(""), [])
+    assert.deepEqual(rag.chunk(null as unknown as string), [])
+  })
+
+  it("returns a single piece when the text fits inside the size", () => {
+    const short = "This is a short paragraph about nothing in particular."
+    assert.deepEqual(rag.chunk(short, { size: 4000, overlap: 200 }), [short])
+  })
+
+  it("splits long text into multiple pieces", () => {
+    const para = "Sentence one. Sentence two! Sentence three? ".repeat(40)
+    const pieces = rag.chunk(para, { size: 300, overlap: 50 })
+    assert.ok(pieces.length >= 2, `expected at least 2 chunks, got ${pieces.length}`)
+  })
+
+  it("keeps each chunk close to the requested size (within a reasonable margin)", () => {
+    const para = "Sentence alpha. Sentence beta! Sentence gamma? ".repeat(80)
+    const SIZE = 400
+    const pieces = rag.chunk(para, { size: SIZE, overlap: 50 })
+    for (const p of pieces) assert.ok(p.length <= SIZE * 1.4, `chunk exceeded 1.4× size: ${p.length}`)
+  })
+})
+
+describe("rag-service · cosine", () => {
+  it("returns 1.0 for identical vectors", () => {
+    const v = Float32Array.from([1, 2, 3, 4])
+    assert.ok(Math.abs(rag.cosine(v, v) - 1) < 1e-6)
+  })
+
+  it("returns 0 for orthogonal vectors", () => {
+    const a = Float32Array.from([1, 0, 0, 0])
+    const b = Float32Array.from([0, 1, 0, 0])
+    assert.ok(Math.abs(rag.cosine(a, b)) < 1e-6)
+  })
+
+  it("returns -1 for opposite vectors", () => {
+    const a = Float32Array.from([1, 2, 3])
+    const b = Float32Array.from([-1, -2, -3])
+    assert.ok(Math.abs(rag.cosine(a, b) + 1) < 1e-6)
+  })
+
+  it("is commutative (a·b === b·a)", () => {
+    const a = Float32Array.from([0.1, 0.2, 0.3, 0.4])
+    const b = Float32Array.from([0.5, -0.1, 0.2, 0.8])
+    assert.ok(Math.abs(rag.cosine(a, b) - rag.cosine(b, a)) < 1e-9)
+  })
+})
+
+describe("rag-service · stats", () => {
+  it("reports zero chunks for an empty collection", () => {
+    const s = rag.stats("user-unknown", "empty-collection")
+    assert.equal(s.chunks, 0)
+    assert.equal(s.dim, rag.EMBED_DIM)
+  })
+})
+
+describe("stream-cache · lifecycle", () => {
+  it("creates an entry that resume() can read", () => {
+    streamCache._reset()
+    const h = streamCache.start("u1", "c1", { title: "hello" })
+    h.append("first ")
+    h.append("second")
+    const snap = streamCache.resume("u1", "c1")
+    assert.ok(snap, "resume should return a snapshot")
+    assert.equal(snap!.status, "streaming")
+    assert.equal(snap!.content, "first second")
+    assert.equal(snap!.title, "hello")
+  })
+
+  it("marks complete → status 'done'", () => {
+    streamCache._reset()
+    streamCache.start("u2", "c2").complete()
+    assert.equal(streamCache.resume("u2", "c2")!.status, "done")
+  })
+
+  it("marks fail → status 'error' with message", () => {
+    streamCache._reset()
+    streamCache.start("u3", "c3").fail("kaboom")
+    const snap = streamCache.resume("u3", "c3")!
+    assert.equal(snap.status, "error")
+    assert.equal(snap.error, "kaboom")
+  })
+
+  it("returns null for an unknown chat", () => {
+    streamCache._reset()
+    assert.equal(streamCache.resume("ghost", "nope"), null)
+  })
+
+  it("isolates entries across users", () => {
+    streamCache._reset()
+    streamCache.start("userA", "sharedChat").append("A only")
+    streamCache.start("userB", "sharedChat").append("B only")
+    assert.equal(streamCache.resume("userA", "sharedChat")!.content, "A only")
+    assert.equal(streamCache.resume("userB", "sharedChat")!.content, "B only")
+  })
+
+  it("forget() removes the entry", () => {
+    streamCache._reset()
+    const h = streamCache.start("u4", "c4")
+    h.append("temp")
+    assert.equal(streamCache._size(), 1)
+    h.forget()
+    assert.equal(streamCache._size(), 0)
+  })
+
+  it("append on a complete()'d stream still extends content", () => {
+    streamCache._reset()
+    const h = streamCache.start("u5", "c5")
+    h.append("before")
+    h.complete()
+    h.append(" after")
+    assert.equal(streamCache.resume("u5", "c5")!.content, "before after")
+  })
+
+  it("append ignores empty / falsy chunks", () => {
+    streamCache._reset()
+    const h = streamCache.start("u6", "c6")
+    h.append("")
+    h.append(null as unknown as string)
+    h.append("real")
+    assert.equal(streamCache.resume("u6", "c6")!.content, "real")
+  })
+})
+
+describe("route modules load clean", () => {
+  it("rag route module loads without error", () => {
+    const mod = cjsRequire("../../backend/src/routes/rag")
+    assert.ok(mod, "rag route should export an Express router")
+  })
+
+  it("chats route module still loads after adding pending-stream endpoint", () => {
+    const mod = cjsRequire("../../backend/src/routes/chats")
+    assert.ok(mod)
+  })
+
+  it("research route module still loads after adding the critic pass", () => {
+    const mod = cjsRequire("../../backend/src/routes/research")
+    assert.ok(mod)
+  })
+})

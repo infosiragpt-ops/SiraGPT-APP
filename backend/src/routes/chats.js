@@ -5,8 +5,19 @@ const prisma = require('../config/database');
 const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
 const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
+const streamCache = require('../services/stream-cache');
 
 const router = express.Router();
+
+// GET /api/chats/:chatId/pending-stream
+// Returns the server-side cached partial content for an in-flight
+// stream so the UI can resume after a tab reload / reconnect.
+// See services/stream-cache.js for the lifecycle + TTL.
+router.get('/:chatId/pending-stream', authenticateToken, (req, res) => {
+  const snapshot = streamCache.resume(req.user.id, req.params.chatId);
+  if (!snapshot) return res.json({ ok: true, pending: null });
+  return res.json({ ok: true, pending: snapshot });
+});
 
 // Get user's chats
 router.get('/', authenticateToken, async (req, res) => {

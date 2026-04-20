@@ -115,6 +115,42 @@ Prioritize .edu, .gov, .org, peer-reviewed journals, and well-known outlets. No 
 }
 
 /**
+ * Critic — flags sub-questions that came back weak (< MIN_SOURCES
+ * credible hits) and proposes a reformulation so the searcher has a
+ * better shot on the retry. This is the "Re" in ReAct: we reason
+ * about what the first action returned, then act again with a better
+ * query. Kept cheap (gpt-4o-mini, small prompt) so one extra pass
+ * per weak angle doesn't blow the latency budget.
+ */
+const MIN_SOURCES_PER_QUESTION = 2;
+
+async function critiqueAndRefine(openai, subQuestion, hitCount) {
+  const system = `You are a research critic. The searcher returned ${hitCount} credible sources for a sub-question — below the bar of ${MIN_SOURCES_PER_QUESTION}. Your job: return a STRICT JSON object {"refined": "<a single rewritten sub-question more likely to surface credible sources, or the empty string if the question is fundamentally unanswerable via web search>"}.
+
+Strategies you can use: narrower scope (add a year range, a region, a specific domain), broader scope (drop an over-specific filter), change terminology (use field-standard terms), or reframe as a question that is better indexed by scholarly search.
+
+No prose. JSON only.`;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user',   content: `Original sub-question: "${subQuestion}"` },
+      ],
+      response_format: { type: 'json_object' },
+      max_tokens: 200,
+      temperature: 0.4,
+    });
+    const parsed = JSON.parse(completion.choices[0]?.message?.content || '{}');
+    return typeof parsed.refined === 'string' && parsed.refined.trim().length > 0 ? parsed.refined.trim() : null;
+  } catch (err) {
+    console.warn('[research] critic failed:', err.message);
+    return null;
+  }
+}
+
+/**
  * Dedupe sources by URL, keeping the first occurrence (so earlier
  * sub-questions win ties). Assign stable [^N] citation keys.
  */
@@ -236,6 +272,25 @@ router.post(
       const perQuestionSources = await Promise.all(
         subQuestions.map(q => searchSubQuestion(openai, q, cfg.sourcesPerQ))
       );
+
+      // ReAct critic loop: for any sub-question whose first search came
+      // back weak (< MIN_SOURCES_PER_QUESTION credible hits), reformulate
+      // and retry ONCE. Capped at one retry per question to bound latency.
+      const retries = [];
+      for (let i = 0; i < perQuestionSources.length; i++) {
+        if (perQuestionSources[i].length < MIN_SOURCES_PER_QUESTION) {
+          retries.push(
+            critiqueAndRefine(openai, subQuestions[i], perQuestionSources[i].length).then(async (refined) => {
+              if (!refined) return;
+              send({ type: 'phase', phase: 'search', label: `Refining weak angle: ${refined.slice(0, 80)}…` });
+              const extra = await searchSubQuestion(openai, refined, cfg.sourcesPerQ);
+              perQuestionSources[i] = perQuestionSources[i].concat(extra);
+            })
+          );
+        }
+      }
+      if (retries.length > 0) await Promise.all(retries);
+
       allSources = dedupeAndIndex(perQuestionSources);
       send({ type: 'sources', sources: allSources });
 

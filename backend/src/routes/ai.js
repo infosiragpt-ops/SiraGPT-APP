@@ -11,6 +11,7 @@ const googleMCPService = require('../services/google-mcp');
 const documentService = require('../services/document-service');
 const langPolicy = require('../services/language-policy');
 const masterPrompt = require('../services/master-prompt');
+const streamCache = require('../services/stream-cache');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -570,6 +571,30 @@ router.post(
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
 
+      // Server-side stream snapshot so a reload / second tab can resume
+      // via GET /api/chats/:chatId/pending-stream. Only cached when we
+      // have both an authenticated user and a chatId (the identity the
+      // resume endpoint keys on).
+      const cacheHandle = isAuth && chatId
+        ? streamCache.start(userId, chatId, { title: typeof prompt === 'string' ? prompt.slice(0, 80) : '' })
+        : null;
+      if (cacheHandle) {
+        const origWrite = res.write.bind(res);
+        res.write = (payload, ...rest) => {
+          if (typeof payload === 'string' && payload.startsWith('data:')) {
+            try {
+              const raw = payload.slice(5).trim();
+              if (raw && raw !== '[DONE]') {
+                const obj = JSON.parse(raw);
+                if (obj && typeof obj.content === 'string') cacheHandle.append(obj.content);
+                if (obj && obj.error) cacheHandle.fail(obj.error);
+              }
+            } catch { /* non-JSON SSE frame — ignore */ }
+          }
+          return origWrite(payload, ...rest);
+        };
+      }
+
       let fullResponseContent = '';
       try {
         fullResponseContent = await aiService.generateStream({
@@ -584,7 +609,9 @@ router.post(
           userPrompt: prompt,
           qualityGuard: true,
         });
+        if (cacheHandle) cacheHandle.complete();
       } catch (apiError) {
+        if (cacheHandle) cacheHandle.fail(apiError && apiError.message ? apiError.message : 'stream failed');
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
           console.warn('AI Service stream aborted by client in route, no further content will be sent.');
           // Don't rethrow, just return, as client has already aborted and doesn't expect more data/error
