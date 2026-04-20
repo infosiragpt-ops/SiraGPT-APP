@@ -57,6 +57,12 @@ router.post(
     body('rerank').optional().isBoolean(),
     body('useHybrid').optional().isBoolean(),
     body('rrfK').optional().isInt({ min: 1, max: 200 }),
+    body('useGraph').optional().isBoolean(),
+    body('graphBeamSize').optional().isInt({ min: 1, max: 16 }),
+    body('graphLength').optional().isInt({ min: 1, max: 8 }),
+    body('graphGamma').optional().isInt({ min: 1, max: 10 }),
+    body('graphProximalN').optional().isInt({ min: 1, max: 20 }),
+    body('sessionId').optional().isString().isLength({ max: 128 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -76,6 +82,13 @@ router.post(
         rerankOpenAI,
         useHybrid: !!req.body.useHybrid,
         rrfK: typeof req.body.rrfK === 'number' ? req.body.rrfK : undefined,
+        useGraph: !!req.body.useGraph,
+        graphOpenAI: req.body.useGraph ? rag.getOpenAI() : null,
+        graphBeamSize: req.body.graphBeamSize,
+        graphLength: req.body.graphLength,
+        graphGamma: req.body.graphGamma,
+        graphProximalN: req.body.graphProximalN,
+        sessionId: req.body.sessionId || null,
       });
       res.json({ ok: true, collection, hits });
     } catch (err) {
@@ -121,6 +134,42 @@ router.get(
   (req, res) => {
     const collection = req.query.collection || 'default';
     res.json({ ok: true, collection, ...rag.stats(req.user.id, collection) });
+  }
+);
+
+/**
+ * POST /api/rag/ingest-triples
+ *   body: { collection?: string, sources?: string[] }
+ * Runs LLM-based triple extraction over chunks already ingested into
+ * `collection`. `sources` (optional) restricts extraction to chunks from
+ * the given source identifiers — useful for backfilling a specific file
+ * without re-processing the whole collection.
+ *
+ * This is the offline step of GEAR SyncGE; retrieval with useGraph=true
+ * only works after this has been called for the collection.
+ */
+router.post(
+  '/ingest-triples',
+  authenticateToken,
+  [
+    body('collection').optional().isString().isLength({ min: 1, max: 64 }),
+    body('sources').optional().isArray(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    try {
+      const collection = req.body.collection || 'default';
+      const sources = Array.isArray(req.body.sources) ? req.body.sources : null;
+      const result = await rag.ingestTriples(req.user.id, collection, {
+        openai: rag.getOpenAI(),
+        sources,
+      });
+      res.json({ ok: true, collection, ...result });
+    } catch (err) {
+      console.error('[rag] ingest-triples failed:', err);
+      res.status(500).json({ error: err.message || 'ingest-triples failed' });
+    }
   }
 );
 

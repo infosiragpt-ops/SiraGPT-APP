@@ -31,6 +31,10 @@ const { expandQuery } = require('./query-expansion');
 const llmReranker = require('./llm-reranker');
 const bm25 = require('./bm25');
 const codeChunker = require('./code-chunker');
+const tripleGraph = require('./triple-graph');
+const tripleExtractor = require('./triple-extractor');
+const { diverseTripleBeamSearch, flattenBeamsBFS } = require('./diverse-beam-search');
+const gistMemory = require('./gist-memory');
 
 const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
@@ -218,6 +222,25 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     useHybrid = false,
     rrfK = 60,
     hybridWeights = { semantic: 1.0, bm25: 1.0 },
+    // GEAR / SyncGE (Shen et al., ACL 2025) ─────────────────────────
+    // When useGraph is true, we:
+    //   1. base-retrieve (hybrid or cosine) → C'_q
+    //   2. LLM reads top-N passages to extract proximal triples T'_q
+    //   3. triple-graph.linkTriple() maps each T'_q → initial stored triple
+    //   4. Diverse Triple Beam Search expands the graph
+    //   5. flatten + map triples → source passages → C̃_q
+    //   6. RRF(C̃_q, C'_q) → final C_q
+    // The caller must have ingested triples into triple-graph ahead of
+    // time (see ingestTriples / /api/rag/ingest-triples). If the graph
+    // is empty for this namespace we silently skip and return the base
+    // retrieval.
+    useGraph = false,
+    graphOpenAI = null,    // OpenAI client used for proximal extraction
+    graphBeamSize = 4,
+    graphLength = 3,
+    graphGamma = 2,
+    graphProximalN = 5,    // how many base-retrieved passages feed the LLM read step
+    sessionId = null,      // optional: enables gist memory across turns
   } = opts;
 
   // Overfetch a pool to feed downstream MMR/reranker/RRF with real choice.
@@ -318,12 +341,151 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     pool = await llmReranker.rerank(rerankOpenAI, query, pool, { k: pool.length });
   }
 
+  if (useGraph) {
+    // SyncGE / GEAR single-step retrieval (Shen et al., ACL 2025, §4).
+    // Only runs when the triple graph for this namespace is non-empty;
+    // otherwise this is a no-op and the base pool passes through.
+    const graphStats = tripleGraph.stats(userId, collection);
+    if (graphStats.triples > 0) {
+      try {
+        const graphPassages = await expandWithGraph({
+          userId, collection, query, basePool: pool, entries,
+          openai: graphOpenAI || getOpenAI(),
+          proximalN: graphProximalN, beamSize: graphBeamSize,
+          length: graphLength, gamma: graphGamma,
+          sessionId, rrfK,
+        });
+        if (graphPassages.length > 0) {
+          // Fuse the base pool and the graph-derived pool via RRF.
+          pool = fuseByRRF(pool, graphPassages, { rrfK, k: pool.length });
+        }
+      } catch (err) {
+        // Graph expansion must never break base retrieval.
+        console.warn('[rag] SyncGE expansion failed, returning base pool:', err.message);
+      }
+    }
+  }
+
   if (useMMR) {
     pool = mmrRerank(pool, { lambda: mmrLambda, k: Math.max(1, k) });
   }
 
   // Strip internal-only fields before returning.
   return pool.slice(0, Math.max(1, k)).map(({ _idx, semRank, bmRank, fusedScore, ...rest }) => rest);
+}
+
+/**
+ * Internal helper: run the GEAR SyncGE pipeline and return an ordered
+ * list of passages derived from the expanded triple sub-graph. Returns
+ * `[]` if any step produces nothing usable (so the caller can fall back
+ * to the base pool).
+ */
+async function expandWithGraph({
+  userId, collection, query, basePool, entries,
+  openai, proximalN, beamSize, length, gamma, sessionId,
+}) {
+  if (!openai) return [];
+
+  // Step 1: LLM "read" over top-N base passages to pull proximal triples.
+  // When we have gist memory for this session, pass it in so the LLM
+  // produces complementary triples rather than repeats (Eq. 4 n≥2).
+  const topPassages = basePool.slice(0, Math.max(1, proximalN));
+  const prior = sessionId ? gistMemory.get(sessionId) : [];
+  const proximal = await tripleExtractor.extractProximalTriples(openai, query, topPassages, {
+    gistMemory: prior.length > 0 ? prior : null,
+  });
+  if (proximal.length === 0) return [];
+
+  if (sessionId) gistMemory.append(sessionId, proximal);
+
+  // Step 2: tripleLink — map each proximal triple to the closest stored triple.
+  // Parallel to keep latency manageable; a handful of calls at most.
+  const linked = await Promise.all(
+    proximal.map(t => tripleGraph.linkTriple(userId, collection, t).catch(() => null))
+  );
+  const initialTriples = linked.filter(Boolean).map(x => x.triple);
+  if (initialTriples.length === 0) return [];
+
+  // Step 3: Diverse Triple Beam Search over the stored graph.
+  // Score function = cosine(query, concatenated-triple-sentence).
+  const queryVec = (await embed([query]))[0];
+  const scoreCache = new Map();
+  const scoreFn = async (sequence) => {
+    const sentence = sequence.map(t => tripleGraph.tripleToSentence(t)).join(' ; ');
+    if (scoreCache.has(sentence)) return scoreCache.get(sentence);
+    const [v] = await embed([sentence]);
+    const s = cosine(queryVec, v);
+    scoreCache.set(sentence, s);
+    return s;
+  };
+  const neighbourFn = (last, visitedKeys) =>
+    tripleGraph.getNeighbours(userId, collection, last, { excludeKeys: visitedKeys });
+  const tripleKeyFn = (t) => tripleGraph.tripleKey(t);
+
+  const beams = await diverseTripleBeamSearch({
+    initialTriples,
+    neighbourFn,
+    scoreFn,
+    tripleKeyFn,
+    b: beamSize,
+    l: length,
+    gamma,
+  });
+  if (beams.length === 0) return [];
+
+  // Step 4: flatten BFS and map each triple back to its source chunk.
+  const flatTriples = flattenBeamsBFS(beams, tripleKeyFn);
+
+  // Build a source → first-occurrence-rank map so duplicate chunk refs
+  // keep the best (earliest) rank.
+  const sourceRank = new Map();
+  flatTriples.forEach((t, rank) => {
+    const src = t.source;
+    if (!src) return;
+    if (!sourceRank.has(src)) sourceRank.set(src, rank + 1);
+  });
+  if (sourceRank.size === 0) return [];
+
+  // Map sources back to chunk objects. `entries` is the full in-memory
+  // collection — we find each chunk whose `source` matches. This is O(E·S)
+  // but E is already capped at MAX_COLLECTION_CHUNKS; if that ever bites,
+  // cache a `source → entryIdx` map on the store.
+  const out = [];
+  const seen = new Set();
+  for (const [src, rank] of sourceRank) {
+    const entry = entries.find(e => e.source === src);
+    if (!entry || seen.has(entry)) continue;
+    seen.add(entry);
+    out.push({ _idx: entries.indexOf(entry), text: entry.text, source: entry.source, title: entry.title, score: 1 / rank, graphRank: rank });
+  }
+  return out;
+}
+
+/**
+ * Reciprocal Rank Fusion of two already-ranked pools. Used to combine
+ * base retrieval output with the GEAR graph-expanded list (Eq. 3 in
+ * the paper). Returns a new array sorted by fused score.
+ */
+function fuseByRRF(poolA, poolB, { rrfK = 60, k = Infinity } = {}) {
+  const fused = new Map(); // identity (text slice) → accumulator
+  const id = (e) => e._idx != null ? `idx:${e._idx}` : `src:${e.source || ''}|${(e.text || '').slice(0, 40)}`;
+
+  const addRankings = (pool) => {
+    pool.forEach((e, rank) => {
+      const key = id(e);
+      const contrib = 1 / (rrfK + rank + 1);
+      const existing = fused.get(key);
+      if (existing) existing.fusedScore += contrib;
+      else fused.set(key, { ...e, fusedScore: contrib });
+    });
+  };
+  addRankings(poolA);
+  addRankings(poolB);
+
+  return [...fused.values()]
+    .sort((a, b) => b.fusedScore - a.fusedScore)
+    .slice(0, k)
+    .map(e => ({ ...e, score: e.fusedScore }));
 }
 
 /**
@@ -378,8 +540,51 @@ async function ingestCode(userId, collection, files, opts = {}) {
   return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
 }
 
+/**
+ * Populate the triple graph for GEAR retrieval.
+ *
+ * For each existing chunk in `(userId, collection)` (or all chunks when
+ * `sources` is not supplied), run the LLM triple extractor and write
+ * the results into triple-graph.js keyed by the same namespace. Each
+ * triple's `source` field points back to the chunk's source identifier
+ * so retrieval can map triples → passages later.
+ *
+ * Returns `{ chunksScanned, triplesAdded, totalTriples }`.
+ *
+ * If `openai` is null we use the heuristic extractor — mostly useful for
+ * tests and dev flows without API keys. Production should pass the
+ * shared OpenAI client so triple quality is comparable to the paper's.
+ */
+async function ingestTriples(userId, collection, { openai = null, sources = null, model = 'gpt-4o-mini' } = {}) {
+  const key = storeKey(userId, collection);
+  const entries = store.get(key) || [];
+  if (entries.length === 0) return { chunksScanned: 0, triplesAdded: 0, totalTriples: 0 };
+
+  const filter = Array.isArray(sources) && sources.length > 0 ? new Set(sources) : null;
+  const targets = filter ? entries.filter(e => filter.has(e.source)) : entries;
+
+  let triplesAdded = 0;
+  for (const entry of targets) {
+    const triples = openai
+      ? await tripleExtractor.extractTriples(openai, entry.text, { source: entry.source, model })
+      : tripleExtractor.extractTriplesHeuristic(entry.text, { source: entry.source });
+    if (triples.length === 0) continue;
+    const result = await tripleGraph.addTriples(userId, collection, triples, {
+      embedder: openai ? null : async () => [], // skip embeddings in heuristic/no-key mode
+    });
+    triplesAdded += result.added;
+  }
+
+  return {
+    chunksScanned: targets.length,
+    triplesAdded,
+    totalTriples: tripleGraph.stats(userId, collection).triples,
+  };
+}
+
 function clear(userId, collection) {
   store.delete(storeKey(userId, collection));
+  tripleGraph.clear(userId, collection);
 }
 
 function stats(userId, collection) {
@@ -392,11 +597,15 @@ module.exports = {
   embed,
   ingest,
   ingestCode,
+  ingestTriples,
   retrieve,
   clear,
   stats,
   cosine,        // exported for tests
   getOpenAI,     // exported so callers can pass the shared client to rerank
+  // exported for tests / advanced callers
+  fuseByRRF,
+  expandWithGraph,
   EMBED_MODEL,
   EMBED_DIM,
 };
