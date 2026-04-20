@@ -2391,3 +2391,145 @@ html[dir="rtl"] .left-0 { right: 0; left: auto; }
 html[dir="rtl"] .left-3 { right: 0.75rem; left: auto; }
 html[dir="rtl"] .right-0 { left: 0; right: auto; }
 html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
+
+/* ────────────────────────────────────────────────────────────
+ * Liquid hover effect for the composer tool menu (DropdownMenu
+ * items). Organic blob behind the row with morphing border-
+ * radius, spring-eased opacity+scale in on hover. Icon adds a
+ * small rotate + scale, label slides slightly to the right to
+ * meet the grown icon.
+ *
+ * Usage: add `group liquid-menu-item` to the row wrapper, add
+ * `liquid-icon` to the icon container, and `liquid-label` to
+ * the text container. For connectors add `data-brand="gmail"`
+ * (etc.) on the wrapper — the brand-specific gradient tint is
+ * wired below.
+ * ──────────────────────────────────────────────────────────── */
+
+@keyframes liquid-morph {
+  0%, 100% { border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%; }
+  50%      { border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%; }
+}
+
+@keyframes jelly {
+  0%   { transform: scale(1, 1); }
+  30%  { transform: scale(1.15, 0.9); }
+  50%  { transform: scale(0.95, 1.05); }
+  70%  { transform: scale(1.02, 0.98); }
+  100% { transform: scale(1, 1); }
+}
+
+.liquid-menu-item {
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+  transition: color 200ms ease-out;
+}
+.liquid-menu-item::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: -1;
+  background: hsl(var(--primary) / 0.08);
+  border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%;
+  opacity: 0;
+  transform: scale(0.8);
+  transition:
+    opacity 400ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    transform 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  pointer-events: none;
+}
+.dark .liquid-menu-item::before { background: hsl(var(--primary) / 0.15); }
+.liquid-menu-item:hover::before,
+.liquid-menu-item[data-highlighted]::before,
+.liquid-menu-item:focus-visible::before {
+  opacity: 1;
+  transform: scale(1);
+  animation: liquid-morph 3s ease-in-out infinite;
+}
+
+.liquid-icon {
+  transition: transform 300ms ease-out;
+  transform-origin: center;
+}
+.liquid-menu-item:hover .liquid-icon,
+.liquid-menu-item[data-highlighted] .liquid-icon,
+.liquid-menu-item:focus-visible .liquid-icon {
+  transform: rotate(-8deg) scale(1.12);
+}
+
+.liquid-label {
+  display: inline-block;
+  transition: transform 200ms ease-out, color 200ms ease-out;
+}
+.liquid-menu-item:hover .liquid-label,
+.liquid-menu-item[data-highlighted] .liquid-label {
+  transform: translateX(4px);
+}
+
+/* Connector submenu — jelly bounce on the brand logo + a
+ * brand-tinted gradient wash that fades in under the row. */
+.liquid-menu-item[data-brand] .liquid-icon > img,
+.liquid-menu-item[data-brand] .liquid-icon > svg {
+  transform-origin: center;
+}
+.liquid-menu-item[data-brand]:hover .liquid-icon > img,
+.liquid-menu-item[data-brand][data-highlighted] .liquid-icon > img,
+.liquid-menu-item[data-brand]:hover .liquid-icon > svg,
+.liquid-menu-item[data-brand][data-highlighted] .liquid-icon > svg {
+  animation: jelly 500ms ease-out;
+}
+.liquid-menu-item[data-brand]::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: -1;
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity 300ms ease-out;
+  pointer-events: none;
+}
+.liquid-menu-item[data-brand="gmail"]::after     { background: linear-gradient(135deg, rgba(234, 67, 53, 0.05), rgba(234, 67, 53, 0.00)); }
+.liquid-menu-item[data-brand="calendar"]::after  { background: linear-gradient(135deg, rgba( 66,133,244, 0.05), rgba( 66,133,244, 0.00)); }
+.liquid-menu-item[data-brand="drive"]::after     { background: linear-gradient(135deg, rgba( 52,168, 83, 0.05), rgba( 52,168, 83, 0.00)); }
+.liquid-menu-item[data-brand="spotify"]::after   { background: linear-gradient(135deg, rgba( 29,185, 84, 0.05), rgba( 29,185, 84, 0.00)); }
+.liquid-menu-item[data-brand="word"]::after      { background: linear-gradient(135deg, rgba( 43, 87,154, 0.05), rgba( 43, 87,154, 0.00)); }
+.liquid-menu-item[data-brand="excel"]::after     { background: linear-gradient(135deg, rgba( 33,115, 70, 0.05), rgba( 33,115, 70, 0.00)); }
+.liquid-menu-item[data-brand]:hover::after,
+.liquid-menu-item[data-brand][data-highlighted]::after {
+  opacity: 1;
+}
+
+/* Respect the user's motion preference — both via the OS setting
+ * AND via Settings → Accessibility → Reduce motion (which toggles
+ * .reduce-motion on <html>). All three tracks go calm. */
+@media (prefers-reduced-motion: reduce) {
+  .liquid-menu-item::before,
+  .liquid-menu-item::after,
+  .liquid-icon,
+  .liquid-label { transition: none !important; animation: none !important; }
+  .liquid-menu-item:hover::before,
+  .liquid-menu-item[data-highlighted]::before {
+    animation: none !important;
+    opacity: 1;
+    transform: scale(1);
+  }
+  .liquid-menu-item:hover .liquid-icon,
+  .liquid-menu-item[data-highlighted] .liquid-icon { transform: none !important; }
+  .liquid-menu-item:hover .liquid-label,
+  .liquid-menu-item[data-highlighted] .liquid-label { transform: none !important; }
+}
+.reduce-motion .liquid-menu-item::before,
+.reduce-motion .liquid-menu-item::after,
+.reduce-motion .liquid-icon,
+.reduce-motion .liquid-label { transition: none !important; animation: none !important; }
+.reduce-motion .liquid-menu-item:hover::before,
+.reduce-motion .liquid-menu-item[data-highlighted]::before {
+  animation: none !important;
+  opacity: 1;
+  transform: scale(1);
+}
+.reduce-motion .liquid-menu-item:hover .liquid-icon,
+.reduce-motion .liquid-menu-item[data-highlighted] .liquid-icon { transform: none !important; }
+.reduce-motion .liquid-menu-item:hover .liquid-label,
+.reduce-motion .liquid-menu-item[data-highlighted] .liquid-label { transform: none !important; }

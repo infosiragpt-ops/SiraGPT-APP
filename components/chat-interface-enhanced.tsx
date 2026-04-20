@@ -296,13 +296,13 @@ const ActionsDropdown = ({
         <DropdownMenuContent align="start" className="w-64">
           {/* File Upload - Only for text chats */}
 
-          <DropdownMenuItem onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
+          <DropdownMenuItem className="liquid-menu-item" onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
             <div className="flex items-center gap-3 w-full">
-              <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
+              <div className="liquid-icon w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
                 <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
               <div className="flex-1">
-                <div className="font-medium text-sm">Upload Files</div>
+                <div className="liquid-label font-medium text-sm">Upload Files</div>
                 <div className="text-xs text-muted-foreground">
                   {isUploading ? 'Uploading...' : 'Images, PDFs, Documents'}
                 </div>
@@ -319,11 +319,12 @@ const ActionsDropdown = ({
           />
           {/* Web Search */}
           <DropdownMenuItem
+            className="liquid-menu-item"
             onClick={handleWebSearchToggle}
             disabled={isWebSearching}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
+              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
                 ? 'bg-green-100 dark:bg-green-900/20'
                 : 'bg-emerald-100 dark:bg-emerald-900/20'
                 }`}>
@@ -333,7 +334,7 @@ const ActionsDropdown = ({
                   }`} />
               </div>
               <div className="flex-1">
-                <div className="font-medium text-sm">
+                <div className="liquid-label font-medium text-sm">
                   {isWebSearchActive ? 'Web Search Active' : 'Web Search'}
                 </div>
               </div>
@@ -343,20 +344,13 @@ const ActionsDropdown = ({
             </div>
           </DropdownMenuItem>
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
+            <DropdownMenuSubTrigger className="liquid-menu-item">
               <div className="flex items-center gap-3 w-full">
-                <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                  {/* <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
-                  <path d="M16.5 12.5C16.5 14.9853 14.4853 17 12 17C9.51472 17 7.5 14.9853 7.5 12.5C7.5 10.0147 9.51472 8 12 8C14.4853 8 16.5 10.0147 16.5 12.5Z" stroke="currentColor" stroke-width="1.5" />
-                  <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
-
-                </svg> */}
-
+                <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
                   <Network width="13" height="13" />
                 </div>
                 <div className="flex-1">
-                  <div className="font-medium text-sm flex items-center">
+                  <div className="liquid-label font-medium text-sm flex items-center">
                     Connectors
                   </div>
                 </div>
@@ -366,11 +360,13 @@ const ActionsDropdown = ({
 
               {/* Gmail */}
               <DropdownMenuItem
+                className="liquid-menu-item"
+                data-brand="gmail"
                 onClick={handleGmailToggle}
                 disabled={isProcessingGmail}
               >
                 <div className="flex items-center gap-3 w-full">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
+                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
                     ? 'bg-red-100 dark:bg-red-900/20'
                     : 'bg-red-100 dark:bg-red-900/20'
                     }`}>
@@ -378,7 +374,7 @@ const ActionsDropdown = ({
                     <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
-                    <div className="font-medium text-sm">
+                    <div className="liquid-label font-medium text-sm">
                       {isGmailActive ? 'Gmail Active' : 'Gmail'}
                     </div>
                   </div>
@@ -390,11 +386,13 @@ const ActionsDropdown = ({
 
               {/* Google Calendar */}
               <DropdownMenuItem
+                className="liquid-menu-item"
+                data-brand="calendar"
                 onClick={handleGoogleCalendarToggle}
                 disabled={isProcessingGoogleServices}
               >
                 <div className="flex items-center gap-3 w-full">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleCalendarActive
+                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleCalendarActive
                     ? 'bg-blue-100 dark:bg-blue-900/20'
                     : 'bg-blue-100 dark:bg-blue-900/20'
                     }`}>
@@ -402,7 +400,7 @@ const ActionsDropdown = ({
                     <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
-                    <div className="font-medium text-sm">
+                    <div className="liquid-label font-medium text-sm">
                       {isGoogleCalendarActive ? 'Calendar Active' : 'Google Calendar'}
                     </div>
                   </div>
@@ -414,11 +412,13 @@ const ActionsDropdown = ({
 
               {/* Google Drive */}
               <DropdownMenuItem
+                className="liquid-menu-item"
+                data-brand="drive"
                 onClick={handleGoogleDriveToggle}
                 disabled={isProcessingGoogleServices}
               >
                 <div className="flex items-center gap-3 w-full">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleDriveActive
+                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleDriveActive
                     ? 'bg-green-100 dark:bg-green-900/20'
                     : 'bg-green-100 dark:bg-green-900/20'
                     }`}>
@@ -426,7 +426,7 @@ const ActionsDropdown = ({
                     <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
-                    <div className="font-medium text-sm">
+                    <div className="liquid-label font-medium text-sm">
                       {isGoogleDriveActive ? 'Drive Active' : 'Google Drive'}
                     </div>
                   </div>
@@ -438,11 +438,13 @@ const ActionsDropdown = ({
 
               {/* Spotify */}
               <DropdownMenuItem
+                className="liquid-menu-item"
+                data-brand="spotify"
                 onClick={handleSpotifyToggle}
                 disabled={isProcessingSpotify}
               >
                 <div className="flex items-center gap-3 w-full">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isSpotifyActive
+                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isSpotifyActive
                     ? 'bg-green-100 dark:bg-green-900/20'
                     : 'bg-green-100 dark:bg-green-900/20'
                     }`}>
@@ -450,7 +452,7 @@ const ActionsDropdown = ({
                     <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
-                    <div className="font-medium text-sm">
+                    <div className="liquid-label font-medium text-sm">
                       {isSpotifyActive ? 'Spotify Active' : 'Spotify'}
                     </div>
                   </div>
@@ -462,6 +464,8 @@ const ActionsDropdown = ({
 
               {/* Word Connector */}
               <DropdownMenuItem
+                className="liquid-menu-item"
+                data-brand="word"
                 onClick={() => {
                   if (handleWordConnectorToggle) {
                     handleWordConnectorToggle();
@@ -471,14 +475,14 @@ const ActionsDropdown = ({
                 disabled={isDisabled}
               >
                 <div className="flex items-center gap-3 w-full">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
+                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
                     ? 'bg-blue-100 dark:bg-blue-900/20'
                     : 'bg-blue-100 dark:bg-blue-900/20'
                     }`}>
                     <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
-                    <div className="font-medium text-sm">
+                    <div className="liquid-label font-medium text-sm">
                       {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
                     </div>
                   </div>
@@ -490,6 +494,8 @@ const ActionsDropdown = ({
 
               {/* Excel Connector */}
               <DropdownMenuItem
+                className="liquid-menu-item"
+                data-brand="excel"
                 onClick={() => {
                   if (handleExcelConnectorToggle) {
                     handleExcelConnectorToggle();
@@ -499,14 +505,14 @@ const ActionsDropdown = ({
                 disabled={isDisabled}
               >
                 <div className="flex items-center gap-3 w-full">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
+                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
                     ? 'bg-blue-100 dark:bg-blue-900/20'
                     : 'bg-blue-100 dark:bg-blue-900/20'
                     }`}>
                     <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
-                    <div className="font-medium text-sm">
+                    <div className="liquid-label font-medium text-sm">
                       {isExcelConnectorActive ? 'Excel Connector Active' : 'Excel Connector'}
                     </div>
                   </div>
@@ -522,15 +528,16 @@ const ActionsDropdown = ({
 
           {/* Voice Studio - Opens panel directly */}
           <DropdownMenuItem
+            className="liquid-menu-item"
             onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
             disabled={currentPlan === "FREE" || isDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
+              <div className="liquid-icon w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
                 <Mic className="h-4 w-4 text-purple-600 dark:text-purple-400" />
               </div>
               <div className="flex-1">
-                <div className="font-medium text-sm">Voice Studio</div>
+                <div className="liquid-label font-medium text-sm">Voice Studio</div>
                 <div className="text-xs text-muted-foreground">
                   Text-to-Speech, Speech-to-Text, Music
                 </div>
@@ -544,11 +551,12 @@ const ActionsDropdown = ({
 
           {/* Image Generation */}
           <DropdownMenuItem
+            className="liquid-menu-item"
             onClick={handleImageGenerationToggle}
             disabled={currentPlan === "FREE" || isDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
+              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
                 ? 'bg-pink-100 dark:bg-pink-900/20'
                 : 'bg-pink-100 dark:bg-pink-900/20'
                 }`}>
@@ -558,7 +566,7 @@ const ActionsDropdown = ({
                   }`} />
               </div>
               <div className="flex-1">
-                <div className="font-medium text-sm">
+                <div className="liquid-label font-medium text-sm">
                   {isImageGenerationActive ? 'Image Generation Active' : 'Image Generation'}
                 </div>
                 <div className="text-xs text-muted-foreground">
@@ -576,11 +584,12 @@ const ActionsDropdown = ({
 
           {/* Video Generation */}
           <DropdownMenuItem
+            className="liquid-menu-item"
             onClick={handleVideoGenerationToggle}
             disabled={currentPlan === "FREE" || isDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
+              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
                 ? 'bg-orange-100 dark:bg-orange-900/20'
                 : 'bg-orange-100 dark:bg-orange-900/20'
                 }`}>
@@ -590,7 +599,7 @@ const ActionsDropdown = ({
                   }`} />
               </div>
               <div className="flex-1">
-                <div className="font-medium text-sm">
+                <div className="liquid-label font-medium text-sm">
                   {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
                 </div>
                 <div className="text-xs text-muted-foreground">
@@ -642,6 +651,7 @@ const ActionsDropdown = ({
 
           {/* Thesis Generation */}
           <DropdownMenuItem
+            className="liquid-menu-item"
             onClick={() => {
               setChatType('thesis');
               setIsOpen(false);
@@ -649,7 +659,7 @@ const ActionsDropdown = ({
             disabled={currentPlan === "FREE" || isDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
+              <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
                 ? 'bg-purple-100 dark:bg-purple-900/20'
                 : 'bg-purple-100 dark:bg-purple-900/20'
                 }`}>
@@ -659,7 +669,7 @@ const ActionsDropdown = ({
                   }`} />
               </div>
               <div className="flex-1">
-                <div className="font-medium text-sm">
+                <div className="liquid-label font-medium text-sm">
                   {chatType === 'thesis' ? 'Thesis Generator Active' : 'Thesis Generator'}
                 </div>
                 <div className="text-xs text-muted-foreground">
