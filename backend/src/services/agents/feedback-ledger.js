@@ -186,6 +186,18 @@ function stats(userId) {
 function clearUser(userId) { ledger.delete(userId); }
 function _reset() { ledger.clear(); }
 
+/**
+ * Return a shallow copy of every entry for this user. Used by the
+ * preference-export module to iterate the whole ledger for JSONL
+ * export. We deliberately copy so callers can't mutate internal state,
+ * but we share the embedding Float32Array (it's read-only by convention).
+ */
+function _dump(userId) {
+  const list = ledger.get(userId);
+  if (!list) return [];
+  return list.map(e => ({ ...e }));
+}
+
 module.exports = {
   record,
   findExemplars,
@@ -193,5 +205,6 @@ module.exports = {
   stats,
   clearUser,
   _reset,
+  _dump,
   MAX_ENTRIES_PER_USER,
 };

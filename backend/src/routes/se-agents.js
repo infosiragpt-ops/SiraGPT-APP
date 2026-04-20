@@ -39,6 +39,8 @@ const intentClarifier = require('../services/agents/intent-clarifier');
 const feedback = require('../services/agents/feedback-ledger');
 const alignWrapper = require('../services/agents/align-wrapper');
 const safetyFilter = require('../services/agents/safety-filter');
+const calibrator = require('../services/agents/response-calibrator');
+const preferenceExport = require('../services/agents/preference-export');
 
 const router = express.Router();
 
@@ -575,6 +577,68 @@ router.post(
       llmFallback: req.body.llmFallback !== false,
     });
     res.json({ ok: true, ...result });
+  })
+);
+
+/**
+ * POST /api/se-agents/calibrate
+ * Run the response-calibrator over an arbitrary (request, response)
+ * pair. Detects hedging / false-premise / over-refusal / length issues
+ * — the specific failure modes Ouyang et al. 2022 flag as persistent
+ * even after RLHF fine-tuning.
+ *
+ * Body: { request, response, llmChecks? } → { flagged, findings[], summary }
+ */
+router.post(
+  '/calibrate',
+  authenticateToken,
+  [
+    body('request').isString().isLength({ min: 1, max: 8000 }),
+    body('response').custom(v => typeof v === 'string' || (v !== null && typeof v === 'object')),
+    body('llmChecks').optional().isBoolean(),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'response_calibrator', ['request'])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await calibrator.calibrate({
+      openai,
+      request: req.body.request,
+      response: req.body.response,
+      llmChecks: req.body.llmChecks !== false,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+/**
+ * GET /api/se-agents/preferences/export?format=sft|dpo&agent=xxx
+ * Emit the caller's feedback-ledger data as OpenAI-compatible fine-
+ * tuning JSONL. Closes the RLHF loop from the paper — once a user
+ * has labelled enough responses (typically 200+), they can pipe this
+ * file straight to OpenAI's fine-tuning API to train their own
+ * aligned model on their own preferences.
+ *
+ * Query:
+ *   format   — 'sft' (default) or 'dpo'
+ *   agent    — optional, filter to one specialist
+ */
+router.get(
+  '/preferences/export',
+  authenticateToken,
+  handleErrors(async (req, res) => {
+    const format = String(req.query.format || 'sft').toLowerCase();
+    const agent = typeof req.query.agent === 'string' ? req.query.agent : null;
+    if (!['sft', 'dpo'].includes(format)) {
+      return res.status(400).json({ error: `unknown format '${format}' — use sft or dpo` });
+    }
+    const out = preferenceExport.exportData({
+      userId: req.user.id, format, agent,
+    });
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="preferences-${format}${agent ? '-' + agent : ''}-${req.user.id}.jsonl"`);
+    res.setHeader('X-Export-Count', String(out.count));
+    res.send(out.ndjson);
   })
 );
 

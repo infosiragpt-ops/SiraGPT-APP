@@ -40,6 +40,7 @@ const clarifier = require('./intent-clarifier');
 const truthfulness = require('./truthfulness');
 const safety = require('./safety-filter');
 const feedback = require('./feedback-ledger');
+const calibrator = require('./response-calibrator');
 
 const DEFAULT_MIN_SCORE = 6;         // overall < 6 triggers a retry
 const DEFAULT_MAX_RETRIES = 1;        // one re-run at most (cost-bounded)
@@ -217,6 +218,20 @@ async function runAligned({
     safetyReport = { flagged: false, findings: [], summary: `skipped: ${err.message}` };
   }
 
+  // ─── 7. Calibration (hedging / false-premise / over-refusal / length) ──
+  let calibrationReport = null;
+  try {
+    calibrationReport = await calibrator.calibrate({
+      openai, request: userRequest, response: summariseResult(lastResult),
+      model,
+      // Skip LLM-backed checks when the run is a retry already — the
+      // main loop is done, we don't want to add more LLM calls per turn.
+      llmChecks: opts.calibratorLlmChecks !== false,
+    });
+  } catch (err) {
+    calibrationReport = { flagged: false, findings: [], summary: `skipped: ${err.message}` };
+  }
+
   return {
     status: 'ok',
     result: lastResult,
@@ -232,6 +247,7 @@ async function runAligned({
     },
     truthfulness: truthReport,
     safety: safetyReport,
+    calibration: calibrationReport,
     retries_used: retriesUsed,
     exemplars_used: exemplarsUsed,
   };
