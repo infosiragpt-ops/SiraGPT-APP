@@ -48,6 +48,7 @@ import ChartComponent from './chart-component';
 import { FigmaDiagramDisplay } from './figma-diagram-component';
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
+import { ArtifactCard, isExecutableArtifact } from "./chat/ArtifactCard"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import ThesisProgressComponent from "./ThesisProgressComponent"
@@ -591,14 +592,26 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         return Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
     }, [parsedFiles])
 
-    // Optimized CodeBlock component with performance improvements
+    // Optimized CodeBlock component with performance improvements.
+    // Meta-AI-style artifact routing: when the code is executable
+    // (html with DOCTYPE/html/canvas/svg, or svg/mermaid), mount
+    // the ArtifactCard (inline iframe preview + 4-button rail) in
+    // place of the plain syntax-highlighted block.
     const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
         const match = /language-(\w+)/.exec(className || '');
-        return !inline && match ? (
-            <CustomCodeBlock className={className} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
-                {children}
-            </CustomCodeBlock>
-        ) : (
+        if (!inline && match) {
+            const language = match[1];
+            const codeString = String(children).replace(/\n$/, '');
+            if (isExecutableArtifact(language, codeString)) {
+                return <ArtifactCard code={codeString} language={language} />;
+            }
+            return (
+                <CustomCodeBlock className={className} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
+                    {children}
+                </CustomCodeBlock>
+            );
+        }
+        return (
             <code className="text-sm font-mono  px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {children}
             </code>
