@@ -632,6 +632,61 @@ async function ingestTriples(userId, collection, { openai = null, sources = null
   };
 }
 
+/**
+ * Enumerate distinct source identifiers in a collection.
+ *
+ * Iterates the in-memory store directly, so unlike `retrieve("list files")`
+ * this is:
+ *   - Deterministic — the same collection returns the same set every time.
+ *   - Complete — no file ingested into the collection is missed due to
+ *     semantic ranking.
+ *   - Cheap — no embedding call, no LLM call.
+ *
+ * Returns `[{ source, title, chunks, preview, firstSeen }]` sorted by
+ * source for stable output.
+ */
+function listSources(userId, collection) {
+  const entries = store.get(storeKey(userId, collection)) || [];
+  if (entries.length === 0) return [];
+  const bySource = new Map();
+  for (const e of entries) {
+    const src = e.source || '(no-source)';
+    let rec = bySource.get(src);
+    if (!rec) {
+      rec = {
+        source: src,
+        title: e.title || null,
+        chunks: 0,
+        preview: (e.text || '').slice(0, 120),
+      };
+      bySource.set(src, rec);
+    }
+    rec.chunks++;
+  }
+  return [...bySource.values()].sort((a, b) => String(a.source).localeCompare(String(b.source)));
+}
+
+/**
+ * Fetch every chunk belonging to a given source, in insertion order.
+ * Returns `[{ text, source, title, meta? }]` (no embedding field). The
+ * order mirrors ingest order — for code this means chunks come out
+ * roughly by line number because code-chunker emits them top-down.
+ *
+ * Returns [] when the source doesn't exist in the collection.
+ */
+function getBySource(userId, collection, source) {
+  if (!source) return [];
+  const entries = store.get(storeKey(userId, collection)) || [];
+  const out = [];
+  for (const e of entries) {
+    if (e.source === source) {
+      const { embedding, ...rest } = e;
+      out.push(rest);
+    }
+  }
+  return out;
+}
+
 function clear(userId, collection) {
   store.delete(storeKey(userId, collection));
   tripleGraph.clear(userId, collection);
@@ -649,6 +704,8 @@ module.exports = {
   ingestCode,
   ingestTriples,
   retrieve,
+  listSources,
+  getBySource,
   clear,
   stats,
   cosine,        // exported for tests

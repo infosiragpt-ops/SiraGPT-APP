@@ -120,10 +120,16 @@ test('run(): tool error becomes observation rather than throwing', async () => {
   assert.ok(step.observation.error.includes('exploded'));
 });
 
-test('run(): hits maxIters when model never finalises', async () => {
-  const openai = scriptedLLM([
-    JSON.stringify({ tool: 'noop', args: {} }),
-  ]); // returns the same thing forever
+test('run(): hits maxIters when model varies but never finalises', async () => {
+  // Rotate args each turn so raw responses differ — otherwise the
+  // same-response loop detector kicks in before maxIters.
+  let turn = 0;
+  const openai = {
+    chat: { completions: { create: async () => {
+      const content = JSON.stringify({ tool: 'noop', args: { n: turn++ } });
+      return { choices: [{ message: { content } }] };
+    }}},
+  };
   const noop = {
     name: 'noop', description: '', schema: {},
     handler: async () => 'ok',
@@ -132,6 +138,20 @@ test('run(): hits maxIters when model never finalises', async () => {
   assert.equal(result.final, null);
   assert.equal(result.terminatedBy, 'maxIters');
   assert.equal(result.iterations, 3);
+});
+
+test('run(): same-response loop → terminatedBy="loop" on the third identical turn', async () => {
+  const openai = scriptedLLM([
+    JSON.stringify({ tool: 'noop', args: {} }), // same output forever
+  ]);
+  const noop = {
+    name: 'noop', description: '', schema: {},
+    handler: async () => 'ok',
+  };
+  const result = await core.run({ openai, goal: 'g', tools: [noop], maxIters: 20 });
+  assert.equal(result.terminatedBy, 'loop');
+  // Should bail well before maxIters — our impl triggers on the 3rd identical response.
+  assert.ok(result.iterations <= 5, `expected early exit, got ${result.iterations}`);
 });
 
 test('run(): unparseable LLM output → recovery observation + model finalises', async () => {

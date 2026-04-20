@@ -28,19 +28,26 @@ const testGen = require('./test-gen-agent');
 const debugAgent = require('./debug-agent');
 const codeGen = require('./code-gen-agent');
 const staticCheck = require('./static-check-agent');
+const requirementsAgent = require('./requirements-agent');
+const logAnalysis = require('./log-analysis-agent');
 
 const INTENT_SYSTEM = `You classify a software-engineering request into one of these intents:
 
+- requirements   — user describes a new feature vaguely and needs it turned into a structured spec.
 - code_review    — user wants their code reviewed for bugs / style / security.
 - test_gen      — user wants tests generated for a function or file.
 - debug          — user reports an error / failing test / stacktrace.
 - code_gen      — user asks to write new code from a specification.
 - static_check   — user asks to lint / scan code for issues without a full review.
+- log_analysis   — user pastes log lines, error bursts, or asks about failing services.
 - general        — none of the above; hand off to the default RAG chat.
 
 Reply with STRICT JSON: {"intent":"<intent>","confidence":0.0-1.0,"reason":"<one sentence>"}`;
 
-const VALID_INTENTS = new Set(['code_review', 'test_gen', 'debug', 'code_gen', 'static_check', 'general']);
+const VALID_INTENTS = new Set([
+  'requirements', 'code_review', 'test_gen', 'debug',
+  'code_gen', 'static_check', 'log_analysis', 'general',
+]);
 
 /**
  * Classify a user message into one of the SE intents.
@@ -100,6 +107,70 @@ async function pipeline({ openai, userId, collection, recipe, input }) {
       const tg = await testGen.generate({ ...ctx, source });
       steps.push({ name: 'test_gen', result: tg });
     }
+    return { recipe, steps };
+  }
+
+  if (recipe === 'end_to_end_dev') {
+    // §4.7 of the survey: requirements → code-gen(multi_path) → review
+    //                    → test-gen → static-check. Each step gates the
+    // next: if requirements has too many open_questions, we stop.
+    const request = input?.request;
+    if (!request) throw new Error('pipeline end_to_end_dev: input.request required');
+
+    const req = await requirementsAgent.requirements({
+      ...ctx, request,
+      relatedFiles: input?.relatedFiles,
+      domainContext: input?.domainContext,
+    });
+    steps.push({ name: 'requirements', result: req });
+
+    const HIGH_AMBIGUITY = 3;
+    if (req.open_questions.length > HIGH_AMBIGUITY) {
+      return {
+        recipe, steps,
+        blocked: true,
+        reason: `Requirements have ${req.open_questions.length} open questions — resolve them before proceeding.`,
+      };
+    }
+
+    // Build a tight spec string from the requirements artifact so the
+    // code-gen agent gets the structured output rather than the raw
+    // user prose.
+    const specFromReq = [
+      `Title: ${req.title}`,
+      `Summary: ${req.summary}`,
+      'User stories:',
+      ...req.user_stories.map(s => `  - ${s.id}: As ${s.role}, I want ${s.capability}, so that ${s.value}`),
+      'Acceptance criteria:',
+      ...req.acceptance_criteria.map(ac => `  - [${ac.story_id}] Given ${ac.given}, When ${ac.when}, Then ${ac.then}`),
+      req.non_goals.length > 0 ? 'Non-goals:\n' + req.non_goals.map(n => `  - ${n}`).join('\n') : '',
+      req.assumptions.length > 0 ? 'Assumptions:\n' + req.assumptions.map(a => `  - ${a.assumption} (evidence: ${a.evidence})`).join('\n') : '',
+    ].filter(Boolean).join('\n');
+
+    const cg = await codeGen.generate({
+      ...ctx, spec: specFromReq,
+      strategy: input?.strategy || 'multi_path',
+      numPaths: input?.numPaths || 3,
+      language: input?.language,
+    });
+    steps.push({ name: 'code_gen', result: cg });
+
+    if (cg.code && cg.file_path) {
+      const rag = require('../rag-service');
+      await rag.ingestCode(userId, collection, [{
+        filename: cg.file_path, content: cg.code, language: cg.language,
+      }]);
+
+      const review = await codeReview.review({ ...ctx, files: [cg.file_path] });
+      steps.push({ name: 'code_review', result: review });
+
+      const tg = await testGen.generate({ ...ctx, source: cg.file_path, language: cg.language });
+      steps.push({ name: 'test_gen', result: tg });
+
+      const sc = await staticCheck.check({ ...ctx, files: [cg.file_path] });
+      steps.push({ name: 'static_check', result: sc });
+    }
+
     return { recipe, steps };
   }
 
@@ -183,4 +254,8 @@ module.exports = {
   pipeline,
   collaborate,
   VALID_INTENTS,
+  // re-export specialist agents for callers who have an orchestrator
+  // instance and want direct access rather than bespoke imports.
+  requirements: requirementsAgent.requirements,
+  logAnalysis: logAnalysis.analyse,
 };

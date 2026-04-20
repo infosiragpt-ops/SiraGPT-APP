@@ -40,62 +40,52 @@ function ensureCollection(ctx) {
   }
 }
 
-// We expose a tiny view of the rag-service store via exported helpers so
-// tools don't reach into its internals. If those helpers don't exist yet
-// (older version of rag-service), we fall back gracefully.
-function getCollectionEntries(ctx) {
-  ensureCollection(ctx);
-  // rag-service doesn't export entries directly, but stats + a careful
-  // retrieval can reconstruct the set we need. For read_file + list_files
-  // we do a broad retrieve with a high k and deduplicate by source.
-  return null; // actual access done per-tool below via retrieve().
-}
-
 // ─── Tools ─────────────────────────────────────────────────────────────────
 
 const read_file = {
   name: 'read_file',
-  description: 'Read text of a file chunk from the user\'s knowledge collection by source identifier.',
-  schema: { source: 'string (required)', max_chars: 'number (optional, default 4000)' },
+  description: 'Read the full text of a file from the user\'s knowledge collection, in ingestion order.',
+  schema: { source: 'string (required — exact source id)', max_chars: 'number (optional, default 8000, max 40000)' },
   async handler(args, ctx) {
     ensureCollection(ctx);
     const src = args?.source;
     if (!src || typeof src !== 'string') return { error: 'missing "source"' };
-    const maxChars = Math.max(200, Math.min(Number(args?.max_chars) || 4000, 20000));
+    const maxChars = Math.max(200, Math.min(Number(args?.max_chars) || 8000, 40000));
 
-    // Retrieve with the source string itself as query — grabs chunks from
-    // that source. Bounded at k=10 to avoid huge observations.
-    const hits = await rag.retrieve(ctx.userId, ctx.collection, src, 10, { useHybrid: true });
-    const filtered = hits.filter(h => h.source === src);
-    if (filtered.length === 0) return { error: `no chunks with source="${src}"` };
+    // Iterate the store — deterministic, no semantic drift.
+    const chunks = rag.getBySource(ctx.userId, ctx.collection, src);
+    if (chunks.length === 0) return { error: `no chunks with source="${src}"` };
 
-    const joined = filtered.map(h => h.text).join('\n\n---\n\n');
+    // Join with a separator that preserves chunk boundaries but doesn't
+    // corrupt line counts the caller might compute downstream. The title
+    // (e.g. "file.ts:10-40") keeps line context intact.
+    const joined = chunks
+      .map(c => c.title ? `// ${c.title}\n${c.text}` : c.text)
+      .join('\n\n');
+
     return {
       source: src,
-      chunks: filtered.length,
+      chunks: chunks.length,
       text: joined.slice(0, maxChars),
       truncated: joined.length > maxChars,
+      total_chars: joined.length,
     };
   },
 };
 
 const list_files = {
   name: 'list_files',
-  description: 'List distinct source identifiers in the current collection (up to 50).',
-  schema: { query: 'string (optional — bias listing toward this topic)' },
+  description: 'List every distinct source identifier in the current collection (deterministic — no semantic filter).',
+  schema: { contains: 'string (optional — filter sources whose id includes this substring, case-insensitive)' },
   async handler(args, ctx) {
     ensureCollection(ctx);
-    const query = typeof args?.query === 'string' && args.query.trim()
-      ? args.query.trim()
-      : 'list all files';
-    // Pull a wide net of hits, collapse by source.
-    const hits = await rag.retrieve(ctx.userId, ctx.collection, query, 40, { useHybrid: true });
-    const sources = new Map();
-    for (const h of hits) {
-      const s = h.source || '(no-source)';
-      if (!sources.has(s)) sources.set(s, { source: s, title: h.title || null, preview: (h.text || '').slice(0, 120) });
-    }
-    return { count: sources.size, files: [...sources.values()].slice(0, 50) };
+    let sources = rag.listSources(ctx.userId, ctx.collection);
+    const needle = typeof args?.contains === 'string' ? args.contains.trim().toLowerCase() : '';
+    if (needle) sources = sources.filter(s => String(s.source).toLowerCase().includes(needle));
+    return {
+      count: sources.length,
+      files: sources.slice(0, 100), // hard cap so observations stay manageable
+    };
   },
 };
 
@@ -168,55 +158,179 @@ const search_graph = {
 
 const get_symbol = {
   name: 'get_symbol',
-  description: 'Extract a specific function/class/interface from a source file by name.',
+  description: 'Fetch a specific function/class/interface from a source file by exact name.',
   schema: { source: 'string (required)', symbol: 'string (required)' },
   async handler(args, ctx) {
     ensureCollection(ctx);
     const { source, symbol } = args || {};
     if (!source || !symbol) return { error: 'missing "source" or "symbol"' };
 
-    // Pull chunks for that file and scan their metadata for the symbol.
-    const hits = await rag.retrieve(ctx.userId, ctx.collection, symbol, 20, { useHybrid: true });
-    const matching = hits.filter(h => h.source === source && h.title && h.title.includes(symbol));
-    if (matching.length > 0) {
-      return { source, symbol, chunks: matching.map(m => ({ title: m.title, text: m.text })) };
+    const chunks = rag.getBySource(ctx.userId, ctx.collection, source);
+    if (chunks.length === 0) return { error: `no content for source="${source}"` };
+
+    // Fast path: when the file was ingested via ingestCode, each chunk's
+    // meta carries the exact symbol name. No re-chunking, correct line
+    // numbers — the essential fix over the previous implementation that
+    // re-ran code-chunker on concatenated text (which silently reset
+    // line counts per chunk boundary).
+    const fromMeta = chunks.filter(c => c.meta?.name === symbol);
+    if (fromMeta.length > 0) {
+      return {
+        source, symbol,
+        match: 'exact',
+        chunks: fromMeta.map(c => ({
+          title: c.title,
+          text: c.text,
+          language: c.meta?.language,
+          nodeType: c.meta?.nodeType,
+          startLine: c.meta?.startLine,
+          endLine: c.meta?.endLine,
+        })),
+      };
     }
-    // Fallback: re-chunk the full file text via code-chunker if we have it.
-    const allFromSource = hits.filter(h => h.source === source);
-    if (allFromSource.length === 0) return { error: `no content for source="${source}"` };
-    const joined = allFromSource.map(h => h.text).join('\n');
-    const chunks = codeChunker.chunkCode(source, joined);
-    const symChunks = chunks.filter(c => c.name && c.name === symbol);
+
+    // Fallback path: file wasn't ingested via ingestCode (no meta). We
+    // re-chunk the concatenated text, but this time we strip the chunk
+    // separator titles we injected in read_file ("// <title>\n") and
+    // rely on the chunks being in insertion order — so code-chunker
+    // produces usable line numbers relative to the concatenated view.
+    // This is best-effort; line numbers may still be off by a constant.
+    const joined = chunks.map(c => c.text).join('\n');
+    const reChunked = codeChunker.chunkCode(source, joined);
+    const symChunks = reChunked.filter(c => c.name === symbol);
     if (symChunks.length === 0) return { error: `symbol "${symbol}" not found in ${source}` };
     return {
       source, symbol,
+      match: 'reparsed',
       chunks: symChunks.map(c => ({
         title: `${source}:${c.startLine}-${c.endLine} (${c.nodeType} ${c.name})`,
         text: c.text,
         language: c.language,
+        nodeType: c.nodeType,
+        startLine: c.startLine,
+        endLine: c.endLine,
       })),
     };
   },
 };
 
 // ─── Deterministic static checks (no LLM) ───────────────────────────────────
+//
+// Each check receives:
+//   text       — original source
+//   lines      — text.split('\n')
+//   context    — { language, codeMask }
+// where codeMask[i] is true if lines[i] contains any non-comment,
+// non-string code. The mask lets checks skip false positives without
+// writing a full tokeniser: "// eval(x)" inside a comment doesn't
+// trigger the eval_usage check; `"api_key: abcdef"` inside a string
+// literal doesn't trigger hardcoded_secret.
+//
+// The mask is approximate — it correctly handles:
+//   - // line comments (JS/TS/Java/Go/Rust/C/C++)
+//   - # line comments (Python, shell-style)
+//   - /* … */ block comments
+//   - "…" and '…' string literals with \-escape support
+// It does NOT handle template literals (JS `…${…}`) or Python triple-
+// quoted strings; we leave those as-is because checking them correctly
+// needs a real parser and the false-positive rate is low in practice.
+
+/**
+ * Strip string literals ("..." / '...' / `...`) from a single line,
+ * replacing their contents with empty strings. Preserves the opening
+ * and closing quotes so column offsets roughly align. Returns the
+ * transformed line. Useful when a check wants to match patterns that
+ * are only meaningful in CODE position — eval(x) in code is risky,
+ * eval(x) inside a string is prose.
+ */
+function stripStringLiterals(line) {
+  let out = '';
+  let inString = false;
+  let stringChar = null;
+  let escaped = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === stringChar) { inString = false; stringChar = null; out += ch; continue; }
+      // drop the char
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      inString = true; stringChar = ch; out += ch;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function buildCommentCodeMask(text, language) {
+  const lines = text.split('\n');
+  const codeMask = new Array(lines.length).fill(false);
+  const isHashComment = language === 'python' || language === 'ruby' || language === 'shell' || language === 'unknown';
+
+  let inBlockComment = false;
+  let inString = false;
+  let stringChar = null;
+  let escaped = false;
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    let hasCode = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      const next = line[i + 1];
+      if (inBlockComment) {
+        if (ch === '*' && next === '/') { inBlockComment = false; i++; }
+        continue;
+      }
+      if (inString) {
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\') { escaped = true; continue; }
+        if (ch === stringChar) { inString = false; stringChar = null; }
+        continue;
+      }
+      // Line comment?
+      if (ch === '/' && next === '/' && language !== 'python' && language !== 'shell') break;
+      if (isHashComment && ch === '#') break;
+      // Block comment?
+      if (ch === '/' && next === '*' && language !== 'python' && language !== 'shell') {
+        inBlockComment = true; i++; continue;
+      }
+      // String start?
+      if (ch === '"' || ch === "'" || (ch === '`' && (language === 'javascript' || language === 'typescript'))) {
+        inString = true; stringChar = ch; continue;
+      }
+      if (!/\s/.test(ch)) hasCode = true;
+    }
+    codeMask[li] = hasCode;
+  }
+  return { lines, codeMask };
+}
 
 const STATIC_CHECKS = [
   {
     id: 'long_function',
     description: 'Function bodies longer than 80 lines are hard to review',
-    scan: (text, { language }) => {
-      const lines = text.split('\n');
-      if (lines.length > 80) return [{ severity: 'warn', line: 1, message: `function spans ${lines.length} lines` }];
+    scan: (text, { lines }) => {
+      // Heuristic applies to whole-file chunks; long_function is a soft
+      // signal that the file is hard to take in at a glance.
+      if (lines.length > 80) {
+        return [{ severity: 'warn', line: 1, message: `source spans ${lines.length} lines — consider splitting` }];
+      }
       return [];
     },
   },
   {
     id: 'todo_fixme',
-    description: 'Pending TODO/FIXME/XXX markers',
-    scan: (text) => {
+    description: 'Pending TODO/FIXME/XXX/HACK markers',
+    scan: (text, { lines }) => {
+      // TODOs inside comments ARE what we want to flag — that's the whole
+      // point. We still scan every line; the mask is not consulted.
       const out = [];
-      text.split('\n').forEach((line, i) => {
+      lines.forEach((line, i) => {
         const m = line.match(/\b(TODO|FIXME|XXX|HACK)\b[:\s]*(.*)$/);
         if (m) out.push({ severity: 'info', line: i + 1, message: `${m[1]}: ${m[2].trim().slice(0, 120)}` });
       });
@@ -225,11 +339,15 @@ const STATIC_CHECKS = [
   },
   {
     id: 'eval_usage',
-    description: 'Use of eval() or new Function() is a security risk',
-    scan: (text) => {
+    description: 'Use of eval() or new Function() — dynamic code execution',
+    scan: (text, { lines, codeMask }) => {
       const out = [];
-      text.split('\n').forEach((line, i) => {
-        if (/\beval\s*\(/.test(line) || /\bnew\s+Function\s*\(/.test(line)) {
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return; // skip pure-comment lines
+        // Strip string literals so `"eval(x)"` inside a string doesn't
+        // trigger; only real code-position matches should fire.
+        const stripped = stripStringLiterals(line);
+        if (/\beval\s*\(/.test(stripped) || /\bnew\s+Function\s*\(/.test(stripped)) {
           out.push({ severity: 'high', line: i + 1, message: 'dynamic code execution — audit carefully' });
         }
       });
@@ -239,15 +357,27 @@ const STATIC_CHECKS = [
   {
     id: 'hardcoded_secret',
     description: 'Likely hard-coded secret or API key',
-    scan: (text) => {
+    scan: (text, { lines }) => {
+      // For secrets we INTENTIONALLY scan strings (that's where they
+      // hide) but skip lines that are entirely inside a block comment.
+      // The patterns below are tuned to common real formats.
       const out = [];
-      const re = /(?:api[_-]?key|secret|password|token)\s*[:=]\s*["']([A-Za-z0-9_\-]{16,})["']/gi;
-      text.split('\n').forEach((line, i) => {
-        if (re.test(line)) {
+      const patterns = [
+        { re: /(?:api[_-]?key|secret|passwd|password|token|bearer)\s*[:=]\s*["']([A-Za-z0-9_\-./+=]{16,})["']/gi, msg: 'possible hard-coded credential' },
+        { re: /\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, msg: 'AWS access key id' },
+        { re: /\bsk-[A-Za-z0-9]{20,}\b/g, msg: 'OpenAI-style secret key' },
+        { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, msg: 'Slack token' },
+        { re: /\bghp_[A-Za-z0-9]{36}\b/g, msg: 'GitHub personal access token' },
+        { re: /\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b/g, msg: 'JWT-shaped token' },
+      ];
+      lines.forEach((line, i) => {
+        for (const { re, msg } of patterns) {
           re.lastIndex = 0;
-          out.push({ severity: 'high', line: i + 1, message: 'possible hard-coded credential' });
+          if (re.test(line)) {
+            out.push({ severity: 'high', line: i + 1, message: msg });
+            break;
+          }
         }
-        re.lastIndex = 0;
       });
       return out;
     },
@@ -255,18 +385,42 @@ const STATIC_CHECKS = [
   {
     id: 'console_log',
     description: 'Leftover console.log / print / debugger statements',
-    scan: (text, { language }) => {
+    scan: (text, { lines, codeMask, language }) => {
       const out = [];
-      const patterns = [
-        [/console\.(log|debug)\s*\(/, 'console.log'],
-        [/^\s*debugger\s*;?\s*$/, 'debugger'],
-      ];
+      const patterns = [];
+      if (language === 'javascript' || language === 'typescript' || language === 'unknown') {
+        patterns.push([/\bconsole\.(log|debug)\s*\(/, 'console.log']);
+        patterns.push([/^\s*debugger\s*;?\s*$/, 'debugger']);
+      }
       if (language === 'python') patterns.push([/^\s*print\s*\(/, 'print()']);
-      text.split('\n').forEach((line, i) => {
+
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
         for (const [re, label] of patterns) {
-          if (re.test(line)) { out.push({ severity: 'info', line: i + 1, message: `${label} left in code` }); break; }
+          if (re.test(line)) {
+            out.push({ severity: 'info', line: i + 1, message: `${label} left in code` });
+            break;
+          }
         }
       });
+      return out;
+    },
+  },
+  {
+    id: 'empty_catch',
+    description: 'Empty catch block — errors are silently swallowed',
+    scan: (text, { codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'java') return [];
+      // catch (e) { } or catch { } with nothing inside.
+      const out = [];
+      const re = /\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/g;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const upto = text.slice(0, m.index);
+        const line = upto.split('\n').length;
+        if (!codeMask[line - 1]) continue;
+        out.push({ severity: 'warn', line, message: 'empty catch block — handle or rethrow' });
+      }
       return out;
     },
   },
@@ -289,11 +443,17 @@ const static_checks = {
     }
 
     const language = codeChunker.detectLanguage(src, content);
+    // Build the comment/string mask ONCE and pass it to every check so
+    // each regex scan runs in O(lines) rather than re-tokenising.
+    const { lines, codeMask } = buildCommentCodeMask(content, language);
     const findings = [];
     for (const check of STATIC_CHECKS) {
-      const hits = check.scan(content, { language });
+      const hits = check.scan(content, { language, lines, codeMask });
       for (const h of hits) findings.push({ rule: check.id, ...h });
     }
+    // Sort by line, then severity — easier for downstream consumption.
+    const severityOrder = { high: 0, warn: 1, info: 2 };
+    findings.sort((a, b) => (a.line - b.line) || (severityOrder[a.severity] - severityOrder[b.severity]));
     return {
       source: src,
       language,
@@ -344,4 +504,6 @@ module.exports = {
   // individual exports for tests
   read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
   STATIC_CHECKS,
+  buildCommentCodeMask, // exported for tests
+  stripStringLiterals,  // exported for tests
 };

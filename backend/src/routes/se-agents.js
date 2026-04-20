@@ -25,6 +25,8 @@ const testGen = require('../services/agents/test-gen-agent');
 const debugAgent = require('../services/agents/debug-agent');
 const codeGen = require('../services/agents/code-gen-agent');
 const staticCheck = require('../services/agents/static-check-agent');
+const requirementsAgent = require('../services/agents/requirements-agent');
+const logAnalysis = require('../services/agents/log-analysis-agent');
 const orchestrator = require('../services/agents/se-orchestrator');
 
 const router = express.Router();
@@ -146,6 +148,56 @@ router.post(
       numPaths: req.body.numPaths || 3,
       language: req.body.language,
       maxIters: req.body.maxIters || 12,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+router.post(
+  '/requirements',
+  authenticateToken,
+  [
+    body('request').isString().isLength({ min: 1, max: 8000 }),
+    body('relatedFiles').optional().isArray(),
+    body('domainContext').optional().isString().isLength({ max: 4000 }),
+    body('collection').optional().isString().isLength({ max: 64 }),
+    body('maxIters').optional().isInt({ min: 1, max: 20 }),
+  ],
+  handleErrors(async (req, res) => {
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await requirementsAgent.requirements({
+      openai,
+      userId: req.user.id,
+      collection: req.body.collection || 'code',
+      request: req.body.request,
+      relatedFiles: Array.isArray(req.body.relatedFiles) ? req.body.relatedFiles : null,
+      domainContext: req.body.domainContext,
+      maxIters: req.body.maxIters || 10,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+router.post(
+  '/log-analysis',
+  authenticateToken,
+  [
+    body('logs').custom(v => typeof v === 'string' || Array.isArray(v)),
+    body('topK').optional().isInt({ min: 1, max: 30 }),
+    body('correlateWithCode').optional().isBoolean(),
+    body('collection').optional().isString().isLength({ max: 64 }),
+    body('maxIters').optional().isInt({ min: 1, max: 20 }),
+  ],
+  handleErrors(async (req, res) => {
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await logAnalysis.analyse({
+      openai,
+      userId: req.user.id,
+      collection: req.body.collection || 'code',
+      logs: req.body.logs,
+      topK: req.body.topK || 8,
+      correlateWithCode: req.body.correlateWithCode !== false,
+      maxIters: req.body.maxIters || 10,
     });
     res.json({ ok: true, ...result });
   })
