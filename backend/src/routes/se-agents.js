@@ -41,6 +41,8 @@ const alignWrapper = require('../services/agents/align-wrapper');
 const safetyFilter = require('../services/agents/safety-filter');
 const calibrator = require('../services/agents/response-calibrator');
 const preferenceExport = require('../services/agents/preference-export');
+const evalHarness = require('../services/agents/eval-harness');
+const multiJudge = require('../services/agents/multi-judge');
 
 const router = express.Router();
 
@@ -628,16 +630,27 @@ router.get(
   handleErrors(async (req, res) => {
     const format = String(req.query.format || 'sft').toLowerCase();
     const agent = typeof req.query.agent === 'string' ? req.query.agent : null;
+    // PII scrub defaults to ON — shipping raw user data to fine-tuning
+    // is a real privacy risk and GDPR violation. Callers must explicitly
+    // pass ?scrubPii=false to emit raw.
+    const scrubPii = req.query.scrubPii !== 'false';
+    const aggressive = req.query.aggressive === 'true';
     if (!['sft', 'dpo'].includes(format)) {
       return res.status(400).json({ error: `unknown format '${format}' — use sft or dpo` });
     }
     const out = preferenceExport.exportData({
-      userId: req.user.id, format, agent,
+      userId: req.user.id, format, agent, scrubPii, aggressive,
     });
     res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
     res.setHeader('Content-Disposition',
       `attachment; filename="preferences-${format}${agent ? '-' + agent : ''}-${req.user.id}.jsonl"`);
     res.setHeader('X-Export-Count', String(out.count));
+    res.setHeader('X-PII-Scrubbed', String(out.scrubbed));
+    if (out.scrubbed && out.piiHits.length > 0) {
+      // Compact summary "email:3,phone:1" so ops can monitor.
+      res.setHeader('X-PII-Hits',
+        out.piiHits.map(h => `${h.id}:${h.count}`).join(','));
+    }
     res.send(out.ndjson);
   })
 );
@@ -814,6 +827,139 @@ router.post(
       result,
       fallback_to_rag_chat: routing.intent === 'general',
     });
+  })
+);
+
+/**
+ * POST /api/se-agents/align-score-multi
+ * Run multi-judge scoring — N calls with varied personas + temperatures,
+ * aggregate via median + IQR. Addresses the single-judge variance
+ * problem (InstructGPT paper reports 72-77% inter-annotator agreement).
+ *
+ * Body: { request, response, sourceContext?, n? (1-5, default 3) }
+ * Response: { median, iqr, disagreement: 'low'|'medium'|'high',
+ *             aggregated: {helpful, honest, harmless, overall},
+ *             rounds: [...], issues: [...] }
+ */
+router.post(
+  '/align-score-multi',
+  authenticateToken,
+  [
+    body('request').isString().isLength({ min: 1, max: 8000 }),
+    body('response').custom(v => typeof v === 'string' || (v !== null && typeof v === 'object')),
+    body('sourceContext').optional().isString().isLength({ max: 12000 }),
+    body('n').optional().isInt({ min: 1, max: 5 }),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'multi_judge', ['request'])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await multiJudge.scoreMulti({
+      openai,
+      userRequest: req.body.request,
+      response: req.body.response,
+      sourceContext: req.body.sourceContext,
+      n: req.body.n || 3,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+/**
+ * POST /api/se-agents/eval
+ * Run an eval harness over a prompt set for an agent.
+ * Body: { agent: 'code_review'|'test_gen'|..., mode: 'single'|'ab',
+ *         prompts?: [{id, prompt}], passThreshold?: 6,
+ *         // for ab mode:
+ *         variantA?: { align?: bool, strategy?: str },
+ *         variantB?: { align?: bool, strategy?: str } }
+ *
+ * The handler builds runAgent closures that call the relevant
+ * specialist with the requested options, then dispatches to
+ * eval-harness.runEval or .runAB.
+ */
+router.post(
+  '/eval',
+  authenticateToken,
+  [
+    body('agent').isIn(['code_review', 'test_gen', 'debug', 'code_gen', 'requirements', 'maintenance', 'static_check', 'log_analysis', 'general']),
+    body('mode').optional().isIn(['single', 'ab']),
+    body('prompts').optional().isArray(),
+    body('passThreshold').optional().isInt({ min: 0, max: 10 }),
+    body('variantA').optional().isObject(),
+    body('variantB').optional().isObject(),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'eval_harness', [])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const mode = req.body.mode || 'single';
+    const prompts = Array.isArray(req.body.prompts) ? req.body.prompts : null;
+
+    // Build a runAgent closure — when mode=single, this is a single
+    // specialist call. The closure keeps the eval harness agnostic to
+    // which specialist it's measuring.
+    const makeRunner = (variantOpts = {}) => {
+      const align = !!variantOpts.align;
+      return async (prompt /*, id */) => {
+        // For eval we only actually hit the code_gen / code_review /
+        // general specialists most readily — they take a free-text
+        // request. Debug/log-analysis expect specific shapes. This
+        // branch maps each agent to a sensible default input shape.
+        const agent = req.body.agent;
+        const common = {
+          openai, userId: req.user.id, collection: 'code', maxIters: 6,
+        };
+        if (agent === 'code_gen') {
+          const r = align
+            ? await alignWrapper.runAligned({
+                openai, userId: req.user.id, agentName: 'code_gen',
+                userRequest: prompt,
+                run: async () => codeGen.generate({ ...common, spec: prompt, strategy: variantOpts.strategy || 'single_path' }),
+                embedder: async (t) => rag.embed(t),
+                opts: { skipClarifier: true }, // don't interrupt the eval with questions
+              }).then(o => o.result || o)
+            : await codeGen.generate({ ...common, spec: prompt, strategy: variantOpts.strategy || 'single_path' });
+          return r;
+        }
+        if (agent === 'code_review' || agent === 'static_check') {
+          return await codeReview.review({ ...common, focus: prompt });
+        }
+        if (agent === 'test_gen') {
+          return await testGen.generate({ ...common, source: 'eval-input.txt' });
+        }
+        if (agent === 'debug') {
+          return await debugAgent.debug({ ...common, error: prompt });
+        }
+        if (agent === 'requirements') {
+          return await requirementsAgent.requirements({ ...common, request: prompt });
+        }
+        if (agent === 'maintenance') {
+          return await maintenanceAgent.resolve({ ...common, ticket: prompt });
+        }
+        if (agent === 'log_analysis') {
+          return await logAnalysis.analyse({ ...common, logs: prompt, correlateWithCode: false });
+        }
+        // general / unsupported — just return the prompt echoed for now.
+        return `[${agent}] ${prompt}`;
+      };
+    };
+
+    if (mode === 'ab') {
+      const out = await evalHarness.runAB({
+        openai,
+        runA: makeRunner(req.body.variantA || {}),
+        runB: makeRunner(req.body.variantB || {}),
+        prompts, agent: req.body.agent,
+        labelA: 'baseline', labelB: 'challenger',
+      });
+      return res.json({ ok: true, mode: 'ab', ...out });
+    }
+    const out = await evalHarness.runEval({
+      openai,
+      runAgent: makeRunner({}),
+      prompts, agent: req.body.agent,
+      passThreshold: req.body.passThreshold || 6,
+    });
+    res.json({ ok: true, mode: 'single', agent: req.body.agent, ...out });
   })
 );
 

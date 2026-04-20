@@ -42,6 +42,7 @@
  */
 
 const feedback = require('./feedback-ledger');
+const piiScrubber = require('./pii-scrubber');
 
 const MIN_PAIR_SIMILARITY = 0.6;
 
@@ -110,19 +111,31 @@ function allEntries(userId) {
  *
  * @returns {{ lines: string[], count: number }}
  */
-function exportSFT({ userId, agent = null }) {
+function exportSFT({ userId, agent = null, scrubPii = true, aggressive = false }) {
   const entries = allEntries(userId);
   const eligible = entries
     .filter(e => e.helpful === true)
     .filter(e => !agent || e.agent === agent);
-  const lines = eligible.map(e => JSON.stringify({
-    messages: [
-      { role: 'system', content: systemPromptFor(e.agent) },
-      { role: 'user', content: e.request },
-      { role: 'assistant', content: responseAsString(e.response) },
-    ],
-  }));
-  return { lines, count: lines.length };
+  const piiHits = [];
+  const lines = eligible.map(e => {
+    let request = e.request;
+    let response = responseAsString(e.response);
+    if (scrubPii) {
+      const reqScrub = piiScrubber.scrub(request, { aggressive });
+      const respScrub = piiScrubber.scrub(response, { aggressive });
+      request = reqScrub.scrubbed;
+      response = respScrub.scrubbed;
+      piiHits.push(...reqScrub.hits, ...respScrub.hits);
+    }
+    return JSON.stringify({
+      messages: [
+        { role: 'system', content: systemPromptFor(e.agent) },
+        { role: 'user', content: request },
+        { role: 'assistant', content: response },
+      ],
+    });
+  });
+  return { lines, count: lines.length, piiHits };
 }
 
 // ─── DPO export ───────────────────────────────────────────────────────────
@@ -132,7 +145,7 @@ function exportSFT({ userId, agent = null }) {
  * request embeddings are similar. The user effectively told us: "given
  * a question like this, prefer output A over output B".
  */
-function exportDPO({ userId, agent = null }) {
+function exportDPO({ userId, agent = null, scrubPii = true, aggressive = false }) {
   const entries = allEntries(userId);
   const helpful = entries.filter(e => e.helpful === true && e.embedding);
   const unhelpful = entries.filter(e => e.helpful === false && e.embedding);
@@ -142,7 +155,15 @@ function exportDPO({ userId, agent = null }) {
   }
 
   const lines = [];
+  const piiHits = [];
   const usedHelpful = new Set();
+  const maybeScrub = (s) => {
+    if (!scrubPii) return s;
+    const r = piiScrubber.scrub(s, { aggressive });
+    piiHits.push(...r.hits);
+    return r.scrubbed;
+  };
+
   // For each unhelpful entry, find its nearest helpful partner.
   for (const reject of unhelpful) {
     let bestIdx = -1;
@@ -159,34 +180,38 @@ function exportDPO({ userId, agent = null }) {
       input: {
         messages: [
           { role: 'system', content: systemPromptFor(win.agent || reject.agent) },
-          { role: 'user', content: win.request },
+          { role: 'user', content: maybeScrub(win.request) },
         ],
       },
-      preferred_output: [{ role: 'assistant', content: responseAsString(win.response) }],
-      non_preferred_output: [{ role: 'assistant', content: responseAsString(reject.response) }],
+      preferred_output: [{ role: 'assistant', content: maybeScrub(responseAsString(win.response)) }],
+      non_preferred_output: [{ role: 'assistant', content: maybeScrub(responseAsString(reject.response)) }],
     }));
   }
 
-  return { lines, count: lines.length };
+  return { lines, count: lines.length, piiHits };
 }
 
 /**
  * Export in the requested format and return NDJSON string + metadata.
  */
-function exportData({ userId, format = 'sft', agent = null }) {
+function exportData({ userId, format = 'sft', agent = null, scrubPii = true, aggressive = false }) {
   if (format === 'sft') {
-    const { lines, count } = exportSFT({ userId, agent });
+    const { lines, count, piiHits } = exportSFT({ userId, agent, scrubPii, aggressive });
     return {
       format: 'sft',
       count,
+      scrubbed: scrubPii,
+      piiHits,
       ndjson: lines.join('\n') + (lines.length > 0 ? '\n' : ''),
     };
   }
   if (format === 'dpo') {
-    const { lines, count } = exportDPO({ userId, agent });
+    const { lines, count, piiHits } = exportDPO({ userId, agent, scrubPii, aggressive });
     return {
       format: 'dpo',
       count,
+      scrubbed: scrubPii,
+      piiHits,
       ndjson: lines.join('\n') + (lines.length > 0 ? '\n' : ''),
     };
   }
