@@ -12,6 +12,7 @@ const documentService = require('../services/document-service');
 const langPolicy = require('../services/language-policy');
 const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
+const longTermMemory = require('../services/long-term-memory');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -399,8 +400,24 @@ router.post(
         customGpt,
         userProfile,
       });
-      const systemInstruction = { role: 'system', content: promptBundle.system };
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${promptBundle.system.length} profile=${userProfile ? 'yes' : 'no'}`);
+
+      // Long-term memory recall: pull the top-K durable facts for this
+      // user that are most similar to their current message, and append
+      // them as a "REMEMBERED ABOUT THE USER" block at the end of the
+      // system prompt. Silent no-op for anonymous users (no userId to
+      // key on) and for fresh users whose memory is still empty.
+      let memoryBlock = '';
+      if (userId) {
+        try {
+          const recalled = await longTermMemory.recallFacts(userId, prompt, 5);
+          memoryBlock = longTermMemory.buildMemoryBlock(recalled);
+        } catch (memErr) {
+          console.warn('[ai] memory recall failed (continuing without):', memErr.message);
+        }
+      }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + memoryBlock };
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
@@ -610,6 +627,23 @@ router.post(
           qualityGuard: true,
         });
         if (cacheHandle) cacheHandle.complete();
+
+        // Fire-and-forget: extract durable facts from this turn and
+        // add them to the user's long-term memory. Runs on the next
+        // tick so the reply is already ack'd to the client.
+        if (userId && typeof prompt === 'string' && fullResponseContent) {
+          try {
+            const memoryOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+            longTermMemory.extractFactsAsync({
+              openai: memoryOpenAI,
+              userId,
+              userMessage: prompt,
+              assistantMessage: fullResponseContent,
+            });
+          } catch (memErr) {
+            console.warn('[ai] memory extract schedule failed:', memErr.message);
+          }
+        }
       } catch (apiError) {
         if (cacheHandle) cacheHandle.fail(apiError && apiError.message ? apiError.message : 'stream failed');
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {

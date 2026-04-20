@@ -12,6 +12,7 @@ const PptxGenJS = require('pptxgenjs');
 const vectorPPTService = require('./vector-ppt-service');
 const { fitMessagesToContext } = require('./context-window');
 const { evaluateResponse, buildCorrectivePrompt } = require('./quality-guard');
+const { getBreaker, CircuitBreakerError } = require('./circuit-breaker');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -312,7 +313,18 @@ class AIService {
 
                     try {
                         const client = this.getClient(currentProvider);
-                        const stream = await client.chat.completions.create(payload, { signal: attemptCtrl.signal });
+                        // Per-(provider, model) circuit breaker: if a provider
+                        // has been failing consistently, short-circuit the call
+                        // so we move to the next model in the chain instantly
+                        // instead of waiting for another timeout. On recovery,
+                        // a single probe call flips us back to CLOSED.
+                        const breaker = getBreaker(`${currentProvider}:${currentModel}`, {
+                            failureThreshold: 5,
+                            resetTimeoutMs: 60_000,
+                        });
+                        const stream = await breaker.execute(() =>
+                            client.chat.completions.create(payload, { signal: attemptCtrl.signal })
+                        );
 
                         for await (const chunk of stream) {
                             const contentChunk = chunk.choices[0]?.delta?.content || '';
@@ -368,6 +380,14 @@ class AIService {
                         const isClientCancel = !isOurTimeout && signal?.aborted;
                         if (isClientCancel) throw err;
                         if (hasStreamedAnyContent) throw err;
+
+                        // CircuitBreakerError means this provider is currently
+                        // shorted. Don't waste retries here — fall straight to
+                        // the next model in the chain.
+                        if (err instanceof CircuitBreakerError) {
+                            console.warn(`⚡ ${currentProvider}:${currentModel} breaker OPEN (next probe at ${err.nextAttemptAt.toISOString()}) — skipping to fallback`);
+                            break;
+                        }
 
                         const retryable = isOurTimeout || isTransientProviderError(err) || err.code === 'EMPTY_COMPLETION';
                         const isLastAttemptForModel = attempt >= MAX_ATTEMPTS_PER_MODEL;
