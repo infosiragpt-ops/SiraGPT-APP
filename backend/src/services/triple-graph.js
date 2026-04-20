@@ -216,7 +216,16 @@ async function linkTriple(userId, collection, queryTriple, { embedder, k = 1 } =
   const ns = store.get(storeKey(userId, collection));
   if (!ns || ns.triples.size === 0) return k > 1 ? [] : null;
 
-  const sentence = tripleToSentence(queryTriple);
+  // Reject malformed triples — all three fields must carry non-whitespace
+  // content. Previously an empty or whitespace-only subject/predicate/
+  // object would produce a "sentence" like "   " that embeds to noise,
+  // and cosine against it returns meaningless rankings.
+  const subj = String(queryTriple?.subject || '').trim();
+  const pred = String(queryTriple?.predicate || '').trim();
+  const obj = String(queryTriple?.object || '').trim();
+  if (!subj || !pred || !obj) return k > 1 ? [] : null;
+
+  const sentence = tripleToSentence({ subject: subj, predicate: pred, object: obj });
   let qVec;
   try {
     const vectors = embedder ? await embedder([sentence]) : await lazyRag().embed([sentence]);

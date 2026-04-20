@@ -564,8 +564,14 @@ async function passageLink(userId, collection, triple, { k = 5 } = {}) {
   const sentence = `${triple.subject} ${triple.predicate} ${triple.object}`.replace(/\s+/g, ' ').trim();
   if (!sentence) return [];
   return retrieve(userId, collection, sentence, k, {
-    useHybrid: true,
-    // No graph expansion here — we're already operating on graph output,
+    // Cosine-only here: triple sentences are ~3-5 tokens after BM25's
+    // stop-word filter, and BM25's IDF math penalises short queries.
+    // Semantic similarity over the full embedding space does a better
+    // job matching a triple like "Stephen Curry plays for Warriors" to
+    // a passage about Curry's team, even when the exact token "plays"
+    // doesn't appear in the chunk.
+    useHybrid: false,
+    // No graph expansion — we're already operating on graph output,
     // recursing would blow up without new information.
     useGraph: false,
   });

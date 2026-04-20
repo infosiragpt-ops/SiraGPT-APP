@@ -375,12 +375,27 @@ async function run({
       continue;
     }
 
-    if (parsed.final !== undefined) {
+    // A non-null `final` terminates the loop. We specifically reject
+    // null — when the model emits `{"final": null}` explicitly (which
+    // some models do when asked for a finalisation schema but have no
+    // answer yet), treating it as "done" would return the same sentinel
+    // as "ran out of iterations" and the caller couldn't tell them
+    // apart. Nudge the model to either call a tool or fill a real value.
+    if (parsed.final !== undefined && parsed.final !== null) {
       final = parsed.final;
       const step = trace.append({ think: parsed.thought || '', final, durationMs: Date.now() - llmStart });
       safeOnStep(onStep, step);
       terminatedBy = 'final';
       break;
+    }
+    if (parsed.final === null) {
+      const step = trace.append({
+        think: parsed.thought || '(null final rejected)',
+        observation: 'Your reply had `"final": null`. Either call a tool to gather more information, or emit a non-null final value.',
+        durationMs: Date.now() - llmStart,
+      });
+      safeOnStep(onStep, step);
+      continue;
     }
 
     const toolName = parsed.tool;
@@ -443,7 +458,17 @@ async function run({
 
 function safeOnStep(onStep, step) {
   if (typeof onStep !== 'function') return;
-  try { onStep(step); } catch (err) { /* swallow — streaming must never break the loop */ }
+  // Pass a shallow clone — a careless streaming consumer that mutates
+  // the step object (deleting fields, renaming, decorating) must not
+  // pollute the trace we return from run().
+  const clone = { ...step };
+  // observation can be an object; deep-copy one level so primitive
+  // reads in the UI don't race with our in-memory trace reference.
+  if (clone.observation && typeof clone.observation === 'object') {
+    try { clone.observation = JSON.parse(JSON.stringify(clone.observation)); }
+    catch { /* fall back to shallow ref — non-serialisable payloads are rare */ }
+  }
+  try { onStep(clone); } catch (err) { /* swallow — streaming must never break the loop */ }
 }
 
 module.exports = {

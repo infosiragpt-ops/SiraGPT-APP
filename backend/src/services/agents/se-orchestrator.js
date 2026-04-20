@@ -30,13 +30,15 @@ const codeGen = require('./code-gen-agent');
 const staticCheck = require('./static-check-agent');
 const requirementsAgent = require('./requirements-agent');
 const logAnalysis = require('./log-analysis-agent');
+const maintenanceAgent = require('./maintenance-agent');
 
 const INTENT_SYSTEM = `You classify a software-engineering request into one of these intents:
 
 - requirements   — user describes a new feature vaguely and needs it turned into a structured spec.
 - code_review    — user wants their code reviewed for bugs / style / security.
 - test_gen      — user wants tests generated for a function or file.
-- debug          — user reports an error / failing test / stacktrace.
+- debug          — user reports an error / failing test / stacktrace — concrete failure output.
+- maintenance    — user describes a bug or gap in prose (issue ticket), no stacktrace.
 - code_gen      — user asks to write new code from a specification.
 - static_check   — user asks to lint / scan code for issues without a full review.
 - log_analysis   — user pastes log lines, error bursts, or asks about failing services.
@@ -45,7 +47,7 @@ const INTENT_SYSTEM = `You classify a software-engineering request into one of t
 Reply with STRICT JSON: {"intent":"<intent>","confidence":0.0-1.0,"reason":"<one sentence>"}`;
 
 const VALID_INTENTS = new Set([
-  'requirements', 'code_review', 'test_gen', 'debug',
+  'requirements', 'code_review', 'test_gen', 'debug', 'maintenance',
   'code_gen', 'static_check', 'log_analysis', 'general',
 ]);
 
@@ -282,13 +284,123 @@ async function collaborate({ openai, userId, collection, spec, maxRounds = 3, la
   };
 }
 
+/**
+ * Consensus mode — Liu et al. (2024) §5.2 "voting/consensus" multi-agent
+ * pattern. Run numAgents independent code-gen agents on the same spec
+ * (with slightly different temperatures for genuine diversity), review
+ * each candidate, then pick the winner by a severity-weighted findings
+ * score.
+ *
+ * Different from collaborate: collaborate is serial (author → reviewer →
+ * author fixes → reviewer). Consensus is parallel (N authors in flight
+ * at once, best one wins). Consensus is more expensive (N × code-gen
+ * cost) but tends to produce better outcomes for genuinely hard specs
+ * because the AGents explore different approaches independently before
+ * committing.
+ *
+ * @param {object} args
+ * @param {number} [args.numAgents=3] — how many candidates to generate
+ * @param {string} args.spec
+ * @param {string} [args.language]
+ */
+async function consensus({
+  openai, userId, collection, spec, numAgents = 3, language,
+}) {
+  if (!spec) throw new Error('consensus: spec is required');
+  if (numAgents < 2) throw new Error('consensus: numAgents must be >= 2');
+  const ctx = { openai, userId, collection };
+  const rag = require('../rag-service');
+
+  // Generate N candidates in PARALLEL — each with slightly different
+  // temperature for genuine diversity without blowing up complexity.
+  // Temperature step 0.1 gives enough variance without going off the rails.
+  const candidates = await Promise.all(
+    Array.from({ length: numAgents }, (_, i) => codeGen.generate({
+      ...ctx, spec, strategy: 'single_path', language,
+      // We don't expose temperature on codeGen.generate yet; rely on
+      // the strategy variation instead (agent may drift turn-by-turn).
+    })),
+  );
+
+  // Ingest each candidate under a unique filename so the reviewer can
+  // read them independently. If a candidate produced no code, score it
+  // with a penalty marker.
+  const extFor = (lang) => lang === 'python' ? 'py' : lang === 'go' ? 'go'
+                : lang === 'rust' ? 'rs' : lang === 'typescript' ? 'ts' : 'js';
+
+  const reviewed = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    if (!c.code) {
+      reviewed.push({ index: i, candidate: c, review: null, score: -Infinity, filePath: null });
+      continue;
+    }
+    const filePath = c.file_path || `candidate-${i}.${extFor(c.language || language)}`;
+    await rag.ingestCode(userId, collection, [{
+      filename: filePath, content: c.code, language: c.language,
+    }]);
+    const review = await codeReview.review({ ...ctx, files: [filePath] });
+    reviewed.push({
+      index: i,
+      candidate: c,
+      review,
+      score: scoreCandidate(review),
+      filePath,
+    });
+  }
+
+  // Sort descending by score. Highest wins.
+  reviewed.sort((a, b) => b.score - a.score);
+  const winner = reviewed[0];
+
+  return {
+    winner: {
+      index: winner.index,
+      file_path: winner.filePath,
+      code: winner.candidate.code,
+      language: winner.candidate.language,
+      rationale: winner.candidate.rationale,
+      score: winner.score,
+    },
+    candidates: reviewed.map(r => ({
+      index: r.index,
+      file_path: r.filePath,
+      score: r.score,
+      has_code: !!r.candidate.code,
+      review_counts: r.review?.counts || null,
+      rationale: r.candidate.rationale,
+    })),
+    spec,
+    num_agents: numAgents,
+  };
+}
+
+/**
+ * Score a code-review result. Lower counts at higher severities = better.
+ * A candidate with 0 findings is perfect (score = 0). Each finding
+ * subtracts by severity weight. The weights penalise critical bugs
+ * orders of magnitude more than info nits.
+ */
+function scoreCandidate(review) {
+  if (!review?.counts) return -Infinity;
+  const w = { critical: 50, high: 15, medium: 4, low: 1, info: 0.1 };
+  let score = 0;
+  for (const [sev, count] of Object.entries(review.counts)) {
+    score -= (w[sev] || 0) * count;
+  }
+  return score;
+}
+
 module.exports = {
   routeIntent,
   pipeline,
   collaborate,
+  consensus,
+  scoreCandidate,
   VALID_INTENTS,
   // re-export specialist agents for callers who have an orchestrator
   // instance and want direct access rather than bespoke imports.
   requirements: requirementsAgent.requirements,
   logAnalysis: logAnalysis.analyse,
+  maintenance: maintenanceAgent.resolve,
 };

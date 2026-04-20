@@ -27,6 +27,7 @@ const codeGen = require('../services/agents/code-gen-agent');
 const staticCheck = require('../services/agents/static-check-agent');
 const requirementsAgent = require('../services/agents/requirements-agent');
 const logAnalysis = require('../services/agents/log-analysis-agent');
+const maintenanceAgent = require('../services/agents/maintenance-agent');
 const orchestrator = require('../services/agents/se-orchestrator');
 
 const router = express.Router();
@@ -179,6 +180,33 @@ router.post(
 );
 
 router.post(
+  '/maintenance',
+  authenticateToken,
+  [
+    body('ticket').isString().isLength({ min: 10, max: 16000 }),
+    body('title').optional().isString().isLength({ max: 500 }),
+    body('reporter').optional().isString().isLength({ max: 64 }),
+    body('initialSuspicion').optional().isArray(),
+    body('collection').optional().isString().isLength({ max: 64 }),
+    body('maxIters').optional().isInt({ min: 1, max: 25 }),
+  ],
+  handleErrors(async (req, res) => {
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await maintenanceAgent.resolve({
+      openai,
+      userId: req.user.id,
+      collection: req.body.collection || 'code',
+      ticket: req.body.ticket,
+      title: req.body.title,
+      reporter: req.body.reporter,
+      initialSuspicion: Array.isArray(req.body.initialSuspicion) ? req.body.initialSuspicion : null,
+      maxIters: req.body.maxIters || 14,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+router.post(
   '/log-analysis',
   authenticateToken,
   [
@@ -228,13 +256,14 @@ router.post(
   '/orchestrate',
   authenticateToken,
   [
-    body('mode').isIn(['route', 'pipeline', 'collaborate']),
+    body('mode').isIn(['route', 'pipeline', 'collaborate', 'consensus']),
     body('collection').optional().isString().isLength({ max: 64 }),
     body('message').optional().isString().isLength({ max: 4000 }),
     body('recipe').optional().isString().isLength({ max: 64 }),
     body('input').optional().isObject(),
     body('spec').optional().isString().isLength({ max: 8000 }),
     body('maxRounds').optional().isInt({ min: 1, max: 6 }),
+    body('numAgents').optional().isInt({ min: 2, max: 6 }),
     body('language').optional().isString().isLength({ max: 32 }),
   ],
   handleErrors(async (req, res) => {
@@ -257,6 +286,15 @@ router.post(
         openai, userId: req.user.id, collection,
         spec: req.body.spec,
         maxRounds: req.body.maxRounds || 3,
+        language: req.body.language,
+      });
+      return res.json({ ok: true, ...r });
+    }
+    if (req.body.mode === 'consensus') {
+      const r = await orchestrator.consensus({
+        openai, userId: req.user.id, collection,
+        spec: req.body.spec,
+        numAgents: req.body.numAgents || 3,
         language: req.body.language,
       });
       return res.json({ ok: true, ...r });

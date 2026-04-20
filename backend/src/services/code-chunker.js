@@ -264,7 +264,35 @@ function extractTsJsNodes(source) {
       endIdx = i;
     }
 
-    const content = lines.slice(i, endIdx + 1).join('\n');
+    // Walk BACKWARD to pull in a contiguous JSDoc block (`/** … */`) or
+    // decorators (`@decorator`, TS-only) sitting immediately above the
+    // declaration. Retrieval by doc text — the most common way to look
+    // up an API — misses the symbol if the doc is in a separate chunk.
+    let startIdx = i;
+    {
+      // Scan backwards for decorators or a */ closer. Stop at the first
+      // non-empty, non-doc-comment, non-decorator line.
+      let b = i - 1;
+      while (b >= 0) {
+        const trimmed = lines[b].trim();
+        if (trimmed === '') { b--; continue; }
+        if (trimmed.startsWith('@')) { startIdx = b; b--; continue; }
+        if (trimmed.endsWith('*/')) {
+          // Walk up to find the matching /** or /*.
+          let jsdocStart = b;
+          while (jsdocStart > 0 && !/\/\*\*?/.test(lines[jsdocStart])) jsdocStart--;
+          if (jsdocStart >= 0 && /\/\*\*?/.test(lines[jsdocStart])) {
+            startIdx = jsdocStart;
+            b = jsdocStart - 1;
+            continue;
+          }
+          break;
+        }
+        break;
+      }
+    }
+
+    const content = lines.slice(startIdx, endIdx + 1).join('\n');
     const nodeType = kind === 'function' || hasArrow || /function/.test(lines[i]) ? 'function'
                    : kind === 'class' ? 'class'
                    : kind === 'interface' ? 'interface'
@@ -276,7 +304,7 @@ function extractTsJsNodes(source) {
     nodes.push({
       name,
       nodeType,
-      startLine: i + 1,
+      startLine: startIdx + 1,
       endLine: endIdx + 1,
       content,
       isExported: !!exported,
@@ -298,9 +326,42 @@ function extractPythonNodes(source) {
     const m = lines[i].match(decl);
     if (!m) continue;
     const [, indent, asyncKw, kind, name] = m;
-    // Only pick up top-level (no indentation) declarations. Nested
-    // methods are included within the class chunk.
     if (indent.length !== 0) continue;
+
+    // Walk BACKWARD to pull in decorator lines (@decorator, @decorator(args))
+    // that sit immediately above this declaration. Without this, a Flask
+    // route handler's @app.route('/path') is lost from the chunk and a
+    // retrieval for the URL misses the function entirely.
+    //
+    // Paren-depth tracking handles multi-line decorators:
+    //   @pytest.fixture(
+    //       scope="session",
+    //   )
+    //   def db(): ...
+    // The `scope=...` and `)` lines aren't `@`-prefixed but belong to
+    // the decorator. We walk backwards, summing paren balance per line;
+    // when balance reaches 0 at a `@`-line, that's the decorator opener.
+    let startIdx = i;
+    {
+      let b = i - 1;
+      let bal = 0;
+      while (b >= 0) {
+        const trimmed = lines[b].trim();
+        if (trimmed === '') { b--; continue; }
+        for (const ch of lines[b]) {
+          if (ch === ')') bal++;
+          else if (ch === '(') bal--;
+        }
+        if (trimmed.startsWith('@') && bal <= 0) {
+          startIdx = b;
+          bal = 0; // reset so stacked decorators each anchor cleanly
+          b--;
+          continue;
+        }
+        if (bal > 0) { b--; continue; }
+        break;
+      }
+    }
 
     // Walk forward until a non-empty line with indent <= declaration's.
     let endIdx = i;
@@ -315,9 +376,9 @@ function extractPythonNodes(source) {
     nodes.push({
       name,
       nodeType: kind === 'class' ? 'class' : 'function',
-      startLine: i + 1,
+      startLine: startIdx + 1,
       endLine: endIdx + 1,
-      content: lines.slice(i, endIdx + 1).join('\n'),
+      content: lines.slice(startIdx, endIdx + 1).join('\n'),
       isExported: !name.startsWith('_'),
       isAsync: !!asyncKw,
     });
