@@ -35,6 +35,7 @@ const tripleGraph = require('./triple-graph');
 const tripleExtractor = require('./triple-extractor');
 const { diverseTripleBeamSearch, flattenBeamsBFS } = require('./diverse-beam-search');
 const gistMemory = require('./gist-memory');
+const { runWithLock } = require('./agents/mutex');
 
 const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
@@ -160,6 +161,10 @@ function cosine(a, b) {
 async function ingest(userId, collection, docs, opts = {}) {
   if (!Array.isArray(docs) || docs.length === 0) return { chunksAdded: 0, totalChunks: 0 };
 
+  // Chunking and embedding are pure / API-bounded — no shared state, safe
+  // outside the lock. We only hold the lock across the read-modify-write
+  // of `store` itself, where a concurrent ingester could otherwise see
+  // a stale `existing` and clobber each other.
   const allChunks = [];
   for (const d of docs) {
     if (!d || typeof d.text !== 'string') continue;
@@ -172,13 +177,14 @@ async function ingest(userId, collection, docs, opts = {}) {
 
   const vectors = await embed(allChunks.map(c => c.text));
   const key = storeKey(userId, collection);
-  const existing = store.get(key) || [];
 
-  const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
-  const trimmed = evictAndCleanOrphans(userId, collection, merged);
-
-  store.set(key, trimmed);
-  return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
+  return runWithLock(`rag:${key}`, () => {
+    const existing = store.get(key) || [];
+    const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
+    const trimmed = evictAndCleanOrphans(userId, collection, merged);
+    store.set(key, trimmed);
+    return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
+  });
 }
 
 /**
@@ -660,13 +666,14 @@ async function ingestCode(userId, collection, files, opts = {}) {
 
   const vectors = await embed(allChunks.map(c => c.text));
   const key = storeKey(userId, collection);
-  const existing = store.get(key) || [];
 
-  const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
-  const trimmed = evictAndCleanOrphans(userId, collection, merged);
-
-  store.set(key, trimmed);
-  return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
+  return runWithLock(`rag:${key}`, () => {
+    const existing = store.get(key) || [];
+    const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
+    const trimmed = evictAndCleanOrphans(userId, collection, merged);
+    store.set(key, trimmed);
+    return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
+  });
 }
 
 /**

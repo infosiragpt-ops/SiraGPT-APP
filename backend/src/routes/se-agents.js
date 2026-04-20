@@ -29,8 +29,66 @@ const requirementsAgent = require('../services/agents/requirements-agent');
 const logAnalysis = require('../services/agents/log-analysis-agent');
 const maintenanceAgent = require('../services/agents/maintenance-agent');
 const orchestrator = require('../services/agents/se-orchestrator');
+const budget = require('../services/agents/budget');
+const metrics = require('../services/agents/metrics');
+const auditLog = require('../services/agents/audit-log');
+const injectionGuard = require('../services/agents/injection-guard');
 
 const router = express.Router();
+
+/**
+ * Pre-flight: scan + budget gate. Call at the START of each handler.
+ * Returns null when allowed; sends a 429 and returns a truthy value
+ * when the caller should bail out.
+ */
+function preflight(req, res, agentName, scanFieldNames = []) {
+  const scanBag = {};
+  for (const f of scanFieldNames) {
+    if (typeof req.body?.[f] === 'string') scanBag[f] = req.body[f];
+  }
+  const hits = injectionGuard.scanFields(scanBag);
+  for (const h of hits) {
+    const [, rule] = h.split(':');
+    metrics.counter('se_agent_injection_signals_total', { agent: agentName, rule });
+  }
+  req._agentInjectionHits = hits;
+
+  const allowed = budget.checkAllowed(req.user?.id);
+  if (!allowed.allowed) {
+    metrics.counter('se_agent_rate_limited_total', { reason: allowed.reason });
+    auditLog.audit({
+      event: 'agent_denied', userId: req.user?.id || null,
+      agent: agentName, reason: allowed.reason,
+    });
+    res.setHeader('Retry-After', Math.ceil(allowed.retryAfterMs / 1000));
+    res.status(429).json({
+      error: 'rate_limited', reason: allowed.reason,
+      retryAfterMs: allowed.retryAfterMs,
+    });
+    return true; // denied
+  }
+  return false;
+}
+
+/** Post-flight: metrics + audit + budget record. Call once after result is ready. */
+function finalize(req, agentName, result) {
+  if (!result || typeof result !== 'object') return;
+  metrics.recordAgentRun({ agent: agentName, result });
+  if (result.stats?.toolCalls) {
+    metrics.counter('se_agent_tool_calls_total', { agent: agentName }, result.stats.toolCalls);
+  }
+  auditLog.auditAgentRun({
+    userId: req.user?.id || null,
+    agent: agentName,
+    collection: req.body?.collection || null,
+    result,
+    extra: { injection_hits: (req._agentInjectionHits || []).length },
+  });
+  if (result.stats) {
+    const toks = (result.stats.approxPromptTokens || 0) + (result.stats.approxCompletionTokens || 0);
+    if (req.user?.id && toks > 0) budget.record(req.user.id, { tokens: toks });
+  }
+}
 
 function requireOpenAI(res) {
   const client = rag.getOpenAI();
@@ -64,6 +122,7 @@ router.post(
     body('maxIters').optional().isInt({ min: 1, max: 20 }),
   ],
   handleErrors(async (req, res) => {
+    if (preflight(req, res, 'code_review', ['focus'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
     const result = await codeReview.review({
       openai,
@@ -73,6 +132,7 @@ router.post(
       focus: req.body.focus || null,
       maxIters: req.body.maxIters || 12,
     });
+    finalize(req, 'code_review', result);
     res.json({ ok: true, ...result });
   })
 );
@@ -88,6 +148,7 @@ router.post(
     body('maxIters').optional().isInt({ min: 1, max: 20 }),
   ],
   handleErrors(async (req, res) => {
+    if (preflight(req, res, 'test_gen', ['source', 'symbol'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
     const result = await testGen.generate({
       openai,
@@ -98,6 +159,7 @@ router.post(
       language: req.body.language,
       maxIters: req.body.maxIters || 10,
     });
+    finalize(req, 'test_gen', result);
     res.json({ ok: true, ...result });
   })
 );
@@ -113,6 +175,7 @@ router.post(
     body('maxIters').optional().isInt({ min: 1, max: 20 }),
   ],
   handleErrors(async (req, res) => {
+    if (preflight(req, res, 'debug', ['error', 'context'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
     const result = await debugAgent.debug({
       openai,
@@ -123,6 +186,7 @@ router.post(
       suspicion: Array.isArray(req.body.suspicion) ? req.body.suspicion : null,
       maxIters: req.body.maxIters || 12,
     });
+    finalize(req, 'debug', result);
     res.json({ ok: true, ...result });
   })
 );
@@ -139,6 +203,7 @@ router.post(
     body('maxIters').optional().isInt({ min: 1, max: 20 }),
   ],
   handleErrors(async (req, res) => {
+    if (preflight(req, res, 'code_gen', ['spec'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
     const result = await codeGen.generate({
       openai,
@@ -150,6 +215,7 @@ router.post(
       language: req.body.language,
       maxIters: req.body.maxIters || 12,
     });
+    finalize(req, 'code_gen', result);
     res.json({ ok: true, ...result });
   })
 );
@@ -165,6 +231,7 @@ router.post(
     body('maxIters').optional().isInt({ min: 1, max: 20 }),
   ],
   handleErrors(async (req, res) => {
+    if (preflight(req, res, 'requirements', ['request', 'domainContext'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
     const result = await requirementsAgent.requirements({
       openai,
@@ -175,6 +242,7 @@ router.post(
       domainContext: req.body.domainContext,
       maxIters: req.body.maxIters || 10,
     });
+    finalize(req, 'requirements', result);
     res.json({ ok: true, ...result });
   })
 );
@@ -191,6 +259,7 @@ router.post(
     body('maxIters').optional().isInt({ min: 1, max: 25 }),
   ],
   handleErrors(async (req, res) => {
+    if (preflight(req, res, 'maintenance', ['ticket', 'title'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
     const result = await maintenanceAgent.resolve({
       openai,
@@ -202,6 +271,7 @@ router.post(
       initialSuspicion: Array.isArray(req.body.initialSuspicion) ? req.body.initialSuspicion : null,
       maxIters: req.body.maxIters || 14,
     });
+    finalize(req, 'maintenance', result);
     res.json({ ok: true, ...result });
   })
 );
@@ -217,6 +287,7 @@ router.post(
     body('maxIters').optional().isInt({ min: 1, max: 20 }),
   ],
   handleErrors(async (req, res) => {
+    if (preflight(req, res, 'log_analysis', [])) return;
     const openai = requireOpenAI(res); if (!openai) return;
     const result = await logAnalysis.analyse({
       openai,
@@ -227,6 +298,7 @@ router.post(
       correlateWithCode: req.body.correlateWithCode !== false,
       maxIters: req.body.maxIters || 10,
     });
+    finalize(req, 'log_analysis', result);
     res.json({ ok: true, ...result });
   })
 );
@@ -240,6 +312,7 @@ router.post(
     body('maxIters').optional().isInt({ min: 1, max: 20 }),
   ],
   handleErrors(async (req, res) => {
+    if (preflight(req, res, 'static_check', [])) return;
     const openai = requireOpenAI(res); if (!openai) return;
     const result = await staticCheck.check({
       openai,
@@ -248,6 +321,7 @@ router.post(
       files: req.body.files,
       maxIters: req.body.maxIters || 8,
     });
+    finalize(req, 'static_check', result);
     res.json({ ok: true, ...result });
   })
 );
@@ -301,5 +375,185 @@ router.post(
     }
   })
 );
+
+/**
+ * POST /api/se-agents/chat
+ * Single entry point from the chat UI. Takes a user message, routes
+ * the intent, delegates to the right specialist, returns a uniform
+ * { intent, agent, result } envelope the frontend can render.
+ *
+ * When `intent` is 'general', the caller should fall back to their
+ * existing RAG chat — we don't handle general chat here.
+ *
+ * Body: { message, collection?, context? }
+ *   context is an optional bag with per-agent extras: { files, spec,
+ *   ticket, error, suspicion, logs } — we pick the ones relevant to
+ *   the routed intent and pass them through.
+ */
+router.post(
+  '/chat',
+  authenticateToken,
+  [
+    body('message').isString().isLength({ min: 1, max: 8000 }),
+    body('collection').optional().isString().isLength({ max: 64 }),
+    body('context').optional().isObject(),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'chat_dispatcher', ['message'])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+
+    const collection = req.body.collection || 'code';
+    const message = req.body.message;
+    const context = req.body.context || {};
+
+    // Step 1: route intent.
+    const routing = await orchestrator.routeIntent({ openai, message });
+
+    // Step 2: dispatch to specialist based on intent.
+    //   For specialists that need more than message text, pull from
+    //   `context`. Anything missing → fall back to lightweight "general"
+    //   branch which returns the intent + the message itself so the
+    //   caller can hand off to its RAG chat.
+    const userId = req.user.id;
+    const commonArgs = { openai, userId, collection };
+    let agent = null;
+    let result = null;
+
+    switch (routing.intent) {
+      case 'code_review':
+        agent = 'code_review';
+        result = await codeReview.review({
+          ...commonArgs,
+          files: Array.isArray(context.files) ? context.files : null,
+          focus: typeof context.focus === 'string' ? context.focus : message,
+        });
+        break;
+      case 'test_gen':
+        agent = 'test_gen';
+        if (!context.source) {
+          // Can't run without a target; surface the gap to the caller.
+          routing.intent = 'general'; break;
+        }
+        result = await testGen.generate({
+          ...commonArgs,
+          source: context.source, symbol: context.symbol, language: context.language,
+        });
+        break;
+      case 'debug':
+        agent = 'debug';
+        result = await debugAgent.debug({
+          ...commonArgs,
+          error: typeof context.error === 'string' ? context.error : message,
+          context: typeof context.hint === 'string' ? context.hint : null,
+          suspicion: Array.isArray(context.suspicion) ? context.suspicion : null,
+        });
+        break;
+      case 'code_gen':
+        agent = 'code_gen';
+        result = await codeGen.generate({
+          ...commonArgs,
+          spec: typeof context.spec === 'string' ? context.spec : message,
+          strategy: context.strategy || 'single_path',
+          language: context.language,
+        });
+        break;
+      case 'static_check':
+        if (!Array.isArray(context.files) || context.files.length === 0) {
+          routing.intent = 'general'; break;
+        }
+        agent = 'static_check';
+        result = await staticCheck.check({ ...commonArgs, files: context.files });
+        break;
+      case 'requirements':
+        agent = 'requirements';
+        result = await requirementsAgent.requirements({
+          ...commonArgs,
+          request: message,
+          relatedFiles: context.files,
+          domainContext: context.domainContext,
+        });
+        break;
+      case 'log_analysis':
+        agent = 'log_analysis';
+        result = await logAnalysis.analyse({
+          ...commonArgs,
+          logs: typeof context.logs === 'string' ? context.logs : message,
+          topK: context.topK || 8,
+        });
+        break;
+      case 'maintenance':
+        agent = 'maintenance';
+        result = await maintenanceAgent.resolve({
+          ...commonArgs,
+          ticket: typeof context.ticket === 'string' ? context.ticket : message,
+          title: context.title,
+        });
+        break;
+      default:
+        // general — let the caller fall back to their existing RAG chat
+        break;
+    }
+
+    if (result) finalize(req, agent, result);
+
+    res.json({
+      ok: true,
+      intent: routing.intent,
+      confidence: routing.confidence,
+      reason: routing.reason,
+      agent,
+      result,
+      fallback_to_rag_chat: routing.intent === 'general',
+    });
+  })
+);
+
+/**
+ * GET /api/se-agents/metrics
+ * Prometheus-compatible text format. No auth — metrics endpoints are
+ * conventionally unauth'd and protected at the network layer (scrape
+ * target allowlist). If you're exposing this to the internet, wrap it
+ * in auth at the edge.
+ */
+router.get('/metrics', (req, res) => {
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.send(metrics.renderText());
+});
+
+/**
+ * GET /api/se-agents/usage
+ * Returns the caller's current budget usage (hour + day window).
+ * Useful for frontend dashboards and client-side pre-flight checks
+ * so the UI can warn before running an expensive agent.
+ */
+router.get('/usage', authenticateToken, (req, res) => {
+  const u = budget.getUsage(req.user.id);
+  res.json({
+    ok: true,
+    userId: req.user.id,
+    ...u,
+    caps: {
+      daily_tokens: budget.DAILY_TOKENS,
+      hourly_tokens: budget.HOURLY_TOKENS,
+      rpm: budget.RPM,
+    },
+  });
+});
+
+/**
+ * GET /api/se-agents/health
+ * Liveness + readiness. Returns ok if the module imports loaded and
+ * the OpenAI client is configured. Does NOT exercise the API.
+ */
+router.get('/health', (req, res) => {
+  const openaiReady = !!rag.getOpenAI();
+  res.status(openaiReady ? 200 : 503).json({
+    ok: openaiReady,
+    openai: openaiReady,
+    agents: ['code_review', 'test_gen', 'debug', 'code_gen', 'static_check',
+             'requirements', 'log_analysis', 'maintenance'],
+    orchestrator_modes: ['route', 'pipeline', 'collaborate', 'consensus'],
+  });
+});
 
 module.exports = router;

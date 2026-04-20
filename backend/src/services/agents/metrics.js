@@ -1,0 +1,206 @@
+/**
+ * metrics — Prometheus-compatible text-format exporter.
+ *
+ * In-process counters and histograms, zero deps. Scraped by a
+ * Prometheus server pulling /api/se-agents/metrics. Replace with the
+ * official prom-client library if/when ops wants to add prom-specific
+ * features like percentiles — the public API here mirrors it.
+ *
+ * Supported metric types:
+ *   - counter(name, labels)       → increment
+ *   - observe(name, labels, ms)   → histogram sample
+ *   - gauge(name, labels, value)  → set
+ *
+ * Labels become Prometheus labels in the export format. Label values
+ * are escaped per the Prometheus text-exposition spec.
+ */
+
+// name → { type, labels, description, series: Map<label-key, value> }
+// For histograms, series value is { count, sum, buckets: Map<upperBound, count> }
+const registry = new Map();
+
+const DEFAULT_BUCKETS_MS = [50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000];
+
+function registerCounter(name, { help, labels = [] } = {}) {
+  registry.set(name, { type: 'counter', help, labels, series: new Map() });
+}
+
+function registerHistogram(name, { help, labels = [], buckets = DEFAULT_BUCKETS_MS } = {}) {
+  registry.set(name, { type: 'histogram', help, labels, buckets, series: new Map() });
+}
+
+function registerGauge(name, { help, labels = [] } = {}) {
+  registry.set(name, { type: 'gauge', help, labels, series: new Map() });
+}
+
+// Pre-register the metrics we emit from the SE agent framework.
+registerCounter('se_agent_invocations_total', {
+  help: 'Total agent invocations by agent name + termination reason',
+  labels: ['agent', 'terminatedBy'],
+});
+registerCounter('se_agent_errors_total', {
+  help: 'Total agent invocations that ended in an error',
+  labels: ['agent'],
+});
+registerCounter('se_agent_tokens_total', {
+  help: 'Approximate total tokens consumed (prompt + completion)',
+  labels: ['agent'],
+});
+registerCounter('se_agent_tool_calls_total', {
+  help: 'Tool invocations (cache misses)',
+  labels: ['agent', 'tool'],
+});
+registerCounter('se_agent_tool_cache_hits_total', {
+  help: 'Tool invocations served from the per-run cache',
+  labels: ['agent'],
+});
+registerCounter('se_agent_rate_limited_total', {
+  help: '429 responses due to budget or rpm caps',
+  labels: ['reason'],
+});
+registerCounter('se_agent_injection_signals_total', {
+  help: 'Inputs that tripped the injection scanner',
+  labels: ['agent', 'rule'],
+});
+registerHistogram('se_agent_duration_ms', {
+  help: 'Agent run duration in milliseconds',
+  labels: ['agent', 'terminatedBy'],
+});
+registerGauge('se_agent_rag_chunks', {
+  help: 'Chunks currently resident in the in-memory RAG store',
+  labels: ['collection'],
+});
+
+function labelKey(labelNames, labels) {
+  // Canonical label serialisation. Undefined/missing labels become ''.
+  return labelNames.map(n => `${n}=${String(labels?.[n] ?? '').replace(/[\\"\n]/g, '_')}`).join(',');
+}
+
+function counter(name, labels = {}, delta = 1) {
+  const m = registry.get(name);
+  if (!m || m.type !== 'counter') return;
+  const k = labelKey(m.labels, labels);
+  m.series.set(k, (m.series.get(k) || 0) + delta);
+}
+
+function gauge(name, labels = {}, value = 0) {
+  const m = registry.get(name);
+  if (!m || m.type !== 'gauge') return;
+  m.series.set(labelKey(m.labels, labels), value);
+}
+
+function observe(name, labels = {}, value = 0) {
+  const m = registry.get(name);
+  if (!m || m.type !== 'histogram') return;
+  const k = labelKey(m.labels, labels);
+  let rec = m.series.get(k);
+  if (!rec) {
+    rec = {
+      count: 0, sum: 0,
+      buckets: new Map(m.buckets.map(b => [b, 0])),
+    };
+    m.series.set(k, rec);
+  }
+  rec.count++;
+  rec.sum += value;
+  for (const b of m.buckets) {
+    if (value <= b) rec.buckets.set(b, rec.buckets.get(b) + 1);
+  }
+}
+
+// ─── Prometheus text-format rendering ──────────────────────────────────────
+
+function escapeLabelValue(v) {
+  return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+}
+
+function kvToPromLabels(labelNames, key) {
+  if (!key) return '';
+  const parts = key.split(',');
+  const rendered = parts.map((p, i) => {
+    const [_, value] = p.split('=');
+    return `${labelNames[i]}="${escapeLabelValue(value)}"`;
+  });
+  return `{${rendered.join(',')}}`;
+}
+
+function renderCounter(name, m) {
+  const lines = [`# HELP ${name} ${m.help || ''}`, `# TYPE ${name} counter`];
+  for (const [k, v] of m.series) {
+    lines.push(`${name}${kvToPromLabels(m.labels, k)} ${v}`);
+  }
+  return lines.join('\n');
+}
+
+function renderGauge(name, m) {
+  const lines = [`# HELP ${name} ${m.help || ''}`, `# TYPE ${name} gauge`];
+  for (const [k, v] of m.series) {
+    lines.push(`${name}${kvToPromLabels(m.labels, k)} ${v}`);
+  }
+  return lines.join('\n');
+}
+
+function renderHistogram(name, m) {
+  const lines = [`# HELP ${name} ${m.help || ''}`, `# TYPE ${name} histogram`];
+  for (const [k, rec] of m.series) {
+    const labelStr = kvToPromLabels(m.labels, k);
+    // le buckets cumulative
+    let cumCount = 0;
+    for (const b of m.buckets) {
+      cumCount = rec.buckets.get(b);
+      // We store CUMULATIVE in observe() already (walks up bucket ceilings).
+      lines.push(`${name}_bucket${appendLabel(labelStr, `le="${b}"`)} ${cumCount}`);
+    }
+    lines.push(`${name}_bucket${appendLabel(labelStr, 'le="+Inf"')} ${rec.count}`);
+    lines.push(`${name}_sum${labelStr} ${rec.sum}`);
+    lines.push(`${name}_count${labelStr} ${rec.count}`);
+  }
+  return lines.join('\n');
+}
+
+function appendLabel(labelStr, extra) {
+  if (!labelStr) return `{${extra}}`;
+  return labelStr.replace(/\}$/, `,${extra}}`);
+}
+
+/** Render ALL registered metrics in Prometheus text format. */
+function renderText() {
+  const parts = [];
+  for (const [name, m] of registry) {
+    if (m.type === 'counter') parts.push(renderCounter(name, m));
+    else if (m.type === 'gauge') parts.push(renderGauge(name, m));
+    else if (m.type === 'histogram') parts.push(renderHistogram(name, m));
+  }
+  return parts.join('\n\n') + '\n';
+}
+
+function _reset() {
+  for (const m of registry.values()) m.series.clear();
+}
+
+/**
+ * Convenience: record a full agent run. Mirrors audit-log.auditAgentRun
+ * so callers can instrument once and route to both.
+ */
+function recordAgentRun({ agent, result }) {
+  const terminatedBy = result?.terminatedBy || 'unknown';
+  counter('se_agent_invocations_total', { agent, terminatedBy });
+  if (terminatedBy === 'error') counter('se_agent_errors_total', { agent });
+  const tokens = result?.stats
+    ? (result.stats.approxPromptTokens || 0) + (result.stats.approxCompletionTokens || 0)
+    : 0;
+  counter('se_agent_tokens_total', { agent }, tokens);
+  counter('se_agent_tool_cache_hits_total', { agent }, result?.stats?.toolCacheHits || 0);
+  observe('se_agent_duration_ms', { agent, terminatedBy }, result?.stats?.durationMs || 0);
+}
+
+module.exports = {
+  counter,
+  gauge,
+  observe,
+  renderText,
+  recordAgentRun,
+  _reset,
+  // exported for tests
+  registry,
+};
