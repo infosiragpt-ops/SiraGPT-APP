@@ -728,9 +728,49 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     ...commonProps,
                     code: ({ node, inline, className, children, ...props }: any) => {
                         const match = /language-(\w+)/.exec(className || '');
-                        return !inline && match ? (
-                            <pre className="text-sm whitespace-pre-wrap p-4 my-4 bg-gray-900/80 rounded-md font-mono text-white"><code>{String(children)}</code></pre>
-                        ) : (
+                        if (!inline && match) {
+                            const lang = (match[1] || '').toLowerCase();
+                            const codeString = String(children).replace(/\n$/, '');
+                            // Will the block become an artifact once streaming
+                            // finishes? Run the same detector we use post-
+                            // stream so the header + final card stay aligned.
+                            const willBeArtifact = isExecutableArtifact(lang, codeString)
+                                || (lang === 'html' && /<!doctype|<html[\s>]/i.test(codeString.slice(0, 200)))
+                                || (lang === 'mermaid')
+                                || (lang === 'svg');
+                            if (willBeArtifact) {
+                                // Compact streaming card: capped height so a
+                                // long HTML document doesn't take over the
+                                // whole viewport while it's being generated.
+                                // A fade at the bottom hints at the scroll,
+                                // and the "Generando artefacto…" pill sits
+                                // on top-right with a pulsing dot.
+                                return (
+                                    <div className="my-4 overflow-hidden rounded-xl border border-border bg-gray-900/90 shadow-sm">
+                                        <div className="flex items-center justify-between px-4 py-2 border-b border-white/10">
+                                            <span className="text-xs font-sans text-gray-400">{lang}</span>
+                                            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
+                                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                                Generando artefacto…
+                                            </span>
+                                        </div>
+                                        <div className="relative">
+                                            <pre className="text-[13px] whitespace-pre-wrap p-4 font-mono text-gray-100 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
+                                            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-gray-900/95 to-transparent" />
+                                        </div>
+                                    </div>
+                                );
+                            }
+                            // Non-artifact code block during streaming:
+                            // same cap + simple header.
+                            return (
+                                <div className="my-4 overflow-hidden rounded-xl border border-border bg-gray-900/80 shadow-sm">
+                                    <div className="px-4 py-2 border-b border-white/10 text-xs font-sans text-gray-400">{lang}</div>
+                                    <pre className="text-sm whitespace-pre-wrap p-4 font-mono text-white max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
+                                </div>
+                            );
+                        }
+                        return (
                             <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>{children}</code>
                         );
                     },
