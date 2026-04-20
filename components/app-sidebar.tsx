@@ -483,25 +483,6 @@ export function AppSidebar() {
           </Tooltip>
         </TooltipProvider>
 
-        {/* Background streams indicator — shows up when one or more
-            chats are still generating even if the user has navigated
-            away from them. Counter pulses while streaming. */}
-        {bgStreams.activeCount > 0 && (
-          <div className="mt-2 mx-1">
-            <div className={cn(
-              "flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1.5 text-xs text-emerald-700 dark:text-emerald-400",
-              state === "closed" && "justify-center",
-            )}>
-              <span className="relative flex h-2 w-2 shrink-0">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-              </span>
-              <span className={cn("font-medium tabular-nums", state === "closed" && "hidden")}>
-                {bgStreams.activeCount} {bgStreams.activeCount === 1 ? "chat" : "chats"} en progreso
-              </span>
-            </div>
-          </div>
-        )}
       </div>
 
       <SidebarContent
@@ -537,6 +518,10 @@ export function AppSidebar() {
                       // Use optimistic update if available, otherwise use original title
                       const displayTitle = optimisticUpdates[chat.id] || chat.title
                       const isTruncated = displayTitle.length > 25
+                      // Per-chat streaming indicator — drives the small
+                      // blue spinner that sits to the left of the 3-dot
+                      // menu while this chat's stream is still generating.
+                      const isStreaming = bgStreams.get(chat.id)?.status === "streaming"
 
                       return (
                         <SidebarMenuItem key={chat.id}>
@@ -584,7 +569,10 @@ export function AppSidebar() {
                                       <SidebarMenuButton
                                         isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
                                         onClick={() => !isEditing && handleChatClick(chat.id)}
-                                        className="flex-1 justify-start h-auto py-2 pr-8 transition-all"
+                                        className={cn(
+                                          "flex-1 justify-start h-auto py-2 transition-all",
+                                          isStreaming ? "pr-14" : "pr-8",
+                                        )}
                                       >
                                         <div className="flex flex-col items-start min-w-0 flex-1">
                                           <span className={cn("text-sm w-full transition-all", isTruncated ? "truncate" : "")}>
@@ -603,6 +591,16 @@ export function AppSidebar() {
                                     )}
                                   </Tooltip>
                                 </TooltipProvider>
+                                {/* Always-on blue spinner while this chat's
+                                    background stream is still generating. Sits
+                                    to the LEFT of the 3-dot dropdown so the
+                                    user always sees which thread is working. */}
+                                {isStreaming && (
+                                  <Loader2
+                                    aria-label="Chat en progreso"
+                                    className="pointer-events-none absolute right-9 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-blue-500"
+                                  />
+                                )}
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
                                     <Button
