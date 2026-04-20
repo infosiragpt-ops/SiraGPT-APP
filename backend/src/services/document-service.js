@@ -1,14 +1,162 @@
 const fs = require('fs').promises;
 const path = require('path');
 const mime = require('mime-types');
-const { exec } = require('child_process');
-const { Document, Packer, Paragraph, HeadingLevel } = require('docx');
+const { exec, execSync } = require('child_process');
+const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, AlignmentType, BorderStyle, WidthType } = require('docx');
 const puppeteer = require('puppeteer');
 const PizZip = require('pizzip');
 const axios = require('axios');
 
+// Detect pandoc once at module load. If the binary isn't on PATH
+// (common on a fresh macOS without brew), fall back to a pure-JS
+// markdown → docx pipeline so users still get a working file. Log the
+// decision so ops can see why the fallback kicked in.
+let PANDOC_AVAILABLE = false;
+try {
+    execSync('pandoc --version', { stdio: 'ignore' });
+    PANDOC_AVAILABLE = true;
+    console.log('📄 document-service: pandoc detected — using pandoc pipeline');
+} catch {
+    PANDOC_AVAILABLE = false;
+    console.warn('📄 document-service: pandoc NOT found on PATH — using pure-JS docx fallback (install pandoc for richer formatting: brew install pandoc)');
+}
+
+/**
+ * Pure-JS markdown → docx converter. Handles the subset we see in
+ * practice: H1-H3 headings, paragraphs, bullet/numbered lists, bold
+ * and italic inline runs, and simple pipe tables. Not as rich as
+ * pandoc (no footnotes, no LaTeX math, no fancy reference styles) but
+ * produces a valid, readable .docx without requiring any system
+ * binary — so document generation NEVER hard-fails just because
+ * pandoc isn't installed.
+ *
+ * @param {string} filePath — where to write the .docx
+ * @param {string} markdown — the source content
+ */
+async function createDocxPureJS(filePath, markdown) {
+    const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+
+    /** Parse a markdown inline segment into an array of TextRun. */
+    function parseInlines(text) {
+        const runs = [];
+        // Simple tokenizer: **bold**, *italic*, `code`, then plain.
+        const regex = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`)/g;
+        let last = 0;
+        let m;
+        while ((m = regex.exec(text)) !== null) {
+            if (m.index > last) runs.push(new TextRun({ text: text.slice(last, m.index), font: 'Calibri' }));
+            const tok = m[0];
+            if (tok.startsWith('**')) runs.push(new TextRun({ text: tok.slice(2, -2), bold: true, font: 'Calibri' }));
+            else if (tok.startsWith('*')) runs.push(new TextRun({ text: tok.slice(1, -1), italics: true, font: 'Calibri' }));
+            else if (tok.startsWith('`')) runs.push(new TextRun({ text: tok.slice(1, -1), font: 'Consolas' }));
+            last = m.index + tok.length;
+        }
+        if (last < text.length) runs.push(new TextRun({ text: text.slice(last), font: 'Calibri' }));
+        return runs.length > 0 ? runs : [new TextRun({ text: '', font: 'Calibri' })];
+    }
+
+    function mkCell(text) {
+        return new TableCell({
+            children: [new Paragraph({ children: parseInlines(text) })],
+            borders: {
+                top:    { style: BorderStyle.SINGLE, size: 6, color: '999999' },
+                bottom: { style: BorderStyle.SINGLE, size: 6, color: '999999' },
+                left:   { style: BorderStyle.SINGLE, size: 6, color: '999999' },
+                right:  { style: BorderStyle.SINGLE, size: 6, color: '999999' },
+            },
+        });
+    }
+
+    const blocks = [];
+    let i = 0;
+    while (i < lines.length) {
+        const raw = lines[i];
+        const line = raw.trimEnd();
+
+        // Blank line → paragraph spacer (docx handles spacing in styles).
+        if (line.trim() === '') { i++; continue; }
+
+        // Headings
+        let h;
+        if ((h = line.match(/^###\s+(.*)$/))) {
+            blocks.push(new Paragraph({ heading: HeadingLevel.HEADING_3, children: parseInlines(h[1]) }));
+            i++; continue;
+        }
+        if ((h = line.match(/^##\s+(.*)$/))) {
+            blocks.push(new Paragraph({ heading: HeadingLevel.HEADING_2, children: parseInlines(h[1]) }));
+            i++; continue;
+        }
+        if ((h = line.match(/^#\s+(.*)$/))) {
+            blocks.push(new Paragraph({ heading: HeadingLevel.HEADING_1, children: parseInlines(h[1]) }));
+            i++; continue;
+        }
+
+        // Pipe table: gather contiguous | lines.
+        if (/^\s*\|.*\|/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(lines[i + 1])) {
+            const rows = [];
+            while (i < lines.length && /^\s*\|/.test(lines[i])) {
+                // Skip the separator line "| --- | --- |"
+                if (!/^\s*\|?\s*:?-+:?/.test(lines[i])) {
+                    const cells = lines[i].replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+                    rows.push(cells);
+                }
+                i++;
+            }
+            if (rows.length > 0) {
+                const colCount = Math.max(...rows.map(r => r.length));
+                const tableRows = rows.map(r => new TableRow({
+                    children: Array.from({ length: colCount }, (_, c) => mkCell(r[c] || '')),
+                }));
+                blocks.push(new Table({ rows: tableRows, width: { size: 100, type: WidthType.PERCENTAGE } }));
+                blocks.push(new Paragraph({ text: '' })); // spacer after table
+            }
+            continue;
+        }
+
+        // Bullet list
+        let m;
+        if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
+            blocks.push(new Paragraph({ children: parseInlines(m[1]), bullet: { level: 0 } }));
+            i++; continue;
+        }
+
+        // Numbered list
+        if ((m = line.match(/^\s*\d+\.\s+(.*)$/))) {
+            blocks.push(new Paragraph({ children: parseInlines(m[1]), numbering: { reference: 'default-numbering', level: 0 } }));
+            i++; continue;
+        }
+
+        // Default: plain paragraph
+        blocks.push(new Paragraph({ children: parseInlines(line), alignment: AlignmentType.JUSTIFIED }));
+        i++;
+    }
+
+    const doc = new Document({
+        numbering: {
+            config: [{
+                reference: 'default-numbering',
+                levels: [{ level: 0, format: 'decimal', text: '%1.', alignment: AlignmentType.START }],
+            }],
+        },
+        styles: { default: { document: { run: { font: 'Calibri', size: 22 }, paragraph: { spacing: { line: 300, before: 80, after: 80 } } } } },
+        sections: [{ children: blocks }],
+    });
+
+    const buffer = await Packer.toBuffer(doc);
+    await fs.writeFile(filePath, buffer);
+}
+
 
 async function createDocx(filePath, content) {
+    // No pandoc on this host → pure-JS fallback. Always produces a
+    // valid .docx, no system dependency. Quality is close-enough for
+    // typical reports; richer formatting (footnotes, LaTeX) requires
+    // pandoc, which can be added later with `brew install pandoc`.
+    if (!PANDOC_AVAILABLE) {
+        console.log('📄 createDocx: using pure-JS fallback (pandoc unavailable)');
+        return createDocxPureJS(filePath, content);
+    }
+
     // --- Step 1: Extract and save base64 images ---
     const tempDir = path.join(__dirname, '../../uploads/temp');
     await fs.mkdir(tempDir, { recursive: true });
