@@ -119,8 +119,12 @@ const search_code = {
     ensureCollection(ctx);
     if (!args?.query) return { error: 'missing "query"' };
     const k = Math.max(1, Math.min(Number(args.k) || 5, 15));
-    // Retrieve a broad pool first, then apply BM25 for the final ranking.
-    const broad = await rag.retrieve(ctx.userId, ctx.collection, args.query, 30, { useHybrid: true });
+    // Previously we retrieved with `useHybrid: true` — which ALREADY runs
+    // BM25 internally — and then rebuilt a second BM25 index on the result.
+    // Double work. Use cosine-only to get a broad semantic pool, then BM25
+    // once over it for the final keyword-sensitive ranking that matters
+    // for identifiers.
+    const broad = await rag.retrieve(ctx.userId, ctx.collection, args.query, 30);
     const bmIndex = bm25.buildIndex(broad.map(h => ({ text: h.text, hit: h })));
     const ranked = bm25.searchIndex(bmIndex, args.query, { k });
     return {

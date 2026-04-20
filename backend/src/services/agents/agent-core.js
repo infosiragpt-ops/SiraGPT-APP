@@ -41,6 +41,13 @@ const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_TEMPERATURE = 0.1;
 const DEFAULT_MAX_TOKENS = 1400;
 const MAX_OBSERVATION_CHARS = 4000;
+// Trace compaction: steps older than the most recent RECENT_STEPS_FULL
+// keep a summary line instead of the full observation. Without this, a
+// long tool-using loop re-sends every past observation on every turn —
+// at 4KB each × 8 turns that's 32KB of observations added to each prompt,
+// most of which the LLM doesn't need once it moved past them.
+const RECENT_STEPS_FULL = 3;
+const SUMMARY_OBSERVATION_CHARS = 200;
 
 // Retry policy — roughly: 1s, 2s, 4s, with jitter. Caps total wait at ~7s.
 const RETRY_MAX_ATTEMPTS = 3;
@@ -197,17 +204,30 @@ class AgentTrace {
     return withTiming;
   }
   toMessages() {
-    return this.steps.flatMap(s => {
+    // Keep the last RECENT_STEPS_FULL steps at full fidelity; compact the
+    // rest to a short summary so the scratchpad doesn't balloon.
+    const total = this.steps.length;
+    const fullFromIdx = Math.max(0, total - RECENT_STEPS_FULL);
+
+    return this.steps.flatMap((s, idx) => {
       const msgs = [];
+      const keepFull = idx >= fullFromIdx;
+
       if (s.think || s.tool || s.final !== undefined) {
         const payload = s.final !== undefined
           ? { thought: s.think || '', final: s.final }
           : { thought: s.think || '', ...(s.tool ? { tool: s.tool, args: s.args } : {}) };
         msgs.push({ role: 'assistant', content: JSON.stringify(payload) });
       }
+
       if (s.observation !== undefined) {
         const obs = typeof s.observation === 'string' ? s.observation : JSON.stringify(s.observation);
-        msgs.push({ role: 'user', content: `Observation: ${obs.slice(0, MAX_OBSERVATION_CHARS)}` });
+        const limit = keepFull ? MAX_OBSERVATION_CHARS : SUMMARY_OBSERVATION_CHARS;
+        const suffix = (obs.length > limit) ? (keepFull ? '…[truncated]' : '…[older step, summarised]') : '';
+        msgs.push({
+          role: 'user',
+          content: `Observation: ${obs.slice(0, limit)}${suffix}`,
+        });
       }
       return msgs;
     });
@@ -430,4 +450,7 @@ module.exports = {
   DEFAULT_MAX_ITERS,
   DEFAULT_MODEL,
   RETRY_MAX_ATTEMPTS,
+  RECENT_STEPS_FULL,
+  SUMMARY_OBSERVATION_CHARS,
+  MAX_OBSERVATION_CHARS,
 };

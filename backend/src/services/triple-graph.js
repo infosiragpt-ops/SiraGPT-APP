@@ -28,7 +28,12 @@
  * by averaging rather than adding duplicates.
  */
 
-const rag = require('./rag-service');
+// Circular require with rag-service: both files need each other, but
+// Node CJS resolves the later-loaded one to a partial-exports object
+// that doesn't reflect any functions defined after the `require` call.
+// The safe form is `lazyRag()` below, which resolves the reference at
+// CALL time (when both modules have finished loading).
+function lazyRag() { return require('./rag-service'); }
 
 const store = new Map(); // storeKey → { triples: Map<tripleKey, Triple>, byEntity: Map<entity, Set<tripleKey>>, bySource: Map<sourceId, Set<tripleKey>> }
 
@@ -113,12 +118,17 @@ async function addTriples(userId, collection, triples, { embedder } = {}) {
   const ns = getNamespace(userId, collection);
   const fresh = [];
   const freshRefs = [];
+  let newCount = 0;
   for (const raw of triples) {
     if (!raw || !raw.subject || !raw.predicate || !raw.object) continue;
-    const key = tripleKey(raw);
-    const already = ns.triples.has(key);
+    const already = ns.triples.has(tripleKey(raw));
     const ref = indexTripleInNs(ns, raw);
-    if (!already && !ref.embedding) {
+    if (!already) newCount++;
+    // Queue for embedding when the triple has no vector yet — regardless
+    // of whether this is the first insertion or a backfill pass. Previously
+    // we gated on `!already`, which meant an initial embedder-less insert
+    // would permanently lock the triple out of linkTriple/DBS scoring.
+    if (!ref.embedding) {
       fresh.push(tripleToSentence(raw));
       freshRefs.push(ref);
     }
@@ -128,7 +138,7 @@ async function addTriples(userId, collection, triples, { embedder } = {}) {
     try {
       const vectors = embedder
         ? await embedder(fresh)
-        : await rag.embed(fresh);
+        : await lazyRag().embed(fresh);
       for (let i = 0; i < freshRefs.length; i++) {
         freshRefs[i].embedding = vectors[i];
       }
@@ -140,7 +150,7 @@ async function addTriples(userId, collection, triples, { embedder } = {}) {
     }
   }
 
-  return { added: fresh.length, total: ns.triples.size };
+  return { added: newCount, embedded: fresh.length, total: ns.triples.size };
 }
 
 function getTriple(userId, collection, t) {
@@ -209,7 +219,7 @@ async function linkTriple(userId, collection, queryTriple, { embedder, k = 1 } =
   const sentence = tripleToSentence(queryTriple);
   let qVec;
   try {
-    const vectors = embedder ? await embedder([sentence]) : await rag.embed([sentence]);
+    const vectors = embedder ? await embedder([sentence]) : await lazyRag().embed([sentence]);
     qVec = vectors[0];
   } catch (err) {
     console.warn('[triple-graph] linkTriple embedding failed:', err.message);

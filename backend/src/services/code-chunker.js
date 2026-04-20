@@ -29,7 +29,11 @@ const DEFAULTS = {
   lineChunkSize: 60,      // lines per window for fallback chunker
   lineOverlap: 10,        // lines shared between adjacent fallback windows
   includeImports: true,   // prepend the import block to each chunk
-  minLines: 3,            // skip "chunks" smaller than this (tiny helpers)
+  // Default 1 — keep named one-liners (`const f = x => x * 2;`) since the
+  // symbol name itself is a retrieval target. Callers that truly want to
+  // drop tiny helpers can pass a higher minLines. The previous default
+  // of 3 silently dropped every single-line arrow/variable declaration.
+  minLines: 1,
   maxChars: 3000,         // hard cap so a 10k-line class doesn't produce one mega-chunk
 };
 
@@ -167,16 +171,43 @@ function extractTsJsNodes(source) {
     if ((kind === 'const' || kind === 'let' || kind === 'var') && !/=>|function/.test(lines[i])) continue;
     if (kind === 'type' && !lines[i].includes('{')) continue;
 
-    const endIdx = lines[i].includes('{') || lines[i].includes('=>')
-      ? (lines[i].includes('{') ? findBraceEnd(lines, i) : findBraceEnd(lines, i))
-      : i;
+    // Decide how far the chunk extends:
+    //   - Opens a brace on this line (`function f() {`, `class X {`, arrow
+    //     with body `=> {`): walk to the matching close via brace balance.
+    //   - Single-line arrow without braces (`const f = x => x * 2;`): the
+    //     chunk ends on THIS line. Previously we called findBraceEnd anyway,
+    //     which walked forward and swallowed everything up to the next
+    //     unrelated `{...}` block.
+    //   - No brace, no arrow (e.g. a forward declaration): single-line.
+    const hasOpenBrace = lines[i].includes('{');
+    const hasArrow = /=>/.test(lines[i]);
+    let endIdx;
+    if (hasOpenBrace) {
+      endIdx = findBraceEnd(lines, i);
+    } else if (hasArrow) {
+      // Arrow without a body brace — either a one-liner with a semicolon
+      // on this same line, or the body continues as a single expression.
+      // We greedily extend to the first line ending in `;` or `,` or `)`.
+      endIdx = i;
+      if (!/[;,)]\s*$/.test(lines[i])) {
+        for (let j = i + 1; j < lines.length && j < i + 20; j++) {
+          if (/[;,)]\s*$/.test(lines[j])) { endIdx = j; break; }
+          endIdx = j;
+        }
+      }
+    } else {
+      endIdx = i;
+    }
 
     const content = lines.slice(i, endIdx + 1).join('\n');
-    const nodeType = kind === 'function' || /=>|function/.test(lines[i]) ? 'function'
+    const nodeType = kind === 'function' || hasArrow || /function/.test(lines[i]) ? 'function'
                    : kind === 'class' ? 'class'
                    : kind === 'interface' ? 'interface'
                    : kind === 'type' ? 'type'
                    : 'variable';
+    // Detect `const x = async (...) => ...` — the outer regex puts
+    // (async\s+)? BEFORE the declarator so this case is missed.
+    const lineIsAsync = !!asyncKw || /=\s*async\s*[(<]/.test(lines[i]) || /=\s*async\s+function/.test(lines[i]);
     nodes.push({
       name,
       nodeType,
@@ -184,7 +215,7 @@ function extractTsJsNodes(source) {
       endLine: endIdx + 1,
       content,
       isExported: !!exported,
-      isAsync: !!asyncKw,
+      isAsync: lineIsAsync,
     });
 
     // Skip ahead so nested declarations don't also become top-level chunks.

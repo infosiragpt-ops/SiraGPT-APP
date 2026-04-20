@@ -286,7 +286,9 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     //   RRF(d) = Σ_rankers  w / (rrfK + rank_ranker(d))
     // RRF is score-agnostic: it only cares about each ranker's position,
     // so we don't need to normalise BM25 raw scores against cosine.
-    const bmIndex = bm25.buildIndex(entries.map(e => ({ text: e.text, _idx: entries.indexOf(e) })));
+    // Previously: `entries.map(e => ({ text: e.text, _idx: entries.indexOf(e) }))`
+    // which is O(n²) per retrieve. Carry the index positionally instead.
+    const bmIndex = bm25.buildIndex(entries.map((e, idx) => ({ text: e.text, _idx: idx })));
     const bmHits = bm25.searchIndex(bmIndex, query, { k: entries.length });
 
     const fused = new Map(); // _idx → { scored-like, fusedScore }
@@ -446,17 +448,29 @@ async function expandWithGraph({
   });
   if (sourceRank.size === 0) return [];
 
-  // Map sources back to chunk objects. `entries` is the full in-memory
-  // collection — we find each chunk whose `source` matches. This is O(E·S)
-  // but E is already capped at MAX_COLLECTION_CHUNKS; if that ever bites,
-  // cache a `source → entryIdx` map on the store.
+  // Map sources back to chunk objects. Build source → first-index map
+  // once (O(E)) then look up from the rank map (O(S·log S) at worst).
+  // Previously this was `entries.find(...)` + `entries.indexOf(...)` per
+  // source — O(E·S) on every graph-expanded retrieve.
+  const sourceToIdx = new Map();
+  for (let i = 0; i < entries.length; i++) {
+    const src = entries[i].source;
+    if (src && !sourceToIdx.has(src)) sourceToIdx.set(src, i);
+  }
+
   const out = [];
-  const seen = new Set();
   for (const [src, rank] of sourceRank) {
-    const entry = entries.find(e => e.source === src);
-    if (!entry || seen.has(entry)) continue;
-    seen.add(entry);
-    out.push({ _idx: entries.indexOf(entry), text: entry.text, source: entry.source, title: entry.title, score: 1 / rank, graphRank: rank });
+    const idx = sourceToIdx.get(src);
+    if (idx === undefined) continue;
+    const entry = entries[idx];
+    out.push({
+      _idx: idx,
+      text: entry.text,
+      source: entry.source,
+      title: entry.title,
+      score: 1 / rank,
+      graphRank: rank,
+    });
   }
   return out;
 }
@@ -467,8 +481,25 @@ async function expandWithGraph({
  * the paper). Returns a new array sorted by fused score.
  */
 function fuseByRRF(poolA, poolB, { rrfK = 60, k = Infinity } = {}) {
-  const fused = new Map(); // identity (text slice) → accumulator
-  const id = (e) => e._idx != null ? `idx:${e._idx}` : `src:${e.source || ''}|${(e.text || '').slice(0, 40)}`;
+  const fused = new Map(); // identity → accumulator
+  // Identity preference:
+  //   1. _idx — unambiguous when both pools came from the same entries array.
+  //   2. source + full-text hash — collision-free across distinct chunks.
+  //   3. full-text hash — last-resort when neither _idx nor source available.
+  // The previous "first 40 chars" fallback merged distinct chunks whose
+  // first 40 chars happened to match (very common in code).
+  const textHash = (s) => {
+    if (!s) return '0';
+    // Fast non-crypto string hash (djb2 variant). Good enough for identity.
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  };
+  const id = (e) => {
+    if (e._idx != null) return `idx:${e._idx}`;
+    const t = textHash(e.text || '');
+    return e.source ? `src:${e.source}|${t}` : `tx:${t}`;
+  };
 
   const addRankings = (pool) => {
     pool.forEach((e, rank) => {
@@ -517,7 +548,17 @@ async function passageLink(userId, collection, triple, { k = 5 } = {}) {
  */
 function finalFuseGEAR({ perIterPools = [], tripleLinkedPools = [], k = 10, rrfK = 60 }) {
   const fused = new Map();
-  const id = (e) => e._idx != null ? `idx:${e._idx}` : `src:${e.source || ''}|${(e.text || '').slice(0, 40)}`;
+  const textHash = (s) => {
+    if (!s) return '0';
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+  };
+  const id = (e) => {
+    if (e._idx != null) return `idx:${e._idx}`;
+    const t = textHash(e.text || '');
+    return e.source ? `src:${e.source}|${t}` : `tx:${t}`;
+  };
 
   const add = (pool) => {
     if (!Array.isArray(pool)) return;

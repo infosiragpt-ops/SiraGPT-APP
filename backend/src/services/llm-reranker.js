@@ -147,7 +147,12 @@ async function rerank(openai, query, candidates, opts = {}) {
     return [...candidates].sort((a, b) => b.score - a.score).slice(0, k);
   }
 
+  // Only the top-maxChunksPerBatch candidates go to the LLM (token cost
+  // cap). The tail is preserved — we append it behind the reranked head
+  // with unrankedFallbackScore. Previously the tail was silently dropped,
+  // so a caller passing 30 candidates with maxChunksPerBatch=20 lost 10.
   const pool = candidates.slice(0, config.maxChunksPerBatch);
+  const tail = candidates.slice(config.maxChunksPerBatch);
   const ids = pool.map((_, i) => String(i));
   const key = cacheKey(query, ids);
 
@@ -178,7 +183,11 @@ async function rerank(openai, query, candidates, opts = {}) {
     .map((c, i) => ({ ...c, rerankScore: scores.get(i) ?? config.unrankedFallbackScore }))
     .sort((a, b) => b.rerankScore - a.rerankScore);
 
-  return reranked.slice(0, k);
+  // Append the untouched tail (below maxChunksPerBatch) behind the reranked
+  // head, preserving original relative order. Give each a fallback score so
+  // mixed-pool downstream callers see a consistent shape.
+  const tailAnnotated = tail.map(c => ({ ...c, rerankScore: config.unrankedFallbackScore }));
+  return reranked.concat(tailAnnotated).slice(0, k);
 }
 
 function clearCache() {
