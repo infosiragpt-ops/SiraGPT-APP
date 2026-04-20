@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation"
 import { ChatProvider } from "@/lib/chat-context-integrated"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { AppShell } from "@/components/app-shell"
+import { ArtifactPanelProvider } from "@/lib/artifact-panel-context"
 
 interface AppWrapperProps {
   children: React.ReactNode
@@ -36,11 +37,13 @@ export function AppWrapper({ children }: AppWrapperProps) {
   if (needsChatContext) {
     return (
       <ChatProvider>
-        <SidebarProvider>
-          <AppShell>
-            {children}
-          </AppShell>
-        </SidebarProvider>
+        <ArtifactPanelProvider>
+          <SidebarProvider>
+            <AppShell>
+              {children}
+            </AppShell>
+          </SidebarProvider>
+        </ArtifactPanelProvider>
       </ChatProvider>
     )
   }

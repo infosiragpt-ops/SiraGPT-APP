@@ -26,6 +26,7 @@ import {
   RefreshCw, FileCode, Download, ExternalLink, X, Maximize2, Minimize2,
   Check, Clipboard,
 } from "lucide-react"
+import { useArtifactPanel } from "@/lib/artifact-panel-context"
 
 export type ArtifactCardProps = {
   code: string
@@ -70,8 +71,7 @@ function toFullDocument(code: string, language: string): string {
 export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
   const lang = (language || "").toLowerCase()
   const isMermaid = lang === "mermaid"
-  const [showCode, setShowCode] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  const { open: openPanel } = useArtifactPanel()
   // Generation counter — bumping this re-keys the iframe / mermaid
   // div, forcing a re-render/reset without reloading the page.
   const [generation, setGeneration] = useState(0)
@@ -163,12 +163,14 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
             heightClass="h-[400px]"
           />
 
-          {/* Absolute overlay button — "Abrir" to pop the artifact out. */}
+          {/* Absolute overlay button — "Abrir" opens the artifact in the
+              right-side split panel so the user can interact at full width
+              without losing the chat. */}
           <div className="pointer-events-none absolute inset-0 flex items-end justify-end p-3">
             <button
-              onClick={() => setExpanded(true)}
+              onClick={() => openPanel({ code, language: lang, title: artifactTitle, view: "preview" })}
               className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-white/90 backdrop-blur-sm px-4 py-1.5 text-sm font-medium text-foreground shadow-md ring-1 ring-black/10 hover:bg-white transition-colors"
-              title="Abrir el artefacto a pantalla amplia"
+              title="Abrir el artefacto en el panel lateral"
             >
               <Maximize2 className="h-3.5 w-3.5" />
               Abrir
@@ -183,41 +185,13 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
           </div>
           <ActionRail
             onReset={onReset}
-            onToggleCode={() => setShowCode((s) => !s)}
-            showCode={showCode}
+            onToggleCode={() => openPanel({ code, language: lang, title: artifactTitle, view: "code" })}
+            showCode={false}
             onDownload={onDownload}
             onOpenNewTab={onOpenNewTab}
           />
         </div>
-
-        {/* Source code — collapsed by default, slides down on toggle. */}
-        <div
-          className="grid transition-[grid-template-rows] duration-300 ease-out"
-          style={{ gridTemplateRows: showCode ? "1fr" : "0fr" }}
-        >
-          <div className="min-h-0 overflow-hidden">
-            {showCode && (
-              <InlineSource code={code} language={lang === "mermaid" ? "mermaid" : lang === "svg" ? "markup" : "markup"} />
-            )}
-          </div>
-        </div>
       </div>
-
-      {expanded && (
-        <ArtifactModal
-          code={code}
-          srcDoc={sanitizedSrcDoc}
-          language={lang}
-          title={artifactTitle}
-          onClose={() => setExpanded(false)}
-          generation={generation}
-          onReset={onReset}
-          onToggleCode={() => setShowCode((s) => !s)}
-          showCode={showCode}
-          onDownload={onDownload}
-          onOpenNewTab={onOpenNewTab}
-        />
-      )}
     </>
   )
 }
@@ -367,70 +341,6 @@ function InlineSource({ code, language }: { code: string; language: string }) {
       >
         {code}
       </SyntaxHighlighter>
-    </div>
-  )
-}
-
-// ────────────────────────────────────────────────────────────
-// Full-viewport modal with the artifact maximised and the same
-// 4 actions in the header. Closed by X or Esc.
-// ────────────────────────────────────────────────────────────
-function ArtifactModal({
-  code, srcDoc, language, title, onClose, generation, onReset, onToggleCode, showCode, onDownload, onOpenNewTab,
-}: {
-  code: string; srcDoc: string; language: string; title: string; onClose: () => void; generation: number
-  onReset: () => void; onToggleCode: () => void; showCode: boolean
-  onDownload: () => void; onOpenNewTab: () => void
-}) {
-  // Esc closes; reset body scroll on mount+unmount.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose() }
-    window.addEventListener("keydown", onKey)
-    const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = "hidden"
-    return () => {
-      window.removeEventListener("keydown", onKey)
-      document.body.style.overflow = prevOverflow
-    }
-  }, [onClose])
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-stretch justify-center bg-black/60 backdrop-blur-sm p-4 sm:p-8">
-      <div className="relative flex w-full max-w-[1200px] flex-col overflow-hidden rounded-2xl bg-white dark:bg-zinc-900 shadow-2xl ring-1 ring-black/10">
-        <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2.5 bg-white dark:bg-zinc-900">
-          <div className="min-w-0 flex items-center gap-2">
-            <Minimize2 className="h-4 w-4 text-muted-foreground shrink-0" />
-            <h3 className="truncate text-sm font-semibold">{title}</h3>
-          </div>
-          <div className="flex items-center gap-2">
-            <ActionRail
-              onReset={onReset}
-              onToggleCode={onToggleCode}
-              showCode={showCode}
-              onDownload={onDownload}
-              onOpenNewTab={onOpenNewTab}
-            />
-            <button
-              onClick={onClose}
-              title="Cerrar"
-              aria-label="Cerrar"
-              className="grid h-8 w-8 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-
-        <div className="relative flex-1 bg-white">
-          <ArtifactPreview key={`modal-preview-${generation}`} code={code} srcDoc={srcDoc} language={language} fillHeight />
-        </div>
-
-        {showCode && (
-          <div className="max-h-[40vh] overflow-auto">
-            <InlineSource code={code} language={language === "mermaid" ? "mermaid" : "markup"} />
-          </div>
-        )}
-      </div>
     </div>
   )
 }

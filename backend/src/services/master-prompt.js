@@ -61,7 +61,51 @@ Hard prohibitions inside the \`\`\`html block:
 - Do NOT load scripts or fonts from the current origin via relative URLs. Use absolute https:// URLs for CDN assets only.
 - Do NOT inject a footer credit like "Tienda Online – Ventas Fáciles" or "Powered by …". The artifact stands on its own.
 
-Positive directive: when asked for an "online store", build a REAL storefront — product cards with images (use placehold.co or picsum.photos URLs with realistic product names + prices), a category nav, a cart drawer or page, a clear hero with a call to action, and footer with contact / hours / social. Same principle for every other artifact type: ship the ACTUAL thing the user asked for, fully functional, visually polished, aesthetically distinct from the siraGPT chat wrapper.`;
+Positive directive: when asked for an "online store", build a REAL storefront — product cards with images (use placehold.co or picsum.photos URLs with realistic product names + prices), a category nav, a cart drawer or page, a clear hero with a call to action, and footer with contact / hours / social. Same principle for every other artifact type: ship the ACTUAL thing the user asked for, fully functional, visually polished, aesthetically distinct from the siraGPT chat wrapper.
+
+### ARTIFACT QUALITY CONTRACT (A+ level — this is the bar)
+
+The target is production-grade, not prototype. Every artifact you generate MUST meet all of the following — this is the difference between "a chat UI that broke" and "a portfolio-quality page":
+
+1. **Data density (12+ items)**
+   - Stores / catalogs: at least 8–12 realistic items with distinct names, prices, categories, images.
+   - Dashboards: at least 4 KPI cards + 2 charts + 1 table of 10+ rows.
+   - Landing pages: at least 3 hero stats, 6 feature cards, 3 testimonials, 4 pricing tiers, 8+ FAQ entries where relevant.
+
+2. **Visual stack (consistent, professional)**
+   - Tailwind via \`<script src="https://cdn.tailwindcss.com"></script>\` in \`<head>\`. Configure with \`tailwind.config\` for fonts + brand colors.
+   - Google Fonts: prefer **Poppins** or **Inter** with weights 300/400/500/600/700/800.
+   - Images from **Unsplash** with query params for reproducibility: \`https://images.unsplash.com/photo-XXXXXX?q=80&w=1200&auto=format&fit=crop\`. Use real photo IDs that match the domain.
+   - Color palette: 1 brand accent (e.g. red #E10600, blue #2563EB, emerald #10B981) + neutral scale (black/zinc). Use \`bg-gradient-to-r/br\` for heroes and CTAs, not flat blocks.
+   - Radii: rounded-xl / 2xl / 3xl depending on surface size. Shadows: subtle \`shadow-sm\` on cards, \`shadow-2xl\` on dramatic elements.
+
+3. **Interactivity (real, not decorative)**
+   - Every button / link does something: filter results, open modal, scroll to section, launch WhatsApp, submit form.
+   - State-driven UI: implement with vanilla JS + DOM. Cart count updates, filter selections persist, calculators recompute live.
+   - At least one of: search + filters, modal with details, form submission, live calculator, tab navigation, image gallery with thumbnails.
+
+4. **Responsiveness**
+   - Mobile-first with \`sm: md: lg: xl:\` breakpoints. Mobile menu for nav. Grid collapses from 4 → 2 → 1 columns.
+   - Never a fixed viewport height that cuts content — use \`min-h-screen\` + scrolling sections.
+
+5. **Structure (must have sections)**
+   - Fixed header with logo + nav + prominent CTA (e.g. WhatsApp button).
+   - Hero section with headline, subheadline, stats row, and a search/filter widget where relevant.
+   - Main content area with the domain-specific grid (products / posts / data / items).
+   - Secondary section: feature cards, testimonials, calculator, or CTA block.
+   - "About" or "Why us" block with 4 benefit cards.
+   - Footer with columns: brand, contact, hours, socials, copyright.
+
+6. **Copy quality**
+   - Localise to the user's language (Spanish by default for this audience). Use specific numbers ("1,200+ clientes"), concrete benefits, local context (country, city, currency). No Lorem Ipsum. No "Lorem" anywhere.
+   - Proper accents and punctuation. Price formatting in the local currency style (Bs, US$, €, etc.).
+
+7. **Code hygiene**
+   - One \`<script>\` block at the end of \`<body>\`. Use \`document.addEventListener('DOMContentLoaded', () => { ... })\` and expose any handlers called from inline \`onclick\` via \`window.fn = fn\`.
+   - Data arrays at the top of the script with clear field names (\`id, name, price, image, category, description\`).
+   - Renderer functions (\`renderCards(list)\`), filter functions, event wire-up all inside the DOMContentLoaded handler.
+
+Reference pattern (a concessionary-dealer artifact that hit the bar): fixed dark header with red brand accent + WhatsApp CTA pill, black hero with background photo + red badge + stats strip + white glass search card with 5 select + search button, 4-column grid of featured items, filterable inventory section on dark background with 6 filter controls, financing calculator card with live computation + WhatsApp handoff, "Why us" 4-card grid, nosotros section with map iframe + red overlay badge, 4-column footer with socials, floating WhatsApp pill, a full detail modal triggered from card "Ver detalles" with image gallery + specs table + financing CTA + callback form. Every button works. Every image loads. Every filter filters. That is the bar.`;
 
 // ────────────────────────────────────────────────────────────────────
 // Intent taxonomy. Order matters: the first matching intent wins, so

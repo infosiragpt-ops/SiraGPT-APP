@@ -109,6 +109,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useTranslations } from "next-intl"
+import { useArtifactPanel } from "@/lib/artifact-panel-context"
+import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
 import { DocumentPreview } from "./document-preview"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
@@ -1595,6 +1597,7 @@ export default function ChatInterface() {
 
 function ChatInterfaceContent() {
   const tComposer = useTranslations("composer")
+  const { active: activeArtifact } = useArtifactPanel()
   const { user } = useAuth()
 
   const {
@@ -4489,10 +4492,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             share width with it via the resizable divider; otherwise we
             take the full container. min-w-0 so children can shrink. */}
         <div
-          style={(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive)
+          style={(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact)
             ? { width: `${splitRatio}%`, transition: isDraggingSplit ? undefined : 'width 300ms ease' }
             : undefined}
-          className={`relative flex flex-col h-full min-w-0 overflow-hidden ${(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive) ? 'shrink-0' : 'w-full'}`}
+          className={`relative flex flex-col h-full min-w-0 overflow-hidden ${(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact) ? 'shrink-0' : 'w-full'}`}
         >
           {/* Header */}
           <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-4  backdrop-blur-sm ">
@@ -5266,7 +5269,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             Rendered together with the 6px col-resize divider so the
             user can drag the split from 25% to 75% and double-click
             to reset to 50/50. Persisted in localStorage. */}
-        {(isWordConnectorActive || isExcelConnectorActive || documentPreviewUrl) && (
+        {(isWordConnectorActive || isExcelConnectorActive || documentPreviewUrl || activeArtifact) && (
           <>
             <div
               role="separator"
@@ -5317,6 +5320,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onClose={() => setIsExcelConnectorActive(false)}
                   isGeneratingExternal={isGeneratingExcel}
                 />
+              )}
+              {activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && (
+                <ArtifactPanel />
               )}
             </div>
           </>
