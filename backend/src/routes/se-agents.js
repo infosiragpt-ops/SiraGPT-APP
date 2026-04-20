@@ -37,6 +37,8 @@ const alignmentJudge = require('../services/agents/alignment-judge');
 const truthfulness = require('../services/agents/truthfulness');
 const intentClarifier = require('../services/agents/intent-clarifier');
 const feedback = require('../services/agents/feedback-ledger');
+const alignWrapper = require('../services/agents/align-wrapper');
+const safetyFilter = require('../services/agents/safety-filter');
 
 const router = express.Router();
 
@@ -72,6 +74,47 @@ function preflight(req, res, agentName, scanFieldNames = []) {
     return true; // denied
   }
   return false;
+}
+
+/**
+ * Dispatcher for specialist routes that support `align:true`.
+ *
+ * Takes a "plain" async handler that normally produces the specialist
+ * result directly, plus metadata (agentName, userRequest, contextChunks)
+ * used by the alignment pipeline. When req.body.align is true, it
+ * routes through align-wrapper — adding clarifier pre-check, exemplar
+ * injection, judge, truthfulness, safety, and retry on low scores.
+ * When false, runs the plain handler unchanged.
+ *
+ * The plain handler receives `{ augmentedGoal, critique }` so the
+ * aligned path can pass retry feedback:
+ *   - augmentedGoal: the exemplar few-shot block to prepend to goals
+ *   - critique: on retry, a summary of the previous attempt's HHH issues
+ *
+ * Returns the handler's result (aligned or plain).
+ */
+async function maybeAlign(req, res, agentName, userRequestForAlign, contextChunks, plainRun) {
+  if (req.body?.align === true) {
+    const openai = rag.getOpenAI();
+    const aligned = await alignWrapper.runAligned({
+      openai,
+      userId: req.user.id,
+      agentName,
+      userRequest: userRequestForAlign,
+      contextChunks: contextChunks || [],
+      embedder: async (texts) => rag.embed(texts),
+      run: plainRun,
+      opts: {
+        minScore: req.body.alignMinScore,
+        maxRetries: req.body.alignMaxRetries,
+        skipClarifier: req.body.skipClarifier === true,
+      },
+    });
+    return aligned;
+  }
+  // No alignment wrapping — run plain. augmentedGoal = null, critique = null.
+  const result = await plainRun({ augmentedGoal: null, critique: null });
+  return { status: 'ok', result };
 }
 
 /** Post-flight: metrics + audit + budget record. Call once after result is ready. */
@@ -128,16 +171,32 @@ router.post(
   handleErrors(async (req, res) => {
     if (preflight(req, res, 'code_review', ['focus'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
-    const result = await codeReview.review({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'code',
-      files: Array.isArray(req.body.files) ? req.body.files : null,
-      focus: req.body.focus || null,
-      maxIters: req.body.maxIters || 12,
-    });
-    finalize(req, 'code_review', result);
-    res.json({ ok: true, ...result });
+    const files = Array.isArray(req.body.files) ? req.body.files : null;
+    const focus = req.body.focus || null;
+    const userRequest = focus
+      ? `Review code in files: ${(files || []).join(', ')}. Focus: ${focus}`
+      : `Review code in files: ${(files || ['the collection']).join(', ')}.`;
+
+    const outcome = await maybeAlign(req, res, 'code_review', userRequest, [],
+      async ({ augmentedGoal, critique }) => codeReview.review({
+        openai,
+        userId: req.user.id,
+        collection: req.body.collection || 'code',
+        files,
+        // Fold alignment-pipeline instructions into the `focus` field so
+        // the specialist doesn't need a new signature. Few-shot
+        // exemplars go first; retry-critique goes next; user's original
+        // focus text last (so the specialist still sees it).
+        focus: [augmentedGoal, critique, focus].filter(Boolean).join('\n\n'),
+        maxIters: req.body.maxIters || 12,
+      }),
+    );
+
+    if (outcome.status === 'needs_clarification' || outcome.status === 'blocked') {
+      return res.json({ ok: true, ...outcome });
+    }
+    finalize(req, 'code_review', outcome.result);
+    res.json({ ok: true, ...outcome.result, alignment: outcome.alignment, truthfulness: outcome.truthfulness, safety: outcome.safety, retries_used: outcome.retries_used });
   })
 );
 
@@ -154,17 +213,25 @@ router.post(
   handleErrors(async (req, res) => {
     if (preflight(req, res, 'test_gen', ['source', 'symbol'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
-    const result = await testGen.generate({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'code',
-      source: req.body.source,
-      symbol: req.body.symbol,
-      language: req.body.language,
-      maxIters: req.body.maxIters || 10,
-    });
-    finalize(req, 'test_gen', result);
-    res.json({ ok: true, ...result });
+    const userRequest = `Generate unit tests for ${req.body.symbol ? `symbol "${req.body.symbol}" in ` : ''}source "${req.body.source}".`;
+
+    const outcome = await maybeAlign(req, res, 'test_gen', userRequest, [],
+      async (_) => testGen.generate({
+        openai,
+        userId: req.user.id,
+        collection: req.body.collection || 'code',
+        source: req.body.source,
+        symbol: req.body.symbol,
+        language: req.body.language,
+        maxIters: req.body.maxIters || 10,
+      }),
+    );
+
+    if (outcome.status === 'needs_clarification' || outcome.status === 'blocked') {
+      return res.json({ ok: true, ...outcome });
+    }
+    finalize(req, 'test_gen', outcome.result);
+    res.json({ ok: true, ...outcome.result, alignment: outcome.alignment, truthfulness: outcome.truthfulness, safety: outcome.safety, retries_used: outcome.retries_used });
   })
 );
 
@@ -181,17 +248,27 @@ router.post(
   handleErrors(async (req, res) => {
     if (preflight(req, res, 'debug', ['error', 'context'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
-    const result = await debugAgent.debug({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'code',
-      error: req.body.error,
-      context: req.body.context,
-      suspicion: Array.isArray(req.body.suspicion) ? req.body.suspicion : null,
-      maxIters: req.body.maxIters || 12,
-    });
-    finalize(req, 'debug', result);
-    res.json({ ok: true, ...result });
+    const userRequest = `Diagnose and fix: ${String(req.body.error).slice(0, 500)}${req.body.context ? ` (context: ${String(req.body.context).slice(0, 200)})` : ''}`;
+
+    const outcome = await maybeAlign(req, res, 'debug', userRequest, [],
+      async ({ critique }) => debugAgent.debug({
+        openai,
+        userId: req.user.id,
+        collection: req.body.collection || 'code',
+        error: req.body.error,
+        // Append retry critique to context when present so the debug
+        // agent's ReAct loop sees it.
+        context: [req.body.context, critique].filter(Boolean).join('\n\n'),
+        suspicion: Array.isArray(req.body.suspicion) ? req.body.suspicion : null,
+        maxIters: req.body.maxIters || 12,
+      }),
+    );
+
+    if (outcome.status === 'needs_clarification' || outcome.status === 'blocked') {
+      return res.json({ ok: true, ...outcome });
+    }
+    finalize(req, 'debug', outcome.result);
+    res.json({ ok: true, ...outcome.result, alignment: outcome.alignment, truthfulness: outcome.truthfulness, safety: outcome.safety, retries_used: outcome.retries_used });
   })
 );
 
@@ -209,18 +286,26 @@ router.post(
   handleErrors(async (req, res) => {
     if (preflight(req, res, 'code_gen', ['spec'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
-    const result = await codeGen.generate({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'code',
-      spec: req.body.spec,
-      strategy: req.body.strategy || 'single_path',
-      numPaths: req.body.numPaths || 3,
-      language: req.body.language,
-      maxIters: req.body.maxIters || 12,
-    });
-    finalize(req, 'code_gen', result);
-    res.json({ ok: true, ...result });
+
+    const outcome = await maybeAlign(req, res, 'code_gen', req.body.spec, [],
+      async ({ augmentedGoal, critique }) => codeGen.generate({
+        openai,
+        userId: req.user.id,
+        collection: req.body.collection || 'code',
+        // Inject exemplars and retry critique into the spec.
+        spec: [augmentedGoal, critique, req.body.spec].filter(Boolean).join('\n\n'),
+        strategy: req.body.strategy || 'single_path',
+        numPaths: req.body.numPaths || 3,
+        language: req.body.language,
+        maxIters: req.body.maxIters || 12,
+      }),
+    );
+
+    if (outcome.status === 'needs_clarification' || outcome.status === 'blocked') {
+      return res.json({ ok: true, ...outcome });
+    }
+    finalize(req, 'code_gen', outcome.result);
+    res.json({ ok: true, ...outcome.result, alignment: outcome.alignment, truthfulness: outcome.truthfulness, safety: outcome.safety, retries_used: outcome.retries_used });
   })
 );
 
@@ -237,17 +322,24 @@ router.post(
   handleErrors(async (req, res) => {
     if (preflight(req, res, 'requirements', ['request', 'domainContext'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
-    const result = await requirementsAgent.requirements({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'code',
-      request: req.body.request,
-      relatedFiles: Array.isArray(req.body.relatedFiles) ? req.body.relatedFiles : null,
-      domainContext: req.body.domainContext,
-      maxIters: req.body.maxIters || 10,
-    });
-    finalize(req, 'requirements', result);
-    res.json({ ok: true, ...result });
+
+    const outcome = await maybeAlign(req, res, 'requirements', req.body.request, [],
+      async ({ augmentedGoal, critique }) => requirementsAgent.requirements({
+        openai,
+        userId: req.user.id,
+        collection: req.body.collection || 'code',
+        request: [augmentedGoal, critique, req.body.request].filter(Boolean).join('\n\n'),
+        relatedFiles: Array.isArray(req.body.relatedFiles) ? req.body.relatedFiles : null,
+        domainContext: req.body.domainContext,
+        maxIters: req.body.maxIters || 10,
+      }),
+    );
+
+    if (outcome.status === 'needs_clarification' || outcome.status === 'blocked') {
+      return res.json({ ok: true, ...outcome });
+    }
+    finalize(req, 'requirements', outcome.result);
+    res.json({ ok: true, ...outcome.result, alignment: outcome.alignment, truthfulness: outcome.truthfulness, safety: outcome.safety, retries_used: outcome.retries_used });
   })
 );
 
@@ -265,18 +357,26 @@ router.post(
   handleErrors(async (req, res) => {
     if (preflight(req, res, 'maintenance', ['ticket', 'title'])) return;
     const openai = requireOpenAI(res); if (!openai) return;
-    const result = await maintenanceAgent.resolve({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'code',
-      ticket: req.body.ticket,
-      title: req.body.title,
-      reporter: req.body.reporter,
-      initialSuspicion: Array.isArray(req.body.initialSuspicion) ? req.body.initialSuspicion : null,
-      maxIters: req.body.maxIters || 14,
-    });
-    finalize(req, 'maintenance', result);
-    res.json({ ok: true, ...result });
+    const userRequest = `${req.body.title ? req.body.title + ' — ' : ''}${String(req.body.ticket).slice(0, 600)}`;
+
+    const outcome = await maybeAlign(req, res, 'maintenance', userRequest, [],
+      async ({ augmentedGoal, critique }) => maintenanceAgent.resolve({
+        openai,
+        userId: req.user.id,
+        collection: req.body.collection || 'code',
+        ticket: [augmentedGoal, critique, req.body.ticket].filter(Boolean).join('\n\n'),
+        title: req.body.title,
+        reporter: req.body.reporter,
+        initialSuspicion: Array.isArray(req.body.initialSuspicion) ? req.body.initialSuspicion : null,
+        maxIters: req.body.maxIters || 14,
+      }),
+    );
+
+    if (outcome.status === 'needs_clarification' || outcome.status === 'blocked') {
+      return res.json({ ok: true, ...outcome });
+    }
+    finalize(req, 'maintenance', outcome.result);
+    res.json({ ok: true, ...outcome.result, alignment: outcome.alignment, truthfulness: outcome.truthfulness, safety: outcome.safety, retries_used: outcome.retries_used });
   })
 );
 
@@ -293,17 +393,28 @@ router.post(
   handleErrors(async (req, res) => {
     if (preflight(req, res, 'log_analysis', [])) return;
     const openai = requireOpenAI(res); if (!openai) return;
-    const result = await logAnalysis.analyse({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'code',
-      logs: req.body.logs,
-      topK: req.body.topK || 8,
-      correlateWithCode: req.body.correlateWithCode !== false,
-      maxIters: req.body.maxIters || 10,
-    });
-    finalize(req, 'log_analysis', result);
-    res.json({ ok: true, ...result });
+    const previewLogs = Array.isArray(req.body.logs)
+      ? req.body.logs.slice(0, 3).join('\n')
+      : String(req.body.logs || '').slice(0, 400);
+    const userRequest = `Analyse this log burst:\n${previewLogs}`;
+
+    const outcome = await maybeAlign(req, res, 'log_analysis', userRequest, [],
+      async (_) => logAnalysis.analyse({
+        openai,
+        userId: req.user.id,
+        collection: req.body.collection || 'code',
+        logs: req.body.logs,
+        topK: req.body.topK || 8,
+        correlateWithCode: req.body.correlateWithCode !== false,
+        maxIters: req.body.maxIters || 10,
+      }),
+    );
+
+    if (outcome.status === 'needs_clarification' || outcome.status === 'blocked') {
+      return res.json({ ok: true, ...outcome });
+    }
+    finalize(req, 'log_analysis', outcome.result);
+    res.json({ ok: true, ...outcome.result, alignment: outcome.alignment, truthfulness: outcome.truthfulness, safety: outcome.safety, retries_used: outcome.retries_used });
   })
 );
 
@@ -318,15 +429,23 @@ router.post(
   handleErrors(async (req, res) => {
     if (preflight(req, res, 'static_check', [])) return;
     const openai = requireOpenAI(res); if (!openai) return;
-    const result = await staticCheck.check({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'code',
-      files: req.body.files,
-      maxIters: req.body.maxIters || 8,
-    });
-    finalize(req, 'static_check', result);
-    res.json({ ok: true, ...result });
+    const userRequest = `Static analysis on: ${(req.body.files || []).join(', ')}`;
+
+    const outcome = await maybeAlign(req, res, 'static_check', userRequest, [],
+      async (_) => staticCheck.check({
+        openai,
+        userId: req.user.id,
+        collection: req.body.collection || 'code',
+        files: req.body.files,
+        maxIters: req.body.maxIters || 8,
+      }),
+    );
+
+    if (outcome.status === 'needs_clarification' || outcome.status === 'blocked') {
+      return res.json({ ok: true, ...outcome });
+    }
+    finalize(req, 'static_check', outcome.result);
+    res.json({ ok: true, ...outcome.result, alignment: outcome.alignment, truthfulness: outcome.truthfulness, safety: outcome.safety, retries_used: outcome.retries_used });
   })
 );
 
