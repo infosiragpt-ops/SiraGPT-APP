@@ -33,6 +33,10 @@ const budget = require('../services/agents/budget');
 const metrics = require('../services/agents/metrics');
 const auditLog = require('../services/agents/audit-log');
 const injectionGuard = require('../services/agents/injection-guard');
+const alignmentJudge = require('../services/agents/alignment-judge');
+const truthfulness = require('../services/agents/truthfulness');
+const intentClarifier = require('../services/agents/intent-clarifier');
+const feedback = require('../services/agents/feedback-ledger');
 
 const router = express.Router();
 
@@ -375,6 +379,128 @@ router.post(
     }
   })
 );
+
+/**
+ * POST /api/se-agents/clarify
+ * Pre-flight ambiguity check before running an expensive specialist.
+ * Body: { request, agent? } → { status: 'clear'|'ambiguous'|'blocked', ... }
+ *
+ * Recommended client flow: if status === 'ambiguous', show the returned
+ * questions to the user, wait for their reply, then re-submit the
+ * disambiguated request to the specialist endpoint.
+ */
+router.post(
+  '/clarify',
+  authenticateToken,
+  [
+    body('request').isString().isLength({ min: 1, max: 8000 }),
+    body('agent').optional().isString().isLength({ max: 32 }),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'intent_clarifier', ['request'])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await intentClarifier.clarify({
+      openai, request: req.body.request, agent: req.body.agent,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+/**
+ * POST /api/se-agents/align-score
+ * Score a response against the HHH rubric. Body: { request, response,
+ * sourceContext? } → { helpful, honest, harmless, overall, issues[] }.
+ * Exposed so frontends can display the score next to a response.
+ */
+router.post(
+  '/align-score',
+  authenticateToken,
+  [
+    body('request').isString().isLength({ min: 1, max: 8000 }),
+    body('response').custom(v => typeof v === 'string' || (v !== null && typeof v === 'object')),
+    body('sourceContext').optional().isString().isLength({ max: 12000 }),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'alignment_judge', ['request'])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await alignmentJudge.score({
+      openai,
+      userRequest: req.body.request,
+      response: req.body.response,
+      sourceContext: req.body.sourceContext,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+/**
+ * POST /api/se-agents/truthfulness
+ * Body: { response, contextChunks: [{text, source?}], llmFallback? }
+ * Returns per-claim grounding decisions + overall score.
+ */
+router.post(
+  '/truthfulness',
+  authenticateToken,
+  [
+    body('response').custom(v => typeof v === 'string' || (v !== null && typeof v === 'object')),
+    body('contextChunks').optional().isArray(),
+    body('llmFallback').optional().isBoolean(),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'truthfulness', [])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await truthfulness.check({
+      openai,
+      response: req.body.response,
+      contextChunks: Array.isArray(req.body.contextChunks) ? req.body.contextChunks : [],
+      llmFallback: req.body.llmFallback !== false,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+/**
+ * POST /api/se-agents/feedback
+ * Record user feedback on a past run. Body: { runId, agent, request,
+ * response, helpful, notes? } — same shape as the ledger entry.
+ */
+router.post(
+  '/feedback',
+  authenticateToken,
+  [
+    body('runId').isString().isLength({ min: 1, max: 128 }),
+    body('agent').optional().isString().isLength({ max: 32 }),
+    body('request').isString().isLength({ min: 1, max: 8000 }),
+    body('response').custom(v => v !== undefined),
+    body('helpful').isBoolean(),
+    body('notes').optional().isString().isLength({ max: 1000 }),
+  ],
+  handleErrors(async (req, res) => {
+    const r = await feedback.record({
+      userId: req.user.id,
+      runId: req.body.runId,
+      agent: req.body.agent || null,
+      request: req.body.request,
+      response: req.body.response,
+      helpful: req.body.helpful,
+      notes: req.body.notes || null,
+      embedder: async (texts) => rag.embed(texts),
+    });
+    auditLog.audit({
+      event: 'feedback', userId: req.user.id,
+      runId: req.body.runId, agent: req.body.agent, helpful: req.body.helpful,
+    });
+    res.json({ ok: true, ...r });
+  })
+);
+
+/**
+ * GET /api/se-agents/feedback/stats
+ * The caller's thumbs-up/down counts — useful for "X helpful answers so far" UX.
+ */
+router.get('/feedback/stats', authenticateToken, (req, res) => {
+  res.json({ ok: true, ...feedback.stats(req.user.id) });
+});
 
 /**
  * POST /api/se-agents/chat
