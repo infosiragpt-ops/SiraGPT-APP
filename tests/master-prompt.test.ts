@@ -41,6 +41,21 @@ describe("master-prompt · classifyIntent", () => {
   it("falls back to GENERAL_CHAT when nothing matches", () => {
     assert.equal(masterPrompt.classifyIntent("hola qué tal cómo va todo").intent, "GENERAL_CHAT")
   })
+
+  it("does NOT trigger GENERATE_DOCUMENT on a pasted paragraph that just happens to mention 'informe' or 'reporte'", () => {
+    // Regression: a user pastes a paragraph about operational efficiency
+    // and the loose old pattern matched "redacta un informe" somewhere
+    // inside. Model wrapped the whole reply in [CREATE_DOCUMENT] and the
+    // chat message came back blank. Must stay GENERAL_CHAT now.
+    const pasted = "La gestión de inventarios es clave para la eficiencia operativa. Redacta un informe detallado sobre los principales desafíos que enfrentan las empresas en este ámbito y propón soluciones."
+    assert.notEqual(masterPrompt.classifyIntent(pasted).intent, "GENERATE_DOCUMENT")
+  })
+
+  it("still triggers GENERATE_DOCUMENT on an explicit file request", () => {
+    assert.equal(masterPrompt.classifyIntent("crea un documento word sobre la revolución industrial").intent, "GENERATE_DOCUMENT")
+    assert.equal(masterPrompt.classifyIntent("hazme un pdf con las conclusiones").intent, "GENERATE_DOCUMENT")
+    assert.equal(masterPrompt.classifyIntent("exportar como excel").intent, "GENERATE_DOCUMENT")
+  })
 })
 
 describe("master-prompt · buildUserProfileBlock", () => {

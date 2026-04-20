@@ -156,15 +156,25 @@ Reference mental model for an architectural artifact: a top-bar with the project
 const INTENT_RULES = [
   {
     intent: 'GENERATE_DOCUMENT',
+    // Only trigger when the user *explicitly* asks for a downloadable
+    // file. Loose patterns like "redacta un informe" used to match and
+    // make the model wrap its whole reply in [CREATE_DOCUMENT:...],
+    // which then got stripped from the chat → the user saw a blank
+    // bubble. Every regex below now requires either a concrete file
+    // format, a file-export verb, or an existing CREATE_DOCUMENT tag.
     patterns: [
-      /\b(word|docx|pdf|excel|xlsx|powerpoint|pptx|presentaci[oó]n|presentation|planilha|spreadsheet)\b/i,
-      /\b(generate|create|make|build|redacta|escribe|arma|genera|crea|haz|elabora|monta|produce|gerar|criar)\b.{0,40}\b(documento|document|informe|report|contrato|contract|carta|letter|propuesta|proposal|reporte|relatorio)\b/i,
-      /\b(save as|download as|exportar como|guardar como|export as)\b/i,
+      // 1) Verb + explicit file format in close proximity.
+      //    "crea un documento word", "hazme un pdf", "genera un excel".
+      /\b(generate|create|make|build|redacta|escribe|arma|genera|crea|haz(?:me(?:lo)?|nos)?|elabora|monta|produce|gerar|criar|d[eé]scargalo?|d[eé]scargame|download me)\b.{0,40}\b(word|docx|pdf|excel|xlsx|powerpoint|pptx|presentaci[oó]n|presentation|planilha|spreadsheet|archivo)\b/i,
+      // 2) Explicit download / save-as phrasing.
+      /\b(save as|download as|exportar como|guardar como|export as|d[eé]scargalo en|archivo (word|pdf|excel|pptx))\b/i,
+      // 3) The model's own tag echoed back (e.g. regeneration).
       /\[CREATE_DOCUMENT:/i,
     ],
     context: `\n## TASK: DOCUMENT GENERATION
 - The user wants a downloadable document. Detect the format from their phrasing (docx, pdf, xlsx, pptx). If unclear, default to .docx.
 - Wrap the FULL content between [CREATE_DOCUMENT:filename.ext] and [/CREATE_DOCUMENT] — no placeholders, no "add sections here", no apologies for the length.
+- **HARD REQUIREMENT — never leave the chat message empty.** BEFORE the opening [CREATE_DOCUMENT:...] tag, write a short 1–2 sentence human-facing summary of what the document contains (e.g. "Aquí tienes el informe sobre X. Incluye Y secciones y Z tablas."). The chat bubble renders only the text OUTSIDE the tag; if you put everything inside, the user sees a blank reply. This summary is NOT optional.
 - Use proper markdown hierarchy: one H1 title, H2 sections, H3 subsections. Include a cover line (title + author line) at the top and a closing block at the end.
 - For Excel/spreadsheet: produce a markdown table with headers + at least 10 rows of realistic, plausible data that matches the domain.
 - For PowerPoint: structure as H2 per slide, with bullet points under each.

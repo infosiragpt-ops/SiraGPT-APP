@@ -656,6 +656,13 @@ router.post(
       }
 
       const tokens = fullResponseContent.length + prompt.length;
+      // HARD INVARIANT: the user's visible reply is `fullResponseContent`
+      // as it came back from the model. Every code path below may REFINE
+      // finalContent (strip tags, append notes) but must NEVER leave it
+      // empty or shorter than the visible part of fullResponseContent.
+      // A guard right before the DB save enforces this — if something
+      // above violated the invariant, we fall back to fullResponseContent.
+      const MIN_VISIBLE_CHARS = 5;
       let finalContent = fullResponseContent;
       let newFiles = [];
 
@@ -735,8 +742,23 @@ router.post(
             console.error("Error processing images/charts for document:", imageError);
           }
 
-          // Remove any [CREATE_DOCUMENT] tags from the main response to avoid duplication
-          finalContent = fullResponseContent.replace(docRegex, '').trim();
+          // Strip the [CREATE_DOCUMENT] block from the visible chat
+          // message. If the model wrapped EVERYTHING inside the tag —
+          // very common — the stripped string is empty. When that
+          // happens we promote the first ~400 chars of the tag content
+          // to the visible message so the user sees the actual AI
+          // output in the bubble, with the file attachment below as
+          // the downloadable extra. A single-line confirmation on its
+          // own is NOT enough — that's what made the reply feel blank.
+          const stripped = fullResponseContent.replace(docRegex, '').trim();
+          if (stripped.length >= MIN_VISIBLE_CHARS) {
+            finalContent = stripped;
+          } else {
+            const preview = chatContent.slice(0, 400).trim();
+            finalContent = preview.length > 0
+              ? `${preview}${chatContent.length > 400 ? '…' : ''}\n\n📄 **Documento listo:** \`${filename}\``
+              : `📄 **Documento listo:** \`${filename}\``;
+          }
 
           console.log(`📄 Creating document: ${filename} (${chatContent.length} chars)`);
 
@@ -776,15 +798,41 @@ router.post(
 
           } catch (fileError) {
             console.error("Error creating document:", fileError);
-            finalContent = "I tried to create the document, but an error occurred while saving the file.";
+            // NEVER overwrite the user's visible text with a bare
+            // error string — that's what made the response look
+            // "auto-deleted". Preserve whatever finalContent already
+            // held (stripped reply or previewed tag content) and only
+            // APPEND a short failure note. If finalContent somehow got
+            // wiped before we got here, fall back to the raw response.
+            const failureNote = "\n\n⚠️ No pude generar el archivo descargable. El texto anterior sí es la respuesta completa.";
+            const safeBase = (finalContent && finalContent.trim().length >= MIN_VISIBLE_CHARS)
+              ? finalContent
+              : (fullResponseContent || '').trim();
+            finalContent = safeBase + failureNote;
             newFiles = [];
           }
         }
 
 
+        // ─── HARD INVARIANT (final guard) ──────────────────────────
+        // No matter what any document-creation / tag-stripping /
+        // error-handling path above did, the assistant reply persisted
+        // to the DB must contain the real model output. If finalContent
+        // ended up empty or near-empty, restore it from the raw stream
+        // so the user never loses what they just read.
+        if (!finalContent || finalContent.trim().length < MIN_VISIBLE_CHARS) {
+          console.warn(`⚠️ finalContent guard tripped (was ${finalContent?.length || 0} chars) — reverting to raw response`);
+          finalContent = (fullResponseContent && fullResponseContent.trim().length > 0)
+            ? fullResponseContent
+            : finalContent;
+        }
+
         await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles, regenerate);
       } else {
-        // Handle non-authenticated user case if necessary
+        // Same guard for the anonymous branch.
+        if (!finalContent || finalContent.trim().length < MIN_VISIBLE_CHARS) {
+          finalContent = fullResponseContent || finalContent;
+        }
         await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles, [], regenerate);
       }
 

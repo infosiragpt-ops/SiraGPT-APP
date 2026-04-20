@@ -175,6 +175,15 @@ async function createDocx(filePath, content) {
     const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown+pipe_tables+grid_tables -t docx --extract-media="${tempDir}" --mathjax --reference-doc="${referenceDocPath}" -o "${filePath}"`;
     console.log(`Executing Pandoc command: ${pandocCommand}`);
 
+    // Image-handling was commented out above (see Step 2), so there are
+    // no saved image files to unlink here. `imageFiles` stayed as a
+    // reference in this cleanup block and was throwing ReferenceError
+    // inside Pandoc's exec callback — which then bubbled up as a
+    // generic document-creation failure in the route. Keep the array
+    // empty-by-default so the loop is a no-op; if image extraction is
+    // re-enabled, populate it in Step 2.
+    const imageFiles = [];
+
     await new Promise((resolve, reject) => {
         exec(pandocCommand, { maxBuffer: 15 * 1024 * 1024 }, async (error, stdout, stderr) => {
             // Clean up temporary files
