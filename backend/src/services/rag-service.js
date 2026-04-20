@@ -175,15 +175,49 @@ async function ingest(userId, collection, docs, opts = {}) {
   const existing = store.get(key) || [];
 
   const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
-
-  // Oldest-wins eviction keeps memory bounded if someone ingests a
-  // whole book into one collection.
-  const trimmed = merged.length > MAX_COLLECTION_CHUNKS
-    ? merged.slice(merged.length - MAX_COLLECTION_CHUNKS)
-    : merged;
+  const trimmed = evictAndCleanOrphans(userId, collection, merged);
 
   store.set(key, trimmed);
   return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
+}
+
+/**
+ * Oldest-wins eviction with triple-graph cleanup.
+ *
+ * When a collection exceeds MAX_COLLECTION_CHUNKS we drop the oldest
+ * chunks. Those chunks may have contributed source identifiers that
+ * the triple graph indexed; if no surviving chunk carries the same
+ * source, the graph's triples for that source become orphans —
+ * retrieval still returns them, but passageLink then fails to find a
+ * backing chunk. This helper does the eviction AND scrubs the graph
+ * for any source that no longer has a chunk in the collection.
+ *
+ * Returns the trimmed array.
+ */
+function evictAndCleanOrphans(userId, collection, merged) {
+  if (merged.length <= MAX_COLLECTION_CHUNKS) return merged;
+
+  const trimmed = merged.slice(merged.length - MAX_COLLECTION_CHUNKS);
+
+  // Compare source sets; any source present BEFORE but not AFTER gets
+  // its triples cleaned.
+  const stillPresent = new Set();
+  for (const e of trimmed) if (e.source) stillPresent.add(e.source);
+
+  const evictedSources = new Set();
+  for (let i = 0; i < merged.length - trimmed.length; i++) {
+    const src = merged[i].source;
+    if (src && !stillPresent.has(src)) evictedSources.add(src);
+  }
+
+  if (evictedSources.size > 0) {
+    // Lazy-require to avoid the circular dep reversing on us.
+    const tg = require('./triple-graph');
+    for (const src of evictedSources) {
+      tg.clearSource(userId, collection, src);
+    }
+  }
+  return trimmed;
 }
 
 /**
@@ -623,9 +657,7 @@ async function ingestCode(userId, collection, files, opts = {}) {
   const existing = store.get(key) || [];
 
   const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
-  const trimmed = merged.length > MAX_COLLECTION_CHUNKS
-    ? merged.slice(merged.length - MAX_COLLECTION_CHUNKS)
-    : merged;
+  const trimmed = evictAndCleanOrphans(userId, collection, merged);
 
   store.set(key, trimmed);
   return { chunksAdded: allChunks.length, totalChunks: trimmed.length };

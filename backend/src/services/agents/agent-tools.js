@@ -42,6 +42,38 @@ function ensureCollection(ctx) {
 
 // ─── Tools ─────────────────────────────────────────────────────────────────
 
+// Pick the right comment prefix for a given source so the concatenated
+// chunk output is syntactically valid for that language. Previously we
+// always used `//`, which is a syntax error in Python/shell and
+// disruptive in YAML/JSON/HTML.
+function commentPrefixFor(source) {
+  const ext = typeof source === 'string' && source.includes('.')
+    ? source.split('.').pop().toLowerCase()
+    : '';
+  switch (ext) {
+    case 'py': case 'rb': case 'sh': case 'bash': case 'zsh':
+    case 'yaml': case 'yml': case 'toml': case 'conf':
+    case 'r': case 'jl':
+      return '#';
+    case 'html': case 'htm': case 'xml': case 'svg':
+      return '<!--';
+    case 'css': case 'scss': case 'less':
+      return '/*';
+    case 'sql':
+      return '--';
+    case 'lisp': case 'clj': case 'scm':
+      return ';;';
+    default:
+      return '//'; // JS/TS/Go/Rust/Java/C/C++/Swift/Kotlin/etc.
+  }
+}
+
+function formatChunkSeparator(prefix, title) {
+  if (prefix === '<!--') return `<!-- ${title} -->`;
+  if (prefix === '/*')   return `/* ${title} */`;
+  return `${prefix} ${title}`;
+}
+
 const read_file = {
   name: 'read_file',
   description: 'Read the full text of a file from the user\'s knowledge collection, in ingestion order.',
@@ -52,15 +84,12 @@ const read_file = {
     if (!src || typeof src !== 'string') return { error: 'missing "source"' };
     const maxChars = Math.max(200, Math.min(Number(args?.max_chars) || 8000, 40000));
 
-    // Iterate the store — deterministic, no semantic drift.
     const chunks = rag.getBySource(ctx.userId, ctx.collection, src);
     if (chunks.length === 0) return { error: `no chunks with source="${src}"` };
 
-    // Join with a separator that preserves chunk boundaries but doesn't
-    // corrupt line counts the caller might compute downstream. The title
-    // (e.g. "file.ts:10-40") keeps line context intact.
+    const prefix = commentPrefixFor(src);
     const joined = chunks
-      .map(c => c.title ? `// ${c.title}\n${c.text}` : c.text)
+      .map(c => c.title ? `${formatChunkSeparator(prefix, c.title)}\n${c.text}` : c.text)
       .join('\n\n');
 
     return {
@@ -230,14 +259,15 @@ const get_symbol = {
 // trigger the eval_usage check; `"api_key: abcdef"` inside a string
 // literal doesn't trigger hardcoded_secret.
 //
-// The mask is approximate — it correctly handles:
+// The mask correctly handles:
 //   - // line comments (JS/TS/Java/Go/Rust/C/C++)
 //   - # line comments (Python, shell-style)
 //   - /* … */ block comments
 //   - "…" and '…' string literals with \-escape support
-// It does NOT handle template literals (JS `…${…}`) or Python triple-
-// quoted strings; we leave those as-is because checking them correctly
-// needs a real parser and the false-positive rate is low in practice.
+//   - Python triple-quoted strings (""" … """ and ''' … ''') across lines
+// It does NOT fully handle template literals (JS `…${…}` with multi-line
+// content); acceptable because the false-positive rate is low in practice
+// and a full parse would require pulling in a tokeniser.
 
 /**
  * Strip string literals ("..." / '...' / `...`) from a single line,
@@ -274,10 +304,13 @@ function buildCommentCodeMask(text, language) {
   const lines = text.split('\n');
   const codeMask = new Array(lines.length).fill(false);
   const isHashComment = language === 'python' || language === 'ruby' || language === 'shell' || language === 'unknown';
+  const isPython = language === 'python';
 
   let inBlockComment = false;
   let inString = false;
-  let stringChar = null;
+  let stringChar = null;          // for single-char strings: '"', "'", "`"
+  let inTripleString = false;     // for Python """ / '''
+  let tripleChar = null;
   let escaped = false;
 
   for (let li = 0; li < lines.length; li++) {
@@ -286,6 +319,16 @@ function buildCommentCodeMask(text, language) {
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
       const next = line[i + 1];
+      const after = line[i + 2];
+
+      // Python triple-quoted strings take priority over everything —
+      // they can contain `#`, `"`, `'`, braces, and newlines.
+      if (inTripleString) {
+        if (ch === tripleChar && next === tripleChar && after === tripleChar) {
+          inTripleString = false; tripleChar = null; i += 2;
+        }
+        continue;
+      }
       if (inBlockComment) {
         if (ch === '*' && next === '/') { inBlockComment = false; i++; }
         continue;
@@ -296,6 +339,11 @@ function buildCommentCodeMask(text, language) {
         if (ch === stringChar) { inString = false; stringChar = null; }
         continue;
       }
+      // Python triple-quote START?
+      if (isPython && (ch === '"' || ch === "'") && next === ch && after === ch) {
+        inTripleString = true; tripleChar = ch; i += 2;
+        continue;
+      }
       // Line comment?
       if (ch === '/' && next === '/' && language !== 'python' && language !== 'shell') break;
       if (isHashComment && ch === '#') break;
@@ -303,7 +351,7 @@ function buildCommentCodeMask(text, language) {
       if (ch === '/' && next === '*' && language !== 'python' && language !== 'shell') {
         inBlockComment = true; i++; continue;
       }
-      // String start?
+      // Single-quoted string start?
       if (ch === '"' || ch === "'" || (ch === '`' && (language === 'javascript' || language === 'typescript'))) {
         inString = true; stringChar = ch; continue;
       }
@@ -316,11 +364,12 @@ function buildCommentCodeMask(text, language) {
 
 const STATIC_CHECKS = [
   {
-    id: 'long_function',
-    description: 'Function bodies longer than 80 lines are hard to review',
+    // Renamed from 'long_function' — the check is applied to whole files,
+    // not function bodies. The old id is kept as an alias below so existing
+    // callers / tests don't break.
+    id: 'long_source',
+    description: 'Source files longer than 80 lines are hard to review',
     scan: (text, { lines }) => {
-      // Heuristic applies to whole-file chunks; long_function is a soft
-      // signal that the file is hard to take in at a glance.
       if (lines.length > 80) {
         return [{ severity: 'warn', line: 1, message: `source spans ${lines.length} lines — consider splitting` }];
       }
@@ -510,4 +559,6 @@ module.exports = {
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests
+  commentPrefixFor,     // exported for tests
+  formatChunkSeparator, // exported for tests
 };

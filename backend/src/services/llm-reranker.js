@@ -55,12 +55,24 @@ function getCached(key) {
 }
 
 function setCache(key, scores, ttlMs) {
-  // Opportunistic eviction: when we're over the soft cap, sweep expired
-  // entries before inserting. Not LRU — the TTL already bounds lifetime.
-  if (rerankCache.size > CACHE_MAX) {
+  // Two-tier eviction: expired entries first, FIFO oldest second.
+  // Previously we only swept expired entries — if all CACHE_MAX entries
+  // were still within their TTL, the cache grew unbounded. Under a
+  // steady load of distinct queries with a 10-minute TTL you'd see
+  // thousands of entries sitting in memory. Now the cache size is
+  // hard-capped at CACHE_MAX.
+  if (rerankCache.size >= CACHE_MAX) {
     const now = Date.now();
+    // Phase 1: drop expired.
     for (const [k, v] of rerankCache) {
       if (now > v.expiresAt) rerankCache.delete(k);
+    }
+    // Phase 2: if still at cap, evict oldest by insertion order (Map's
+    // iteration order is insertion order in ES2015+).
+    while (rerankCache.size >= CACHE_MAX) {
+      const firstKey = rerankCache.keys().next().value;
+      if (firstKey === undefined) break;
+      rerankCache.delete(firstKey);
     }
   }
   rerankCache.set(key, { scores, expiresAt: Date.now() + ttlMs });
@@ -194,10 +206,14 @@ function clearCache() {
   rerankCache.clear();
 }
 
+function cacheSize() { return rerankCache.size; }
+
 module.exports = {
   rerank,
   clearCache,
+  cacheSize,
   DEFAULT_CONFIG,
+  CACHE_MAX,
   // exported for tests
   buildPrompt,
   parseResponse,

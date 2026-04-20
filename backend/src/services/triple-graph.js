@@ -264,6 +264,44 @@ function clear(userId, collection) {
   store.delete(storeKey(userId, collection));
 }
 
+/**
+ * Drop every triple whose source matches `sourceId`. Keeps the rest of
+ * the graph intact. Used by rag-service when chunk eviction removes a
+ * source entirely — otherwise the graph keeps dangling triples that
+ * retrieval would happily return despite no backing chunk.
+ *
+ * Returns { removed } — the number of triples dropped.
+ */
+function clearSource(userId, collection, sourceId) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns || !sourceId) return { removed: 0 };
+  const keys = ns.bySource.get(sourceId);
+  if (!keys || keys.size === 0) return { removed: 0 };
+
+  let removed = 0;
+  for (const tkey of keys) {
+    const triple = ns.triples.get(tkey);
+    if (!triple) continue;
+    ns.triples.delete(tkey);
+    removed++;
+
+    // Remove the triple from every entity set it participated in. We
+    // can't blindly delete the entity entries because other triples may
+    // still share them.
+    const subjKey = (triple.subject || '').toLowerCase();
+    const objKey = (triple.object || '').toLowerCase();
+    for (const entity of [subjKey, objKey]) {
+      if (!entity) continue;
+      const set = ns.byEntity.get(entity);
+      if (!set) continue;
+      set.delete(tkey);
+      if (set.size === 0) ns.byEntity.delete(entity);
+    }
+  }
+  ns.bySource.delete(sourceId);
+  return { removed };
+}
+
 function stats(userId, collection) {
   const ns = store.get(storeKey(userId, collection));
   if (!ns) return { triples: 0, entities: 0, sources: 0 };
@@ -281,6 +319,7 @@ module.exports = {
   getTriple,
   getTriplesForSource,
   clear,
+  clearSource,
   stats,
   // exported for tests
   tripleKey,

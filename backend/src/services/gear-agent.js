@@ -112,13 +112,36 @@ function parseReasonReply(raw) {
  * so the model's next-question text is everything after that label. If
  * the prompt + response are stitched, we strip the prompt; if not, we
  * take the full response as the next question.
+ *
+ * Rejects obviously bogus rewrites (error messages, refusals, too-short
+ * fragments) so the caller's agent loop doesn't go on to retrieve with
+ * a junk query like "ERROR" or "I cannot help". An empty return triggers
+ * the caller's fallback to the original question, which in turn trips
+ * the loop-termination guard.
  */
+const REWRITE_GARBAGE_PATTERNS = [
+  /^(error|sorry|i (cannot|can't|am unable|don't)|unable to|apologize)/i,
+  /\b(as an ai|language model|i'm sorry)/i,
+];
+const MIN_REWRITE_CHARS = 6;
+
 function parseRewriteReply(raw) {
   if (!raw || typeof raw !== 'string') return '';
+
+  let candidate = '';
   const m = raw.match(/Next Question\s*:\s*([\s\S]+?)(?:\n\s*(?:#|$)|$)/i);
-  if (m) return m[1].trim();
-  // No label — assume the whole reply is the next question, trimmed to one line.
-  return raw.split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
+  if (m) {
+    candidate = m[1].trim();
+  } else {
+    // No label — take the first non-empty line as the candidate.
+    candidate = raw.split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
+  }
+
+  if (candidate.length < MIN_REWRITE_CHARS) return '';
+  for (const pat of REWRITE_GARBAGE_PATTERNS) {
+    if (pat.test(candidate)) return '';
+  }
+  return candidate;
 }
 
 // ─── LLM calls ──────────────────────────────────────────────────────────────

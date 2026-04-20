@@ -56,13 +56,25 @@ function detectLanguage(filename, content) {
   // Heuristic fallback on content — useful when the filename is missing
   // or is something like "stdin" or "paste".
   if (!content) return 'unknown';
+  // Order matters — check TS-specific patterns BEFORE the generic JS
+  // one, but only patterns that a JS file cannot match. A plain
+  // `import X from 'y'` is valid in both, so by itself it shouldn't
+  // force TypeScript classification.
   if (/^\s*(import\s+\w|from\s+\w+\s+import|def\s+\w+\s*\()/m.test(content)) return 'python';
   if (/^\s*package\s+\w+\s*$/m.test(content) && /\bfunc\s+\w+\s*\(/.test(content)) return 'go';
-  if (/^\s*(import\s+.+\s+from\s+|export\s+(default|const|function|class)\s|const\s+\w+\s*:\s*\w+\s*=)/m.test(content)) return 'typescript';
-  if (/^\s*(import\s+.+\s+from\s+|function\s+\w+|const\s+\w+\s*=\s*\()/m.test(content)) return 'javascript';
   if (/^\s*(fn\s+\w+\s*\(|use\s+\w+(::\w+)+;)/m.test(content)) return 'rust';
   if (/^\s*(public\s+class\s+\w+|import\s+java\.)/m.test(content)) return 'java';
   if (/^\s*#include\s*[<"]/m.test(content)) return /\bclass\s+\w+/.test(content) ? 'cpp' : 'c';
+
+  // TypeScript-exclusive signals: type annotations, interfaces, generics.
+  // Match ONLY when we see something JS can't produce.
+  const tsExclusive = /(:\s*(string|number|boolean|any|unknown|void)\b|interface\s+\w+\s*\{|<[A-Z]\w*>|as\s+\w+)/;
+  if (tsExclusive.test(content)) return 'typescript';
+
+  // JavaScript signals: imports, function/class declarations, require().
+  if (/^\s*(import\s+.+\s+from\s+|function\s+\w+|const\s+\w+\s*=|class\s+\w+|require\s*\()/m.test(content)) {
+    return 'javascript';
+  }
   return 'unknown';
 }
 
@@ -135,19 +147,72 @@ function extractImports(lines, language) {
 function findBraceEnd(lines, startIdx) {
   let depth = 0;
   let started = false;
+  // Per-line regex stripping handles `'x'` and `"x"` fine but can't
+  // span line boundaries, so a template literal like
+  //   `line one ${x}
+  //    line two`
+  // used to leak its braces (the `${` and `}`) into the brace counter
+  // and silently cut the chunk short. Track backtick string state
+  // across lines so we stay oblivious to template-literal braces.
+  let inBacktick = false;
+  // Inside a template literal, `${…}` is an interpolation that DOES
+  // contain real code we must count. Track interpolation depth too.
+  let interpDepth = 0;
+
   for (let i = startIdx; i < lines.length; i++) {
     const line = lines[i];
-    // Strip line comments and string literals coarsely to avoid
-    // counting braces inside them. This is intentionally naive.
-    const cleaned = line
-      .replace(/\/\/.*$/g, '')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/"([^"\\]|\\.)*"/g, '""')
-      .replace(/'([^'\\]|\\.)*'/g, "''")
-      .replace(/`([^`\\]|\\.)*`/g, '``');
-    for (const ch of cleaned) {
-      if (ch === '{') { depth++; started = true; }
-      else if (ch === '}') { depth--; if (started && depth === 0) return i; }
+    let j = 0;
+    while (j < line.length) {
+      const ch = line[j];
+      const next = line[j + 1];
+
+      if (inBacktick && interpDepth === 0) {
+        if (ch === '\\') { j += 2; continue; }
+        if (ch === '`') { inBacktick = false; j++; continue; }
+        if (ch === '$' && next === '{') { interpDepth = 1; j += 2; continue; }
+        j++;
+        continue;
+      }
+
+      // Line comment — remainder of line is dead.
+      if (ch === '/' && next === '/') break;
+      // Block comment — fast-forward to */ (may span lines; handled
+      // by the inner line loop since /* and */ rarely cross in our
+      // corpus, but if they do we lose some braces — acceptable).
+      if (ch === '/' && next === '*') {
+        const end = line.indexOf('*/', j + 2);
+        if (end === -1) { j = line.length; break; }
+        j = end + 2;
+        continue;
+      }
+      // Enter a string literal.
+      if (ch === '"' || ch === "'") {
+        const quote = ch;
+        j++;
+        while (j < line.length) {
+          if (line[j] === '\\') { j += 2; continue; }
+          if (line[j] === quote) { j++; break; }
+          j++;
+        }
+        continue;
+      }
+      // Backtick string — may span lines.
+      if (ch === '`') { inBacktick = true; j++; continue; }
+
+      // Normal code — count braces.
+      if (ch === '{') {
+        if (interpDepth > 0) interpDepth++;
+        else { depth++; started = true; }
+      } else if (ch === '}') {
+        if (interpDepth > 0) {
+          interpDepth--;
+          if (interpDepth === 0) { j++; continue; }
+        } else {
+          depth--;
+          if (started && depth === 0) return i;
+        }
+      }
+      j++;
     }
   }
   return lines.length - 1;

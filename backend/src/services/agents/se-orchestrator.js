@@ -180,17 +180,26 @@ async function pipeline({ openai, userId, collection, recipe, input }) {
     const cg = await codeGen.generate({ ...ctx, spec, strategy: input?.strategy || 'single_path', language: input?.language });
     steps.push({ name: 'code_gen', result: cg });
 
-    // We have the generated code but it's NOT in the collection yet.
-    // For review + test-gen we need the code somewhere the tools can
-    // read. We inline-ingest the generated code as a synthetic source
-    // so agents can reach it via read_file/get_symbol.
-    if (cg.code && cg.file_path) {
+    // Previously we skipped review + test-gen entirely when the agent
+    // didn't return a file_path. That was a silent failure — the caller
+    // got a code_gen step and nothing else with no indication why.
+    // Synthesise a reasonable default filename so the downstream steps
+    // always run.
+    if (cg.code) {
+      const extFor = (lang) => lang === 'python' ? 'py'
+                    : lang === 'go' ? 'go'
+                    : lang === 'rust' ? 'rs'
+                    : lang === 'typescript' ? 'ts'
+                    : 'js';
+      const filePath = cg.file_path || `generated.${extFor(cg.language || input?.language)}`;
       const rag = require('../rag-service');
-      await rag.ingestCode(userId, collection, [{ filename: cg.file_path, content: cg.code, language: cg.language }]);
-      const reviewResult = await codeReview.review({ ...ctx, files: [cg.file_path] });
+      await rag.ingestCode(userId, collection, [{ filename: filePath, content: cg.code, language: cg.language }]);
+      const reviewResult = await codeReview.review({ ...ctx, files: [filePath] });
       steps.push({ name: 'code_review', result: reviewResult });
-      const tg = await testGen.generate({ ...ctx, source: cg.file_path, language: cg.language });
+      const tg = await testGen.generate({ ...ctx, source: filePath, language: cg.language });
       steps.push({ name: 'test_gen', result: tg });
+    } else {
+      steps.push({ name: 'code_review', result: { skipped: 'code_gen produced no code' } });
     }
     return { recipe, steps };
   }
@@ -214,16 +223,42 @@ async function collaborate({ openai, userId, collection, spec, maxRounds = 3, la
   let currentCode = null;
   let currentFilePath = null;
 
+  // Cap how many findings we feed into the next-round spec. Without
+  // this, a reviewer that produces 40 findings turns into a 40-line
+  // directive appended to the spec — with earlier rounds' directives
+  // stacked on top, the spec can exceed the context window within 3-4
+  // rounds. We prioritise critical and high, then fill with the rest
+  // up to MAX_FEEDBACK.
+  const MAX_FEEDBACK_PER_ROUND = 8;
+
+  const severityRank = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const selectFeedbackForNextRound = (findings) => {
+    return [...findings]
+      .sort((a, b) => (severityRank[a.severity] ?? 9) - (severityRank[b.severity] ?? 9))
+      .slice(0, MAX_FEEDBACK_PER_ROUND)
+      .map(f => ({
+        file: f.file,
+        severity: f.severity,
+        category: f.category,
+        issue: f.issue,
+        suggestion: f.suggestion,
+      }));
+  };
+
   for (let round = 1; round <= maxRounds; round++) {
+    const lastReview = rounds[rounds.length - 1]?.review;
+    const feedback = lastReview ? selectFeedbackForNextRound(lastReview.findings) : null;
     const cg = await codeGen.generate({
       ...ctx,
       spec: round === 1
         ? spec
-        : `${spec}\n\nRevise the previous draft to address these reviewer findings:\n${JSON.stringify(rounds[rounds.length - 1].review.findings.slice(0, 10))}`,
+        : `${spec}\n\nRevise the previous draft to address these reviewer findings (highest severity first):\n${JSON.stringify(feedback)}`,
       strategy: 'single_path',
       language,
     });
     currentCode = cg.code;
+    // Never let a missing file_path silently drop the ingestion + review
+    // step — synthesise a sensible default so the agent loop keeps flowing.
     currentFilePath = cg.file_path || currentFilePath || `generated-round-${round}.${language === 'python' ? 'py' : 'js'}`;
 
     if (currentCode) {
@@ -232,11 +267,9 @@ async function collaborate({ openai, userId, collection, spec, maxRounds = 3, la
       }]);
     }
 
-    const review = await codeReview.review({ ...ctx, files: currentFilePath ? [currentFilePath] : [] });
+    const review = await codeReview.review({ ...ctx, files: [currentFilePath] });
     rounds.push({ round, generation: cg, review });
 
-    // Stop when nothing critical/high remains. If the reviewer found
-    // only low/info-level nits we ship.
     const blockers = review.findings.filter(f => f.severity === 'critical' || f.severity === 'high');
     if (blockers.length === 0) break;
   }

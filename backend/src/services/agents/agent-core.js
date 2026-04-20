@@ -121,12 +121,20 @@ function isTransientLLMError(err) {
   if (typeof status === 'number' && status >= 500 && status < 600) return true;
 
   const netPattern = /timeout|econnreset|econnrefused|ehostunreach|enetunreach|eai_again/i;
-  const code = err.code || err.error?.code || '';
-  if (typeof code === 'string' && netPattern.test(code)) return true;
 
-  const msg = String(err.message || err);
-  if (netPattern.test(msg)) return true;
-  if (/rate[-\s]?limit|temporarily unavailable|connection reset|overloaded/i.test(msg)) return true;
+  // Node's modern fetch-based errors wrap the real network error in a
+  // top-level `TypeError: fetch failed` whose `.cause` has the code.
+  // Check both the error itself and the cause chain (bounded at depth 3
+  // so a circular cause can't loop us).
+  let cur = err;
+  for (let d = 0; d < 3 && cur; d++) {
+    const code = cur.code || cur.error?.code || '';
+    if (typeof code === 'string' && netPattern.test(code)) return true;
+    const msg = String(cur.message || '');
+    if (netPattern.test(msg)) return true;
+    if (/rate[-\s]?limit|temporarily unavailable|connection reset|overloaded/i.test(msg)) return true;
+    cur = cur.cause;
+  }
   return false;
 }
 

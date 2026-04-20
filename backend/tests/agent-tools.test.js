@@ -87,7 +87,9 @@ test('static_checks: long function warns', async () => {
     { source: 'x.js', content: long },
     { userId: 'u', collection: 'c' },
   );
-  const hits = out.findings.filter(f => f.rule === 'long_function');
+  // Rule renamed to `long_source` (was `long_function`) — the check is
+  // applied to whole files, not function bodies.
+  const hits = out.findings.filter(f => f.rule === 'long_source');
   assert.equal(hits.length, 1);
 });
 
