@@ -4528,8 +4528,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 )}
               </div>
               <div className="flex items-center gap-0.5">
-                {/* Complete Chat Share Button - only show if there's a chat with messages */}
-                {currentChat?.id && currentChat?.messages && currentChat.messages.length > 0 && !showAudioPanel && (
+                {/* Complete Chat Share Button - only show if there's a chat with messages.
+                    Hidden when a right-side panel (preview/artifact/connector) is
+                    active so the header fits the narrower pane. */}
+                {currentChat?.id && currentChat?.messages && currentChat.messages.length > 0 && !showAudioPanel && !(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact) && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -4540,7 +4542,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <Share className="h-5 w-5" />
                   </Button>
                 )}
-                <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
+                {/* WhatsApp CTA — marketing surface; hide it when the pane
+                    is narrow (split active) so the primary controls stay visible. */}
+                {!(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact) && (
+                  <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
+                )}
                 <ThemeToggle />
                 {/* Plan / Upgrade button — unified icon-system:
                     Free plan → text CTA "Subir de plan"
@@ -4554,7 +4560,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       ? currentUserInfo.apiUsage / currentUserInfo.monthlyLimit
                       : 0
                   const isFree = currentPlan === 'FREE'
-                  const showTextCta = isFree || usageRatio >= 0.7
+                  // Collapse the text CTA to icon-only when a right-side
+                  // panel is active — the left pane is ~half width then,
+                  // and the "Subir de plan" pill was wrapping into the
+                  // message area.
+                  const isSplitActive = !!(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact)
+                  const showTextCta = !isSplitActive && (isFree || usageRatio >= 0.7)
                   const warn = !isFree && usageRatio >= 0.9
                   const caution = !isFree && usageRatio >= 0.7 && usageRatio < 0.9
                   return (

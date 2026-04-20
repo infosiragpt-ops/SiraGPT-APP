@@ -104,24 +104,31 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   return (
     <div className="relative flex h-full w-full flex-col bg-background">
       <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="truncate text-sm font-medium" title={filename}>
+          <span className="min-w-0 truncate text-sm font-medium" title={filename}>
             {filename}
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
             onClick={() => window.open(url, "_blank", "noopener")}
-            className="h-8 gap-1.5 text-xs"
+            className="h-8 w-8"
+            title="Descargar"
             aria-label="Descargar"
           >
-            <Download className="h-3.5 w-3.5" />
-            Descargar
+            <Download className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8" aria-label="Cerrar previsualización">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="h-8 w-8"
+            title="Cerrar"
+            aria-label="Cerrar previsualización"
+          >
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -140,9 +147,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         )}
 
         {state.kind === "html" && (
-          <div className="px-6 py-8">
+          <div className="px-4 py-6 md:px-6 md:py-8">
             <article
-              className="docx-preview mx-auto max-w-[780px] text-[15px] leading-relaxed text-foreground [&_h1]:mt-6 [&_h1]:mb-3 [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-lg [&_h3]:font-semibold [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-3 [&_td]:py-1.5 [&_th]:border [&_th]:border-border [&_th]:bg-muted/40 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_strong]:font-semibold [&_em]:italic"
+              style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+              className="docx-preview mx-auto max-w-[780px] text-[15px] leading-relaxed text-foreground [&_h1]:mt-6 [&_h1]:mb-3 [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:mt-5 [&_h2]:mb-2 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-lg [&_h3]:font-semibold [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-6 [&_table]:my-3 [&_table]:block [&_table]:w-full [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-3 [&_td]:py-1.5 [&_th]:border [&_th]:border-border [&_th]:bg-muted/40 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_strong]:font-semibold [&_em]:italic [&_img]:max-w-full [&_img]:h-auto"
               dangerouslySetInnerHTML={{ __html: state.html }}
             />
           </div>

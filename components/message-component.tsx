@@ -2006,6 +2006,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 "bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white",
                                 "border border-transparent shadow-none",
                                 "text-[14.5px] leading-[1.5]",
+                                // Wrap long tokens (pasted URLs, code strings, or
+                                // long sentences in narrow split-view) instead of
+                                // pushing the bubble past the pane edge.
+                                "[overflow-wrap:anywhere] [word-break:break-word]",
                                 // Strip prose margins so the bubble hugs the
                                 // text on every line of content.
                                 "[&_.prose]:!m-0 [&_p]:!my-0 [&_p:first-child]:!mt-0 [&_p:last-child]:!mb-0",
