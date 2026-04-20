@@ -1,6 +1,7 @@
 "use client"
 import * as React from "react"
 import { useTranslations } from "next-intl"
+import { useBackgroundStreams } from "@/lib/background-streams-context"
 import {
   Bot,
   MessageSquare,
@@ -107,6 +108,7 @@ const generationTypes = [
 
 export function AppSidebar() {
   const t = useTranslations("sidebar")
+  const bgStreams = useBackgroundStreams()
   const { user, logout } = useAuth()
   const {
     chats,
@@ -176,11 +178,11 @@ export function AppSidebar() {
       (now.getTime() - date.getTime()) / (1000 * 60)
     )
 
-    if (diffInMinutes < 1) return "Just now"
+    if (diffInMinutes < 1) return t("justNow")
     if (diffInMinutes < 60) return `${diffInMinutes}m ago`
     const diffInHours = Math.floor(diffInMinutes / 60)
     if (diffInHours < 24) return `${diffInHours}h ago`
-    if (diffInHours < 48) return "Yesterday"
+    if (diffInHours < 48) return t("yesterday")
     return `${Math.floor(diffInHours / 24)}d ago`
   }
 
@@ -480,6 +482,26 @@ export function AppSidebar() {
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
+
+        {/* Background streams indicator — shows up when one or more
+            chats are still generating even if the user has navigated
+            away from them. Counter pulses while streaming. */}
+        {bgStreams.activeCount > 0 && (
+          <div className="mt-2 mx-1">
+            <div className={cn(
+              "flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1.5 text-xs text-emerald-700 dark:text-emerald-400",
+              state === "closed" && "justify-center",
+            )}>
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              </span>
+              <span className={cn("font-medium tabular-nums", state === "closed" && "hidden")}>
+                {bgStreams.activeCount} {bgStreams.activeCount === 1 ? "chat" : "chats"} en progreso
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       <SidebarContent
@@ -506,7 +528,7 @@ export function AppSidebar() {
               <SidebarMenu>
                 {chats.length === 0 ? (
                   <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-                    No chats yet. Start a new conversation!
+                    {t("noChats")}
                   </div>
                 ) : (
                   <>
@@ -624,7 +646,7 @@ export function AppSidebar() {
                       <SidebarMenuItem>
                         <div className="flex items-center justify-center py-3">
                           <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                          <span className="text-xs text-muted-foreground">Loading more chats...</span>
+                          <span className="text-xs text-muted-foreground">{t("loadingMoreChats")}</span>
                         </div>
                       </SidebarMenuItem>
                     )}
@@ -638,7 +660,7 @@ export function AppSidebar() {
                           className="w-full justify-center text-xs text-muted-foreground py-2 h-8 hover:bg-accent hover:text-accent-foreground"
                         >
                           <ChevronDown className="h-3 w-3 mr-1" />
-                          Load more chats
+                          {t("loadMoreChats")}
                         </Button>
                       </SidebarMenuItem>
                     )}
@@ -647,7 +669,7 @@ export function AppSidebar() {
                     {!hasMoreChats && !isLoadingMore && chats.length >= 20 && (
                       <SidebarMenuItem>
                         <div className="text-center py-2 text-xs text-muted-foreground opacity-50">
-                          All chats loaded
+                          {t("allChatsLoaded")}
                         </div>
                       </SidebarMenuItem>
                     )}
@@ -690,7 +712,7 @@ export function AppSidebar() {
                         {user?.name || "Admin User"}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {user?.isSuperAdmin ? "Super Administrator" : user?.isAdmin ? "Administrator" : user?.plan || "Free Plan"}
+                        {user?.isSuperAdmin ? t("superAdministrator") : user?.isAdmin ? t("administrator") : user?.plan || t("freePlan")}
                       </span>
                     </div>
                   </SidebarMenuButton>
@@ -698,27 +720,27 @@ export function AppSidebar() {
                 <DropdownMenuContent side="top" className="w-56">
                   <DropdownMenuItem onClick={() => router.push("/profile")}>
                     <User className="mr-2 h-4 w-4" />
-                    Profile
+                    {t("profile")}
                   </DropdownMenuItem>
 
                   <DropdownMenuItem onClick={() => router.push("/billing")}>
                     <CreditCard className="mr-2 h-4 w-4" />
-                    Billing
+                    {t("billing")}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => router.push("/settings")}>
                     <Settings className="mr-2 h-4 w-4" />
-                    Settings
+                    {t("settings")}
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => router.push("/privacy-policy")}>
                     <Shield className="mr-2 h-4 w-4" />
-                    Privacy Policy
+                    {t("privacyPolicy")}
                   </DropdownMenuItem>
                   {user?.isAdmin && (
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={() => router.push("/admin")}>
                         <Settings className="mr-2 h-4 w-4" />
-                        Admin Panel
+                        {t("adminPanel")}
                       </DropdownMenuItem>
                     </>
                   )}
@@ -727,7 +749,7 @@ export function AppSidebar() {
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onClick={() => router.push("/super-admin")}>
                         <Shield className="mr-2 h-4 w-4 text-red-600" />
-                        <span className="text-red-600">Super Admin Panel</span>
+                        <span className="text-red-600">{t("superAdminPanel")}</span>
                       </DropdownMenuItem>
                     </>
                   )}
@@ -750,7 +772,7 @@ export function AppSidebar() {
                         className="text-orange-600"
                       >
                         <Shield className="mr-2 h-4 w-4" />
-                        Return to Super Admin
+                        {t("returnToSuperAdmin")}
                       </DropdownMenuItem>
                     </>
                   )}
@@ -760,7 +782,7 @@ export function AppSidebar() {
                     onClick={handleLogout}
                   >
                     <LogOut className="mr-2 h-4 w-4" />
-                    Logout
+                    {t("logout")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -777,7 +799,7 @@ export function AppSidebar() {
                     }`}
                 >
                   <Crown className="h-3 w-3 mr-1" />
-                  {usagePercentage >= 90 ? 'Upgrade Now' : 'Upgrade'}
+                  {usagePercentage >= 90 ? t("upgradeNow") : t("upgrade")}
                 </Button>
               )}
             </div>

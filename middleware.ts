@@ -8,6 +8,7 @@ import {
   isSupportedLocale,
   localeForCountry,
 } from './lib/i18n/locales'
+import { countryCodeFromHeaders } from './lib/i18n/locale-resolution'
 
 const LOCALE_COOKIE = 'NEXT_LOCALE'
 const ONE_YEAR = 60 * 60 * 24 * 365
@@ -47,6 +48,13 @@ export async function middleware(request: NextRequest) {
   // 3) IP geolocation if Accept-Language was useless (curl, RSS readers,
   //    headless bots). Only fires once — the resolved locale is cached
   //    in the NEXT_LOCALE cookie for a year.
+  if (!isSupportedLocale(resolved)) {
+    const headerCountry = countryCodeFromHeaders(request.headers)
+    if (headerCountry) {
+      resolved = localeForCountry(headerCountry)
+    }
+  }
+
   if (!isSupportedLocale(resolved)) {
     const ip = (request.headers.get('x-forwarded-for') || '').split(',')[0].trim()
       || request.headers.get('x-real-ip')

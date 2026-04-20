@@ -23,7 +23,17 @@ const HEARTBEAT_INTERVAL_MS = 15000;
  */
 function getFallbackChain() {
     const raw = (process.env.FALLBACK_MODELS || '').trim();
-    if (!raw) return ['gpt-4o-mini', 'gpt-3.5-turbo'];
+    if (!raw) {
+        const defaults = ['gpt-4o-mini'];
+        if (process.env.OPENROUTER_API_KEY) {
+            defaults.push('anthropic/claude-3-haiku', 'deepseek/deepseek-chat-v3-0324');
+        }
+        if (process.env.GEMINI_API_KEY) {
+            defaults.push('gemini-2.5-flash');
+        }
+        defaults.push('gpt-3.5-turbo');
+        return [...new Set(defaults)];
+    }
     return raw.split(',').map(s => s.trim()).filter(Boolean);
 }
 

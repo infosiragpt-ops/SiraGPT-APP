@@ -6,6 +6,7 @@ import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { aiService } from "./ai-service"
 import { toast } from "sonner"
+import { useBackgroundStreams } from "./background-streams-context"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -148,6 +149,11 @@ const ChatContext = createContext<ChatContextType | undefined>(undefined)
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
   const { user, token } = useAuth()
+  // Mirror streaming state into the BackgroundStreams context so
+  // the sidebar can show an "N chats in progress" pill and streams
+  // keep advertising progress even when the user navigates to a
+  // different chat. The actual network call still lives here.
+  const bg = useBackgroundStreams()
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
   const [selectedModel, setSelectedModel] = useState("")
@@ -475,6 +481,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           const controller = new AbortController();
           abortControllerRef.current = controller;
 
+          // Register this chat's stream in the BackgroundStreams
+          // context so it keeps accruing tokens even if the user
+          // switches to a different chat. The sidebar pill reads
+          // from there to show "N chats en progreso".
+          bg.register(activeChat.id, activeChat.title || 'Nuevo chat', controller);
+
           // STEP 3: Nayi streaming API call karein
           await apiClient.generateAIStream(
             {
@@ -486,7 +498,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               streamId: streamId,
             },
             (chunk) => {
-              // Check if we should stop processing chunks
+              // Always accumulate in the background-streams store so
+              // the user sees progress even if they navigated away.
+              bg.appendChunk(activeChat.id, chunk);
+
+              // Check if we should stop processing chunks for the
+              // foreground chat view.
               if (controller.signal.aborted || pendingStop) {
                 return;
               }
@@ -507,6 +524,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             async () => {
               // onClose: Jab stream khatam ho jaye
+              bg.complete(activeChat.id);
               if (!controller.signal.aborted && !pendingStop) {
                 setIsLoading(false);
                 setIsStreaming(false);
@@ -517,6 +535,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             (error) => {
               console.error("Streaming failed:", error);
+              // Mirror the failure into BackgroundStreams so the
+              // sidebar pill shows the error state for this chat.
+              bg.fail(activeChat.id, error?.message || 'stream failed');
 
               // Check for monthly API limit errors
               const errorMessage = error?.message || '';

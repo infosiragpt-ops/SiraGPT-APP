@@ -7,7 +7,6 @@ import { AuthProvider } from "@/lib/auth-context-integrated"
 import { Toaster } from "@/components/ui/sonner"
 import { AppWrapper } from "@/components/app-wrapper"
 import 'katex/dist/katex.min.css';
-import { ChatProvider } from "@/lib/chat-context-integrated"
 import { SettingsProvider } from "@/lib/settings-context"
 import { SyncfusionBannerRemover } from "@/components/SyncfusionBannerRemover"
 import { NextIntlClientProvider } from "next-intl"
@@ -52,11 +51,9 @@ export default async function RootLayout({
           <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
             <AuthProvider>
               <SettingsProvider>
-                <ChatProvider>
-                  <AppWrapper>
-                    {children}
-                  </AppWrapper>
-                </ChatProvider>
+                <AppWrapper>
+                  {children}
+                </AppWrapper>
                 <Toaster />
               </SettingsProvider>
             </AuthProvider>

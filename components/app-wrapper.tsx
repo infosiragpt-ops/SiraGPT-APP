@@ -5,46 +5,37 @@ import { ChatProvider } from "@/lib/chat-context-integrated"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { AppShell } from "@/components/app-shell"
 import { ArtifactPanelProvider } from "@/lib/artifact-panel-context"
+import { BackgroundStreamsProvider } from "@/lib/background-streams-context"
+import { needsChatContext, needsSidebar } from "@/lib/app-wrapper-routes"
 
 interface AppWrapperProps {
   children: React.ReactNode
 }
 
-// Pages that need chat context and sidebar
-const chatPages = ['/chat', '/gpts', '/profile', '/library','/billing','/settings', '/thesis']
-// Pages that only need sidebar (no chat context)
-const sidebarOnlyPages = ['/profile', '/admin']
-
 export function AppWrapper({ children }: AppWrapperProps) {
   const pathname = usePathname()
-  
-  // Check if current page needs chat context
-  const needsChatContext = chatPages.some(page => 
-    pathname === page || pathname.startsWith(`${page}/`)
-  )
-  
-  // Check if current page needs sidebar
-  const needsSidebar = chatPages.some(page => 
-    pathname === page || pathname.startsWith(`${page}/`)
-  )
+  const pageNeedsChatContext = needsChatContext(pathname)
+  const pageNeedsSidebar = needsSidebar(pathname)
 
   // For pages that don't need any special layout (home, login, register, etc.)
-  if (!needsChatContext && !needsSidebar) {
+  if (!pageNeedsChatContext && !pageNeedsSidebar) {
     return <>{children}</>
   }
 
   // For pages that need chat context and sidebar
-  if (needsChatContext) {
+  if (pageNeedsChatContext) {
     return (
-      <ChatProvider>
-        <ArtifactPanelProvider>
-          <SidebarProvider>
-            <AppShell>
-              {children}
-            </AppShell>
-          </SidebarProvider>
-        </ArtifactPanelProvider>
-      </ChatProvider>
+      <BackgroundStreamsProvider>
+        <ChatProvider>
+          <ArtifactPanelProvider>
+            <SidebarProvider>
+              <AppShell>
+                {children}
+              </AppShell>
+            </SidebarProvider>
+          </ArtifactPanelProvider>
+        </ChatProvider>
+      </BackgroundStreamsProvider>
     )
   }
 

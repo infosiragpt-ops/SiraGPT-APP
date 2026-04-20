@@ -1,5 +1,6 @@
 "use client"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { getAuthRedirect } from "@/lib/auth/auth-guard-rules"
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 import { Loader2 } from "lucide-react"
@@ -16,21 +17,12 @@ export function AuthGuard({ children, requireAdmin = false, requireSuperAdmin = 
 
   useEffect(() => {
     if (isLoading) return
-     if (!user) {
-        router.push("/auth/login")
-        return
-      }
-      
-    if (requireSuperAdmin && !user.isSuperAdmin) {
-        router.push("/chat")
-        return
-      }
-      
-    if (requireAdmin && !user.isAdmin && !user.isSuperAdmin) {
-        router.push("/chat")
-        return
-      }
+
+    const redirect = getAuthRedirect(user, { requireAdmin, requireSuperAdmin })
+    if (redirect) router.push(redirect)
   }, [user, isLoading, requireAdmin, requireSuperAdmin, router])
+
+  const redirect = getAuthRedirect(user, { requireAdmin, requireSuperAdmin })
 
   if (isLoading) {
     return (
@@ -40,7 +32,7 @@ export function AuthGuard({ children, requireAdmin = false, requireSuperAdmin = 
     )
   }
 
-  if (!user || (requireSuperAdmin && !user.isSuperAdmin) || (requireAdmin && !user.isAdmin && !user.isSuperAdmin)) {
+  if (redirect) {
     return null
   }
 

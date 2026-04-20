@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useEffect, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useState } from "react"
 import { apiClient } from "./api"
 
 interface User {
@@ -42,20 +42,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const checkAuth = async () => {
-      try {
-        const savedToken = localStorage.getItem('auth-token')
-        if (savedToken) {
-          setToken(savedToken)
-          apiClient.setToken(savedToken)
+      const savedToken = localStorage.getItem('auth-token')
+      if (!savedToken) {
+        setIsLoading(false)
+        return
+      }
 
-          const response = await apiClient.getCurrentUser()
-          setUser(response.user)
-        }
+      try {
+        setToken(savedToken)
+        apiClient.setToken(savedToken)
+
+        const response = await apiClient.getCurrentUser()
+        setUser(response.user)
       } catch (error) {
         console.error('Auth check failed:', error)
         localStorage.removeItem('auth-token')
         apiClient.setToken(null)
         setToken(null)
+        setUser(null)
       } finally {
         setIsLoading(false)
       }
@@ -137,19 +141,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-const refreshUser = async () => {
-    try {
-      const latestUser = await apiClient.getCurrentUser(); // /auth/me
-      console.log("Refreshing user in AuthContext:", latestUser);
-      setUser(latestUser.user);
-    } catch (error) {
-      console.error("Failed to refresh user:", error);
-    }
-  };
-  useEffect(() => {
-      refreshUser();
+  const refreshUser = useCallback(async () => {
+    if (!token) return
 
-  }, [setUser]);
+    try {
+      const latestUser = await apiClient.getCurrentUser()
+      console.log("Refreshing user in AuthContext:", latestUser)
+      setUser(latestUser.user)
+    } catch (error) {
+      console.error("Failed to refresh user:", error)
+      if ((error as any)?.status === 401 || (error as any)?.statusCode === 401) {
+        localStorage.removeItem('auth-token')
+        apiClient.setToken(null)
+        setToken(null)
+        setUser(null)
+      }
+    }
+  }, [token])
 
   return (
     <AuthContext.Provider value={{ user, login, register, logout, isLoading, token, loginWithToken, refreshUser }}>

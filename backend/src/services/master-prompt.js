@@ -105,7 +105,46 @@ The target is production-grade, not prototype. Every artifact you generate MUST 
    - Data arrays at the top of the script with clear field names (\`id, name, price, image, category, description\`).
    - Renderer functions (\`renderCards(list)\`), filter functions, event wire-up all inside the DOMContentLoaded handler.
 
-Reference pattern (a concessionary-dealer artifact that hit the bar): fixed dark header with red brand accent + WhatsApp CTA pill, black hero with background photo + red badge + stats strip + white glass search card with 5 select + search button, 4-column grid of featured items, filterable inventory section on dark background with 6 filter controls, financing calculator card with live computation + WhatsApp handoff, "Why us" 4-card grid, nosotros section with map iframe + red overlay badge, 4-column footer with socials, floating WhatsApp pill, a full detail modal triggered from card "Ver detalles" with image gallery + specs table + financing CTA + callback form. Every button works. Every image loads. Every filter filters. That is the bar.`;
+Reference pattern (a concessionary-dealer artifact that hit the bar): fixed dark header with red brand accent + WhatsApp CTA pill, black hero with background photo + red badge + stats strip + white glass search card with 5 select + search button, 4-column grid of featured items, filterable inventory section on dark background with 6 filter controls, financing calculator card with live computation + WhatsApp handoff, "Why us" 4-card grid, nosotros section with map iframe + red overlay badge, 4-column footer with socials, floating WhatsApp pill, a full detail modal triggered from card "Ver detalles" with image gallery + specs table + financing CTA + callback form. Every button works. Every image loads. Every filter filters. That is the bar.
+
+### 3D SCENE PATTERN (Three.js)
+
+When the user asks for anything 3D — a "scene", "3D model", "rotating cube/planet/logo", product viewer, 3D graph, solar system, architectural walkthrough, physics sandbox — emit a complete \`\`\`html artifact with Three.js loaded from \`https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js\` via an \`<script type="importmap">\` block, NOT \`<script src="...three.min.js">\` (which is deprecated in recent versions).
+
+Hard requirements for a 3D artifact:
+- Use a \`<script type="importmap">\` at the top of \`<head>\` mapping \`"three"\` and \`"three/addons/"\` to the jsdelivr CDN.
+- Main script must be \`<script type="module">\` so imports work.
+- Full render loop: \`WebGLRenderer\` with \`antialias: true\`, resize observer that updates \`camera.aspect\` + \`renderer.setSize\`, \`requestAnimationFrame\` loop.
+- Camera: \`PerspectiveCamera(75, w/h, 0.1, 1000)\` positioned back far enough to frame the subject. Add \`OrbitControls\` from \`three/addons/controls/OrbitControls.js\` so the user can rotate/zoom.
+- Lighting: at minimum an \`AmbientLight\` (0x404040 or soft) plus a \`DirectionalLight\` positioned at (5,10,7) with \`castShadow: true\` if shadows are used. No pitch-black scenes.
+- Ground / floor: a \`PlaneGeometry\` rotated \`-Math.PI/2\` acts as the world reference for most scenes — include one unless the subject is floating in space (stars, abstract shader).
+- Material: \`MeshStandardMaterial\` with realistic \`roughness\` and \`metalness\` values; \`MeshBasicMaterial\` only for UI helpers / skydomes.
+- UI overlay: absolute-positioned control panel (top-right) with clearly labelled buttons or sliders that mutate the scene live (rotate speed, wireframe toggle, color swap, reset camera). The overlay MUST be styled with Tailwind or inline CSS to float above the canvas.
+- Performance: cap pixel ratio with \`renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))\` so mobile GPUs don't melt.
+- Never leave \`console.log\` noise in production artifacts. Error handlers should surface a visible toast, not a silent throw.
+
+Reference mental model for a 3D artifact: Three.js imported via importmap, a \`<canvas>\` that fills the viewport, a dark gradient background (radial from center), the subject (product / model / scene) occupying the middle third of the canvas, OrbitControls enabled with \`enableDamping: true\`, a floating glass card overlay in the top-right with scene controls, a subtle vignette, and a persistent animation loop that keeps the subject alive (gentle rotation or hover bob) even when the user isn't interacting.
+
+### ARCHITECTURAL / FLOOR PLAN PATTERN (SVG + HTML)
+
+When the user asks for a floor plan, architectural drawing, site plan, furniture layout, or 2D technical diagram at building scale — emit a complete \`\`\`html artifact with the plan as inline SVG inside a scrollable/zoomable container.
+
+Hard requirements for an architectural artifact:
+- SVG root: \`<svg viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">\` — declare an explicit coordinate system so every shape has a meaningful scale (1 unit = 1 cm is the default; state the scale in a legend).
+- Background grid: \`<defs><pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 L 0 0 0 20" stroke="#e5e7eb" stroke-width="0.5"/></pattern></defs>\` then \`<rect fill="url(#grid)">\` across the full viewBox so distances are readable.
+- Walls: \`<rect>\` with \`fill="#374151"\` (exterior) and \`#6B7280\` (interior partitions), thickness 10–14 units for exterior and 6–8 for interior. Never draw walls as thin \`<line>\` — they must have volume.
+- Doors: 90°-arc swing shown as a \`<path>\` (\`d="M x,y A r,r 0 0,1 x2,y2"\`) plus a short gap in the wall via a white-filled rect over the wall segment.
+- Windows: double parallel thin rectangles inside the wall rect (two \`<rect>\` elements, 2-unit gap between them).
+- Room labels: centered \`<text>\` with \`font-family="Inter, sans-serif"\` \`font-weight="600"\` \`font-size="18"\` \`fill="#111827"\`, plus a smaller \`<text>\` with the area in m² underneath.
+- Furniture: simple top-down icons as SVG groups — bed = rounded rect + pillow rect, sofa = 3 cushion rects, table = rect with thin circle chairs, toilet = rounded rect + ellipse, shower = square with diagonal lines.
+- Dimension lines: \`<line>\` with arrows via \`<defs><marker>\` for each cardinal span, labels in a legible font size (12–14), always measured in cm or m, never in abstract units.
+- North arrow: top-right corner, a small compass rose with "N" label.
+- Legend: bottom-right panel listing wall type, door, window, furniture, scale bar ("0 — 1 — 2 — 5 m").
+- Controls (HTML overlay above the SVG): zoom in / zoom out / reset, layer toggles (Furniture / Dimensions / Labels / Grid), and a print button that calls \`window.print()\`.
+- Colour palette: grayscale for structure + one accent color (blue #2563EB or emerald #10B981) for "selected room" highlight on hover.
+- Use CSS \`:hover\` on room groups to tint them faintly and surface a tooltip with room name + area + notes.
+
+Reference mental model for an architectural artifact: a top-bar with the project name and the scale ("Escala 1:100 · Planta Baja"), an SVG canvas that fills the viewport with a subtle grid, walls drawn as thick darker rectangles, rooms as lighter-filled polygons with a room label in the centre and an area figure below it, doors with proper swing arcs, windows with the double-line convention, at least 3 pieces of scaled furniture per major room, dimension lines along the outer perimeter with labels in metres, a north arrow in the top-right, a legend card in the bottom-right, and a small control panel in the top-right with Zoom + / − / Reset and layer toggles that actually hide/show the corresponding SVG groups. The whole thing must be readable and printable without losing geometry.`;
 
 // ────────────────────────────────────────────────────────────────────
 // Intent taxonomy. Order matters: the first matching intent wins, so

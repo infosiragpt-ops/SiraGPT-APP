@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "rootDir": "..",
+    "outDir": "../.test-dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": [
+    "../tests/**/*.test.ts",
+    "../lib/i18n/locales.ts",
+    "../lib/i18n/locale-resolution.ts",
+    "../lib/auth/auth-guard-rules.ts",
+    "../lib/app-wrapper-routes.ts"
+  ]
+}

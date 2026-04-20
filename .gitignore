@@ -8,6 +8,11 @@
 
 # testing
 /coverage
+/.test-dist/
+/.playwright-cli/
+/output/
+backend/prisma/dev.db
+backend/prisma/*.db-journal
 
 # next.js
 /.next/

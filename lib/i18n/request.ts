@@ -1,6 +1,7 @@
 import { cookies, headers } from "next/headers"
 import { getRequestConfig } from "next-intl/server"
 import { SUPPORTED_LOCALES, DEFAULT_LOCALE, FALLBACK_LOCALE, isSupportedLocale } from "./locales"
+import { pickLocaleFromAcceptLanguage } from "./locale-resolution"
 
 export const LOCALE_COOKIE = "NEXT_LOCALE"
 
@@ -23,7 +24,7 @@ export default getRequestConfig(async () => {
   let locale: string | undefined = cookieStore.get(LOCALE_COOKIE)?.value
   if (!isSupportedLocale(locale)) {
     const accept = headerStore.get("accept-language") || ""
-    locale = pickFromAcceptLanguage(accept) || DEFAULT_LOCALE
+    locale = pickLocaleFromAcceptLanguage(accept, SUPPORTED_LOCALES) || DEFAULT_LOCALE
   }
   if (!isSupportedLocale(locale)) locale = DEFAULT_LOCALE
 
@@ -44,23 +45,6 @@ async function loadMessages(code: string): Promise<Record<string, any>> {
   } catch {
     return {}
   }
-}
-
-function pickFromAcceptLanguage(accept: string): string | undefined {
-  if (!accept) return undefined
-  // Very small parser — avoids pulling negotiator here (the middleware
-  // already handles full negotiation). We just walk the q-ordered list
-  // and grab the first 2-letter prefix we support.
-  const tags = accept.split(",").map((s) => {
-    const [t, ...rest] = s.trim().split(";")
-    const q = rest.find((r) => r.trim().startsWith("q="))
-    return { tag: t.trim(), q: q ? parseFloat(q.split("=")[1]) : 1 }
-  }).sort((a, b) => b.q - a.q)
-  for (const { tag } of tags) {
-    const short = tag.toLowerCase().slice(0, 2)
-    if (SUPPORTED_LOCALES.includes(short)) return short
-  }
-  return undefined
 }
 
 function mergeDeep<T extends Record<string, any>>(target: T, source: Partial<T> | undefined): T {
