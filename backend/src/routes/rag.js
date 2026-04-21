@@ -14,6 +14,11 @@ const advancedChunking = require('../services/rag/advanced-chunking');
 const contextCuration = require('../services/rag/context-curation');
 const advancedPatterns = require('../services/rag/advanced-patterns');
 const rgbBench = require('../services/rag/rgb-benchmark');
+const metadataRouter = require('../services/rag/metadata-router');
+const propositionIndexer = require('../services/rag/proposition-indexer');
+const abstractiveCompressor = require('../services/rag/abstractive-compressor');
+const iterativeRetgen = require('../services/rag/iterative-retgen');
+const aresEval = require('../services/rag/ares-eval');
 
 const router = express.Router();
 
@@ -402,6 +407,144 @@ router.post(
     } catch (err) {
       console.error('[rgb] failed:', err);
       res.status(500).json({ error: err.message || 'rgb failed' });
+    }
+  }
+);
+
+// ─── Metadata filtering (Gao et al. §IV.B) ──────────────────────────────
+router.post(
+  '/metadata-filter',
+  authenticateToken,
+  [
+    body('passages').isArray({ min: 1, max: 500 }),
+    body('filter').isObject(),
+    body('keepMissing').optional().isBoolean(),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const out = metadataRouter.applyMetadataFilter({
+      passages: req.body.passages,
+      filter: req.body.filter,
+      keepMissing: req.body.keepMissing,
+    });
+    res.json({ ok: true, ...out });
+  }
+);
+
+// ─── Query routing (Gao et al. §IV.C) ───────────────────────────────────
+router.post(
+  '/route',
+  authenticateToken,
+  [
+    body('query').isString().isLength({ min: 1, max: 4000 }),
+    body('collections').isArray({ min: 1, max: 50 }),
+    body('topK').optional().isInt({ min: 1, max: 10 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    try {
+      const out = await metadataRouter.route({
+        openai,
+        query: req.body.query,
+        collections: req.body.collections,
+        model: req.body.model,
+        topK: req.body.topK ?? 1,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/route] failed:', err);
+      res.status(500).json({ error: err.message || 'route failed' });
+    }
+  }
+);
+
+// ─── Proposition indexing (Dense X, Chen et al. 2023) ───────────────────
+router.post(
+  '/propositions',
+  authenticateToken,
+  [
+    body('source').isString().isLength({ min: 1, max: 400 }),
+    body('text').isString().isLength({ min: 1, max: 50_000 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await propositionIndexer.indexPassage({
+        openai,
+        source: req.body.source,
+        text: req.body.text,
+        parentMeta: req.body.metadata,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/propositions] failed:', err);
+      res.status(500).json({ error: err.message || 'propositions failed' });
+    }
+  }
+);
+
+// ─── Abstractive compression (RECOMP, Xu et al. 2023) ───────────────────
+router.post(
+  '/compress-abstractive',
+  authenticateToken,
+  [
+    body('query').isString().isLength({ min: 1, max: 4000 }),
+    body('passages').isArray({ min: 1, max: 30 }),
+    body('maxWords').optional().isInt({ min: 50, max: 800 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await abstractiveCompressor.compress({
+        openai,
+        query: req.body.query,
+        passages: req.body.passages,
+        maxWords: req.body.maxWords,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/compress-abstractive] failed:', err);
+      res.status(500).json({ error: err.message || 'compress-abstractive failed' });
+    }
+  }
+);
+
+// ─── ARES evaluation ────────────────────────────────────────────────────
+router.post(
+  '/ares',
+  authenticateToken,
+  [
+    body('items').isArray({ min: 1, max: 100 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await aresEval.evaluateDataset({
+        openai,
+        items: req.body.items,
+        model: req.body.model,
+        fewShots: req.body.fewShots,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/ares] failed:', err);
+      res.status(500).json({ error: err.message || 'ares failed' });
     }
   }
 );
