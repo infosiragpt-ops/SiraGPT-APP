@@ -36,6 +36,7 @@ const researchRoutes = require('./src/routes/research');
 const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
 const seAgentsRoutes = require('./src/routes/se-agents');
+const artifactsRoutes = require('./src/routes/artifacts');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -145,6 +146,7 @@ app.use('/api/research', researchRoutes);
 app.use('/api/rag', ragRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/se-agents', seAgentsRoutes);
+app.use('/api/artifacts', artifactsRoutes);
 app.use('/api/document-ai', documentGenerateAiRoutes);
 
 

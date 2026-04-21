@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
 import { Badge } from "@/components/ui/badge"
@@ -2052,7 +2053,24 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 ) : (
                                     // For diagram (figma) responses, only show the diagram block, no text
                                     // For thesis responses, only show the thesis display, no text
-                                    !hasFigmaDiagram && !getThesisData() && <MessageContent content={displayedContent} />
+                                    !hasFigmaDiagram && !getThesisData() && (() => {
+                                        // If the content carries an artifact block, render the
+                                        // "before" prose, then the interactive viewer, then the
+                                        // "after" prose. Otherwise fall back to plain text.
+                                        const parsed = extractArtifact(displayedContent || '');
+                                        if (!parsed) return <MessageContent content={displayedContent} />;
+                                        return (
+                                            <>
+                                                {parsed.before && <MessageContent content={parsed.before} />}
+                                                <InteractiveArtifact
+                                                    html={parsed.artifact.html}
+                                                    title={parsed.artifact.title}
+                                                    description={parsed.artifact.description}
+                                                />
+                                                {parsed.after && <MessageContent content={parsed.after} />}
+                                            </>
+                                        );
+                                    })()
                                 )}
                                 <PPTDisplay />
                                 <VideoDisplay />
