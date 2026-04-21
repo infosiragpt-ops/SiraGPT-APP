@@ -36,6 +36,7 @@ const researchRoutes = require('./src/routes/research');
 const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
 const seAgentsRoutes = require('./src/routes/se-agents');
+const searchBrainRoutes = require('./src/routes/search-brain');
 const artifactsRoutes = require('./src/routes/artifacts');
 
 const app = express();
@@ -134,6 +135,7 @@ app.use('/api/download', downloadRoutes);
 app.use('/api/elevenlabs', elevenlabsRoutes);
 app.use('/api/video', videoRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/search-brain', searchBrainRoutes);
 app.use('/api/gpts', gptsRoutes); // Add GPTs API routes
 app.use('/api/library', libraryRoutes);
 app.use('/api/proxy', apiProxyRoutes);
