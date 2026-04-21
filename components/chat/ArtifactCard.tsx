@@ -152,7 +152,7 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
 
   return (
     <>
-      <div className="my-4 overflow-hidden rounded-xl border border-border bg-white dark:bg-zinc-900 shadow-sm">
+      <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-zinc-950/70">
         {/* Preview surface */}
         <div className="relative bg-white" style={{ minHeight: 240 }}>
           <ArtifactPreview
@@ -179,7 +179,7 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
         </div>
 
         {/* Action rail */}
-        <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-muted/30 px-3 py-2">
+        <div className="flex items-center justify-between gap-2 border-t border-black/[0.04] dark:border-white/[0.04] bg-muted/20 px-3 py-1.5">
           <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
             {artifactTitle}
           </div>

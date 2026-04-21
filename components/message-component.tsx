@@ -747,17 +747,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 // and the "Generando artefacto…" pill sits
                                 // on top-right with a pulsing dot.
                                 return (
-                                    <div className="my-4 overflow-hidden rounded-xl border border-border bg-gray-900/90 shadow-sm">
-                                        <div className="flex items-center justify-between px-4 py-2 border-b border-white/10">
-                                            <span className="text-xs font-sans text-gray-400">{lang}</span>
-                                            <span className="inline-flex items-center gap-1.5 text-xs text-emerald-400">
+                                    <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/70">
+                                        <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-white/[0.04]">
+                                            <span className="text-[11px] font-sans tracking-wide text-zinc-500">{lang}</span>
+                                            <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400/90">
                                                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
                                                 Generando artefacto…
                                             </span>
                                         </div>
                                         <div className="relative">
-                                            <pre className="text-[13px] whitespace-pre-wrap p-4 font-mono text-gray-100 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
-                                            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-gray-900/95 to-transparent" />
+                                            <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-200 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
+                                            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-zinc-950/90 to-transparent" />
                                         </div>
                                     </div>
                                 );
@@ -765,9 +765,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             // Non-artifact code block during streaming:
                             // same cap + simple header.
                             return (
-                                <div className="my-4 overflow-hidden rounded-xl border border-border bg-gray-900/80 shadow-sm">
-                                    <div className="px-4 py-2 border-b border-white/10 text-xs font-sans text-gray-400">{lang}</div>
-                                    <pre className="text-sm whitespace-pre-wrap p-4 font-mono text-white max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
+                                <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/60">
+                                    <div className="px-3.5 py-1.5 border-b border-white/[0.04] text-[11px] font-sans tracking-wide text-zinc-500">{lang}</div>
+                                    <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-100 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
                                 </div>
                             );
                         }

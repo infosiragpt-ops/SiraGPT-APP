@@ -50,12 +50,12 @@ export function InteractiveArtifact({
     <div
       className={
         expanded
-          ? 'fixed inset-4 z-50 overflow-hidden rounded-2xl border border-border/60 bg-background shadow-2xl'
-          : 'my-3 overflow-hidden rounded-xl border border-border/60 bg-background'
+          ? 'fixed inset-4 z-50 overflow-hidden rounded-xl border border-black/[0.08] dark:border-white/[0.08] bg-background shadow-xl'
+          : 'my-3 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-background'
       }
     >
       {(title || description) && (
-        <div className="flex items-start justify-between gap-3 border-b border-border/40 bg-muted/30 px-4 py-2">
+        <div className="flex items-start justify-between gap-3 border-b border-black/[0.04] dark:border-white/[0.04] bg-muted/20 px-3.5 py-1.5">
           <div className="min-w-0 flex-1">
             {title && (
               <div className="truncate text-sm font-semibold text-foreground">{title}</div>
