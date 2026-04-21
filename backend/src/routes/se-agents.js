@@ -56,8 +56,10 @@ const graphrag = require('../services/agents/graphrag');
 const tripleGraph = require('../services/triple-graph');
 const agentCoder = require('../services/agents/agent-coder');
 const humanevalBench = require('../services/agents/benchmarks/humaneval');
+const mbppBench = require('../services/agents/benchmarks/mbpp');
 const selectiveRag = require('../services/agents/selective-rag');
 const repoRetriever = require('../services/agents/repo-retriever');
+const promptingStrategies = require('../services/agents/prompting-strategies');
 
 const router = express.Router();
 
@@ -1495,11 +1497,88 @@ router.post(
         maxRetries: req.body.maxRetries ?? 3,
         timeoutMs: req.body.timeoutMs ?? 10_000,
         extraTests: req.body.extraTests !== false,
+        strategy: req.body.strategy || 'plain',
+        strategySamples: req.body.strategySamples,
       });
       res.json({ ok: true, ...result });
     } catch (err) {
       console.error('[agent-coder] failed:', err);
       res.status(500).json({ error: err.message || 'agent-coder failed' });
+    }
+  }
+);
+
+// ─── Prompting strategies (§5.6): CoT / self-plan / self-refine / self-cons ─
+router.post(
+  '/prompting',
+  authenticateToken,
+  [
+    body('prompt').isString().isLength({ min: 1, max: 8000 }),
+    body('strategy').isIn(['plain', 'cot', 'self-plan', 'self-refine', 'self-consistency']),
+    body('language').optional().isIn(['python', 'javascript', 'node']),
+    body('samples').optional().isInt({ min: 1, max: 10 }),
+    body('visibleTests').optional().isString().isLength({ max: 8000 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await promptingStrategies.generate({
+        openai,
+        prompt: req.body.prompt,
+        language: req.body.language || 'python',
+        strategy: req.body.strategy,
+        model: req.body.model,
+        samples: req.body.samples,
+        visibleTests: req.body.visibleTests,
+        timeoutMs: req.body.timeoutMs ?? 8000,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[prompting] failed:', err);
+      res.status(500).json({ error: err.message || 'prompting failed' });
+    }
+  }
+);
+
+// ─── MBPP benchmark ─────────────────────────────────────────────────────
+router.post(
+  '/mbpp',
+  authenticateToken,
+  [
+    body('strategy').optional().isIn(['direct', 'agent-coder']),
+    body('limit').optional().isInt({ min: 1, max: 200 }),
+    body('samplesPerProblem').optional().isInt({ min: 1, max: 10 }),
+    body('ks').optional().isArray({ max: 5 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+    body('datasetPath').optional().isString().isLength({ max: 400 }),
+    body('timeoutMs').optional().isInt({ min: 1000, max: 60_000 }),
+    body('maxRetries').optional().isInt({ min: 0, max: 8 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const result = await mbppBench.evaluate({
+        openai,
+        strategy: req.body.strategy || 'agent-coder',
+        datasetPath: req.body.datasetPath,
+        limit: req.body.limit ?? 5,
+        samplesPerProblem: req.body.samplesPerProblem ?? 1,
+        ks: Array.isArray(req.body.ks) ? req.body.ks.map(Number).filter(n => n > 0) : [1],
+        model: req.body.model,
+        timeoutMs: req.body.timeoutMs ?? 10_000,
+        maxRetries: req.body.maxRetries ?? 3,
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error('[mbpp] failed:', err);
+      res.status(500).json({ error: err.message || 'mbpp failed' });
     }
   }
 );

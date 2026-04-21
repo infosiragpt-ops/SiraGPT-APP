@@ -162,6 +162,58 @@ test('solve: null openai is refused', async () => {
 
 // ─── JavaScript loop ─────────────────────────────────────────────────────
 
+// ─── strategy plumbing ───────────────────────────────────────────────────
+
+test('solve: strategy=cot routes the first draft through CoT prompt', async () => {
+  // When strategy='cot' we expect TWO LLM calls before the tester:
+  // the CoT-style programmer call (note: the scripted mock doesn't
+  // care which system prompt was used; we only need to verify the
+  // strategy_trace is populated correctly). With extraTests=false
+  // and visibleTests supplied, the sequence is just the CoT call.
+  const openai = scripted([
+    JSON.stringify({
+      reasoning: '1. return the sum',
+      code: 'def add(a, b):\n    return a + b\n',
+      entry_point: 'add',
+      notes: '',
+    }),
+  ]);
+  const r = await agentCoder.solve({
+    openai,
+    prompt: 'add',
+    visibleTests: '_check("s", add(1, 2) == 3)\n',
+    language: 'python',
+    extraTests: false,
+    maxRetries: 1,
+    strategy: 'cot',
+    timeoutMs: 5000,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.strategy, 'cot');
+  assert.equal(r.strategy_trace.strategy, 'cot');
+  assert.match(r.strategy_trace.reasoning, /return the sum/);
+});
+
+test('solve: strategy=self-plan produces a plan + implementation', async () => {
+  const openai = scripted([
+    JSON.stringify({ plan: ['sum the list'], entry_point: 'sum_list', edge_cases: ['empty'] }),
+    JSON.stringify({ code: 'def sum_list(xs):\n    return sum(xs)\n', entry_point: 'sum_list' }),
+  ]);
+  const r = await agentCoder.solve({
+    openai,
+    prompt: 'sum a list',
+    visibleTests: '_check("a", sum_list([1,2,3]) == 6)\n',
+    language: 'python',
+    extraTests: false,
+    maxRetries: 1,
+    strategy: 'self-plan',
+    timeoutMs: 5000,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.strategy, 'self-plan');
+  assert.deepEqual(r.strategy_trace.plan, ['sum the list']);
+});
+
 test('solve: JavaScript path runs end-to-end', async () => {
   const src = 'function mul(a, b) { return a * b; }\n';
   const openai = scripted([

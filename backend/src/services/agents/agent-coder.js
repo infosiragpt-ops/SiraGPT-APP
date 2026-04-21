@@ -22,6 +22,13 @@
  */
 
 const sandbox = require('./code-sandbox');
+// Lazy to avoid a circular require at module init (prompting-strategies
+// reads PROGRAMMER_SYSTEM from this file).
+let _strategies = null;
+function strategies() {
+  if (!_strategies) _strategies = require('./prompting-strategies');
+  return _strategies;
+}
 
 const PROGRAMMER_SYSTEM =
   `You are an expert programmer. Given a natural-language problem, emit ONE complete, directly-runnable solution.
@@ -137,22 +144,41 @@ async function solve({
   maxRetries = 3,
   extraTests = true,
   timeoutMs = 10_000,
+  strategy = 'plain',       // first-draft prompting strategy (§5.6)
+  strategySamples,          // only used for self-consistency
 }) {
   if (!openai) return { ok: false, reason: 'no LLM client', code: '', attempts: 0, executions: [], language };
   if (!prompt || typeof prompt !== 'string') {
     return { ok: false, reason: 'empty prompt', code: '', attempts: 0, executions: [], language };
   }
 
-  // Step 1 — programmer draft.
-  const draftUser = [
-    `PROBLEM:\n${prompt}`,
-    signature ? `SIGNATURE:\n${signature}` : '',
-    `LANGUAGE: ${language}`,
-  ].filter(Boolean).join('\n\n');
-
-  let draft = await runLLM({ openai, model, system: PROGRAMMER_SYSTEM, user: draftUser });
-  let code = typeof draft.code === 'string' ? draft.code : '';
-  let entryPoint = typeof draft.entry_point === 'string' ? draft.entry_point : 'solution';
+  // Step 1 — programmer draft. When `strategy !== 'plain'` we route
+  // through prompting-strategies so CoT / self-plan / self-refine /
+  // self-consistency can produce the first draft.
+  let strategyTrace = null;
+  let code = '';
+  let entryPoint = 'solution';
+  if (strategy && strategy !== 'plain') {
+    const picked = await strategies().generate({
+      openai, prompt: signature ? `${prompt}\n\nSIGNATURE:\n${signature}` : prompt,
+      language, model, strategy,
+      samples: strategySamples,
+      visibleTests,
+      timeoutMs,
+    });
+    code = picked.code || '';
+    entryPoint = picked.entry_point || 'solution';
+    strategyTrace = picked.trace || null;
+  } else {
+    const draftUser = [
+      `PROBLEM:\n${prompt}`,
+      signature ? `SIGNATURE:\n${signature}` : '',
+      `LANGUAGE: ${language}`,
+    ].filter(Boolean).join('\n\n');
+    const draft = await runLLM({ openai, model, system: PROGRAMMER_SYSTEM, user: draftUser });
+    code = typeof draft.code === 'string' ? draft.code : '';
+    entryPoint = typeof draft.entry_point === 'string' ? draft.entry_point : 'solution';
+  }
 
   // Step 2 — test designer (optional).
   let extraTestBody = '';
@@ -199,6 +225,8 @@ async function solve({
         executions,
         extra_tests: extraTestBody,
         reason: '',
+        strategy,
+        strategy_trace: strategyTrace,
       };
     }
     if (attempt > maxRetries) break;
@@ -230,6 +258,8 @@ async function solve({
     executions,
     extra_tests: extraTestBody,
     reason: 'exhausted repair attempts without passing all tests',
+    strategy,
+    strategy_trace: strategyTrace,
   };
 }
 
