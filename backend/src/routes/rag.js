@@ -19,6 +19,10 @@ const propositionIndexer = require('../services/rag/proposition-indexer');
 const abstractiveCompressor = require('../services/rag/abstractive-compressor');
 const iterativeRetgen = require('../services/rag/iterative-retgen');
 const aresEval = require('../services/rag/ares-eval');
+const raptor = require('../services/rag/raptor-tree');
+const genRead = require('../services/rag/generate-then-read');
+const rrr = require('../services/rag/rewrite-retrieve-read');
+const multiSource = require('../services/rag/multi-source');
 
 const router = express.Router();
 
@@ -545,6 +549,138 @@ router.post(
     } catch (err) {
       console.error('[rag/ares] failed:', err);
       res.status(500).json({ error: err.message || 'ares failed' });
+    }
+  }
+);
+
+// ─── RAPTOR tree build (§IV.B) ──────────────────────────────────────────
+router.post(
+  '/raptor-build',
+  authenticateToken,
+  [
+    body('leaves').isArray({ min: 1, max: 500 }),
+    body('clusterSize').optional().isInt({ min: 2, max: 10 }),
+    body('maxLevels').optional().isInt({ min: 1, max: 6 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const tree = await raptor.buildTree({
+        openai,
+        embed: rag.embed,
+        leaves: req.body.leaves,
+        clusterSize: req.body.clusterSize,
+        maxLevels: req.body.maxLevels,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...tree });
+    } catch (err) {
+      console.error('[rag/raptor-build] failed:', err);
+      res.status(500).json({ error: err.message || 'raptor-build failed' });
+    }
+  }
+);
+
+// ─── GENREAD (§IV.A) ────────────────────────────────────────────────────
+router.post(
+  '/genread',
+  authenticateToken,
+  [
+    body('query').isString().isLength({ min: 1, max: 4000 }),
+    body('numPassages').optional().isInt({ min: 1, max: 8 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+    body('mode').optional().isIn(['standalone', 'fallback', 'augment']),
+    body('retrievalResults').optional().isArray({ max: 30 }),
+    body('minHits').optional().isInt({ min: 0, max: 20 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      if (req.body.mode === 'fallback' || req.body.mode === 'augment') {
+        const out = await genRead.blend({
+          openai,
+          query: req.body.query,
+          retrievalResults: req.body.retrievalResults || [],
+          mode: req.body.mode,
+          minHits: req.body.minHits,
+          numPassages: req.body.numPassages,
+        });
+        return res.json({ ok: true, ...out });
+      }
+      const out = await genRead.generate({
+        openai,
+        query: req.body.query,
+        numPassages: req.body.numPassages,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/genread] failed:', err);
+      res.status(500).json({ error: err.message || 'genread failed' });
+    }
+  }
+);
+
+// ─── Rewrite-Retrieve-Read (§III.C) ─────────────────────────────────────
+router.post(
+  '/rewrite',
+  authenticateToken,
+  [
+    body('query').isString().isLength({ min: 1, max: 4000 }),
+    body('history').optional().isString().isLength({ max: 8000 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await rrr.rewrite({
+        openai,
+        query: req.body.query,
+        history: req.body.history,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/rewrite] failed:', err);
+      res.status(500).json({ error: err.message || 'rewrite failed' });
+    }
+  }
+);
+
+// ─── Multi-source fusion (§IV.A) ────────────────────────────────────────
+router.post(
+  '/multi-source-fuse',
+  authenticateToken,
+  [
+    body('perSource').isObject(),
+    body('weights').optional().isObject(),
+    body('k').optional().isInt({ min: 1, max: 50 }),
+    body('rrfK').optional().isInt({ min: 10, max: 500 }),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    try {
+      const out = multiSource.fuseWeighted({
+        perSource: req.body.perSource,
+        weights: req.body.weights,
+        k: req.body.k,
+        rrfK: req.body.rrfK,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/multi-source-fuse] failed:', err);
+      res.status(500).json({ error: err.message || 'multi-source-fuse failed' });
     }
   }
 );
