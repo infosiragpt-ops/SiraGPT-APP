@@ -13,6 +13,7 @@ const langPolicy = require('../services/language-policy');
 const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
 const longTermMemory = require('../services/long-term-memory');
+const artifactGenerator = require('../services/artifacts/artifact-generator');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -613,7 +614,57 @@ router.post(
       }
 
       let fullResponseContent = '';
+      // ─── Artifact branch ───────────────────────────────────────────
+      // If the user asked "grafica / visualiza / anima / plot / draw",
+      // bypass the plain-text LLM and produce an interactive HTML
+      // visualization instead. Falls through to the normal stream on
+      // refusal or error so the user never sees a blank reply.
+      let artifactHandled = false;
+      if (artifactGenerator.isArtifactRequest(prompt)) {
+        try {
+          const imageDataUrls = [];
+          for (const f of processedFiles) {
+            if (!f || !f.mimeType || !f.mimeType.startsWith('image/')) continue;
+            try {
+              if (f.path && fsSync.existsSync(f.path)) {
+                const b64 = fsSync.readFileSync(f.path).toString('base64');
+                imageDataUrls.push(`data:${f.mimeType};base64,${b64}`);
+              }
+            } catch (readErr) {
+              console.warn('[artifact] failed to read image for vision:', readErr.message);
+            }
+          }
+          // Vision-capable model only when provider is OpenAI; gpt-4o
+          // is the reliable default for the visual understanding step.
+          const artifactOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+          const art = await artifactGenerator.generate({
+            openai: artifactOpenai,
+            userRequest: prompt,
+            imageDataUrls,
+            maxHtmlChars: 80000,
+          });
+          if (!art.refused && art.html) {
+            const intro = imageDataUrls.length > 0
+              ? `He preparado una visualización interactiva basada en la imagen. Usa los controles para manipular los parámetros y observar cómo cambia el resultado en tiempo real.`
+              : `Aquí tienes una visualización interactiva. Usa los controles para explorar los valores.`;
+            const wrapped = `${intro}\n\n${artifactGenerator.wrapArtifact(art)}`;
+            // Stream in two frames — the intro text first so the user
+            // sees immediate feedback, then the artifact block.
+            res.write(`data: ${JSON.stringify({ content: intro })}\n\n`);
+            res.write(`data: ${JSON.stringify({ content: `\n\n${artifactGenerator.wrapArtifact(art)}` })}\n\n`);
+            res.write(`data: [DONE]\n\n`);
+            fullResponseContent = wrapped;
+            artifactHandled = true;
+            if (cacheHandle) cacheHandle.complete();
+          } else {
+            console.log('[artifact] generator refused:', art.reason, '— falling through to text response');
+          }
+        } catch (artifactErr) {
+          console.warn('[artifact] branch errored, falling through:', artifactErr.message);
+        }
+      }
       try {
+        if (!artifactHandled) {
         fullResponseContent = await aiService.generateStream({
           provider: actualProvider,
           model: actualModel,
@@ -627,6 +678,7 @@ router.post(
           qualityGuard: true,
         });
         if (cacheHandle) cacheHandle.complete();
+        }
 
         // Fire-and-forget: extract durable facts from this turn and
         // add them to the user's long-term memory. Runs on the next

@@ -191,3 +191,99 @@ test('generate: size reported matches returned html length', async () => {
   const r = await g.generate({ openai, userRequest: 'grafica' });
   assert.equal(r.size, r.html.length);
 });
+
+// ─── Vision path ─────────────────────────────────────────────────────────
+
+test('generate: imageDataUrls routes to gpt-4o with vision content', async () => {
+  let capturedCall = null;
+  const openai = {
+    chat: { completions: { create: async (args) => {
+      capturedCall = args;
+      const html = '<!DOCTYPE html><html><head><style>body{font-family:system-ui;padding:16px}</style></head><body><svg width="800" height="600"><circle cx="400" cy="300" r="200" fill="none" stroke="#111"/></svg><p>Trigonometric circle visualization with interactive controls.</p></body></html>';
+      return { choices: [{ message: { content: JSON.stringify({ title: 'Círculo', description: 'Interactivo', html }) } }] };
+    }}},
+  };
+  const png1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  const r = await g.generate({
+    openai,
+    userRequest: 'grafica esta imagen',
+    imageDataUrls: [png1],
+  });
+  assert.equal(r.refused, false);
+  assert.equal(capturedCall.model, 'gpt-4o', 'should pick vision model');
+  const userMsg = capturedCall.messages.find(m => m.role === 'user');
+  assert.ok(Array.isArray(userMsg.content), 'user content must be an array for vision');
+  const imgPart = userMsg.content.find(p => p.type === 'image_url');
+  assert.ok(imgPart && imgPart.image_url.url === png1, 'image URL propagated');
+});
+
+test('generate: imageDataUrls capped at 4 images', async () => {
+  let capturedCall = null;
+  const openai = {
+    chat: { completions: { create: async (args) => {
+      capturedCall = args;
+      const html = '<!DOCTYPE html><html><head><style>body{font-family:system-ui;padding:20px}</style></head><body><h1>Many</h1><p>Body long enough to pass minimum length validator guard.</p></body></html>';
+      return { choices: [{ message: { content: JSON.stringify({ title: 't', description: 'd', html }) } }] };
+    }}},
+  };
+  const six = Array.from({ length: 6 }, (_, i) => `data:image/png;base64,AAA${i}`);
+  await g.generate({ openai, userRequest: 'grafica', imageDataUrls: six });
+  const userMsg = capturedCall.messages.find(m => m.role === 'user');
+  const imgs = userMsg.content.filter(p => p.type === 'image_url');
+  assert.equal(imgs.length, 4);
+});
+
+test('generate: non-image data URLs are ignored', async () => {
+  let capturedCall = null;
+  const openai = {
+    chat: { completions: { create: async (args) => {
+      capturedCall = args;
+      const html = '<!DOCTYPE html><html><head><style>body{font-family:system-ui}</style></head><body><h1>Test</h1><p>Padding content to reach minimum length threshold for validator.</p></body></html>';
+      return { choices: [{ message: { content: JSON.stringify({ title: 't', description: 'd', html }) } }] };
+    }}},
+  };
+  await g.generate({
+    openai,
+    userRequest: 'grafica',
+    imageDataUrls: ['data:application/pdf;base64,JVBERi0x', 'http://evil/img.png'],
+  });
+  const userMsg = capturedCall.messages.find(m => m.role === 'user');
+  const imgs = (userMsg.content || []).filter?.(p => p.type === 'image_url') || [];
+  assert.equal(imgs.length, 0);
+});
+
+// ─── wrapArtifact ────────────────────────────────────────────────────────
+
+test('wrapArtifact: produces parseable <artifact> block', () => {
+  const out = g.wrapArtifact({
+    title: 'My title',
+    description: 'Short description',
+    html: '<!DOCTYPE html><html><body>x</body></html>',
+  });
+  assert.ok(out.startsWith('<artifact '));
+  assert.ok(out.includes('title="My title"'));
+  assert.ok(out.includes('description="Short description"'));
+  assert.ok(out.endsWith('</artifact>'));
+});
+
+test('wrapArtifact: escapes quotes in attributes', () => {
+  const out = g.wrapArtifact({
+    title: 'He said "hi"',
+    description: 'A & B',
+    html: '<!DOCTYPE html><html></html>',
+  });
+  assert.ok(out.includes('title="He said &quot;hi&quot;"'));
+  assert.ok(out.includes('description="A &amp; B"'));
+});
+
+test('wrapArtifact output matches frontend extractArtifact regex shape', () => {
+  const out = g.wrapArtifact({
+    title: 'T', description: 'D',
+    html: '<!DOCTYPE html><html><body>content</body></html>',
+  });
+  // Same regex used by extractArtifact in components/artifact/InteractiveArtifact.tsx
+  const m = out.match(/<artifact\b([^>]*)>([\s\S]*?)<\/artifact>/i);
+  assert.ok(m);
+  assert.ok(/title="T"/.test(m[1]));
+  assert.ok(m[2].includes('<!DOCTYPE html>'));
+});

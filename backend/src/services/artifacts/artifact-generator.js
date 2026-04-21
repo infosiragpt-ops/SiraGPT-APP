@@ -24,6 +24,8 @@
  */
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
+const DEFAULT_VISION_MODEL = 'gpt-4o';
+const MAX_IMAGES = 4;
 
 const SYSTEM_PROMPT = `You are a front-end engineer. The user wants an INTERACTIVE VISUALIZATION to understand a concept. You will produce ONE self-contained HTML document that implements it.
 
@@ -80,6 +82,23 @@ function buildUserPrompt(userRequest, imageDescription) {
   return parts.join('\n\n');
 }
 
+function buildVisionUserContent(userRequest, imageDataUrls) {
+  const textPrefix =
+    `USER REQUEST: ${String(userRequest).slice(0, 2000)}\n\n` +
+    `The attached image(s) are the reference. LOOK AT THE IMAGE carefully and reproduce the underlying concept as an interactive HTML visualization. ` +
+    `If the image shows a trigonometric circle, build an SVG with a draggable angle slider and live sen/cos/tan readouts. ` +
+    `If it shows a function graph, build an SVG plot with sliders for the function parameters. ` +
+    `If it shows a geometric figure, build an SVG where the user can manipulate the defining variables.\n\n` +
+    'Produce the artifact JSON now. The HTML must be complete, interactive, and render on first load without a build step.';
+  const content = [{ type: 'text', text: textPrefix }];
+  for (const url of imageDataUrls.slice(0, MAX_IMAGES)) {
+    if (typeof url === 'string' && url.startsWith('data:image/')) {
+      content.push({ type: 'image_url', image_url: { url, detail: 'high' } });
+    }
+  }
+  return content;
+}
+
 /**
  * Generate an interactive artifact for a user request.
  *
@@ -87,7 +106,10 @@ function buildUserPrompt(userRequest, imageDescription) {
  * @param {object} args.openai
  * @param {string} args.userRequest        — e.g. "grafica", "visualiza el ciclo de krebs"
  * @param {string} [args.imageDescription] — optional prose describing an attached image
- * @param {string} [args.model='gpt-4o-mini']
+ * @param {string[]} [args.imageDataUrls]  — optional data:image/... URLs; switches
+ *                                           to a vision-capable model so the LLM
+ *                                           sees the reference before producing HTML
+ * @param {string} [args.model='gpt-4o-mini' or 'gpt-4o' when images present]
  * @param {number} [args.maxHtmlChars=40000] — safety cap on generated HTML size
  *
  * @returns {Promise<{
@@ -99,7 +121,7 @@ function buildUserPrompt(userRequest, imageDescription) {
  *   size: number,
  * }>}
  */
-async function generate({ openai, userRequest, imageDescription, model = DEFAULT_MODEL, maxHtmlChars = 40000 }) {
+async function generate({ openai, userRequest, imageDescription, imageDataUrls, model, maxHtmlChars = 40000 }) {
   if (!openai) {
     return { title: '', description: '', html: '', refused: true, reason: 'no LLM client', size: 0 };
   }
@@ -107,15 +129,21 @@ async function generate({ openai, userRequest, imageDescription, model = DEFAULT
     return { title: '', description: '', html: '', refused: true, reason: 'empty request', size: 0 };
   }
 
+  const hasImages = Array.isArray(imageDataUrls) && imageDataUrls.length > 0;
+  const resolvedModel = model || (hasImages ? DEFAULT_VISION_MODEL : DEFAULT_MODEL);
+  const userContent = hasImages
+    ? buildVisionUserContent(userRequest, imageDataUrls)
+    : buildUserPrompt(userRequest, imageDescription);
+
   try {
     const resp = await openai.chat.completions.create({
-      model,
+      model: resolvedModel,
       temperature: 0.2,
       max_tokens: 4000,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user',   content: buildUserPrompt(userRequest, imageDescription) },
+        { role: 'user',   content: userContent },
       ],
     });
     const raw = resp.choices?.[0]?.message?.content || '{}';
@@ -227,11 +255,23 @@ function isArtifactRequest(text) {
   return false;
 }
 
+/**
+ * Wrap an artifact payload in the inline <artifact> tag that the
+ * frontend parser (extractArtifact in InteractiveArtifact.tsx)
+ * understands. Callers are responsible for the surrounding intro text.
+ */
+function wrapArtifact({ title, description, html }) {
+  const escAttr = s => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return `<artifact title="${escAttr(title)}" description="${escAttr(description)}">\n${html}\n</artifact>`;
+}
+
 module.exports = {
   generate,
   isArtifactRequest,
   sanitiseArtifactHtml,
   buildUserPrompt,
+  buildVisionUserContent,
+  wrapArtifact,
   SYSTEM_PROMPT,
   ARTIFACT_INTENT_PATTERNS,
 };
