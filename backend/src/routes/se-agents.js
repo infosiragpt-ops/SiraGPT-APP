@@ -49,6 +49,7 @@ const biasEval = require('../services/agents/benchmarks/bias-eval');
 const closedDomain = require('../services/agents/benchmarks/closed-domain-hallucination');
 const alignmentTax = require('../services/agents/benchmarks/alignment-tax');
 const promptTaxonomy = require('../services/agents/prompt-taxonomy');
+const ragas = require('../services/agents/ragas');
 
 const router = express.Router();
 
@@ -1046,6 +1047,57 @@ router.post(
       return res.json({ ok: true, benchmark: 'closed-domain', ...result });
     }
     return res.status(400).json({ error: `unknown benchmark '${name}' — use truthful-qa | toxicity | bias | closed-domain` });
+  })
+);
+
+/**
+ * POST /api/se-agents/ragas
+ * RAGAS evaluation (Es et al. 2024): faithfulness, answer_relevancy,
+ * context_precision, context_recall (last only when groundTruth provided).
+ *
+ * Body:
+ *   { question, answer, retrievedContexts:[...], groundTruth?: string }
+ *     → single-example evaluation
+ *   { examples: [{question, answer, retrievedContexts, groundTruth?}, ...] }
+ *     → batch; returns per-example + aggregate (mean, std)
+ */
+router.post(
+  '/ragas',
+  authenticateToken,
+  [
+    body('question').optional().isString().isLength({ max: 4000 }),
+    body('answer').optional().custom(v => typeof v === 'string' || typeof v === 'object'),
+    body('retrievedContexts').optional().isArray(),
+    body('groundTruth').optional().isString().isLength({ max: 8000 }),
+    body('examples').optional().isArray(),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'ragas_eval', [])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const embedder = async (texts) => rag.embed(texts);
+
+    if (Array.isArray(req.body.examples) && req.body.examples.length > 0) {
+      const r = await ragas.evaluateBatch({
+        openai, examples: req.body.examples, embedder,
+      });
+      return res.json({ ok: true, mode: 'batch', ...r });
+    }
+
+    if (!req.body.question || !req.body.answer) {
+      return res.status(400).json({
+        error: 'ragas: either {examples: [...]} or {question, answer, retrievedContexts} required',
+      });
+    }
+
+    const r = await ragas.evaluate({
+      openai,
+      question: req.body.question,
+      answer: req.body.answer,
+      retrievedContexts: req.body.retrievedContexts || [],
+      groundTruth: req.body.groundTruth || null,
+      embedder,
+    });
+    res.json({ ok: true, mode: 'single', ...r });
   })
 );
 
