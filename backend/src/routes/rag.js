@@ -23,6 +23,7 @@ const raptor = require('../services/rag/raptor-tree');
 const genRead = require('../services/rag/generate-then-read');
 const rrr = require('../services/rag/rewrite-retrieve-read');
 const multiSource = require('../services/rag/multi-source');
+const selfRagEngine = require('../services/rag/self-rag-engine');
 
 const router = express.Router();
 
@@ -681,6 +682,53 @@ router.post(
     } catch (err) {
       console.error('[rag/multi-source-fuse] failed:', err);
       res.status(500).json({ error: err.message || 'multi-source-fuse failed' });
+    }
+  }
+);
+
+// ─── Self-RAG engine (Asai et al. 2024, Algorithm 1) ───────────────────
+// Segment-level inference with 4 reflection tokens, per-passage parallel
+// candidates, weighted beam ranking (Eq. 3-4), optional hard constraints.
+// The retriever is wired to the authenticated user's default RAG
+// collection; callers can override via `collection`. For fully-custom
+// retrievers, use the service directly from a call site.
+router.post(
+  '/self-rag-engine',
+  authenticateToken,
+  [
+    body('input').isString().isLength({ min: 1, max: 4000 }),
+    body('collection').optional().isString().isLength({ max: 120 }),
+    body('k').optional().isInt({ min: 1, max: 20 }),
+    body('maxSegments').optional().isInt({ min: 1, max: 20 }),
+    body('weights').optional().isObject(),
+    body('retrieveMode').optional().isIn(['adaptive', 'always', 'never']),
+    body('hardConstraints').optional().isBoolean(),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const userId = req.user?.id;
+      const collection = req.body.collection || 'default';
+      const retrieve = (query, k) => rag.retrieve(userId, collection, query, k);
+      const out = await selfRagEngine.infer({
+        openai,
+        input: req.body.input,
+        retrieve,
+        k: req.body.k ?? 4,
+        maxSegments: req.body.maxSegments ?? 6,
+        weights: req.body.weights,
+        retrieveMode: req.body.retrieveMode || 'adaptive',
+        hardConstraints: req.body.hardConstraints === true,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/self-rag-engine] failed:', err);
+      res.status(500).json({ error: err.message || 'self-rag-engine failed' });
     }
   }
 );
