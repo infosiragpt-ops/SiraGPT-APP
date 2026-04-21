@@ -84,14 +84,26 @@ async function callJSON({ openai, model = 'gpt-4o-mini', system, user, temperatu
 
 const RETRIEVE_GATE_SYSTEM = `You emit the "Retrieve" reflection token for Self-RAG. Given a user input and any answer text already generated, decide whether retrieving additional passages would HELP produce the NEXT segment.
 
-Output format — STRICT JSON: { "retrieve": "yes" | "no" | "continue", "reason": "<one sentence>" }
+Output format — STRICT JSON:
+{
+  "retrieve": "yes" | "no" | "continue",
+  "confidence": <0..1 — probability that retrieving would HELP>,
+  "reason": "<one sentence>"
+}
 
 Use:
 - "yes"      — the next segment needs a specific fact that retrieval could supply.
 - "no"       — the next segment can be produced safely from general knowledge or reasoning alone.
-- "continue" — the current context still has the relevant passages loaded; reuse them (don't re-retrieve).`;
+- "continue" — the current context still has the relevant passages loaded; reuse them (don't re-retrieve).
+- confidence should be close to 1.0 when retrieval is clearly needed and close to 0.0 when clearly not.`;
 
-async function predictRetrieve({ openai, model, input, partial, context }) {
+/**
+ * predictRetrieve returns both the categorical token and a probability.
+ * Paper §3.3 ("Adaptive retrieval with threshold") lets callers pass
+ * `retrieveThreshold` so retrieval fires only when P(retrieve=yes) >
+ * threshold — flexible tradeoff between recall and latency.
+ */
+async function predictRetrieve({ openai, model, input, partial, context, retrieveThreshold }) {
   const out = await callJSON({
     openai, model,
     system: RETRIEVE_GATE_SYSTEM,
@@ -100,11 +112,25 @@ async function predictRetrieve({ openai, model, input, partial, context }) {
       `ANSWER SO FAR:\n${partial || '(none)'}`,
       `CURRENT CONTEXT:\n${context.length ? context.slice(0, 3).map((p, i) => `[${i + 1}] ${(p.text || '').slice(0, 200)}`).join('\n') : '(none)'}`,
     ].join('\n\n'),
-    maxTokens: 120,
+    maxTokens: 150,
   });
-  const v = typeof out.retrieve === 'string' ? out.retrieve.toLowerCase() : '';
+  const raw = typeof out.retrieve === 'string' ? out.retrieve.toLowerCase() : '';
+  let retrieve = RETRIEVE_VALUES.includes(raw) ? raw : 'no';
+  const confidence = typeof out.confidence === 'number'
+    ? Math.max(0, Math.min(1, out.confidence))
+    : (retrieve === 'yes' ? 0.8 : retrieve === 'no' ? 0.2 : 0.5);
+  // Threshold override (paper §3.3). When caller sets retrieveThreshold,
+  // the binary decision is derived from confidence, overriding the
+  // LLM's own categorical vote — useful when you want stricter
+  // factuality (lower threshold → retrieve more often) or lower
+  // latency (higher threshold → retrieve less).
+  if (typeof retrieveThreshold === 'number') {
+    if (confidence >= retrieveThreshold && retrieve !== 'continue') retrieve = 'yes';
+    else if (confidence < retrieveThreshold && retrieve !== 'continue') retrieve = 'no';
+  }
   return {
-    retrieve: RETRIEVE_VALUES.includes(v) ? v : 'no',
+    retrieve,
+    confidence,
     reason: typeof out.reason === 'string' ? out.reason.slice(0, 200) : '',
   };
 }
@@ -274,8 +300,10 @@ async function infer({
   model = 'gpt-4o-mini',
   weights = DEFAULT_WEIGHTS,
   retrieveMode = 'adaptive',
+  retrieveThreshold,       // optional [0..1] — see predictRetrieve
   hardConstraints = false,
   maxSegments = 6,
+  beamSize = 1,            // 1 = greedy (paper's default mode), >1 = tree-decoding beam search
 }) {
   if (!openai) throw new Error('self-rag-engine: openai required');
   if (typeof retrieve !== 'function') throw new Error('self-rag-engine: retrieve(fn) required');
@@ -289,12 +317,13 @@ async function infer({
     // Step 1 — Retrieve decision.
     let retrieveToken;
     if (retrieveMode === 'always') {
-      retrieveToken = { retrieve: 'yes', reason: 'forced by retrieveMode=always' };
+      retrieveToken = { retrieve: 'yes', confidence: 1.0, reason: 'forced by retrieveMode=always' };
     } else if (retrieveMode === 'never') {
-      retrieveToken = { retrieve: 'no', reason: 'forced by retrieveMode=never' };
+      retrieveToken = { retrieve: 'no', confidence: 0.0, reason: 'forced by retrieveMode=never' };
     } else {
       retrieveToken = await predictRetrieve({
         openai, model, input, partial, context: passagesSeen,
+        retrieveThreshold,
       });
     }
 
@@ -434,8 +463,195 @@ async function infer({
   };
 }
 
+// ─── Tree-decoding beam search (paper §3.3) ─────────────────────────────
+
+/**
+ * Keep top-B hypothesis sequences alive. At each step, for each alive
+ * hypothesis:
+ *   - Decide Retrieve (adaptive | always | never | threshold)
+ *   - Generate K per-passage candidates OR a single no-retrieve cand
+ *   - Score each via critiqueScore, append to the hypothesis to form
+ *     a new beam entry, accumulate the score
+ * Then prune globally to top-B by cumulative score.
+ *
+ * When beamSize=1 this reduces to greedy `infer`. When beamSize>1 the
+ * search actually explores divergent continuations. Useful when one
+ * passage is great for the first half of the answer but another is
+ * needed for the second half — greedy-top-1 would lock in the first
+ * choice prematurely.
+ *
+ * Caller gets the highest-score final hypothesis AS the answer, plus
+ * the full beam trace for audit.
+ */
+async function inferBeam({
+  openai,
+  input,
+  retrieve,
+  k = 4,
+  model = 'gpt-4o-mini',
+  weights = DEFAULT_WEIGHTS,
+  retrieveMode = 'adaptive',
+  retrieveThreshold,
+  hardConstraints = false,
+  maxSegments = 6,
+  beamSize = 3,
+}) {
+  if (!openai) throw new Error('self-rag-engine: openai required');
+  if (typeof retrieve !== 'function') throw new Error('self-rag-engine: retrieve(fn) required');
+  if (beamSize < 1) beamSize = 1;
+
+  // A "hypothesis" is one partial answer + its segments + a running score.
+  let beams = [{
+    partial: '',
+    segments: [],
+    passagesSeen: [],
+    cumulativeScore: 0,
+    finished: false,
+  }];
+
+  for (let step = 0; step < maxSegments; step++) {
+    const expansions = [];
+    for (const beam of beams) {
+      if (beam.finished) {
+        expansions.push(beam);
+        continue;
+      }
+
+      let retrieveToken;
+      if (retrieveMode === 'always') {
+        retrieveToken = { retrieve: 'yes', confidence: 1.0, reason: 'forced' };
+      } else if (retrieveMode === 'never') {
+        retrieveToken = { retrieve: 'no', confidence: 0.0, reason: 'forced' };
+      } else {
+        retrieveToken = await predictRetrieve({
+          openai, model, input, partial: beam.partial, context: beam.passagesSeen,
+          retrieveThreshold,
+        });
+      }
+
+      if (retrieveToken.retrieve === 'no') {
+        const cand = await generateNoRetrieve({ openai, model, input, partial: beam.partial });
+        const score = critiqueScore(cand, weights);
+        const segmentRecord = {
+          index: step,
+          text: cand.segment,
+          source: null,
+          isRel: null, isSup: null,
+          isUse: cand.isUse,
+          score,
+          retrieveDecision: retrieveToken.retrieve,
+          retrieveConfidence: retrieveToken.confidence,
+        };
+        expansions.push({
+          partial: cand.segment ? (beam.partial ? beam.partial + ' ' + cand.segment : cand.segment) : beam.partial,
+          segments: [...beam.segments, segmentRecord],
+          passagesSeen: beam.passagesSeen,
+          cumulativeScore: beam.cumulativeScore + score,
+          finished: cand.done,
+        });
+        continue;
+      }
+
+      // retrieve=yes: pull K passages (or reuse on "continue").
+      let passagesSeen = beam.passagesSeen;
+      if (retrieveToken.retrieve === 'yes') {
+        const hits = await retrieve(
+          beam.partial ? `${input}\n${beam.partial}` : input, k,
+        );
+        passagesSeen = [...beam.passagesSeen, ...hits];
+      }
+      const pool = retrieveToken.retrieve === 'yes'
+        ? passagesSeen.slice(-k)
+        : passagesSeen.slice(0, k);
+
+      if (pool.length === 0) {
+        // No hits → fall back to no-retrieve for this beam this step.
+        const cand = await generateNoRetrieve({ openai, model, input, partial: beam.partial });
+        const score = critiqueScore(cand, weights);
+        expansions.push({
+          partial: cand.segment ? (beam.partial ? beam.partial + ' ' + cand.segment : cand.segment) : beam.partial,
+          segments: [...beam.segments, {
+            index: step, text: cand.segment, source: null,
+            isRel: null, isSup: null, isUse: cand.isUse, score,
+            retrieveDecision: 'yes-empty', retrieveConfidence: retrieveToken.confidence,
+          }],
+          passagesSeen,
+          cumulativeScore: beam.cumulativeScore + score,
+          finished: cand.done,
+        });
+        continue;
+      }
+
+      const cands = await Promise.all(
+        pool.map(p => generateCandidateFromPassage({ openai, model, input, partial: beam.partial, passage: p })),
+      );
+      const { ranked, filtered } = rankCandidates(cands, { weights, hardConstraints });
+      // Take the top-beamSize expansions from THIS beam (each becomes a
+      // separate hypothesis). Global prune happens once all beams
+      // have expanded.
+      const survivors = ranked.slice(0, beamSize);
+      if (survivors.length === 0) {
+        // All filtered — this beam is dead.
+        expansions.push({
+          ...beam,
+          finished: true,
+          segments: [...beam.segments, {
+            index: step, text: '', source: null,
+            isRel: null, isSup: null, isUse: 1, score: 0,
+            retrieveDecision: retrieveToken.retrieve,
+            retrieveConfidence: retrieveToken.confidence,
+            reason: `all ${filtered.length} candidates filtered`,
+          }],
+        });
+        continue;
+      }
+      for (const { candidate, score } of survivors) {
+        expansions.push({
+          partial: beam.partial ? beam.partial + ' ' + candidate.segment : candidate.segment,
+          segments: [...beam.segments, {
+            index: step,
+            text: candidate.segment,
+            source: candidate.source,
+            isRel: candidate.isRel,
+            isSup: candidate.isSup,
+            isUse: candidate.isUse,
+            score,
+            retrieveDecision: retrieveToken.retrieve,
+            retrieveConfidence: retrieveToken.confidence,
+          }],
+          passagesSeen,
+          cumulativeScore: beam.cumulativeScore + score,
+          finished: candidate.isUse <= 2 && /[.!?]$/.test(candidate.segment),
+        });
+      }
+    }
+    // Global prune to top-beamSize by cumulative score.
+    expansions.sort((a, b) => b.cumulativeScore - a.cumulativeScore);
+    beams = expansions.slice(0, beamSize);
+    if (beams.every(b => b.finished)) break;
+  }
+
+  // Return the highest-cumulative-score beam.
+  beams.sort((a, b) => b.cumulativeScore - a.cumulativeScore);
+  const winner = beams[0];
+  return {
+    answer: winner.partial,
+    segments: winner.segments,
+    passagesSeen: winner.passagesSeen,
+    cumulativeScore: winner.cumulativeScore,
+    alternatives: beams.slice(1).map(b => ({
+      answer: b.partial,
+      cumulativeScore: b.cumulativeScore,
+      segmentCount: b.segments.length,
+    })),
+    beamSize,
+    terminatedBy: winner.finished ? 'done' : 'max-segments',
+  };
+}
+
 module.exports = {
   infer,
+  inferBeam,
   predictRetrieve,
   generateCandidateFromPassage,
   generateNoRetrieve,

@@ -24,6 +24,9 @@ const genRead = require('../services/rag/generate-then-read');
 const rrr = require('../services/rag/rewrite-retrieve-read');
 const multiSource = require('../services/rag/multi-source');
 const selfRagEngine = require('../services/rag/self-rag-engine');
+const selfRagCritic = require('../services/rag/self-rag-critic');
+const citationMetrics = require('../services/rag/citation-metrics');
+const factScore = require('../services/rag/factscore');
 
 const router = express.Router();
 
@@ -714,7 +717,9 @@ router.post(
       const userId = req.user?.id;
       const collection = req.body.collection || 'default';
       const retrieve = (query, k) => rag.retrieve(userId, collection, query, k);
-      const out = await selfRagEngine.infer({
+      const beamSize = req.body.beamSize ?? 1;
+      const runner = beamSize > 1 ? selfRagEngine.inferBeam : selfRagEngine.infer;
+      const out = await runner({
         openai,
         input: req.body.input,
         retrieve,
@@ -722,13 +727,135 @@ router.post(
         maxSegments: req.body.maxSegments ?? 6,
         weights: req.body.weights,
         retrieveMode: req.body.retrieveMode || 'adaptive',
+        retrieveThreshold: typeof req.body.retrieveThreshold === 'number' ? req.body.retrieveThreshold : undefined,
         hardConstraints: req.body.hardConstraints === true,
+        beamSize,
         model: req.body.model,
       });
       res.json({ ok: true, ...out });
     } catch (err) {
       console.error('[rag/self-rag-engine] failed:', err);
       res.status(500).json({ error: err.message || 'self-rag-engine failed' });
+    }
+  }
+);
+
+// ─── Self-RAG critic (standalone) ───────────────────────────────────────
+router.post(
+  '/self-rag-critic',
+  authenticateToken,
+  [
+    body('question').isString().isLength({ min: 1, max: 4000 }),
+    body('answer').isString().isLength({ min: 1, max: 20_000 }),
+    body('passages').isArray({ min: 0, max: 30 }),
+    body('weights').optional().isObject(),
+    body('skipPassageRelevance').optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await selfRagCritic.critique({
+        openai,
+        question: req.body.question,
+        answer: req.body.answer,
+        passages: req.body.passages,
+        weights: req.body.weights,
+        skipPassageRelevance: req.body.skipPassageRelevance === true,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/self-rag-critic] failed:', err);
+      res.status(500).json({ error: err.message || 'self-rag-critic failed' });
+    }
+  }
+);
+
+// ─── Citation precision / recall (Gao et al. 2023) ──────────────────────
+router.post(
+  '/citation-precision',
+  authenticateToken,
+  [
+    body('citedClaims').isArray({ min: 1, max: 60 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await citationMetrics.citationPrecision({
+        openai,
+        citedClaims: req.body.citedClaims,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/citation-precision] failed:', err);
+      res.status(500).json({ error: err.message || 'citation-precision failed' });
+    }
+  }
+);
+
+router.post(
+  '/citation-recall',
+  authenticateToken,
+  [
+    body('answer').isString().isLength({ min: 1, max: 20_000 }),
+    body('citedSegmentIndices').isArray({ max: 60 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await citationMetrics.citationRecall({
+        openai,
+        answer: req.body.answer,
+        citedSegmentIndices: req.body.citedSegmentIndices,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/citation-recall] failed:', err);
+      res.status(500).json({ error: err.message || 'citation-recall failed' });
+    }
+  }
+);
+
+// ─── FactScore-lite (Min et al. 2023) ───────────────────────────────────
+router.post(
+  '/factscore',
+  authenticateToken,
+  [
+    body('text').isString().isLength({ min: 1, max: 20_000 }),
+    body('referencePassages').isArray({ min: 0, max: 30 }),
+    body('maxFacts').optional().isInt({ min: 1, max: 100 }),
+    body('countNotInSourcesAs').optional().isIn(['unsupported', 'neutral']),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+    try {
+      const out = await factScore.factScore({
+        openai,
+        text: req.body.text,
+        referencePassages: req.body.referencePassages,
+        maxFacts: req.body.maxFacts,
+        countNotInSourcesAs: req.body.countNotInSourcesAs,
+        model: req.body.model,
+      });
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[rag/factscore] failed:', err);
+      res.status(500).json({ error: err.message || 'factscore failed' });
     }
   }
 );

@@ -312,6 +312,128 @@ test('infer: missing retrieve fn rejected', async () => {
   );
 });
 
+// ─── Adaptive retrieval threshold (paper §3.3) ───────────────────────────
+
+test('predictRetrieve: threshold flips decision based on confidence', async () => {
+  const openai = scripted([JSON.stringify({
+    retrieve: 'no', confidence: 0.85, reason: 'borderline',
+  })]);
+  // Model said "no" with high confidence. Threshold 0.5 should flip
+  // it to "yes" because confidence ≥ threshold.
+  const r = await sre.predictRetrieve({
+    openai, model: 'm',
+    input: 'q', partial: '', context: [],
+    retrieveThreshold: 0.5,
+  });
+  assert.equal(r.retrieve, 'yes');
+  assert.equal(r.confidence, 0.85);
+});
+
+test('predictRetrieve: threshold below confidence keeps "no"', async () => {
+  const openai = scripted([JSON.stringify({
+    retrieve: 'yes', confidence: 0.3, reason: '',
+  })]);
+  const r = await sre.predictRetrieve({
+    openai, model: 'm',
+    input: 'q', partial: '', context: [],
+    retrieveThreshold: 0.8,
+  });
+  assert.equal(r.retrieve, 'no');
+});
+
+test('predictRetrieve: "continue" not altered by threshold', async () => {
+  const openai = scripted([JSON.stringify({
+    retrieve: 'continue', confidence: 0.1, reason: '',
+  })]);
+  const r = await sre.predictRetrieve({
+    openai, model: 'm',
+    input: 'q', partial: '', context: [{ text: 'p' }],
+    retrieveThreshold: 0.5,
+  });
+  assert.equal(r.retrieve, 'continue');
+});
+
+// ─── Tree-decoding beam search ───────────────────────────────────────────
+
+test('inferBeam: beamSize=1 matches greedy behaviour', async () => {
+  const openai = scripted([
+    JSON.stringify({ retrieve: 'no', confidence: 0.1, reason: '' }),
+    JSON.stringify({ segment: 'Only answer.', isUse: 5, done: true }),
+  ]);
+  const r = await sre.inferBeam({
+    openai, input: 'q', retrieve: async () => [],
+    beamSize: 1, maxSegments: 2,
+  });
+  assert.equal(r.segments.length, 1);
+  assert.equal(r.answer, 'Only answer.');
+  assert.equal(r.beamSize, 1);
+});
+
+test('inferBeam: beamSize=2 keeps two survivors from step 1', async () => {
+  const openai = scripted([
+    // Step 1 gate: yes
+    JSON.stringify({ retrieve: 'yes', confidence: 0.9, reason: '' }),
+    // Step 1: two per-passage candidates (different scores)
+    JSON.stringify({
+      isRel: 'relevant', segment: 'Claim A.',
+      isSup: 'fully_supported', isUse: 5, reason: '',
+    }),
+    JSON.stringify({
+      isRel: 'relevant', segment: 'Claim B.',
+      isSup: 'partially_supported', isUse: 4, reason: '',
+    }),
+    // Step 2 gate A + B (each beam)
+    JSON.stringify({ retrieve: 'no', confidence: 0.1, reason: '' }),
+    JSON.stringify({ segment: '', isUse: 1, done: true }),
+    JSON.stringify({ retrieve: 'no', confidence: 0.1, reason: '' }),
+    JSON.stringify({ segment: '', isUse: 1, done: true }),
+  ]);
+  const r = await sre.inferBeam({
+    openai, input: 'q',
+    retrieve: async () => [
+      { source: 'a', text: 'TA' },
+      { source: 'b', text: 'TB' },
+    ],
+    k: 2, beamSize: 2, maxSegments: 2,
+  });
+  // A has higher cumulative score, so it's the winner; B surfaces in
+  // alternatives for audit.
+  assert.equal(r.answer, 'Claim A.');
+  assert.equal(r.alternatives.length, 1);
+  assert.equal(r.alternatives[0].answer, 'Claim B.');
+});
+
+test('inferBeam: beamSize > K still works (caps to candidates)', async () => {
+  const openai = scripted([
+    JSON.stringify({ retrieve: 'yes', confidence: 0.9, reason: '' }),
+    JSON.stringify({
+      isRel: 'relevant', segment: 'Only candidate.',
+      isSup: 'fully_supported', isUse: 5, reason: '',
+    }),
+    JSON.stringify({ retrieve: 'no', confidence: 0.1, reason: '' }),
+    JSON.stringify({ segment: '', isUse: 1, done: true }),
+  ]);
+  const r = await sre.inferBeam({
+    openai, input: 'q',
+    retrieve: async () => [{ source: 'a', text: 'TA' }],
+    k: 1, beamSize: 5, maxSegments: 2,
+  });
+  assert.equal(r.answer, 'Only candidate.');
+  assert.equal(r.alternatives.length, 0);   // only 1 survivor possible
+});
+
+test('inferBeam: terminatedBy=done when winning beam finishes', async () => {
+  const openai = scripted([
+    JSON.stringify({ retrieve: 'no', confidence: 0.1, reason: '' }),
+    JSON.stringify({ segment: 'Done.', isUse: 5, done: true }),
+  ]);
+  const r = await sre.inferBeam({
+    openai, input: 'q', retrieve: async () => [],
+    beamSize: 2, maxSegments: 3,
+  });
+  assert.equal(r.terminatedBy, 'done');
+});
+
 // ─── Paper weight behaviour (wSup boost) ─────────────────────────────────
 
 test('infer: wSup↑ prefers fully-supported even at lower isUse', async () => {
