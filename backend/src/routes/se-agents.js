@@ -50,6 +50,8 @@ const closedDomain = require('../services/agents/benchmarks/closed-domain-halluc
 const alignmentTax = require('../services/agents/benchmarks/alignment-tax');
 const promptTaxonomy = require('../services/agents/prompt-taxonomy');
 const ragas = require('../services/agents/ragas');
+const graphragEval = require('../services/agents/graphrag/eval-criteria');
+const graphragBench = require('../services/agents/graphrag/adaptive-benchmark');
 
 const router = express.Router();
 
@@ -1098,6 +1100,84 @@ router.post(
       embedder,
     });
     res.json({ ok: true, mode: 'single', ...r });
+  })
+);
+
+/**
+ * POST /api/se-agents/graphrag/eval-criteria
+ * Score one answer on the 4 GraphRAG sensemaking criteria
+ * (comprehensiveness / diversity / empowerment / directness) OR
+ * compare two answers per criterion in A/B mode.
+ *
+ * Body (single):   { question, answer }
+ * Body (compare):  { question, answerA, answerB }
+ * Body (batch AB): { examples: [{ question, answerA, answerB }, ...] }
+ */
+router.post(
+  '/graphrag/eval-criteria',
+  authenticateToken,
+  [
+    body('question').optional().isString().isLength({ max: 4000 }),
+    body('answer').optional().custom(v => typeof v === 'string' || typeof v === 'object'),
+    body('answerA').optional().custom(v => typeof v === 'string' || typeof v === 'object'),
+    body('answerB').optional().custom(v => typeof v === 'string' || typeof v === 'object'),
+    body('examples').optional().isArray(),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'graphrag_eval', [])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+
+    if (Array.isArray(req.body.examples) && req.body.examples.length > 0) {
+      const r = await graphragEval.runABSet({ openai, examples: req.body.examples });
+      return res.json({ ok: true, mode: 'batch_ab', ...r });
+    }
+    if (req.body.answerA && req.body.answerB) {
+      const r = await graphragEval.compareAB({
+        openai, question: req.body.question,
+        answerA: req.body.answerA, answerB: req.body.answerB,
+      });
+      return res.json({ ok: true, mode: 'ab', ...r });
+    }
+    if (req.body.question && req.body.answer) {
+      const r = await graphragEval.scoreSingle({
+        openai, question: req.body.question, answer: req.body.answer,
+      });
+      return res.json({ ok: true, mode: 'single', ...r });
+    }
+    return res.status(400).json({
+      error: 'graphrag/eval-criteria: need {question, answer} or {question, answerA, answerB} or {examples: [...]}',
+    });
+  })
+);
+
+/**
+ * POST /api/se-agents/graphrag/adaptive-benchmark
+ * Generate a persona-labeled sensemaking query set.
+ *
+ * Body: { corpusDescription, intendedUsers?, nPersonas?, queriesPerPersona? }
+ *   corpusDescription: short SUMMARY of the corpus (NOT the corpus itself —
+ *     paper §2.3 requires this to avoid trivially-answerable evals)
+ */
+router.post(
+  '/graphrag/adaptive-benchmark',
+  authenticateToken,
+  [
+    body('corpusDescription').isString().isLength({ min: 10, max: 4000 }),
+    body('intendedUsers').optional().isString().isLength({ max: 1000 }),
+    body('nPersonas').optional().isInt({ min: 1, max: 10 }),
+    body('queriesPerPersona').optional().isInt({ min: 1, max: 10 }),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'graphrag_adaptive_bench', ['corpusDescription'])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const r = await graphragBench.generate({
+      openai,
+      corpusDescription: req.body.corpusDescription,
+      intendedUsers: req.body.intendedUsers,
+      nPersonas: req.body.nPersonas || 5,
+      queriesPerPersona: req.body.queriesPerPersona || 3,
+    });
+    res.json({ ok: true, ...r });
   })
 );
 
