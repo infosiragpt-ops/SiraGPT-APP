@@ -175,6 +175,105 @@ test('self-consistency: no candidates → empty safe return', async () => {
   assert.equal(r.trace.samples, 0);
 });
 
+// ─── program-of-thoughts ─────────────────────────────────────────────────
+
+test('program-of-thoughts: LLM emits Python, sandbox runs it, answer captured', async () => {
+  const openai = scripted([
+    JSON.stringify({
+      code: 'def compute():\n    return sum(range(1, 11))\nprint(compute())\n',
+      entry_point: 'compute',
+      notes: 'sum 1..10',
+    }),
+  ]);
+  const r = await strat.generate({
+    openai,
+    prompt: 'What is the sum of integers from 1 to 10?',
+    strategy: 'program-of-thoughts',
+    timeoutMs: 5000,
+  });
+  assert.match(r.code, /sum\(range/);
+  assert.equal(r.trace.strategy, 'program-of-thoughts');
+  assert.equal(r.trace.ok, true);
+  assert.equal(r.trace.answer, '55');
+});
+
+test('program-of-thoughts: faulty LLM code → trace.ok=false but strategy returns', async () => {
+  const openai = scripted([
+    JSON.stringify({ code: 'raise RuntimeError("boom")\n', entry_point: 'main', notes: '' }),
+  ]);
+  const r = await strat.generate({
+    openai,
+    prompt: 'compute something',
+    strategy: 'program-of-thoughts',
+    timeoutMs: 3000,
+  });
+  assert.equal(r.trace.ok, false);
+  assert.match(r.trace.stderr, /RuntimeError/);
+});
+
+test('program-of-thoughts: empty LLM code → ran=false, no sandbox call', async () => {
+  const openai = scripted([JSON.stringify({ code: '', entry_point: 'main', notes: '' })]);
+  const r = await strat.generate({
+    openai,
+    prompt: 'x',
+    strategy: 'program-of-thoughts',
+  });
+  assert.equal(r.trace.ran, false);
+  assert.equal(r.code, '');
+});
+
+// ─── reflexion ───────────────────────────────────────────────────────────
+
+test('reflexion: no priorAttempt → degenerates to plain', async () => {
+  const openai = scripted([
+    JSON.stringify({ code: 'def f(): return 1', entry_point: 'f', notes: '' }),
+  ]);
+  const r = await strat.generate({
+    openai,
+    prompt: 'x',
+    strategy: 'reflexion',
+  });
+  assert.equal(r.code, 'def f(): return 1');
+  assert.equal(r.trace.strategy, 'reflexion');
+  assert.equal(r.trace.hasPrior, false);
+});
+
+test('reflexion: priorAttempt triggers reflection call + regeneration', async () => {
+  const openai = scripted([
+    JSON.stringify({ reflection: 'The off-by-one happened because I used < instead of <=.' }),
+    JSON.stringify({ code: 'def f(n): return [i for i in range(n+1)]', entry_point: 'f', notes: 'inclusive' }),
+  ]);
+  const r = await strat.generate({
+    openai,
+    prompt: 'return inclusive range from 0 to n',
+    strategy: 'reflexion',
+    priorAttempt: {
+      code: 'def f(n): return [i for i in range(n)]',
+      failure: 'expected [0,1,2,3], got [0,1,2]',
+    },
+  });
+  assert.equal(openai.calls.length, 2);
+  assert.equal(r.trace.hasPrior, true);
+  assert.equal(r.trace.reflections.length, 1);
+  assert.match(r.trace.latestReflection, /off-by-one/);
+  assert.match(r.code, /range\(n\+1\)/);
+});
+
+test('reflexion: accumulates reflections across attempts', async () => {
+  const openai = scripted([
+    JSON.stringify({ reflection: 'attempt-2 reflection' }),
+    JSON.stringify({ code: 'def g(): pass', entry_point: 'g', notes: '' }),
+  ]);
+  const r = await strat.generate({
+    openai,
+    prompt: 'x',
+    strategy: 'reflexion',
+    priorAttempt: { code: 'def g(): pass', failure: 'still wrong' },
+    reflections: ['attempt-1 reflection'],
+  });
+  assert.deepEqual(r.trace.reflections, ['attempt-1 reflection', 'attempt-2 reflection']);
+});
+
 // ─── guards ──────────────────────────────────────────────────────────────
 
 test('unknown strategy rejected', async () => {

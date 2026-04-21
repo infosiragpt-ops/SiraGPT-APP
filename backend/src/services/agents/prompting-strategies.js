@@ -94,6 +94,35 @@ Rules:
 - Focus on issues that would make tests fail (correctness, off-by-one, wrong types, missing null/empty handling).
 - Style issues are low severity; correctness issues are high.`;
 
+const POT_SYSTEM = `You are an expert programmer using "Program of Thoughts" (Chen et al. 2022) to solve a reasoning problem.
+
+Instead of solving the problem directly in natural language, write a SHORT Python program that computes the answer and prints it. The executor will run your program and return stdout.
+
+Output format — STRICT JSON:
+{
+  "code": "<complete Python program that computes and prints the final answer>",
+  "entry_point": "<always 'main' or the top-level function; keep code runnable as a script>",
+  "notes": "<one sentence on the approach>"
+}
+
+Rules:
+- The program MUST print its final answer on the last line (no trailing output after it).
+- No interactive input (input() is forbidden); hard-code any values the problem provides.
+- Standard library only.
+- Keep it minimal — a single function + the print call is ideal.`;
+
+const REFLEXION_SYSTEM = `You are an expert programmer applying Reflexion (Shinn et al. 2023). You were given a problem, produced a solution, and the test runner reported failures. Reflect on WHAT went wrong conceptually before you try again.
+
+Output format — STRICT JSON:
+{
+  "reflection": "<one paragraph: what misunderstanding or bug caused the failure, what you will do differently>"
+}
+
+Rules:
+- Do NOT produce code here — only the reflection.
+- Be specific: name the actual failing behaviour, not a generic "I will be more careful".
+- If the previous failure was a stack trace, explain the root cause in 1-2 sentences.`;
+
 const REVISOR_SYSTEM = `You are the same expert programmer. You wrote a candidate solution; a reviewer identified issues. Produce a REVISED solution that addresses them.
 
 Output format — STRICT JSON:
@@ -323,7 +352,109 @@ async function selfConsistency({
   };
 }
 
-const STRATEGIES = { plain, cot, 'self-plan': selfPlan, 'self-refine': selfRefine, 'self-consistency': selfConsistency };
+/**
+ * Program of Thoughts — the model writes a Python program whose
+ * STDOUT is the answer. The sandbox runs it and we return the
+ * printed value. Useful for arithmetic/data problems where natural-
+ * language reasoning loses precision.
+ */
+async function programOfThoughts({ openai, prompt, language, model, timeoutMs = 5000 }) {
+  const out = await callLLM({
+    openai, model,
+    system: POT_SYSTEM,
+    user: `PROBLEM:\n${prompt}`,
+  });
+  const code = typeof out.code === 'string' ? out.code : '';
+  if (!code) {
+    return { code: '', entry_point: 'main', notes: '', trace: { strategy: 'program-of-thoughts', ran: false } };
+  }
+  const execution = await sandbox.run({ language: 'python', source: code, timeoutMs });
+  const answerLine = execution.stdout
+    ? execution.stdout.trim().split('\n').filter(Boolean).slice(-1)[0] || ''
+    : '';
+  return {
+    code,
+    entry_point: typeof out.entry_point === 'string' ? out.entry_point : 'main',
+    notes: typeof out.notes === 'string' ? out.notes : '',
+    trace: {
+      strategy: 'program-of-thoughts',
+      ran: true,
+      ok: execution.ok,
+      stdout: execution.stdout.slice(0, 500),
+      stderr: execution.stderr.slice(0, 500),
+      answer: answerLine,
+      timedOut: execution.timedOut,
+    },
+  };
+}
+
+/**
+ * Reflexion — on failure, verbalise WHAT went wrong before regenerating.
+ * Caller passes `priorAttempt` (code + failure text). We ask the model
+ * to reflect, then re-prompt the programmer with the reflection in the
+ * context. The returned trace includes the reflection so callers can
+ * stack it across multiple attempts (episodic memory).
+ *
+ * If no priorAttempt is given this degenerates to `plain`.
+ */
+async function reflexion({
+  openai, prompt, language, model,
+  priorAttempt,   // { code, failure }
+  reflections,    // array of prior reflections (grows across attempts)
+}) {
+  if (!priorAttempt || !priorAttempt.failure) {
+    const p = await plain({ openai, prompt, language, model });
+    return { ...p, trace: { strategy: 'reflexion', reflections: Array.isArray(reflections) ? reflections : [], hasPrior: false } };
+  }
+
+  const reflection = await callLLM({
+    openai, model,
+    system: REFLEXION_SYSTEM,
+    user: [
+      `PROBLEM:\n${prompt}`,
+      `PREVIOUS CODE:\n${priorAttempt.code || '(none)'}`,
+      `PREVIOUS FAILURE:\n${String(priorAttempt.failure).slice(0, 2000)}`,
+    ].join('\n\n'),
+  });
+  const reflectionText = typeof reflection.reflection === 'string' ? reflection.reflection : '';
+  const allReflections = [
+    ...(Array.isArray(reflections) ? reflections : []),
+    reflectionText,
+  ].filter(Boolean);
+
+  // Regenerate with the (stacked) reflections injected.
+  const retry = await callLLM({
+    openai, model,
+    system: PROGRAMMER_SYSTEM,
+    user: [
+      `PROBLEM:\n${prompt}`,
+      `LANGUAGE: ${language}`,
+      `REFLECTIONS FROM PREVIOUS ATTEMPTS:\n${allReflections.map((r, i) => `${i + 1}. ${r}`).join('\n')}`,
+      `Write a fresh solution informed by the reflections above. Do not repeat the previous mistakes.`,
+    ].join('\n\n'),
+  });
+  return {
+    code: typeof retry.code === 'string' ? retry.code : (priorAttempt.code || ''),
+    entry_point: typeof retry.entry_point === 'string' ? retry.entry_point : 'solution',
+    notes: typeof retry.notes === 'string' ? retry.notes : '',
+    trace: {
+      strategy: 'reflexion',
+      hasPrior: true,
+      reflections: allReflections,
+      latestReflection: reflectionText,
+    },
+  };
+}
+
+const STRATEGIES = {
+  plain,
+  cot,
+  'self-plan': selfPlan,
+  'self-refine': selfRefine,
+  'self-consistency': selfConsistency,
+  'program-of-thoughts': programOfThoughts,
+  reflexion,
+};
 
 /**
  * Run a prompting strategy and return a candidate solution.
@@ -356,10 +487,14 @@ module.exports = {
   selfPlan,
   selfRefine,
   selfConsistency,
+  programOfThoughts,
+  reflexion,
   STRATEGIES: Object.keys(STRATEGIES),
   COT_SYSTEM,
   PLANNER_SYSTEM,
   IMPLEMENTER_FROM_PLAN_SYSTEM,
   CRITIC_SYSTEM,
   REVISOR_SYSTEM,
+  POT_SYSTEM,
+  REFLEXION_SYSTEM,
 };

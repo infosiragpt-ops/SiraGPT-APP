@@ -60,6 +60,8 @@ const mbppBench = require('../services/agents/benchmarks/mbpp');
 const selectiveRag = require('../services/agents/selective-rag');
 const repoRetriever = require('../services/agents/repo-retriever');
 const promptingStrategies = require('../services/agents/prompting-strategies');
+const codeBleu = require('../services/agents/code-bleu');
+const codeContamination = require('../services/agents/code-contamination');
 
 const router = express.Router();
 
@@ -1514,7 +1516,7 @@ router.post(
   authenticateToken,
   [
     body('prompt').isString().isLength({ min: 1, max: 8000 }),
-    body('strategy').isIn(['plain', 'cot', 'self-plan', 'self-refine', 'self-consistency']),
+    body('strategy').isIn(['plain', 'cot', 'self-plan', 'self-refine', 'self-consistency', 'program-of-thoughts', 'reflexion']),
     body('language').optional().isIn(['python', 'javascript', 'node']),
     body('samples').optional().isInt({ min: 1, max: 10 }),
     body('visibleTests').optional().isString().isLength({ max: 8000 }),
@@ -1535,6 +1537,9 @@ router.post(
         samples: req.body.samples,
         visibleTests: req.body.visibleTests,
         timeoutMs: req.body.timeoutMs ?? 8000,
+        // Reflexion-specific: prior attempt + accumulated reflections.
+        priorAttempt: req.body.priorAttempt,
+        reflections: req.body.reflections,
       });
       res.json({ ok: true, ...out });
     } catch (err) {
@@ -1665,6 +1670,58 @@ router.post(
     } catch (err) {
       console.error('[repo-retrieve] failed:', err);
       res.status(500).json({ error: err.message || 'repo-retrieve failed' });
+    }
+  }
+);
+
+// ─── CodeBLEU (Ren et al. 2020) ─────────────────────────────────────────
+router.post(
+  '/code-bleu',
+  authenticateToken,
+  [
+    body('reference').isString().isLength({ min: 1, max: 100_000 }),
+    body('candidate').isString().isLength({ min: 1, max: 100_000 }),
+    body('weights').optional().isObject(),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    try {
+      const out = codeBleu.codeBleu(req.body.reference, req.body.candidate, req.body.weights);
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      console.error('[code-bleu] failed:', err);
+      res.status(500).json({ error: err.message || 'code-bleu failed' });
+    }
+  }
+);
+
+// ─── Benchmark contamination check ──────────────────────────────────────
+router.post(
+  '/contamination-check',
+  authenticateToken,
+  [
+    body('problem').isObject(),
+    body('corpus').isArray({ min: 1, max: 500 }),
+    body('ngram').optional().isInt({ min: 2, max: 10 }),
+    body('substringLen').optional().isInt({ min: 20, max: 400 }),
+    body('jaccardFlag').optional().isFloat({ min: 0, max: 1 }),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    try {
+      const r = codeContamination.check({
+        problem: req.body.problem,
+        corpus: req.body.corpus.map(String),
+        ngram: req.body.ngram,
+        substringLen: req.body.substringLen,
+        jaccardFlag: req.body.jaccardFlag,
+      });
+      res.json({ ok: true, ...r });
+    } catch (err) {
+      console.error('[contamination-check] failed:', err);
+      res.status(500).json({ error: err.message || 'contamination-check failed' });
     }
   }
 );
