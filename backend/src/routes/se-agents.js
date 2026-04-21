@@ -52,6 +52,8 @@ const promptTaxonomy = require('../services/agents/prompt-taxonomy');
 const ragas = require('../services/agents/ragas');
 const graphragEval = require('../services/agents/graphrag/eval-criteria');
 const graphragBench = require('../services/agents/graphrag/adaptive-benchmark');
+const graphrag = require('../services/agents/graphrag');
+const tripleGraph = require('../services/triple-graph');
 
 const router = express.Router();
 
@@ -1100,6 +1102,70 @@ router.post(
       embedder,
     });
     res.json({ ok: true, mode: 'single', ...r });
+  })
+);
+
+/**
+ * POST /api/se-agents/graphrag/build-index
+ * Build a GraphRAG index from the user's triple-graph: community
+ * detection (hierarchical label propagation) + LLM summaries per
+ * community. Index is stored in-memory keyed by (userId, collection).
+ *
+ * Body: { collection? }
+ */
+router.post(
+  '/graphrag/build-index',
+  authenticateToken,
+  [body('collection').optional().isString().isLength({ max: 64 })],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'graphrag_build', [])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const collection = req.body.collection || 'default';
+
+    const { entities, edges, getRelations } = tripleGraph._dumpEntities(req.user.id, collection);
+    if (entities.length === 0) {
+      return res.status(400).json({
+        error: 'no triples in graph for this collection — run /api/rag/ingest-triples first',
+      });
+    }
+    const idx = await graphrag.buildIndex({
+      openai, userId: req.user.id, collection,
+      entities, edges, getRelations,
+    });
+    res.json({ ok: true, ...idx.stats, builtAt: idx.builtAt });
+  })
+);
+
+/**
+ * POST /api/se-agents/graphrag/query
+ * Answer a sensemaking query using the built index. Map-reduce over
+ * community summaries.
+ *
+ * Body: { query, collection?, level?, minHelpfulness?, mapMax? }
+ */
+router.post(
+  '/graphrag/query',
+  authenticateToken,
+  [
+    body('query').isString().isLength({ min: 2, max: 4000 }),
+    body('collection').optional().isString().isLength({ max: 64 }),
+    body('level').optional().isIn(['leaf', 'super']),
+    body('minHelpfulness').optional().isInt({ min: 0, max: 100 }),
+    body('mapMax').optional().isInt({ min: 1, max: 50 }),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'graphrag_query', ['query'])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await graphrag.query({
+      openai,
+      userId: req.user.id,
+      collection: req.body.collection || 'default',
+      query: req.body.query,
+      level: req.body.level || 'leaf',
+      minHelpfulness: req.body.minHelpfulness,
+      mapMax: req.body.mapMax,
+    });
+    res.json({ ok: true, ...result });
   })
 );
 

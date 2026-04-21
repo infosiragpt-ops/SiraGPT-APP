@@ -321,6 +321,50 @@ function stats(userId, collection) {
   };
 }
 
+/**
+ * Export the entity graph as nodes + weighted edges — what GraphRAG
+ * needs for community detection. Edge weight = number of triples that
+ * co-mention both entities. Also returns a getRelations(entity) closure
+ * so downstream callers don't re-traverse the triples map.
+ */
+function _dumpEntities(userId, collection) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns) return { entities: [], edges: [], getRelations: () => [] };
+
+  const entities = [...ns.byEntity.keys()];
+  const edgeCounts = new Map(); // "a|b" → count, with a < b for undirected stability
+
+  for (const triple of ns.triples.values()) {
+    const a = (triple.subject || '').toLowerCase();
+    const b = (triple.object || '').toLowerCase();
+    if (!a || !b || a === b) continue;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const key = `${lo}|${hi}`;
+    edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
+  }
+  const edges = [];
+  for (const [key, w] of edgeCounts) {
+    const [a, b] = key.split('|');
+    edges.push({ a, b, weight: w });
+  }
+
+  // Closure captures the namespace; reads are cheap because byEntity
+  // is already indexed.
+  const getRelations = (entity) => {
+    const ekey = String(entity).toLowerCase();
+    const tripleKeys = ns.byEntity.get(ekey);
+    if (!tripleKeys) return [];
+    const out = [];
+    for (const tk of tripleKeys) {
+      const t = ns.triples.get(tk);
+      if (t) out.push({ subject: t.subject, predicate: t.predicate, object: t.object });
+    }
+    return out;
+  };
+
+  return { entities, edges, getRelations };
+}
+
 module.exports = {
   addTriples,
   getNeighbours,
@@ -330,6 +374,7 @@ module.exports = {
   clear,
   clearSource,
   stats,
+  _dumpEntities,
   // exported for tests
   tripleKey,
   tripleToSentence,
