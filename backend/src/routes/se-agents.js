@@ -54,6 +54,10 @@ const graphragEval = require('../services/agents/graphrag/eval-criteria');
 const graphragBench = require('../services/agents/graphrag/adaptive-benchmark');
 const graphrag = require('../services/agents/graphrag');
 const tripleGraph = require('../services/triple-graph');
+const agentCoder = require('../services/agents/agent-coder');
+const humanevalBench = require('../services/agents/benchmarks/humaneval');
+const selectiveRag = require('../services/agents/selective-rag');
+const repoRetriever = require('../services/agents/repo-retriever');
 
 const router = express.Router();
 
@@ -1457,5 +1461,133 @@ router.get('/health', (req, res) => {
     orchestrator_modes: ['route', 'pipeline', 'collaborate', 'consensus'],
   });
 });
+
+// ─── AgentCoder (Huang et al. 2024) ──────────────────────────────────────
+// Programmer → test-designer → sandboxed test-executor loop. Cites
+// 96.3% pass@1 on HumanEval in the Jiang et al. survey §5.9.
+router.post(
+  '/agent-coder',
+  authenticateToken,
+  [
+    body('prompt').isString().isLength({ min: 1, max: 8000 }),
+    body('signature').optional().isString().isLength({ max: 2000 }),
+    body('visibleTests').optional().isString().isLength({ max: 8000 }),
+    body('language').optional().isIn(['python', 'javascript', 'node']),
+    body('maxRetries').optional().isInt({ min: 0, max: 8 }),
+    body('timeoutMs').optional().isInt({ min: 1000, max: 60_000 }),
+    body('extraTests').optional().isBoolean(),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+
+    try {
+      const result = await agentCoder.solve({
+        openai,
+        prompt: req.body.prompt,
+        signature: req.body.signature,
+        visibleTests: req.body.visibleTests,
+        language: req.body.language || 'python',
+        model: req.body.model,
+        maxRetries: req.body.maxRetries ?? 3,
+        timeoutMs: req.body.timeoutMs ?? 10_000,
+        extraTests: req.body.extraTests !== false,
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error('[agent-coder] failed:', err);
+      res.status(500).json({ error: err.message || 'agent-coder failed' });
+    }
+  }
+);
+
+// ─── HumanEval / pass@k benchmark ────────────────────────────────────────
+router.post(
+  '/humaneval',
+  authenticateToken,
+  [
+    body('strategy').optional().isIn(['direct', 'agent-coder']),
+    body('limit').optional().isInt({ min: 1, max: 200 }),
+    body('samplesPerProblem').optional().isInt({ min: 1, max: 10 }),
+    body('ks').optional().isArray({ max: 5 }),
+    body('model').optional().isString().isLength({ max: 64 }),
+    body('datasetPath').optional().isString().isLength({ max: 400 }),
+    body('timeoutMs').optional().isInt({ min: 1000, max: 60_000 }),
+    body('maxRetries').optional().isInt({ min: 0, max: 8 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+
+    try {
+      const result = await humanevalBench.evaluate({
+        openai,
+        strategy: req.body.strategy || 'agent-coder',
+        datasetPath: req.body.datasetPath,
+        limit: req.body.limit ?? 5,
+        samplesPerProblem: req.body.samplesPerProblem ?? 1,
+        ks: Array.isArray(req.body.ks) ? req.body.ks.map(Number).filter(n => n > 0) : [1],
+        model: req.body.model,
+        timeoutMs: req.body.timeoutMs ?? 10_000,
+        maxRetries: req.body.maxRetries ?? 3,
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error('[humaneval] failed:', err);
+      res.status(500).json({ error: err.message || 'humaneval failed' });
+    }
+  }
+);
+
+// ─── Selective RAG gate (Repoformer) + iterative repo retrieval (RepoCoder) ─
+router.post(
+  '/repo-retrieve',
+  authenticateToken,
+  [
+    body('query').isString().isLength({ min: 1, max: 4000 }),
+    body('collection').optional().isString().isLength({ max: 120 }),
+    body('k').optional().isInt({ min: 1, max: 30 }),
+    body('skipDraft').optional().isBoolean(),
+    body('forceRetrieve').optional().isBoolean(),
+    body('model').optional().isString().isLength({ max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const openai = rag.getOpenAI();
+    if (!openai) return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+
+    try {
+      const userId = req.user?.id;
+      const collection = req.body.collection || 'default';
+      const gateDecision = req.body.forceRetrieve
+        ? { shouldRetrieve: true, source: 'override', reason: 'forceRetrieve=true', confidence: 1.0 }
+        : await selectiveRag.decide({ query: req.body.query, openai, model: req.body.model });
+
+      if (!gateDecision.shouldRetrieve) {
+        return res.json({ ok: true, gate: gateDecision, passages: [], draft: null, stages: ['skipped'] });
+      }
+
+      const retrieval = await repoRetriever.retrieveIterative({
+        openai,
+        userId,
+        collection,
+        query: req.body.query,
+        k: req.body.k ?? 8,
+        model: req.body.model,
+        skipDraft: req.body.skipDraft === true,
+      });
+      res.json({ ok: true, gate: gateDecision, ...retrieval });
+    } catch (err) {
+      console.error('[repo-retrieve] failed:', err);
+      res.status(500).json({ error: err.message || 'repo-retrieve failed' });
+    }
+  }
+);
 
 module.exports = router;
