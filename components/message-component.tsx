@@ -1896,9 +1896,21 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 )}
                         </div>
                     )}
+                {/*
+                  * USER-side attachment rendering.
+                  *   Images  → rendered inline here (they are visual content,
+                  *             not a clickable chip).
+                  *   Non-images (docs, spreadsheets, PDFs, etc.) → rendered
+                  *             by <MessageDocChips /> below (clickable chip
+                  *             that opens UnifiedDocumentViewer).
+                  *
+                  * Previously this block ALSO rendered a non-image chip
+                  * with a Word/PDF/Excel icon, which visually duplicated
+                  * the MessageDocChips output — every uploaded .docx
+                  * appeared twice in the user bubble. Removed.
+                  */}
                 {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "USER" && (
                     <div className="flex flex-col items-end gap-2">
-                        {/* Render Images */}
                         <div className="flex flex-wrap justify-end gap-2">
                             {parsedFiles
                                 .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
@@ -1923,42 +1935,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             className="max-w-full h-auto rounded-lg max-h-[350px] object-cover cursor-pointer hover:opacity-90 transition-opacity"
                                             onClick={() => setSelectedImage(imageUrl)}
                                         />
-                                    );
-                                })}
-                        </div>
-
-                        {/* Then render other files */}
-                        <div className="flex flex-wrap justify-end gap-2">
-                            {parsedFiles
-                                .filter((file: any) => !file.type?.startsWith('image/') && !file.mimeType?.startsWith('image/'))
-                                .map((file: any, index: number) => {
-                                    const extension = file.originalName?.split('.').pop()?.toLowerCase() || file.name?.split('.').pop()?.toLowerCase();
-                                    let icon;
-                                    switch (extension) {
-                                        case 'pdf':
-                                            icon = <img src="/icons/pdf.png" alt="PDF" className="h-6 w-6" />;
-                                            break;
-                                        case 'doc':
-                                        case 'docx':
-                                            icon = <img src="/icons/Word.png" alt="Word" className="h-6 w-6" />;
-                                            break;
-                                        case 'xls':
-                                        case 'xlsx':
-                                        case 'csv':
-                                            icon = <img src="/icons/Excel.png" alt="Excel" className="h-6 w-6" />;
-                                            break;
-                                        case 'ppt':
-                                        case 'pptx':
-                                            icon = <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-6 w-6" />;
-                                            break;
-                                        default:
-                                            icon = <FileText className="h-4 w-4" />;
-                                    }
-                                    return (
-                                        <button key={`file-${index}`} onClick={() => handleViewFile(file)} className="flex items-center gap-2 px-2 py-1 border rounded hover:bg-muted transition-colors">
-                                            {icon}
-                                            <span className="text-xs">{file.originalName || file.name || 'File'}</span>
-                                        </button>
                                     );
                                 })}
                         </div>
