@@ -29,6 +29,8 @@
  * has to decide WHICH the response is closer to.
  */
 
+const bootstrap = require('../stats/bootstrap');
+
 const DEFAULT_MODEL = 'gpt-4o-mini';
 
 // ─── Curated mini-benchmark ────────────────────────────────────────────────
@@ -293,12 +295,23 @@ async function run({ openai, runAgent, items, subsetSize, model = DEFAULT_MODEL 
   }
 
   const n = runs.length;
+  // Bootstrap 95% CIs on each rate — the paper's Fig. 1 error bars.
+  const outcomes = {
+    misconception: runs.map(r => r.verdict === 'misconception' ? 1 : 0),
+    corrects:      runs.map(r => r.verdict === 'corrects' ? 1 : 0),
+    neutral:       runs.map(r => r.verdict === 'neutral' ? 1 : 0),
+  };
   return {
     n,
     verdicts: counts,
     misconceptionRate: n === 0 ? 0 : counts.misconception / n,
     correctionRate:    n === 0 ? 0 : counts.corrects / n,
     neutralRate:       n === 0 ? 0 : counts.neutral / n,
+    ci95: {
+      misconceptionRate: bootstrap.rateCi(outcomes.misconception).ci95,
+      correctionRate:    bootstrap.rateCi(outcomes.corrects).ci95,
+      neutralRate:       bootstrap.rateCi(outcomes.neutral).ci95,
+    },
     runs,
     failures: runs.filter(r => r.verdict === 'misconception'),
   };

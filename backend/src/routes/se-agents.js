@@ -47,6 +47,8 @@ const truthfulQa = require('../services/agents/benchmarks/truthful-qa');
 const realToxicity = require('../services/agents/benchmarks/real-toxicity');
 const biasEval = require('../services/agents/benchmarks/bias-eval');
 const closedDomain = require('../services/agents/benchmarks/closed-domain-hallucination');
+const alignmentTax = require('../services/agents/benchmarks/alignment-tax');
+const promptTaxonomy = require('../services/agents/prompt-taxonomy');
 
 const router = express.Router();
 
@@ -1046,6 +1048,114 @@ router.post(
     return res.status(400).json({ error: `unknown benchmark '${name}' — use truthful-qa | toxicity | bias | closed-domain` });
   })
 );
+
+/**
+ * POST /api/se-agents/benchmarks/alignment-tax
+ * Measure whether a variant regressed general capability vs baseline.
+ *
+ * Body: { mode: 'single' | 'ab',
+ *         variantA: { align: bool }, variantB: { align: bool },
+ *         items?: {...} }
+ *
+ * Single mode returns accuracy + CI across the 5 task types.
+ * A/B mode returns per-task-type deltas + a regressedTaskTypes list —
+ * a NON-EMPTY list means the alignment variant hurt general capability.
+ */
+router.post(
+  '/benchmarks/alignment-tax',
+  authenticateToken,
+  [
+    body('mode').optional().isIn(['single', 'ab']),
+    body('variantA').optional().isObject(),
+    body('variantB').optional().isObject(),
+    body('items').optional().isObject(),
+  ],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'benchmark_alignment_tax', [])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const mode = req.body.mode || 'single';
+
+    // Build a generic runner. Alignment-tax prompts are self-contained
+    // (they build their own passage+question); we pass them straight
+    // to a completion call.
+    const makeRunner = (variantOpts = {}) => {
+      const align = !!variantOpts.align;
+      return async (prompt) => {
+        if (align) {
+          // Wrap via the align pipeline with the general-dispatch path —
+          // we use a trivial run that just calls the LLM so this measures
+          // the tax of the alignment WRAPPER, not of any specialist.
+          const aligned = await alignWrapper.runAligned({
+            openai, userId: req.user.id, agentName: 'capability_probe',
+            userRequest: prompt,
+            run: async () => {
+              const r = await openai.chat.completions.create({
+                model: 'gpt-4o-mini', temperature: 0, max_tokens: 400,
+                messages: [{ role: 'user', content: prompt }],
+              });
+              return r.choices?.[0]?.message?.content || '';
+            },
+            opts: { skipClarifier: true, maxRetries: 0 },
+          });
+          return aligned.result || '';
+        }
+        const r = await openai.chat.completions.create({
+          model: 'gpt-4o-mini', temperature: 0, max_tokens: 400,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        return r.choices?.[0]?.message?.content || '';
+      };
+    };
+
+    if (mode === 'ab') {
+      const result = await alignmentTax.runAB({
+        openai,
+        runA: makeRunner(req.body.variantA || {}),
+        runB: makeRunner(req.body.variantB || { align: true }),
+        items: req.body.items,
+      });
+      return res.json({ ok: true, benchmark: 'alignment-tax', mode: 'ab', ...result });
+    }
+    const result = await alignmentTax.runSingle({
+      openai,
+      runAgent: makeRunner(req.body.variantA || {}),
+      items: req.body.items,
+    });
+    res.json({ ok: true, benchmark: 'alignment-tax', mode: 'single', ...result });
+  })
+);
+
+/**
+ * POST /api/se-agents/classify-prompt
+ * Classify a single user request into the paper's 10-category taxonomy.
+ * Records it into the user's histogram if the request carries a user.
+ *
+ * Body: { request }
+ */
+router.post(
+  '/classify-prompt',
+  authenticateToken,
+  [body('request').isString().isLength({ min: 1, max: 4000 })],
+  handleErrors(async (req, res) => {
+    if (preflight(req, res, 'prompt_taxonomy', ['request'])) return;
+    const openai = requireOpenAI(res); if (!openai) return;
+    const result = await promptTaxonomy.classify({
+      openai, request: req.body.request, userId: req.user.id,
+    });
+    res.json({ ok: true, ...result });
+  })
+);
+
+/**
+ * GET /api/se-agents/taxonomy/:userId?
+ * Return the caller's (or, for admins, any user's) prompt-type
+ * histogram. Useful for dashboards: "brainstorming 35%, open_qa 22%,
+ * closed_qa 15%, ...".
+ */
+router.get('/taxonomy', authenticateToken, (req, res) => {
+  const h = promptTaxonomy.getHistogram(req.user.id);
+  res.json({ ok: true, userId: req.user.id, ...h });
+});
 
 /**
  * POST /api/se-agents/benchmarks-all
