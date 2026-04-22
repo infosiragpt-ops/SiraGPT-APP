@@ -75,6 +75,19 @@ import { Input } from "@/components/ui/input"
 import { toast } from "sonner"
 // import NotificationCenter from "./notification-center" // Commented out to stop repeated API calls
 
+// Shared liquid-glass styles for the user menu dropdown. Keeping them
+// as module constants avoids allocating a new string on every render
+// and lets both normal and destructive variants compose via cn().
+const LG_ITEM = cn(
+  "relative isolate cursor-pointer rounded-xl px-2.5 py-2 text-sm font-medium",
+  "text-foreground/85 transition-all duration-200",
+  "focus:bg-white/70 focus:text-foreground focus:backdrop-blur-md",
+  "data-[highlighted]:bg-white/70 data-[highlighted]:text-foreground data-[highlighted]:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.6)]",
+  "dark:focus:bg-white/10 dark:data-[highlighted]:bg-white/10",
+  "dark:data-[highlighted]:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]",
+)
+const LG_SEP = "my-1 bg-white/30 dark:bg-white/10"
+
 // Generation Types with enhanced functionality
 const generationTypes = [
   {
@@ -715,28 +728,55 @@ export function AppSidebar() {
                     </div>
                   </SidebarMenuButton>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent side="top" className="w-56">
-                  <DropdownMenuItem onClick={() => router.push("/profile")}>
+                <DropdownMenuContent
+                  side="top"
+                  sideOffset={12}
+                  className={cn(
+                    // Liquid-glass surface
+                    "w-64 overflow-hidden rounded-2xl p-1.5",
+                    "border border-white/30 bg-white/55 backdrop-blur-2xl backdrop-saturate-150",
+                    "dark:border-white/10 dark:bg-neutral-900/55",
+                    // Outer ambient shadow + inner top highlight in one declaration
+                    "shadow-[0_12px_48px_-12px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.55)]",
+                    "dark:shadow-[0_12px_48px_-12px_rgba(0,0,0,0.55),inset_0_1px_0_0_rgba(255,255,255,0.08)]",
+                  )}
+                >
+                  <DropdownMenuItem
+                    onClick={() => router.push("/profile")}
+                    className={LG_ITEM}
+                  >
                     <User className="mr-2 h-4 w-4" />
                     {t("profile")}
                   </DropdownMenuItem>
 
-                  <DropdownMenuItem onClick={() => router.push("/billing")}>
+                  <DropdownMenuItem
+                    onClick={() => router.push("/billing")}
+                    className={LG_ITEM}
+                  >
                     <CreditCard className="mr-2 h-4 w-4" />
                     {t("billing")}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => router.push("/settings")}>
+                  <DropdownMenuItem
+                    onClick={() => router.push("/settings")}
+                    className={LG_ITEM}
+                  >
                     <Settings className="mr-2 h-4 w-4" />
                     {t("settings")}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => router.push("/privacy-policy")}>
+                  <DropdownMenuItem
+                    onClick={() => router.push("/privacy-policy")}
+                    className={LG_ITEM}
+                  >
                     <Shield className="mr-2 h-4 w-4" />
                     {t("privacyPolicy")}
                   </DropdownMenuItem>
                   {user?.isAdmin && (
                     <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => router.push("/admin")}>
+                      <DropdownMenuSeparator className={LG_SEP} />
+                      <DropdownMenuItem
+                        onClick={() => router.push("/admin")}
+                        className={LG_ITEM}
+                      >
                         <Settings className="mr-2 h-4 w-4" />
                         {t("adminPanel")}
                       </DropdownMenuItem>
@@ -744,8 +784,11 @@ export function AppSidebar() {
                   )}
                   {user?.isSuperAdmin && (
                     <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => router.push("/super-admin")}>
+                      <DropdownMenuSeparator className={LG_SEP} />
+                      <DropdownMenuItem
+                        onClick={() => router.push("/super-admin")}
+                        className={LG_ITEM}
+                      >
                         <Shield className="mr-2 h-4 w-4 text-red-600" />
                         <span className="text-red-600">{t("superAdminPanel")}</span>
                       </DropdownMenuItem>
@@ -754,7 +797,7 @@ export function AppSidebar() {
                   {/* Hidden return option for super admin accessing other accounts */}
                   {typeof window !== "undefined" && localStorage.getItem('superadmin-return-data') && (
                     <>
-                      <DropdownMenuSeparator />
+                      <DropdownMenuSeparator className={LG_SEP} />
                       <DropdownMenuItem
                         onClick={async () => {
                           const returnData = localStorage.getItem('superadmin-return-data')
@@ -767,16 +810,16 @@ export function AppSidebar() {
                             }
                           }
                         }}
-                        className="text-orange-600"
+                        className={cn(LG_ITEM, "text-orange-600")}
                       >
                         <Shield className="mr-2 h-4 w-4" />
                         {t("returnToSuperAdmin")}
                       </DropdownMenuItem>
                     </>
                   )}
-                  <DropdownMenuSeparator />
+                  <DropdownMenuSeparator className={LG_SEP} />
                   <DropdownMenuItem
-                    className="text-red-600"
+                    className={cn(LG_ITEM, "text-red-600 focus:text-red-600 data-[highlighted]:text-red-600")}
                     onClick={handleLogout}
                   >
                     <LogOut className="mr-2 h-4 w-4" />
