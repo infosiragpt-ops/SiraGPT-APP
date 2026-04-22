@@ -39,6 +39,9 @@ const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
 const artifactsRoutes = require('./src/routes/artifacts');
+const hooksRoutes = require('./src/routes/hooks');
+const scheduler = require('./src/services/scheduler/scheduler');
+const { runAgent } = require('./src/services/agents/agent-entry');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -152,6 +155,7 @@ app.use('/api/agent', agentRoutes);
 app.use('/api/se-agents', seAgentsRoutes);
 app.use('/api/artifacts', artifactsRoutes);
 app.use('/api/document-ai', documentGenerateAiRoutes);
+app.use('/api/hooks', hooksRoutes);
 
 
 // Error handling middleware
@@ -183,5 +187,11 @@ const server = app.listen(PORT, () => {
 
 // Initialize WebSocket server for Computer Use
 initializeWebSocketServer(server);
+
+// Wire scheduler → agent: register the invoker so cron/webhook jobs
+// can run the agent without the scheduler module importing the agent
+// layer (which would circular-require via the skills registry).
+scheduler.setInvoker(runAgent);
+scheduler.start();
 
 module.exports = app;
