@@ -19,6 +19,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const OpenAI = require('openai');
+const { authenticateAgent } = require('../middleware/agent-access');
 const { authenticateToken } = require('../middleware/auth');
 const reactAgent = require('../services/react-agent');
 const executor = require('../services/agents/executor');
@@ -122,7 +123,7 @@ function buildTools({ openai, userId, collection }) {
 
 router.post(
   '/run',
-  authenticateToken,
+  authenticateAgent,
   [
     body('query').trim().isLength({ min: 3 }).withMessage('query too short'),
     body('maxSteps').optional().isInt({ min: 2, max: 15 }),
@@ -157,15 +158,32 @@ router.post(
     // working; new callers pass useSkills:true to get the registry.
     // With skills, a capability policy also gates which tools are
     // visible to the LLM and caps how many times each may run.
+    //
+    // When authenticated via an agent API key, the key's scope
+    // OVERRIDES any policy options the caller sent in the body —
+    // otherwise a compromised key could elevate its own privileges by
+    // just passing { mode: 'main', allow: [...] }.
     let tools;
     if (req.body.useSkills) {
-      const policyOpts = {};
-      if (req.body.mode) policyOpts.mode = req.body.mode;
-      if (req.body.allow) policyOpts.allow = req.body.allow;
-      if (req.body.deny) policyOpts.deny = req.body.deny;
-      if (req.body.maxCalls) policyOpts.limits = { maxCalls: req.body.maxCalls };
+      let policyOpts = {};
+      if (req.agentKey) {
+        const s = req.agentKey.scope || {};
+        policyOpts = {
+          mode: s.mode || 'sandbox',
+          allow: s.allow || undefined,
+          deny: s.deny || undefined,
+          limits: s.maxCalls ? { maxCalls: s.maxCalls } : undefined,
+        };
+      } else {
+        if (req.body.mode) policyOpts.mode = req.body.mode;
+        if (req.body.allow) policyOpts.allow = req.body.allow;
+        if (req.body.deny) policyOpts.deny = req.body.deny;
+        if (req.body.maxCalls) policyOpts.limits = { maxCalls: req.body.maxCalls };
+      }
+      // Key scope may also restrict visible skills.
+      const skillIds = req.agentKey?.scope?.skillIds || req.body.skillIds || null;
       const built = buildSkillTools({
-        skillIds: req.body.skillIds || null,
+        skillIds,
         policyOpts,
       });
       tools = built.tools;
@@ -228,7 +246,7 @@ router.post(
  * Lets a UI render a "what can this agent do" panel without having to
  * hardcode the list.
  */
-router.get('/skills', authenticateToken, (req, res) => {
+router.get('/skills', authenticateAgent, (req, res) => {
   const { skills: loaded, errors } = skills.get();
   res.json({
     skills: skills.listSkills(loaded),
