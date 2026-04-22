@@ -432,13 +432,41 @@ model Project {
   // UI offers alongside recent activity.
   isStarred    Boolean   @default(false)
 
+  // Read-only share — if non-null, /projects/share/<shareId>
+  // renders a public snapshot of the project (name, description,
+  // file list) without revealing the owner's chats. Toggled via the
+  // "share link" control on the detail page.
+  shareId      String?   @unique
+
   // Relations — file bucket + chats created inside this project.
   files       File[]    @relation("ProjectFiles")
   chats       Chat[]
+  memories    ProjectMemory[]
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   @@map("projects")
   @@index([userId, updatedAt])
+}
+
+// Project memory — durable facts the assistant should remember across
+// chats inside a project. One row per extracted fact. Populated
+// asynchronously after each chat turn by services/project-memory.js:
+// the assistant's reply + the preceding user message are handed to a
+// small LLM extractor that emits 0-3 short "things worth remembering"
+// bullet points (user preferences, the project's scope, decisions
+// made). Rows are plain text — this intentionally sidesteps the
+// embedding-based RAG machinery in long-term-memory.js because the UI
+// just renders the list; semantic retrieval isn't required here.
+model ProjectMemory {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fact         String   @db.Text
+  sourceChatId String?  // optional pointer to the chat this came from
+  createdAt    DateTime @default(now())
+
+  @@map("project_memories")
+  @@index([projectId, createdAt])
 }

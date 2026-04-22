@@ -86,7 +86,22 @@
     "saving": "Guardando…",
     "detailLoadFailed": "No se pudo cargar el proyecto",
     "notFoundTitle": "Proyecto no encontrado",
-    "notFoundDesc": "Puede que haya sido eliminado o no tengas acceso."
+    "notFoundDesc": "Puede que haya sido eliminado o no tengas acceso.",
+    "forgetFact": "Olvidar",
+    "memoryDeleteFailed": "No se pudo olvidar el dato",
+    "share": "Compartir proyecto",
+    "shareTitle": "Compartir este proyecto",
+    "shareDesc": "Cualquiera con el enlace podrá ver el nombre, la descripción y la lista de archivos (solo lectura). Los chats y las instrucciones permanecen privados.",
+    "shareNotEnabled": "Compartir está desactivado.",
+    "enableShare": "Activar enlace de compartir",
+    "enabling": "Activando…",
+    "revokeShare": "Revocar enlace",
+    "revoking": "Revocando…",
+    "shareFailed": "La acción de compartir falló",
+    "copy": "Copiar",
+    "copied": "¡Copiado!",
+    "copyFailed": "No se pudo copiar el enlace",
+    "close": "Cerrar"
   },
   "chat": {
     "placeholder": "Escribe un mensaje",

@@ -17,10 +17,27 @@ export interface Project {
   description: string | null
   instructions: string | null
   isStarred: boolean
+  shareId: string | null
   createdAt: string
   updatedAt: string
   fileCount?: number
   chatCount?: number
+}
+
+export interface ProjectMemoryItem {
+  id: string
+  fact: string
+  sourceChatId: string | null
+  createdAt: string
+}
+
+export interface SharedProjectSnapshot {
+  id: string
+  name: string
+  description: string | null
+  createdAt: string
+  updatedAt: string
+  files: Array<{ id: string; originalName: string; mimeType: string; size: number }>
 }
 
 export interface ProjectDetail extends Project {
@@ -167,5 +184,51 @@ export const projectsService = {
       headers: authHeaders(),
     })
     await handle<{ detached: boolean }>(res)
+  },
+
+  async listMemory(projectId: string): Promise<ProjectMemoryItem[]> {
+    const res = await fetch(`${baseUrl}/${projectId}/memory`, {
+      credentials: "include",
+      headers: authHeaders(),
+    })
+    const json = await handle<{ memories: ProjectMemoryItem[] }>(res)
+    return json.memories
+  },
+
+  async deleteMemory(projectId: string, factId: string): Promise<void> {
+    const res = await fetch(`${baseUrl}/${projectId}/memory/${factId}`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: authHeaders(),
+    })
+    await handle<{ deleted: boolean }>(res)
+  },
+
+  async enableShare(projectId: string): Promise<{ shareId: string; url: string }> {
+    const res = await fetch(`${baseUrl}/${projectId}/share`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+    })
+    return handle<{ shareId: string; url: string }>(res)
+  },
+
+  async revokeShare(projectId: string): Promise<void> {
+    const res = await fetch(`${baseUrl}/${projectId}/share`, {
+      method: "DELETE",
+      credentials: "include",
+      headers: authHeaders(),
+    })
+    await handle<{ revoked: boolean }>(res)
+  },
+
+  async getShared(shareId: string): Promise<SharedProjectSnapshot> {
+    // Public endpoint — no auth header needed.
+    const res = await fetch(`${baseUrl}/share/${shareId}`, {
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+    })
+    const json = await handle<{ project: SharedProjectSnapshot }>(res)
+    return json.project
   },
 }

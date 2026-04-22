@@ -341,7 +341,16 @@ router.post(
             },
             project: {
               include: {
-                files: true
+                files: true,
+                // Include the most recent memory facts — ordered
+                // newest-first, capped so the prompt injection stays
+                // small. master-prompt renders them as a bullet list
+                // under the project block.
+                memories: {
+                  orderBy: { createdAt: 'desc' },
+                  take: 30,
+                  select: { fact: true, createdAt: true },
+                },
               }
             }
           }
@@ -349,7 +358,7 @@ router.post(
 
         if (chat && chat.project) {
           project = chat.project;
-          console.log(`📁 Using Project: ${project.name} (${project.files?.length || 0} files)`);
+          console.log(`📁 Using Project: ${project.name} (${project.files?.length || 0} files, ${project.memories?.length || 0} memories)`);
         }
 
         if (chat && chat.customGpt) {
@@ -896,6 +905,25 @@ router.post(
         }
 
         await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles, regenerate);
+
+        // Project memory — fire-and-forget extraction of durable
+        // facts from this turn. Runs only when the chat belongs to a
+        // project; `project` was hydrated at the top of the handler.
+        // We setImmediate so response finalisation isn't blocked by
+        // an LLM call the user isn't waiting on.
+        if (project && project.id && chatId) {
+          const projectMemory = require('../services/project-memory');
+          setImmediate(() => {
+            projectMemory.extractAndSave({
+              projectId: project.id,
+              projectName: project.name,
+              projectDescription: project.description || null,
+              userMessage: prompt,
+              assistantMessage: finalContent,
+              sourceChatId: chatId,
+            }).catch(() => { /* swallowed inside extractAndSave */ });
+          });
+        }
       } else {
         // Same guard for the anonymous branch.
         if (!finalContent || finalContent.trim().length < MIN_VISIBLE_CHARS) {
