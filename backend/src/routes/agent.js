@@ -21,6 +21,7 @@ const { body, validationResult } = require('express-validator');
 const OpenAI = require('openai');
 const { authenticateToken } = require('../middleware/auth');
 const reactAgent = require('../services/react-agent');
+const executor = require('../services/agents/executor');
 const rag = require('../services/rag-service');
 const skills = require('../services/skills');
 
@@ -133,6 +134,7 @@ router.post(
     body('allow').optional().isArray(),
     body('deny').optional().isArray(),
     body('maxCalls').optional().isInt({ min: 1, max: 500 }),
+    body('thinking').optional().isIn(['low', 'medium', 'high']),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -174,16 +176,44 @@ router.post(
       tools = buildTools({ openai, userId: req.user.id, collection });
     }
 
+    // Thinking level:
+    //   'low' (default) — plain ReAct loop, no planner. Same as before.
+    //   'medium'        — plan once, execute each step, synthesise.
+    //   'high'          — plan + re-plan mid-run if a step fails.
+    // The planner/executor path works with both skills and legacy
+    // tools since both expose { name, description, parameters,
+    // execute } — react-agent's own shape.
+    const thinking = req.body.thinking || 'low';
+
     try {
-      const result = await reactAgent.run(openai, {
-        query: req.body.query,
-        tools,
-        ctx,
-        maxSteps: req.body.maxSteps,
-        model: req.body.model,
-        onStep: (step) => send({ type: 'step', step }),
-      });
-      send({ type: 'final', answer: result.finalAnswer, stoppedReason: result.stoppedReason });
+      let result;
+      if (thinking === 'low') {
+        result = await reactAgent.run(openai, {
+          query: req.body.query,
+          tools,
+          ctx,
+          maxSteps: req.body.maxSteps,
+          model: req.body.model,
+          onStep: (step) => send({ type: 'step', step }),
+        });
+        send({ type: 'final', answer: result.finalAnswer, stoppedReason: result.stoppedReason });
+      } else {
+        result = await executor.run(openai, {
+          goal: req.body.query,
+          tools,
+          thinking,
+          executorModel: req.body.model || 'gpt-4o',
+          ctx,
+          onStep: (evt) => send({ type: evt.phase, ...evt }),
+        });
+        send({
+          type: 'final',
+          answer: result.finalAnswer,
+          stoppedReason: result.stoppedReason,
+          plan: result.plan,
+          replans: result.replans,
+        });
+      }
       res.end();
     } catch (err) {
       console.error('[agent] run failed:', err);
