@@ -19,16 +19,53 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const OpenAI = require('openai');
+const { authenticateAgent } = require('../middleware/agent-access');
 const { authenticateToken } = require('../middleware/auth');
 const reactAgent = require('../services/react-agent');
+const executor = require('../services/agents/executor');
 const rag = require('../services/rag-service');
+const skills = require('../services/skills');
 
 const router = express.Router();
 
 /**
- * Build the tool registry used by the agent. The tools close over the
- * request context (userId, OpenAI client) so they pick up the right
- * collection / API key without leaking those through tool arguments.
+ * Build the tool registry for this request from the filesystem-loaded
+ * skill registry, gated by a session capability policy.
+ *
+ * We keep `buildTools` below for backward compatibility — older callers
+ * that pass no explicit tool preference get the legacy inline tools.
+ * New callers can pass `useSkills: true` to use the skills registry
+ * instead (the recommended path going forward).
+ *
+ * The policy decides which capabilities this session can exercise and
+ * caps tool usage. Default is "main" (broad) for the authenticated
+ * user; routes that spawn sub-agents will ask for "sandbox".
+ *
+ * Return shape includes `hidden` so callers can surface skipped skills
+ * in a diagnostic frame for the UI ("browser skill not available in
+ * this mode").
+ */
+function buildSkillTools({ skillIds = null, policyOpts = {} } = {}) {
+  const { skills: loaded } = skills.get();
+  const chosen = skillIds
+    ? Array.from(loaded.values()).filter(s => skillIds.includes(s.id))
+    : Array.from(loaded.values());
+  const pol = skills.createPolicy(policyOpts);
+  const { skills: visible, hidden, counters } = skills.wrapSkillsWithPolicy(chosen, pol);
+  return {
+    tools: visible.map(s => skills.toReactTool(s)),
+    hidden,
+    counters,
+    policy: pol,
+  };
+}
+
+/**
+ * Build the legacy inline tool registry. Kept so the existing API
+ * surface doesn't change for callers that don't opt into skills yet.
+ * The tools close over the request context (userId, OpenAI client) so
+ * they pick up the right collection / API key without leaking those
+ * through tool arguments.
  */
 function buildTools({ openai, userId, collection }) {
   return [
@@ -86,12 +123,19 @@ function buildTools({ openai, userId, collection }) {
 
 router.post(
   '/run',
-  authenticateToken,
+  authenticateAgent,
   [
     body('query').trim().isLength({ min: 3 }).withMessage('query too short'),
     body('maxSteps').optional().isInt({ min: 2, max: 15 }),
     body('collection').optional().isString(),
     body('model').optional().isString(),
+    body('useSkills').optional().isBoolean(),
+    body('skillIds').optional().isArray(),
+    body('mode').optional().isIn(['main', 'sandbox']),
+    body('allow').optional().isArray(),
+    body('deny').optional().isArray(),
+    body('maxCalls').optional().isInt({ min: 1, max: 500 }),
+    body('thinking').optional().isIn(['low', 'medium', 'high']),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -106,21 +150,88 @@ router.post(
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const tools = buildTools({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'default',
-    });
+    const collection = req.body.collection || 'default';
+    const ctx = { openai, userId: req.user.id, collection };
+
+    // Skills path (new) vs inline tools (legacy). The inline path stays
+    // so existing clients that don't know about the registry keep
+    // working; new callers pass useSkills:true to get the registry.
+    // With skills, a capability policy also gates which tools are
+    // visible to the LLM and caps how many times each may run.
+    //
+    // When authenticated via an agent API key, the key's scope
+    // OVERRIDES any policy options the caller sent in the body —
+    // otherwise a compromised key could elevate its own privileges by
+    // just passing { mode: 'main', allow: [...] }.
+    let tools;
+    if (req.body.useSkills) {
+      let policyOpts = {};
+      if (req.agentKey) {
+        const s = req.agentKey.scope || {};
+        policyOpts = {
+          mode: s.mode || 'sandbox',
+          allow: s.allow || undefined,
+          deny: s.deny || undefined,
+          limits: s.maxCalls ? { maxCalls: s.maxCalls } : undefined,
+        };
+      } else {
+        if (req.body.mode) policyOpts.mode = req.body.mode;
+        if (req.body.allow) policyOpts.allow = req.body.allow;
+        if (req.body.deny) policyOpts.deny = req.body.deny;
+        if (req.body.maxCalls) policyOpts.limits = { maxCalls: req.body.maxCalls };
+      }
+      // Key scope may also restrict visible skills.
+      const skillIds = req.agentKey?.scope?.skillIds || req.body.skillIds || null;
+      const built = buildSkillTools({
+        skillIds,
+        policyOpts,
+      });
+      tools = built.tools;
+      // Tell the client which skills were filtered out so a UI can
+      // render "browser not available" instead of silently hiding.
+      if (built.hidden.length > 0) send({ type: 'policy', hidden: built.hidden, mode: built.policy.mode });
+    } else {
+      tools = buildTools({ openai, userId: req.user.id, collection });
+    }
+
+    // Thinking level:
+    //   'low' (default) — plain ReAct loop, no planner. Same as before.
+    //   'medium'        — plan once, execute each step, synthesise.
+    //   'high'          — plan + re-plan mid-run if a step fails.
+    // The planner/executor path works with both skills and legacy
+    // tools since both expose { name, description, parameters,
+    // execute } — react-agent's own shape.
+    const thinking = req.body.thinking || 'low';
 
     try {
-      const result = await reactAgent.run(openai, {
-        query: req.body.query,
-        tools,
-        maxSteps: req.body.maxSteps,
-        model: req.body.model,
-        onStep: (step) => send({ type: 'step', step }),
-      });
-      send({ type: 'final', answer: result.finalAnswer, stoppedReason: result.stoppedReason });
+      let result;
+      if (thinking === 'low') {
+        result = await reactAgent.run(openai, {
+          query: req.body.query,
+          tools,
+          ctx,
+          maxSteps: req.body.maxSteps,
+          model: req.body.model,
+          onStep: (step) => send({ type: 'step', step }),
+        });
+        send({ type: 'final', answer: result.finalAnswer, stoppedReason: result.stoppedReason });
+      } else {
+        result = await executor.run(openai, {
+          goal: req.body.query,
+          tools,
+          thinking,
+          executorModel: req.body.model || 'gpt-4o',
+          ctx,
+          onStep: (evt) => send({ type: evt.phase, ...evt }),
+        });
+        send({
+          type: 'final',
+          answer: result.finalAnswer,
+          stoppedReason: result.stoppedReason,
+          plan: result.plan,
+          replans: result.replans,
+        });
+      }
       res.end();
     } catch (err) {
       console.error('[agent] run failed:', err);
@@ -129,5 +240,18 @@ router.post(
     }
   }
 );
+
+/**
+ * GET /api/agent/skills — list every loaded skill + its params/caps.
+ * Lets a UI render a "what can this agent do" panel without having to
+ * hardcode the list.
+ */
+router.get('/skills', authenticateAgent, (req, res) => {
+  const { skills: loaded, errors } = skills.get();
+  res.json({
+    skills: skills.listSkills(loaded),
+    loadErrors: errors,
+  });
+});
 
 module.exports = router;

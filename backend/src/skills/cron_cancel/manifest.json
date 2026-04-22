@@ -1,0 +1,18 @@
+{
+  "id": "cron_cancel",
+  "name": "Cancel scheduled task",
+  "version": "1.0.0",
+  "description": "Cancel a scheduled cron job or webhook by id. The id comes from cron_list or a prior cron_schedule / webhook_create call.",
+  "capabilities": ["schedule"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Job id (e.g. 'job_abc123' or 'hook_xyz456')."
+      }
+    },
+    "required": ["id"],
+    "additionalProperties": false
+  }
+}

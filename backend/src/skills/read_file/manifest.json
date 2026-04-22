@@ -1,0 +1,24 @@
+{
+  "id": "read_file",
+  "name": "Read File",
+  "version": "1.0.0",
+  "description": "Read the full text of a file from the user's knowledge collection, in ingestion order. `source` must match an exact source id — use list_files or search_docs first if you don't have it.",
+  "capabilities": ["fs:read"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "source": {
+        "type": "string",
+        "description": "Exact source identifier to read (e.g. a filename)."
+      },
+      "max_chars": {
+        "type": "integer",
+        "minimum": 200,
+        "maximum": 40000,
+        "description": "Character cap on the returned text. Default 8000."
+      }
+    },
+    "required": ["source"],
+    "additionalProperties": false
+  }
+}

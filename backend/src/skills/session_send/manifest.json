@@ -1,0 +1,30 @@
+{
+  "id": "session_send",
+  "name": "Send message to session",
+  "version": "1.0.0",
+  "description": "Append a message to an existing session (the user's own). Optionally run the agent on the new message. Use to update a long-running sub-session with new instructions, or to leave notes the user will see.",
+  "capabilities": ["agent:spawn"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "description": "Target chat id. Must belong to the current user."
+      },
+      "message": {
+        "type": "string",
+        "description": "Message content to append (assistant role unless runAgent:true, then user role)."
+      },
+      "runAgent": {
+        "type": "boolean",
+        "description": "If true, record the message as a user turn and immediately run the agent in the target session. Default false (just appends as an assistant note)."
+      },
+      "thinking": {
+        "type": "string",
+        "enum": ["low", "medium", "high"]
+      }
+    },
+    "required": ["sessionId", "message"],
+    "additionalProperties": false
+  }
+}
