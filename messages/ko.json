@@ -65,7 +65,22 @@
     "saving": "Saving…",
     "detailLoadFailed": "Failed to load project",
     "notFoundTitle": "Project not found",
-    "notFoundDesc": "It may have been deleted or you may not have access."
+    "notFoundDesc": "It may have been deleted or you may not have access.",
+    "forgetFact": "Forget",
+    "memoryDeleteFailed": "Failed to forget fact",
+    "share": "Share project",
+    "shareTitle": "Share this project",
+    "shareDesc": "Anyone with the link can see the project name, description, and file list (read-only). Chats and instructions stay private.",
+    "shareNotEnabled": "Sharing is off.",
+    "enableShare": "Enable share link",
+    "enabling": "Enabling…",
+    "revokeShare": "Revoke link",
+    "revoking": "Revoking…",
+    "shareFailed": "Sharing action failed",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "copyFailed": "Could not copy link",
+    "close": "Close"
   },
   "chat": {
     "placeholder": "메시지 입력", "send": "보내기", "stop": "중지", "regenerate": "다시 생성",

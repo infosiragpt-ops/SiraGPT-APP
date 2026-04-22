@@ -32,6 +32,7 @@ import { useTranslations } from "next-intl"
 import {
   ArrowLeft, MoreHorizontal, Star, Plus, Send,
   FileText, Trash2, Lock, Loader2, Paperclip, Pencil,
+  Share2, Link as LinkIcon, Check, X,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -46,7 +47,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
-import { projectsService, type ProjectDetail } from "@/lib/projects-service"
+import { projectsService, type ProjectDetail, type ProjectMemoryItem } from "@/lib/projects-service"
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
@@ -58,15 +59,25 @@ export default function ProjectDetailPage() {
   const t = useTranslations("projects")
 
   const [project, setProject] = React.useState<ProjectDetail | null>(null)
+  const [memories, setMemories] = React.useState<ProjectMemoryItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [draft, setDraft] = React.useState("")
   const [launching, setLaunching] = React.useState(false)
   const [instructionsOpen, setInstructionsOpen] = React.useState(false)
+  const [shareOpen, setShareOpen] = React.useState(false)
 
   const reload = React.useCallback(async () => {
     setLoading(true)
     try {
-      setProject(await projectsService.get(id))
+      // Load project + memory in parallel — memory fetch is allowed
+      // to fail (memory is a nice-to-have, not required for the
+      // page to render), so we catch locally and default to [].
+      const [p, mem] = await Promise.all([
+        projectsService.get(id),
+        projectsService.listMemory(id).catch(() => [] as ProjectMemoryItem[]),
+      ])
+      setProject(p)
+      setMemories(mem)
     } catch (err: any) {
       toast.error(err?.message || t("detailLoadFailed"))
     } finally {
@@ -75,6 +86,18 @@ export default function ProjectDetailPage() {
   }, [id, t])
 
   React.useEffect(() => { reload() }, [reload])
+
+  async function handleDeleteMemory(factId: string) {
+    if (!project) return
+    setMemories(prev => prev.filter(m => m.id !== factId)) // optimistic
+    try {
+      await projectsService.deleteMemory(project.id, factId)
+    } catch (err: any) {
+      toast.error(err?.message || t("memoryDeleteFailed"))
+      // Re-fetch to restore state if the delete failed.
+      projectsService.listMemory(project.id).then(setMemories).catch(() => {})
+    }
+  }
 
   async function handleToggleStar() {
     if (!project) return
@@ -167,6 +190,10 @@ export default function ProjectDetailPage() {
                       <Pencil className="mr-2 h-4 w-4" />
                       {t("editInstructions")}
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setShareOpen(true)}>
+                      <Share2 className="mr-2 h-4 w-4" />
+                      {t("share")}
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={handleDelete} className="text-red-600 focus:text-red-600">
                       <Trash2 className="mr-2 h-4 w-4" />
@@ -239,7 +266,7 @@ export default function ProjectDetailPage() {
 
           {/* ── Right column: memory / instructions / files ────────────── */}
           <aside className="space-y-4 lg:sticky lg:top-6 self-start">
-            <MemorySection t={t} />
+            <MemorySection t={t} memories={memories} onDelete={handleDeleteMemory} />
             <InstructionsSection
               t={t}
               project={project}
@@ -264,13 +291,26 @@ export default function ProjectDetailPage() {
           toast.success(t("instructionsSaved"))
         }}
       />
+
+      <ShareDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        project={project}
+        onChange={(shareId) => setProject(prev => prev ? { ...prev, shareId } : prev)}
+      />
     </div>
   )
 }
 
 // ─── Right-panel cards ────────────────────────────────────────────────────
 
-function MemorySection({ t }: { t: ReturnType<typeof useTranslations> }) {
+function MemorySection({
+  t, memories, onDelete,
+}: {
+  t: ReturnType<typeof useTranslations>
+  memories: ProjectMemoryItem[]
+  onDelete: (id: string) => void
+}) {
   return (
     <div className="rounded-xl border border-border/60 bg-card">
       <div className="flex items-start justify-between px-4 pt-4">
@@ -280,9 +320,31 @@ function MemorySection({ t }: { t: ReturnType<typeof useTranslations> }) {
           {t("onlyYou")}
         </span>
       </div>
-      <p className="text-xs text-muted-foreground px-4 pb-4 pt-1 leading-relaxed">
-        {t("memoryDesc")}
-      </p>
+
+      {memories.length === 0 ? (
+        <p className="text-xs text-muted-foreground px-4 pb-4 pt-1 leading-relaxed">
+          {t("memoryDesc")}
+        </p>
+      ) : (
+        <ul className="px-2 pb-3 pt-1 space-y-0.5">
+          {memories.map(m => (
+            <li
+              key={m.id}
+              className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40 transition-colors"
+            >
+              <span className="mt-1.5 h-1 w-1 rounded-full bg-muted-foreground/60 shrink-0" />
+              <p className="text-xs leading-snug flex-1 text-foreground/85">{m.fact}</p>
+              <button
+                onClick={() => onDelete(m.id)}
+                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-all shrink-0"
+                aria-label={t("forgetFact")}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -485,6 +547,106 @@ function InstructionsDialog({
           </Button>
           <Button onClick={save} disabled={saving}>
             {saving ? t("saving") : t("save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Share dialog ─────────────────────────────────────────────────────────
+//
+// Read-only share link. Toggle via Enable/Disable; URL shows only
+// when a share is active. Copy-to-clipboard preserves the same UX
+// pattern used elsewhere in the app.
+
+function ShareDialog({
+  open, onOpenChange, project, onChange,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  project: ProjectDetail
+  onChange: (shareId: string | null) => void
+}) {
+  const t = useTranslations("projects")
+  const [busy, setBusy] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
+
+  const shareUrl = React.useMemo(() => {
+    if (!project.shareId) return ""
+    if (typeof window === "undefined") return ""
+    return `${window.location.origin}/projects/share/${project.shareId}`
+  }, [project.shareId])
+
+  async function enable() {
+    setBusy(true)
+    try {
+      const out = await projectsService.enableShare(project.id)
+      onChange(out.shareId)
+    } catch (err: any) {
+      toast.error(err?.message || t("shareFailed"))
+    } finally { setBusy(false) }
+  }
+
+  async function revoke() {
+    setBusy(true)
+    try {
+      await projectsService.revokeShare(project.id)
+      onChange(null)
+    } catch (err: any) {
+      toast.error(err?.message || t("shareFailed"))
+    } finally { setBusy(false) }
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      toast.error(t("copyFailed"))
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[500px]">
+        <DialogHeader>
+          <DialogTitle>{t("shareTitle")}</DialogTitle>
+        </DialogHeader>
+        <p className="text-xs text-muted-foreground">{t("shareDesc")}</p>
+
+        {project.shareId ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <LinkIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+              <Input readOnly value={shareUrl} className="h-9 text-xs" onFocus={(e) => e.target.select()} />
+              <Button
+                variant="outline" size="sm" onClick={copy}
+                className="h-9 gap-1.5 shrink-0"
+              >
+                {copied ? <Check className="h-3.5 w-3.5" /> : <LinkIcon className="h-3.5 w-3.5" />}
+                {copied ? t("copied") : t("copy")}
+              </Button>
+            </div>
+            <div className="flex justify-end">
+              <Button variant="outline" size="sm" onClick={revoke} disabled={busy}>
+                {busy ? t("revoking") : t("revokeShare")}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between rounded-lg border border-dashed border-border/60 p-4">
+            <p className="text-xs text-muted-foreground">{t("shareNotEnabled")}</p>
+            <Button size="sm" onClick={enable} disabled={busy}>
+              {busy ? t("enabling") : t("enableShare")}
+            </Button>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {t("close")}
           </Button>
         </DialogFooter>
       </DialogContent>

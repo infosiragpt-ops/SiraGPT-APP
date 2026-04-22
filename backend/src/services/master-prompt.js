@@ -396,6 +396,17 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
       }).join('\n\n');
       body += `\n\n## PROJECT FILES (authoritative — prefer these over your own prior knowledge when they conflict)\n${knowledge}`;
     }
+
+    // Project memory — durable facts extracted from prior turns. We
+    // don't weight them as heavily as files (user preferences can
+    // shift; we'll re-extract on every turn) but they're surfaced to
+    // the model so it carries the project's history forward.
+    if (project.memories && project.memories.length > 0) {
+      const bullets = project.memories
+        .map(m => `- ${m.fact}`)
+        .join('\n');
+      body += `\n\n## PROJECT MEMORY (things the user has told you about this project)\n${bullets}`;
+    }
   }
 
   body += intentContext;

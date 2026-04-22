@@ -26,8 +26,40 @@ const express = require('express');
 const { body, param, query, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const projectMemory = require('../services/project-memory');
+const crypto = require('crypto');
 
 const router = express.Router();
+
+// ─── Public share view ───────────────────────────────────────────────────
+//
+// Defined BEFORE the authenticateToken middleware so it stays public.
+// Returns a redacted snapshot — name, description, file list — with no
+// chat history, no owner info, no instructions (which may contain
+// sensitive prompts). The /projects/share/:shareId frontend page reads
+// this.
+
+router.get('/share/:shareId', param('shareId').isString(), async (req, res) => {
+  try {
+    const project = await prisma.project.findFirst({
+      where: { shareId: req.params.shareId },
+      select: {
+        id: true, name: true, description: true,
+        createdAt: true, updatedAt: true,
+        files: {
+          select: { id: true, originalName: true, mimeType: true, size: true },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+        },
+      },
+    });
+    if (!project) return res.status(404).json({ error: 'Share link not found or revoked' });
+    res.json({ project });
+  } catch (err) {
+    console.error('[projects] public share error:', err);
+    res.status(500).json({ error: 'Failed to fetch shared project' });
+  }
+});
 
 router.use(authenticateToken);
 
@@ -83,7 +115,7 @@ router.get(
         orderBy,
         select: {
           id: true, name: true, description: true, instructions: true,
-          isStarred: true, createdAt: true, updatedAt: true,
+          isStarred: true, shareId: true, createdAt: true, updatedAt: true,
           _count: { select: { files: true, chats: true } },
         },
       });
@@ -317,5 +349,82 @@ router.delete(
     }
   }
 );
+
+// ─── Memory ───────────────────────────────────────────────────────────────
+
+router.get('/:id/memory', param('id').isString(), async (req, res) => {
+  try {
+    if (validationFail(req, res)) return;
+    const owned = await ownProject(req.user.id, req.params.id);
+    if (!owned) return res.status(404).json({ error: 'Project not found' });
+    const memories = await projectMemory.listMemory(owned.id);
+    res.json({ memories });
+  } catch (err) {
+    console.error('[projects] memory-list error:', err);
+    res.status(500).json({ error: 'Failed to list memory' });
+  }
+});
+
+router.delete(
+  '/:id/memory/:factId',
+  [param('id').isString(), param('factId').isString()],
+  async (req, res) => {
+    try {
+      if (validationFail(req, res)) return;
+      const out = await projectMemory.deleteMemory({
+        userId: req.user.id,
+        projectId: req.params.id,
+        factId: req.params.factId,
+      });
+      if (!out.ok) return res.status(404).json({ error: out.reason });
+      res.json({ deleted: true });
+    } catch (err) {
+      console.error('[projects] memory-delete error:', err);
+      res.status(500).json({ error: 'Failed to delete memory' });
+    }
+  }
+);
+
+// ─── Sharing (enable / revoke) ────────────────────────────────────────────
+//
+// We use a URL-friendly 24-char hex token rather than reusing the id
+// so revoking a share link and re-enabling it yields a NEW URL (the
+// old one becomes permanently dead, which is the correct security
+// behaviour — a leaked URL must stay leaked rather than silently
+// resuming access if the owner re-shares later).
+
+router.post('/:id/share', param('id').isString(), async (req, res) => {
+  try {
+    if (validationFail(req, res)) return;
+    const owned = await ownProject(req.user.id, req.params.id);
+    if (!owned) return res.status(404).json({ error: 'Project not found' });
+    const shareId = crypto.randomBytes(12).toString('hex');
+    const updated = await prisma.project.update({
+      where: { id: owned.id },
+      data: { shareId },
+      select: { shareId: true },
+    });
+    res.json({ shareId: updated.shareId, url: `/projects/share/${updated.shareId}` });
+  } catch (err) {
+    console.error('[projects] share-enable error:', err);
+    res.status(500).json({ error: 'Failed to enable sharing' });
+  }
+});
+
+router.delete('/:id/share', param('id').isString(), async (req, res) => {
+  try {
+    if (validationFail(req, res)) return;
+    const owned = await ownProject(req.user.id, req.params.id);
+    if (!owned) return res.status(404).json({ error: 'Project not found' });
+    await prisma.project.update({
+      where: { id: owned.id },
+      data: { shareId: null },
+    });
+    res.json({ revoked: true });
+  } catch (err) {
+    console.error('[projects] share-revoke error:', err);
+    res.status(500).json({ error: 'Failed to revoke sharing' });
+  }
+});
 
 module.exports = router;
