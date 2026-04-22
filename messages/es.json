@@ -101,7 +101,54 @@
     "copy": "Copiar",
     "copied": "¡Copiado!",
     "copyFailed": "No se pudo copiar el enlace",
-    "close": "Cerrar"
+    "close": "Cerrar",
+    "generateMarcoTeorico": "Generar marco teórico",
+    "generateMarcoTeoricoDesc": "Buscar fuentes académicas, validar DOIs y redactar un borrador citado en APA 7."
+  },
+  "marcoTeorico": {
+    "title": "Marco teórico",
+    "subtitle": "Busca, valida y sintetiza fuentes académicas en un borrador con citas APA 7 para este proyecto.",
+    "topic": "Tema de investigación",
+    "topicPlaceholder": "ej. Fiabilidad de escalas Likert en educación superior",
+    "yearFrom": "Desde",
+    "yearTo": "Hasta",
+    "sources": "Fuentes",
+    "language": "Idioma",
+    "generate": "Generar",
+    "regenerate": "Regenerar",
+    "cancel": "Cancelar",
+    "pipeline": "Flujo",
+    "phase": {
+
+      "search": "Buscar fuentes académicas",
+
+      "validate": "Validar DOIs",
+
+      "synthesize": "Redactar con citas",
+
+      "format": "Construir referencias"
+
+    },
+    "searchRunning": "Consultando OpenAlex…",
+    "validateRunning": "Verificando en CrossRef…",
+    "synthesizeRunning": "Transmitiendo borrador…",
+    "formatRunning": "Componiendo referencias…",
+    "foundN": "{count} fuentes encontradas",
+    "validatedN": "{valid}/{total} DOIs verificados",
+    "yearDistribution": "Fuentes por año",
+    "sourcesFound": "{count} fuentes",
+    "preview": "Vista previa",
+    "saveAsChat": "Guardar como chat",
+    "export": "Exportar .md",
+    "savedAsChat": "Guardado — abriendo chat…",
+    "saveFailed": "No se pudo guardar",
+    "emptyPreview": "Configura la búsqueda a la izquierda y pulsa Generar. El borrador aparecerá aquí mientras se redacta.",
+    "warmingUp": "Buscando…",
+    "topicTooShort": "El tema es demasiado corto",
+    "generateFailed": "Falló la generación",
+    "loadFailed": "No se pudo cargar el proyecto",
+    "projectNotFound": "Proyecto no encontrado",
+    "backToProject": "← {name}"
   },
   "chat": {
     "placeholder": "Escribe un mensaje",

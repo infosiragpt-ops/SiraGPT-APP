@@ -32,7 +32,7 @@ import { useTranslations } from "next-intl"
 import {
   ArrowLeft, MoreHorizontal, Star, Plus, Send,
   FileText, Trash2, Lock, Loader2, Paperclip, Pencil,
-  Share2, Link as LinkIcon, Check, X,
+  Share2, Link as LinkIcon, Check, X, BookOpen,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -236,6 +236,28 @@ export default function ProjectDetailPage() {
                 </div>
               </div>
             </form>
+
+            {/* Marco Teórico launcher — prominent entry point to the
+                academic-literature-review pipeline. Kept above the
+                recent-chats list because this is the signature
+                action for a research-oriented project. */}
+            <button
+              onClick={() => router.push(`/projects/${project.id}/marco-teorico`)}
+              className="w-full group mb-3 rounded-xl border border-border/60 bg-card px-4 py-3 text-left hover:border-foreground/30 hover:shadow-sm transition-all"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-foreground/5 group-hover:bg-foreground/10 transition-colors">
+                  <BookOpen className="h-4 w-4 text-foreground/80" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium">{t("generateMarcoTeorico")}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
+                    {t("generateMarcoTeoricoDesc")}
+                  </div>
+                </div>
+                <ArrowLeft className="h-4 w-4 text-muted-foreground rotate-180 group-hover:text-foreground transition-colors shrink-0" />
+              </div>
+            </button>
 
             {/* Recent chats within this project — empty state when
                 the project has none yet, mirroring the reference UX. */}
