@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "Новый чат", "searchChats": "Поиск чатов", "library": "Библиотека", "gpts": "GPTs",
     "recentChats": "Недавние чаты", "noChats": "Пока нет чатов. Начните разговор!",
-    "settings": "Настройки", "profile": "Профиль", "billing": "Оплата", "logout": "Выйти"
+    "settings": "Настройки", "profile": "Профиль", "billing": "Оплата", "logout": "Выйти",
+    "today": "Сегодня",
+    "last7Days": "Последние 7 дней",
+    "older": "Ранее"
   },
   "chat": {
     "placeholder": "Напишите сообщение", "send": "Отправить", "stop": "Остановить", "regenerate": "Перегенерировать",

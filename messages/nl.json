@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "Nieuwe chat", "searchChats": "Chats zoeken", "library": "Bibliotheek", "gpts": "GPTs",
     "recentChats": "Recente chats", "noChats": "Nog geen chats. Start een gesprek!",
-    "settings": "Instellingen", "profile": "Profiel", "billing": "Facturatie", "logout": "Uitloggen"
+    "settings": "Instellingen", "profile": "Profiel", "billing": "Facturatie", "logout": "Uitloggen",
+    "today": "Vandaag",
+    "last7Days": "Laatste 7 dagen",
+    "older": "Ouder"
   },
   "chat": {
     "placeholder": "Typ een bericht", "send": "Versturen", "stop": "Stoppen", "regenerate": "Opnieuw genereren",

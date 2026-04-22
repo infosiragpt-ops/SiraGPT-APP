@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "새 채팅", "searchChats": "채팅 검색", "library": "라이브러리", "gpts": "GPTs",
     "recentChats": "최근 채팅", "noChats": "아직 채팅이 없습니다. 대화를 시작해 보세요!",
-    "settings": "설정", "profile": "프로필", "billing": "결제", "logout": "로그아웃"
+    "settings": "설정", "profile": "프로필", "billing": "결제", "logout": "로그아웃",
+    "today": "오늘",
+    "last7Days": "지난 7일",
+    "older": "이전"
   },
   "chat": {
     "placeholder": "메시지 입력", "send": "보내기", "stop": "중지", "regenerate": "다시 생성",

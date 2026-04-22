@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "Yeni sohbet", "searchChats": "Sohbetleri ara", "library": "Kütüphane", "gpts": "GPTs",
     "recentChats": "Son sohbetler", "noChats": "Henüz sohbet yok. Bir konuşma başlatın!",
-    "settings": "Ayarlar", "profile": "Profil", "billing": "Faturalandırma", "logout": "Çıkış yap"
+    "settings": "Ayarlar", "profile": "Profil", "billing": "Faturalandırma", "logout": "Çıkış yap",
+    "today": "Bugün",
+    "last7Days": "Son 7 gün",
+    "older": "Daha eski"
   },
   "chat": {
     "placeholder": "Mesaj yazın", "send": "Gönder", "stop": "Durdur", "regenerate": "Yeniden oluştur",

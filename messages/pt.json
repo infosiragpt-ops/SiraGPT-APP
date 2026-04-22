@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "Novo chat", "searchChats": "Pesquisar chats", "library": "Biblioteca", "gpts": "GPTs",
     "recentChats": "Chats recentes", "noChats": "Ainda não há chats. Inicie uma conversa!",
-    "settings": "Configurações", "profile": "Perfil", "billing": "Faturamento", "logout": "Sair"
+    "settings": "Configurações", "profile": "Perfil", "billing": "Faturamento", "logout": "Sair",
+    "today": "Hoje",
+    "last7Days": "Últimos 7 dias",
+    "older": "Mais antigos"
   },
   "chat": {
     "placeholder": "Digite uma mensagem", "send": "Enviar", "stop": "Parar", "regenerate": "Regenerar",

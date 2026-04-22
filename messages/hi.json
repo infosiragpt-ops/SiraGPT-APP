@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "नई चैट", "searchChats": "चैट खोजें", "library": "लाइब्रेरी", "gpts": "GPTs",
     "recentChats": "हाल की चैट", "noChats": "अभी कोई चैट नहीं है। बातचीत शुरू करें!",
-    "settings": "सेटिंग्स", "profile": "प्रोफ़ाइल", "billing": "बिलिंग", "logout": "लॉग आउट"
+    "settings": "सेटिंग्स", "profile": "प्रोफ़ाइल", "billing": "बिलिंग", "logout": "लॉग आउट",
+    "today": "आज",
+    "last7Days": "पिछले 7 दिन",
+    "older": "पुराने"
   },
   "chat": {
     "placeholder": "संदेश लिखें", "send": "भेजें", "stop": "रोकें", "regenerate": "पुनः तैयार करें",

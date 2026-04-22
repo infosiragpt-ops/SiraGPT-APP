@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "Nuova chat", "searchChats": "Cerca chat", "library": "Libreria", "gpts": "GPTs",
     "recentChats": "Chat recenti", "noChats": "Ancora nessuna chat. Inizia una conversazione!",
-    "settings": "Impostazioni", "profile": "Profilo", "billing": "Fatturazione", "logout": "Esci"
+    "settings": "Impostazioni", "profile": "Profilo", "billing": "Fatturazione", "logout": "Esci",
+    "today": "Oggi",
+    "last7Days": "Ultimi 7 giorni",
+    "older": "Precedenti"
   },
   "chat": {
     "placeholder": "Scrivi un messaggio", "send": "Invia", "stop": "Ferma", "regenerate": "Rigenera",

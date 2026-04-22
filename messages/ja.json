@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "新しいチャット", "searchChats": "チャットを検索", "library": "ライブラリ", "gpts": "GPTs",
     "recentChats": "最近のチャット", "noChats": "まだチャットがありません。会話を始めましょう！",
-    "settings": "設定", "profile": "プロフィール", "billing": "請求", "logout": "ログアウト"
+    "settings": "設定", "profile": "プロフィール", "billing": "請求", "logout": "ログアウト",
+    "today": "今日",
+    "last7Days": "過去 7 日間",
+    "older": "以前"
   },
   "chat": {
     "placeholder": "メッセージを入力", "send": "送信", "stop": "停止", "regenerate": "再生成",

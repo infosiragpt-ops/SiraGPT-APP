@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "Nouvelle discussion", "searchChats": "Rechercher", "library": "Bibliothèque", "gpts": "GPTs",
     "recentChats": "Discussions récentes", "noChats": "Aucune discussion. Commencez-en une !",
-    "settings": "Paramètres", "profile": "Profil", "billing": "Facturation", "logout": "Se déconnecter"
+    "settings": "Paramètres", "profile": "Profil", "billing": "Facturation", "logout": "Se déconnecter",
+    "today": "Aujourd'hui",
+    "last7Days": "7 derniers jours",
+    "older": "Plus anciens"
   },
   "chat": {
     "placeholder": "Écrivez un message", "send": "Envoyer", "stop": "Arrêter", "regenerate": "Régénérer",

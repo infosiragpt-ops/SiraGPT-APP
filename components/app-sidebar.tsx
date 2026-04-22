@@ -199,6 +199,55 @@ export function AppSidebar() {
     return `${Math.floor(diffInHours / 24)}d ago`
   }
 
+  /**
+   * Compact inline timestamp for the new single-line chat item — no
+   * trailing "ago", no double digits cramming against the row edge.
+   * Older-than-7-days renders as a localised short date (e.g. "14 mar")
+   * so the timestamp stays readable without taking a full line.
+   */
+  const formatChatTimeCompact = (dateString: string) => {
+    const date = new Date(dateString)
+    const diffInMinutes = Math.floor((Date.now() - date.getTime()) / 60000)
+    if (diffInMinutes < 1) return ""
+    if (diffInMinutes < 60) return `${diffInMinutes}m`
+    const hours = Math.floor(diffInMinutes / 60)
+    if (hours < 24) return `${hours}h`
+    const days = Math.floor(hours / 24)
+    if (days < 7) return `${days}d`
+    return date.toLocaleDateString(undefined, { day: "numeric", month: "short" })
+  }
+
+  /**
+   * Partition chats into time buckets for the ChatGPT/Claude-style
+   * date groupings rendered in the sidebar. Buckets returned in render
+   * order; empty buckets are filtered out at the call site so we don't
+   * render an empty "Today" header when there are no chats today.
+   *
+   * Day boundaries use the local timezone via new Date() — timestamps
+   * stored in UTC still bucket correctly because both sides of the
+   * subtraction are converted consistently.
+   */
+  const groupChatsByTime = (items: Array<{ id: string; updatedAt: string } & Record<string, any>>) => {
+    const now = Date.now()
+    const DAY = 24 * 60 * 60 * 1000
+    const today = new Date()
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+    const startOfYesterday = startOfToday - DAY
+    const weekAgo = now - 7 * DAY
+
+    const buckets: Record<"today" | "yesterday" | "last7Days" | "older", typeof items> = {
+      today: [], yesterday: [], last7Days: [], older: [],
+    }
+    for (const chat of items) {
+      const ts = new Date(chat.updatedAt).getTime()
+      if (ts >= startOfToday) buckets.today.push(chat)
+      else if (ts >= startOfYesterday) buckets.yesterday.push(chat)
+      else if (ts >= weekAgo) buckets.last7Days.push(chat)
+      else buckets.older.push(chat)
+    }
+    return buckets
+  }
+
   const isAnon = !user
   const isFreeUser = user?.plan?.toLowerCase() === "free"
 
@@ -393,9 +442,9 @@ export function AppSidebar() {
               />
 
             </div>
-            <div className="flex flex-col">
-              <span className="text-sm font-semibold">Sira GPT</span>
-              <span className="text-xs text-muted-foreground">AI Platform</span>
+            <div className="flex flex-col leading-tight">
+              <span className="text-sm font-semibold tracking-tight">Sira GPT</span>
+              <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70 mt-0.5">AI Platform</span>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -510,7 +559,7 @@ export function AppSidebar() {
           <SidebarGroup>
             <SidebarGroupLabel
               className={cn(
-                "pr-2 py-4 text-center text-sm text-muted-foreground",
+                "px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 select-none",
                 state === "closed" && "hidden"
               )}
             >
@@ -526,131 +575,168 @@ export function AppSidebar() {
                   </div>
                 ) : (
                   <>
-                    {chats.filter(chat => chat && chat.id).map((chat) => {
-                      const isEditing = editingChatId === chat.id
-                      // Use optimistic update if available, otherwise use original title
-                      const displayTitle = optimisticUpdates[chat.id] || chat.title
-                      const isTruncated = displayTitle.length > 25
-                      // Per-chat streaming indicator — drives the small
-                      // blue spinner that sits to the left of the 3-dot
-                      // menu while this chat's stream is still generating.
-                      const isStreaming = bgStreams.get(chat.id)?.status === "streaming"
+                    {(() => {
+                      // Split the validated chats into time buckets so
+                      // the sidebar reads like a journal instead of a
+                      // flat wall — matches the mental model users
+                      // already have from ChatGPT/Claude. Each chat's
+                      // inline timestamp stays compact so the group
+                      // header provides the coarse context and the row
+                      // just shows the fine offset ("3h", "2d").
+                      const validChats = chats.filter(c => c && c.id)
+                      const buckets = groupChatsByTime(validChats)
+                      const groupDefs: Array<[keyof typeof buckets, string]> = [
+                        ["today", t("today")],
+                        ["yesterday", t("yesterday")],
+                        ["last7Days", t("last7Days")],
+                        ["older", t("older")],
+                      ]
 
-                      return (
-                        <SidebarMenuItem key={chat.id}>
-                          <div className="flex items-center w-full group">
-                            {isEditing ? (
-                              <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-                                <Input
-                                  ref={editInputRef}
-                                  value={editTitle}
-                                  onChange={(e) => setEditTitle(e.target.value)}
-                                  onKeyDown={(e) => handleEditKeyDown(e, chat.id)}
-                                  onBlur={() => handleSaveEdit(chat.id)}
-                                  className="h-7 text-sm flex-1 px-2 py-1"
-                                  onClick={(e) => e.stopPropagation()}
-                                  autoFocus
-                                />
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 w-6 p-0 hover:bg-green-100 dark:hover:bg-green-900/20"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleSaveEdit(chat.id)
-                                  }}
-                                >
-                                  <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/20"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleCancelEdit()
-                                  }}
-                                >
-                                  <X className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
-                                </Button>
-                              </div>
-                            ) : (
-                              <>
-                                <TooltipProvider>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <SidebarMenuButton
-                                        isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
-                                        onClick={() => !isEditing && handleChatClick(chat.id)}
-                                        className={cn(
-                                          "flex-1 justify-start h-auto py-2 transition-all",
-                                          isStreaming ? "pr-14" : "pr-8",
-                                        )}
-                                      >
-                                        <div className="flex flex-col items-start min-w-0 flex-1">
-                                          <span className={cn("text-sm w-full transition-all", isTruncated ? "truncate" : "")}>
-                                            {displayTitle}
-                                          </span>
-                                          <span className="text-xs text-muted-foreground">
-                                            {formatChatTime(chat.updatedAt)}
-                                          </span>
-                                        </div>
-                                      </SidebarMenuButton>
-                                    </TooltipTrigger>
-                                    {isTruncated && (
-                                      <TooltipContent side="right" className="max-w-xs">
-                                        <p className="break-words">{displayTitle}</p>
-                                      </TooltipContent>
-                                    )}
-                                  </Tooltip>
-                                </TooltipProvider>
-                                {/* Always-on blue spinner while this chat's
-                                    background stream is still generating. Sits
-                                    to the LEFT of the 3-dot dropdown so the
-                                    user always sees which thread is working. */}
-                                {isStreaming && (
-                                  <Loader2
-                                    aria-label="Chat en progreso"
-                                    className="pointer-events-none absolute right-9 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-blue-500"
+                      const renderChatItem = (chat: any) => {
+                        const isEditing = editingChatId === chat.id
+                        const displayTitle = optimisticUpdates[chat.id] || chat.title
+                        const isTruncated = displayTitle.length > 25
+                        // Per-chat streaming indicator — drives the small
+                        // blue spinner that sits to the left of the 3-dot
+                        // menu while this chat's stream is still generating.
+                        const isStreaming = bgStreams.get(chat.id)?.status === "streaming"
+
+                        return (
+                          <SidebarMenuItem key={chat.id}>
+                            <div className="flex items-center w-full group">
+                              {isEditing ? (
+                                <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                                  <Input
+                                    ref={editInputRef}
+                                    value={editTitle}
+                                    onChange={(e) => setEditTitle(e.target.value)}
+                                    onKeyDown={(e) => handleEditKeyDown(e, chat.id)}
+                                    onBlur={() => handleSaveEdit(chat.id)}
+                                    className="h-7 text-sm flex-1 px-2 py-1"
+                                    onClick={(e) => e.stopPropagation()}
+                                    autoFocus
                                   />
-                                )}
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2 transition-opacity"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <MoreHorizontal className="h-3 w-3" />
-                                    </Button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-                                    <DropdownMenuItem
-                                      onClick={(e) => handleEditClick(chat, e)}
-                                    >
-                                      <Edit2 className="mr-2 h-4 w-4" />
-                                      Rename
-                                    </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        deleteChat(chat.id)
-                                      }}
-                                      className="text-red-600 focus:text-red-600"
-                                    >
-                                      <Trash2 className="mr-2 h-4 w-4" />
-                                      Delete
-                                    </DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                              </>
-                            )}
-                          </div>
-                        </SidebarMenuItem>
-                      )
-                    })}
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0 hover:bg-green-100 dark:hover:bg-green-900/20"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleSaveEdit(chat.id)
+                                    }}
+                                  >
+                                    <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/20"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleCancelEdit()
+                                    }}
+                                  >
+                                    <X className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <>
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <SidebarMenuButton
+                                          isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
+                                          onClick={() => !isEditing && handleChatClick(chat.id)}
+                                          className={cn(
+                                            // Single-row, fixed-height layout — 2x the density of
+                                            // the previous stacked title+timestamp. Right-padding
+                                            // holds room for the 3-dot menu (pr-8) or the streaming
+                                            // spinner + 3-dot (pr-14).
+                                            "flex-1 justify-start h-8 py-0 transition-all",
+                                            isStreaming ? "pr-14" : "pr-8",
+                                          )}
+                                        >
+                                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                                            <span className="text-sm flex-1 truncate">
+                                              {displayTitle}
+                                            </span>
+                                            {/* Timestamp fades on row-hover so the 3-dot menu
+                                                doesn't fight it for the right slot. tabular-nums
+                                                keeps widths aligned between "3h" and "12d". */}
+                                            <span className="text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover:opacity-0">
+                                              {formatChatTimeCompact(chat.updatedAt)}
+                                            </span>
+                                          </div>
+                                        </SidebarMenuButton>
+                                      </TooltipTrigger>
+                                      {isTruncated && (
+                                        <TooltipContent side="right" className="max-w-xs">
+                                          <p className="break-words">{displayTitle}</p>
+                                        </TooltipContent>
+                                      )}
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                  {/* Always-on blue spinner while this chat's
+                                      background stream is still generating. Sits
+                                      to the LEFT of the 3-dot dropdown so the
+                                      user always sees which thread is working. */}
+                                  {isStreaming && (
+                                    <Loader2
+                                      aria-label="Chat en progreso"
+                                      className="pointer-events-none absolute right-9 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-blue-500"
+                                    />
+                                  )}
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2 transition-opacity"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <MoreHorizontal className="h-3 w-3" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                      <DropdownMenuItem
+                                        onClick={(e) => handleEditClick(chat, e)}
+                                      >
+                                        <Edit2 className="mr-2 h-4 w-4" />
+                                        Rename
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          deleteChat(chat.id)
+                                        }}
+                                        className="text-red-600 focus:text-red-600"
+                                      >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        Delete
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </>
+                              )}
+                            </div>
+                          </SidebarMenuItem>
+                        )
+                      }
+
+                      return groupDefs.map(([key, label]) => {
+                        const items = buckets[key]
+                        if (items.length === 0) return null
+                        return (
+                          <React.Fragment key={key}>
+                            <div className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none">
+                              {label}
+                            </div>
+                            {items.map(renderChatItem)}
+                          </React.Fragment>
+                        )
+                      })
+                    })()}
 
                     {/* Loading indicator at the bottom */}
                     {isLoadingMore && (

@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "Nowy czat", "searchChats": "Szukaj czatów", "library": "Biblioteka", "gpts": "GPTs",
     "recentChats": "Ostatnie czaty", "noChats": "Brak czatów. Rozpocznij rozmowę!",
-    "settings": "Ustawienia", "profile": "Profil", "billing": "Rozliczenia", "logout": "Wyloguj"
+    "settings": "Ustawienia", "profile": "Profil", "billing": "Rozliczenia", "logout": "Wyloguj",
+    "today": "Dzisiaj",
+    "last7Days": "Ostatnie 7 dni",
+    "older": "Starsze"
   },
   "chat": {
     "placeholder": "Napisz wiadomość", "send": "Wyślij", "stop": "Zatrzymaj", "regenerate": "Wygeneruj ponownie",

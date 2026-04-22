@@ -3,7 +3,10 @@
   "sidebar": {
     "newChat": "محادثة جديدة", "searchChats": "بحث في المحادثات", "library": "المكتبة", "gpts": "GPTs",
     "recentChats": "المحادثات الأخيرة", "noChats": "لا توجد محادثات بعد. ابدأ محادثة!",
-    "settings": "الإعدادات", "profile": "الملف الشخصي", "billing": "الفوترة", "logout": "تسجيل الخروج"
+    "settings": "الإعدادات", "profile": "الملف الشخصي", "billing": "الفوترة", "logout": "تسجيل الخروج",
+    "today": "اليوم",
+    "last7Days": "آخر 7 أيام",
+    "older": "أقدم"
   },
   "chat": {
     "placeholder": "اكتب رسالة", "send": "إرسال", "stop": "إيقاف", "regenerate": "إعادة إنشاء",

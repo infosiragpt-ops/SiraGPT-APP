@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "Neuer Chat", "searchChats": "Chats suchen", "library": "Bibliothek", "gpts": "GPTs",
     "recentChats": "Letzte Chats", "noChats": "Noch keine Chats. Starten Sie ein Gespräch!",
-    "settings": "Einstellungen", "profile": "Profil", "billing": "Abrechnung", "logout": "Abmelden"
+    "settings": "Einstellungen", "profile": "Profil", "billing": "Abrechnung", "logout": "Abmelden",
+    "today": "Heute",
+    "last7Days": "Letzte 7 Tage",
+    "older": "Älter"
   },
   "chat": {
     "placeholder": "Nachricht schreiben", "send": "Senden", "stop": "Stopp", "regenerate": "Neu generieren",

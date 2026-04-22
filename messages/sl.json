@@ -9,7 +9,10 @@
     "settings": "Settings",
     "profile": "Profile",
     "billing": "Billing",
-    "logout": "Log out"
+    "logout": "Log out",
+    "today": "Today",
+    "last7Days": "Last 7 days",
+    "older": "Older"
   },
   "chat": {
     "placeholder": "Type a message",

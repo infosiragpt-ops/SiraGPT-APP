@@ -2,7 +2,10 @@
   "sidebar": {
     "newChat": "新对话", "searchChats": "搜索对话", "library": "资料库", "gpts": "GPTs",
     "recentChats": "最近对话", "noChats": "还没有对话，开始聊天吧！",
-    "settings": "设置", "profile": "个人资料", "billing": "账单", "logout": "退出登录"
+    "settings": "设置", "profile": "个人资料", "billing": "账单", "logout": "退出登录",
+    "today": "今天",
+    "last7Days": "最近 7 天",
+    "older": "更早"
   },
   "chat": {
     "placeholder": "输入消息", "send": "发送", "stop": "停止", "regenerate": "重新生成",

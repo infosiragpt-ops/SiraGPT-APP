@@ -23,7 +23,10 @@
     "settings": "Configuración",
     "profile": "Perfil",
     "billing": "Facturación",
-    "logout": "Cerrar sesión"
+    "logout": "Cerrar sesión",
+    "today": "Hoy",
+    "last7Days": "Últimos 7 días",
+    "older": "Anteriores"
   },
   "chat": {
     "placeholder": "Escribe un mensaje",
