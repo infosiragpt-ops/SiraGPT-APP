@@ -26,7 +26,34 @@
     "logout": "Cerrar sesión",
     "today": "Hoy",
     "last7Days": "Últimos 7 días",
-    "older": "Anteriores"
+    "older": "Anteriores",
+    "projects": "Proyectos"
+  },
+  "projects": {
+    "title": "Proyectos",
+    "newProject": "Nuevo proyecto",
+    "searchPlaceholder": "Buscar proyectos…",
+    "sortBy": "Ordenar por",
+    "sort": {
+      "activity": "Actividad reciente",
+      "edited": "Última edición",
+      "created": "Fecha de creación"
+    },
+    "createTitle": "Crear un proyecto personal",
+    "whatWorkingOn": "¿En qué está trabajando?",
+    "namePlaceholder": "Nombre su proyecto",
+    "whatTryingAchieve": "¿Qué intenta lograr?",
+    "descriptionPlaceholder": "Describa su proyecto, objetivos, tema, etc…",
+    "cancel": "Cancelar",
+    "create": "Crear proyecto",
+    "creating": "Creando…",
+    "createFailed": "No se pudo crear el proyecto",
+    "listFailed": "No se pudieron cargar los proyectos",
+    "emptyTitle": "Aún no hay proyectos",
+    "emptyDesc": "Crea un proyecto para reunir archivos e instrucciones y chatear con ese contexto.",
+    "noMatchTitle": "No hay proyectos que coincidan",
+    "noMatchDesc": "Prueba otro término de búsqueda.",
+    "updatedRel": "Actualizado {rel}"
   },
   "chat": {
     "placeholder": "Escribe un mensaje",

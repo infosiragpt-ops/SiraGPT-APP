@@ -5,7 +5,34 @@
     "settings": "설정", "profile": "프로필", "billing": "결제", "logout": "로그아웃",
     "today": "오늘",
     "last7Days": "지난 7일",
-    "older": "이전"
+    "older": "이전",
+    "projects": "Projects"
+  },
+  "projects": {
+    "title": "Projects",
+    "newProject": "New project",
+    "searchPlaceholder": "Search projects…",
+    "sortBy": "Sort by",
+    "sort": {
+      "activity": "Recent activity",
+      "edited": "Last edited",
+      "created": "Created date"
+    },
+    "createTitle": "Create a personal project",
+    "whatWorkingOn": "What are you working on?",
+    "namePlaceholder": "Name your project",
+    "whatTryingAchieve": "What are you trying to achieve?",
+    "descriptionPlaceholder": "Describe your project, goals, topic, etc.",
+    "cancel": "Cancel",
+    "create": "Create project",
+    "creating": "Creating…",
+    "createFailed": "Failed to create project",
+    "listFailed": "Failed to load projects",
+    "emptyTitle": "No projects yet",
+    "emptyDesc": "Create a project to collect files and instructions for a focused chat.",
+    "noMatchTitle": "No matching projects",
+    "noMatchDesc": "Try a different search term.",
+    "updatedRel": "Updated {rel}"
   },
   "chat": {
     "placeholder": "메시지 입력", "send": "보내기", "stop": "중지", "regenerate": "다시 생성",

@@ -5,7 +5,34 @@
     "settings": "Paramètres", "profile": "Profil", "billing": "Facturation", "logout": "Se déconnecter",
     "today": "Aujourd'hui",
     "last7Days": "7 derniers jours",
-    "older": "Plus anciens"
+    "older": "Plus anciens",
+    "projects": "Projets"
+  },
+  "projects": {
+    "title": "Projets",
+    "newProject": "Nouveau projet",
+    "searchPlaceholder": "Rechercher des projets…",
+    "sortBy": "Trier par",
+    "sort": {
+      "activity": "Activité récente",
+      "edited": "Dernière modification",
+      "created": "Date de création"
+    },
+    "createTitle": "Créer un projet personnel",
+    "whatWorkingOn": "Sur quoi travaillez-vous ?",
+    "namePlaceholder": "Nommez votre projet",
+    "whatTryingAchieve": "Qu'essayez-vous d'accomplir ?",
+    "descriptionPlaceholder": "Décrivez votre projet, objectifs, thème, etc.",
+    "cancel": "Annuler",
+    "create": "Créer le projet",
+    "creating": "Création…",
+    "createFailed": "Échec de la création",
+    "listFailed": "Échec du chargement",
+    "emptyTitle": "Aucun projet",
+    "emptyDesc": "Créez un projet pour regrouper des fichiers et instructions.",
+    "noMatchTitle": "Aucun projet correspondant",
+    "noMatchDesc": "Essayez un autre terme.",
+    "updatedRel": "Mis à jour {rel}"
   },
   "chat": {
     "placeholder": "Écrivez un message", "send": "Envoyer", "stop": "Arrêter", "regenerate": "Régénérer",

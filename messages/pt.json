@@ -5,7 +5,34 @@
     "settings": "Configurações", "profile": "Perfil", "billing": "Faturamento", "logout": "Sair",
     "today": "Hoje",
     "last7Days": "Últimos 7 dias",
-    "older": "Mais antigos"
+    "older": "Mais antigos",
+    "projects": "Projetos"
+  },
+  "projects": {
+    "title": "Projetos",
+    "newProject": "Novo projeto",
+    "searchPlaceholder": "Buscar projetos…",
+    "sortBy": "Ordenar por",
+    "sort": {
+      "activity": "Atividade recente",
+      "edited": "Última edição",
+      "created": "Data de criação"
+    },
+    "createTitle": "Criar um projeto pessoal",
+    "whatWorkingOn": "No que está trabalhando?",
+    "namePlaceholder": "Dê um nome ao seu projeto",
+    "whatTryingAchieve": "O que está tentando alcançar?",
+    "descriptionPlaceholder": "Descreva seu projeto, objetivos, tema, etc.",
+    "cancel": "Cancelar",
+    "create": "Criar projeto",
+    "creating": "Criando…",
+    "createFailed": "Falha ao criar projeto",
+    "listFailed": "Falha ao carregar projetos",
+    "emptyTitle": "Ainda sem projetos",
+    "emptyDesc": "Crie um projeto para reunir arquivos e instruções.",
+    "noMatchTitle": "Nenhum projeto correspondente",
+    "noMatchDesc": "Tente outro termo.",
+    "updatedRel": "Atualizado {rel}"
   },
   "chat": {
     "placeholder": "Digite uma mensagem", "send": "Enviar", "stop": "Parar", "regenerate": "Regenerar",

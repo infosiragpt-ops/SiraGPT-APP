@@ -5,7 +5,34 @@
     "settings": "设置", "profile": "个人资料", "billing": "账单", "logout": "退出登录",
     "today": "今天",
     "last7Days": "最近 7 天",
-    "older": "更早"
+    "older": "更早",
+    "projects": "Projects"
+  },
+  "projects": {
+    "title": "Projects",
+    "newProject": "New project",
+    "searchPlaceholder": "Search projects…",
+    "sortBy": "Sort by",
+    "sort": {
+      "activity": "Recent activity",
+      "edited": "Last edited",
+      "created": "Created date"
+    },
+    "createTitle": "Create a personal project",
+    "whatWorkingOn": "What are you working on?",
+    "namePlaceholder": "Name your project",
+    "whatTryingAchieve": "What are you trying to achieve?",
+    "descriptionPlaceholder": "Describe your project, goals, topic, etc.",
+    "cancel": "Cancel",
+    "create": "Create project",
+    "creating": "Creating…",
+    "createFailed": "Failed to create project",
+    "listFailed": "Failed to load projects",
+    "emptyTitle": "No projects yet",
+    "emptyDesc": "Create a project to collect files and instructions for a focused chat.",
+    "noMatchTitle": "No matching projects",
+    "noMatchDesc": "Try a different search term.",
+    "updatedRel": "Updated {rel}"
   },
   "chat": {
     "placeholder": "输入消息", "send": "发送", "stop": "停止", "regenerate": "重新生成",

@@ -24,6 +24,7 @@ import {
   Library,
   Images,
   LayoutGrid,
+  FolderKanban,
   Loader2,
   PenSquare,
   Shield,
@@ -267,6 +268,10 @@ export function AppSidebar() {
     router.push("/gpts")
   }
 
+  const handleProjectsClick = () => {
+    router.push("/projects")
+  }
+
   const handleLibraryClick = () => {
     router.push("/library")
   }
@@ -416,6 +421,7 @@ export function AppSidebar() {
 
   // Check if we're on GPTs page
   const isOnGPTsPage = pathname.startsWith('/gpts')
+  const isOnProjectsPage = pathname.startsWith('/projects')
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -541,6 +547,30 @@ export function AppSidebar() {
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
               <p>{t("gpts")}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Projects — file-bucket workspaces. Placed right after GPTs
+              because both are "context-rich chat entry points": GPTs
+              are reusable personas, Projects are task-scoped bundles.
+              Same interaction / hover language as every other nav row
+              so the sidebar reads as one coherent column. */}
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onClick={handleProjectsClick}
+                className={cn(
+                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
+                  isOnProjectsPage && "bg-accent text-accent-foreground"
+                )}
+                variant="default"
+              >
+                <FolderKanban className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("projects")}</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>{t("projects")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
