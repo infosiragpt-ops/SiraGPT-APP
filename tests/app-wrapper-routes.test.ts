@@ -22,12 +22,16 @@ describe("needsChatContext", () => {
 })
 
 describe("needsSidebar", () => {
-  it("enables the sidebar on admin pages", () => {
-    assert.equal(needsSidebar("/admin/security"), true)
+  it("opts /admin out: it owns its own layout (AdminLayout) — the global AppShell would mount AppSidebar, which calls useChat() and crashes outside a ChatProvider", () => {
+    assert.equal(needsSidebar("/admin/security"), false)
   })
 
   it("enables the sidebar on library pages", () => {
     assert.equal(needsSidebar("/library"), true)
+  })
+
+  it("enables the sidebar on profile pages", () => {
+    assert.equal(needsSidebar("/profile"), true)
   })
 
   it("disables the sidebar on auth pages", () => {

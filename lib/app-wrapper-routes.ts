@@ -1,5 +1,9 @@
 const CHAT_PAGES = ['/chat', '/gpts', '/profile', '/library', '/billing', '/settings', '/thesis'] as const
-const SIDEBAR_ONLY_PAGES = ['/profile', '/admin'] as const
+// /admin owns its full layout (own SidebarProvider + AdminSidebar in
+// app/admin/layout.tsx), so AppWrapper must render children as-is.
+// Injecting AppShell here would pull in AppSidebar, which calls
+// useChat() and crashes outside a ChatProvider.
+const SIDEBAR_ONLY_PAGES = ['/profile'] as const
 
 function matchesPrefix(pathname: string, prefixes: readonly string[]) {
   return prefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
