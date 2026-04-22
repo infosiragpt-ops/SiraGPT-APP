@@ -1,5 +1,13 @@
 // Frontend API client for backend integration
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+/** Backend mounts routes under `/api` (e.g. `/api/auth/login`). Accept env with or without `/api`. */
+export function getNormalizedApiBaseUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+  const trimmed = raw.replace(/\/$/, "")
+  if (trimmed.endsWith("/api")) return trimmed
+  return `${trimmed}/api`
+}
+
+const API_BASE_URL = getNormalizedApiBaseUrl()
 
 class ApiClient {
   private baseURL: string;

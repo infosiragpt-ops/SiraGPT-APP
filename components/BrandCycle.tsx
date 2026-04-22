@@ -1,7 +1,7 @@
 "use client"
 
 import { AnimatePresence, motion } from "framer-motion"
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, type CSSProperties } from "react"
 
 /**
  * Brand showcase cycling through AI providers + feature demos.
@@ -702,50 +702,91 @@ const WebsVisual = () => (
 )
 
 // GitHub + MCP — octocat mark connected to Sira core via animated link
-const GitHubMCPVisual = () => (
-  <div className="relative flex h-[340px] w-[380px] items-center justify-center md:h-[380px] md:w-[440px]">
-    {/* Connection line with traveling dot */}
-    <svg className="absolute inset-0 h-full w-full" viewBox="0 0 440 380" fill="none">
+const GitHubMCPVisual = ({ color }: { color: string }) => (
+  <div
+    className="relative flex h-[360px] w-[400px] items-center justify-center overflow-hidden rounded-3xl border border-slate-200/60 bg-gradient-to-b from-white/80 to-white/40 p-8 shadow-[0_24px_60px_-20px_rgba(79,70,229,0.35)] dark:border-white/10 dark:from-white/[0.07] dark:to-white/[0.02] dark:shadow-[0_28px_70px_-24px_rgba(99,102,241,0.45)] md:h-[400px] md:w-[460px]"
+    style={{ boxShadow: "0 24px 60px -20px rgba(79,70,229,0.28), 0 0 0 1px rgba(255,255,255,0.06) inset" }}
+  >
+    <div
+      aria-hidden
+      className="pointer-events-none absolute -left-16 top-1/2 h-40 w-40 -translate-y-1/2 rounded-full opacity-70 blur-3xl dark:opacity-90"
+      style={{ background: `radial-gradient(circle, ${color}55 0%, transparent 70%)` }}
+    />
+    <div
+      aria-hidden
+      className="pointer-events-none absolute -right-12 top-1/3 h-36 w-36 rounded-full opacity-60 blur-3xl dark:opacity-80"
+      style={{ background: "radial-gradient(circle, rgba(99,102,241,0.45) 0%, transparent 70%)" }}
+    />
+
+    {/* Connection line with glow + traveling dot */}
+    <svg className="absolute inset-0 h-full w-full" viewBox="0 0 440 380" fill="none" aria-hidden>
+      <defs>
+        <linearGradient id="mcpLinkGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+          <stop offset="50%" stopColor="#818cf8" stopOpacity="1" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.5" />
+        </linearGradient>
+      </defs>
       <motion.path
         d="M 100 190 Q 220 140 340 190"
-        stroke="#0f172a"
+        stroke="url(#mcpLinkGrad)"
+        strokeWidth="10"
+        strokeLinecap="round"
+        opacity={0.35}
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.9, ease: "easeOut" }}
+      />
+      <motion.path
+        d="M 100 190 Q 220 140 340 190"
+        stroke={color}
         strokeWidth="2"
-        strokeDasharray="4 4"
+        strokeDasharray="6 6"
         initial={{ pathLength: 0 }}
         animate={{ pathLength: 1 }}
         transition={{ duration: 0.9, ease: "easeOut" }}
       />
       <motion.circle
-        r="5"
-        fill="#0f172a"
+        r="6"
+        fill="#e0e7ff"
         initial={{ offsetDistance: "0%" }}
         animate={{ offsetDistance: "100%" }}
-        transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut", delay: 0.9 }}
+        transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut", delay: 0.9 }}
         style={{
+          filter: "drop-shadow(0 0 6px rgba(129,140,248,0.9))",
           offsetPath: `path("M 100 190 Q 220 140 340 190")`,
-        } as any}
+        } as CSSProperties}
       />
     </svg>
 
     {/* GitHub octocat (left) */}
     <motion.div
       initial={{ opacity: 0, x: -12, scale: 0.9 }}
-      animate={{ opacity: 1, x: 0, scale: 1 }}
-      transition={{ duration: 0.5 }}
-      className="absolute left-0 top-1/2 -translate-y-1/2 flex h-24 w-24 items-center justify-center rounded-2xl bg-white"
-      style={{ boxShadow: "0 12px 30px -10px rgba(15,23,42,0.35), 0 0 0 1px rgba(15,23,42,0.06)" }}
+      animate={{ opacity: 1, x: 0, scale: 1, y: [0, -3, 0] }}
+      transition={{
+        y: { duration: 4, repeat: Infinity, ease: "easeInOut" },
+        default: { duration: 0.5 },
+      }}
+      className="absolute left-6 top-1/2 z-[1] -translate-y-1/2 flex h-[5.5rem] w-[5.5rem] items-center justify-center rounded-2xl bg-white ring-1 ring-slate-200/80 dark:bg-zinc-900 dark:ring-white/15"
+      style={{ boxShadow: "0 16px 40px -12px rgba(15,23,42,0.35), 0 0 0 1px rgba(15,23,42,0.04)" }}
     >
-      <svg viewBox="0 0 24 24" className="h-14 w-14" fill="#0f172a" aria-hidden>
-        <path d="M12 .5C5.37.5 0 5.78 0 12.292c0 5.211 3.438 9.63 8.205 11.188.6.111.82-.254.82-.567 0-.28-.01-1.022-.015-2.005-3.338.711-4.042-1.582-4.042-1.582-.546-1.361-1.335-1.725-1.335-1.725-1.087-.731.084-.716.084-.716 1.205.082 1.838 1.215 1.838 1.215 1.07 1.803 2.809 1.282 3.495.981.108-.763.417-1.282.76-1.577-2.665-.295-5.466-1.309-5.466-5.827 0-1.287.465-2.339 1.235-3.164-.135-.298-.54-1.497.105-3.121 0 0 1.005-.316 3.3 1.209.96-.262 1.98-.392 3-.398 1.02.006 2.04.136 3 .398 2.28-1.525 3.285-1.209 3.285-1.209.645 1.624.24 2.823.12 3.121.765.825 1.23 1.877 1.23 3.164 0 4.53-2.805 5.527-5.475 5.817.42.354.81 1.077.81 2.182 0 1.578-.015 2.846-.015 3.229 0 .309.21.678.825.561C20.565 21.917 24 17.495 24 12.292 24 5.78 18.627.5 12 .5z" />
+      <svg viewBox="0 0 24 24" className="h-14 w-14 text-slate-900 dark:text-white" aria-hidden>
+        <path
+          fill="currentColor"
+          d="M12 .5C5.37.5 0 5.78 0 12.292c0 5.211 3.438 9.63 8.205 11.188.6.111.82-.254.82-.567 0-.28-.01-1.022-.015-2.005-3.338.711-4.042-1.582-4.042-1.582-.546-1.361-1.335-1.725-1.335-1.725-1.087-.731.084-.716.084-.716 1.205.082 1.838 1.215 1.838 1.215 1.07 1.803 2.809 1.282 3.495.981.108-.763.417-1.282.76-1.577-2.665-.295-5.466-1.309-5.466-5.827 0-1.287.465-2.339 1.235-3.164-.135-.298-.54-1.497.105-3.121 0 0 1.005-.316 3.3 1.209.96-.262 1.98-.392 3-.398 1.02.006 2.04.136 3 .398 2.28-1.525 3.285-1.209 3.285-1.209.645 1.624.24 2.823.12 3.121.765.825 1.23 1.877 1.23 3.164 0 4.53-2.805 5.527-5.475 5.817.42.354.81 1.077.81 2.182 0 1.578-.015 2.846-.015 3.229 0 .309.21.678.825.561C20.565 21.917 24 17.495 24 12.292 24 5.78 18.627.5 12 .5z"
+        />
       </svg>
     </motion.div>
 
     {/* MCP badge (center) */}
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, delay: 0.3 }}
-      className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-black px-3 py-1 text-[10px] font-bold tracking-widest text-white"
+      initial={{ opacity: 0, y: 8, scale: 0.92 }}
+      animate={{ opacity: 1, y: 0, scale: [1, 1.04, 1] }}
+      transition={{
+        scale: { duration: 2.2, repeat: Infinity, ease: "easeInOut", delay: 0.5 },
+        default: { duration: 0.45, delay: 0.25 },
+      }}
+      className="absolute left-1/2 top-1/2 z-[2] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-b from-indigo-400 to-indigo-600 px-3.5 py-1.5 text-[10px] font-bold tracking-[0.2em] text-white shadow-lg shadow-indigo-500/40 ring-2 ring-white/25 dark:from-indigo-500 dark:to-indigo-700"
     >
       MCP
     </motion.div>
@@ -753,15 +794,24 @@ const GitHubMCPVisual = () => (
     {/* Sira core (right) */}
     <motion.div
       initial={{ opacity: 0, x: 12, scale: 0.9 }}
-      animate={{ opacity: 1, x: 0, scale: 1 }}
-      transition={{ duration: 0.5, delay: 0.2 }}
-      className="absolute right-0 top-1/2 -translate-y-1/2 flex h-24 w-24 items-center justify-center rounded-full"
+      animate={{ opacity: 1, x: 0, scale: 1, y: [0, 3, 0] }}
+      transition={{
+        y: { duration: 4.5, repeat: Infinity, ease: "easeInOut", delay: 0.3 },
+        default: { duration: 0.5, delay: 0.15 },
+      }}
+      className="absolute right-6 top-1/2 z-[1] -translate-y-1/2 flex h-[5.5rem] w-[5.5rem] items-center justify-center rounded-full"
       style={{
-        background: "radial-gradient(circle at 30% 25%, #a5b4fc 0%, #6366f1 40%, #4338ca 100%)",
-        boxShadow: "0 14px 34px -10px rgba(67,56,202,0.5), 0 0 0 2px rgba(255,255,255,0.2) inset",
+        background: `radial-gradient(circle at 30% 25%, ${color} 0%, #6366f1 42%, #312e81 100%)`,
+        boxShadow: `0 18px 44px -12px rgba(67,56,202,0.55), 0 0 0 2px rgba(255,255,255,0.22) inset, 0 0 40px -8px ${color}66`,
       }}
     >
-      <img src="/sira-gpt.png" alt="" className="h-12 w-12 brightness-0 invert" />
+      <motion.span
+        aria-hidden
+        className="pointer-events-none absolute inset-[-6px] rounded-full border border-white/20"
+        animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.06, 1] }}
+        transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <img src="/sira-gpt.png" alt="" className="relative z-[1] h-12 w-12 brightness-0 invert" />
     </motion.div>
   </div>
 )
@@ -772,6 +822,8 @@ type Brand = {
   id: string
   accent: string
   tagline: string
+  /** Shown under the tagline during the “display” phase only */
+  subtitle?: string
   Visual: React.ComponentType<{ color: string }>
 }
 
@@ -787,7 +839,13 @@ const BRANDS: Brand[] = [
   { id: "word",     accent: "#185abd", tagline: "CREA WORD PROFESIONAL",     Visual: WordVisual },
   { id: "ppt",      accent: "#c43e1c", tagline: "CREA PPT PROFESIONAL",      Visual: PPTVisual },
   { id: "webs",     accent: "#0ea5e9", tagline: "CREA WEBS PROFESIONALES",   Visual: WebsVisual },
-  { id: "github",   accent: "#0f172a", tagline: "CONECTA MCP CON GITHUB",    Visual: GitHubMCPVisual },
+  {
+    id: "github",
+    accent: "#a5b4fc",
+    tagline: "CONECTA MCP CON GITHUB",
+    subtitle: "Herramientas y repositorios enlazados de forma segura a tu flujo en Sira.",
+    Visual: GitHubMCPVisual,
+  },
 ]
 
 // ========================= LOADER BARS =========================
@@ -864,8 +922,8 @@ function BrandCard({ brand, onDone }: { brand: Brand; onDone: () => void }) {
         </div>
       </div>
 
-      {/* Tagline — anchored TOP LEFT */}
-      <div className="absolute top-0 left-0 flex h-14 items-center">
+      {/* Tagline (+ optional subtitle) — top left */}
+      <div className="absolute top-0 left-0 z-[2] flex max-w-[min(100%,520px)] flex-col items-start gap-2 pr-4">
         <AnimatePresence mode="wait">
           {phase === "bars" ? (
             <motion.div
@@ -874,28 +932,58 @@ function BrandCard({ brand, onDone }: { brand: Brand; onDone: () => void }) {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.85, x: -4 }}
               transition={{ duration: 0.3, ease: "easeOut" }}
+              className="flex h-14 items-center"
             >
               <LoaderBars color={accent} />
             </motion.div>
           ) : (
             <motion.div
               key="text"
-              initial={{ opacity: 0, x: -6 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.3, ease: "easeOut" }}
-              className="text-[20px] md:text-[22px] font-semibold uppercase tracking-[0.22em]"
-              style={{ color: accent }}
+              initial={{ opacity: 0, x: -8, filter: "blur(6px)" }}
+              animate={{
+                opacity: 1,
+                x: 0,
+                filter: "blur(0px)",
+                ...(phase === "display"
+                  ? { scale: [1, 1.015, 1], letterSpacing: ["0.22em", "0.24em", "0.22em"] }
+                  : {}),
+              }}
+              transition={{
+                duration: phase === "display" ? 0.85 : 0.35,
+                ease: [0.22, 1, 0.36, 1],
+              }}
+              className="rounded-lg border border-slate-200/80 bg-white/85 px-3 py-1.5 text-[18px] font-semibold uppercase tracking-[0.22em] shadow-[0_8px_30px_-12px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-black/40 dark:shadow-[0_8px_30px_-12px_rgba(0,0,0,0.5)] md:text-[21px]"
             >
-              <span>{typed}</span>
+              <span className="dark:hidden" style={{ color: accent }}>
+                {typed}
+              </span>
+              <span className="hidden bg-gradient-to-r from-white via-indigo-100 to-slate-200 bg-clip-text text-transparent dark:inline">
+                {typed}
+              </span>
               <motion.span
-                className="ml-0.5 inline-block"
-                animate={{ opacity: [1, 0, 1] }}
-                transition={{ duration: 0.9, repeat: Infinity, ease: "easeInOut" }}
+                className="ml-0.5 inline-block align-middle text-slate-800 dark:text-white/90"
+                animate={{ opacity: phase === "typing" ? [1, 0, 1] : 0 }}
+                transition={{ duration: 0.85, repeat: phase === "typing" ? Infinity : 0, ease: "easeInOut" }}
               >
                 |
               </motion.span>
             </motion.div>
           )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {phase === "display" && brand.subtitle ? (
+            <motion.p
+              key="sub"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.4, ease: "easeOut", delay: 0.08 }}
+              className="max-w-md text-[13px] leading-relaxed text-slate-600 dark:text-slate-400 md:text-[14px]"
+            >
+              {brand.subtitle}
+            </motion.p>
+          ) : null}
         </AnimatePresence>
       </div>
     </div>

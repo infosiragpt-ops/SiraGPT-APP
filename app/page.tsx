@@ -110,9 +110,23 @@ export default function Home() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
-              className="relative flex items-center justify-center"
+              className="relative flex flex-col items-center justify-center"
             >
               <BrandCycle />
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.55, delay: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                className="mt-10 flex max-w-lg flex-col items-center gap-4 text-center"
+              >
+                <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-400 md:text-[15px]">
+                  Entra con tu cuenta o regístrate en segundos. Multi‑modelo, documentos y conectores en un solo lugar.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <LoginButton href="/auth/login" />
+                  <SignUpButton href="/auth/register" />
+                </div>
+              </motion.div>
             </motion.div>
           </div>
         </section>

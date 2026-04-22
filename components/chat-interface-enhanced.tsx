@@ -2872,11 +2872,10 @@ But first, you need to connect your Spotify account securely using the button be
   const handleSendRef = React.useRef<() => void>(() => {});
 
   // ────────────────────────────────────────────────────────────
-  // Sidebar auto-collapse — when the user enters a "big-canvas"
-  // tool (Word / Excel / image-gen / video-gen) the left sidebar
-  // steals too much horizontal space. We collapse it on entry and
-  // never auto-reopen — the user pops it back manually via the
-  // floating PanelLeftOpen button pinned to the viewport edge.
+  // Sidebar auto-collapse — when the user turns on any composer tool
+  // (connectors, web search, image/video/thesis, Voice Studio, etc.)
+  // we collapse the left rail for a cleaner workspace. Never auto-
+  // reopen; the user restores it via the floating PanelLeftOpen chip.
   // ────────────────────────────────────────────────────────────
   const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile } = useSidebar();
 
@@ -2933,18 +2932,46 @@ But first, you need to connect your Spotify account securely using the button be
   const splitRatioRef = React.useRef(splitRatio);
   React.useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
 
-  // Auto-collapse sidebar when a big-canvas tool activates. Intent:
-  // give Word/Excel/image/video the horizontal real estate they need.
-  // We only react to OFF → ON transitions; reverting all flags back
-  // to OFF does NOT auto-reopen (spec: "user decides when to reopen").
-  // Skip on mobile — the sidebar there is already an overlay that
-  // doesn't squeeze the main content.
+  // Auto-collapse sidebar when any workspace tool activates (connectors,
+  // web search, media gen, thesis, Voice Studio, Computer Use, etc.) so
+  // the main panel stays clean and wide. Same rules: no auto-reopen;
+  // skip on mobile (overlay sidebar).
   React.useEffect(() => {
     if (isSidebarMobile) return;
-    if (isWordConnectorActive || isExcelConnectorActive || isImageGenerationActive || isVideoGenerationActive) {
+    const toolWorkspaceActive =
+      isWordConnectorActive ||
+      isExcelConnectorActive ||
+      isImageGenerationActive ||
+      isVideoGenerationActive ||
+      isWebSearchActive ||
+      chatType === "thesis" ||
+      chatType === "image" ||
+      chatType === "video" ||
+      showAudioPanel ||
+      isGmailActive ||
+      isGoogleCalendarActive ||
+      isGoogleDriveActive ||
+      isSpotifyActive ||
+      isComputerUseActive;
+    if (toolWorkspaceActive) {
       setSidebarOpen(false);
     }
-  }, [isWordConnectorActive, isExcelConnectorActive, isImageGenerationActive, isVideoGenerationActive, isSidebarMobile, setSidebarOpen]);
+  }, [
+    isSidebarMobile,
+    setSidebarOpen,
+    isWordConnectorActive,
+    isExcelConnectorActive,
+    isImageGenerationActive,
+    isVideoGenerationActive,
+    isWebSearchActive,
+    chatType,
+    showAudioPanel,
+    isGmailActive,
+    isGoogleCalendarActive,
+    isGoogleDriveActive,
+    isSpotifyActive,
+    isComputerUseActive,
+  ]);
 
   const handleSend = async () => {
     const msg = input.trim();
