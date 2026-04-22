@@ -22,13 +22,37 @@ const OpenAI = require('openai');
 const { authenticateToken } = require('../middleware/auth');
 const reactAgent = require('../services/react-agent');
 const rag = require('../services/rag-service');
+const skills = require('../services/skills');
 
 const router = express.Router();
 
 /**
- * Build the tool registry used by the agent. The tools close over the
- * request context (userId, OpenAI client) so they pick up the right
- * collection / API key without leaking those through tool arguments.
+ * Build the tool registry for this request from the filesystem-loaded
+ * skill registry.
+ *
+ * We keep `buildTools` below for backward compatibility — older callers
+ * that pass no explicit tool preference get the legacy inline tools.
+ * New callers can pass `useSkills: true` to use the skills registry
+ * instead (the recommended path going forward).
+ *
+ * Filtering by skill id lets a caller restrict what this agent can do
+ * (e.g. a chat UI exposes only a subset). If `skillIds` is omitted,
+ * every loaded skill is available.
+ */
+function buildSkillTools({ skillIds = null } = {}) {
+  const { skills: loaded } = skills.get();
+  const chosen = skillIds
+    ? Array.from(loaded.values()).filter(s => skillIds.includes(s.id))
+    : Array.from(loaded.values());
+  return chosen.map(s => skills.toReactTool(s));
+}
+
+/**
+ * Build the legacy inline tool registry. Kept so the existing API
+ * surface doesn't change for callers that don't opt into skills yet.
+ * The tools close over the request context (userId, OpenAI client) so
+ * they pick up the right collection / API key without leaking those
+ * through tool arguments.
  */
 function buildTools({ openai, userId, collection }) {
   return [
@@ -92,6 +116,8 @@ router.post(
     body('maxSteps').optional().isInt({ min: 2, max: 15 }),
     body('collection').optional().isString(),
     body('model').optional().isString(),
+    body('useSkills').optional().isBoolean(),
+    body('skillIds').optional().isArray(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -106,16 +132,21 @@ router.post(
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const tools = buildTools({
-      openai,
-      userId: req.user.id,
-      collection: req.body.collection || 'default',
-    });
+    const collection = req.body.collection || 'default';
+    const ctx = { openai, userId: req.user.id, collection };
+
+    // Skills path (new) vs inline tools (legacy). The inline path stays
+    // so existing clients that don't know about the registry keep
+    // working; new callers pass useSkills:true to get the registry.
+    const tools = req.body.useSkills
+      ? buildSkillTools({ skillIds: req.body.skillIds || null })
+      : buildTools({ openai, userId: req.user.id, collection });
 
     try {
       const result = await reactAgent.run(openai, {
         query: req.body.query,
         tools,
+        ctx,
         maxSteps: req.body.maxSteps,
         model: req.body.model,
         onStep: (step) => send({ type: 'step', step }),
@@ -129,5 +160,18 @@ router.post(
     }
   }
 );
+
+/**
+ * GET /api/agent/skills — list every loaded skill + its params/caps.
+ * Lets a UI render a "what can this agent do" panel without having to
+ * hardcode the list.
+ */
+router.get('/skills', authenticateToken, (req, res) => {
+  const { skills: loaded, errors } = skills.get();
+  res.json({
+    skills: skills.listSkills(loaded),
+    loadErrors: errors,
+  });
+});
 
 module.exports = router;
