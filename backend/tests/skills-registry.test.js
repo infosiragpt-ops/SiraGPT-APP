@@ -170,12 +170,28 @@ test('capabilities.assertKnown catches typos at validation time', () => {
 });
 
 test('bundled skills load cleanly from the real skills dir', () => {
-  // Smoke test: the three skills we ship (web_search, rag_retrieve,
-  // read_file) should all load without errors. If someone adds a
-  // broken skill to backend/src/skills/, this test fails.
+  // Smoke test: every bundled skill in backend/src/skills/ should
+  // load without errors. New skills should be added to the assertion
+  // list below so an accidentally broken manifest fails CI here
+  // before it ever runs in production.
   const { skills, errors } = registry.load();
   assert.equal(errors.length, 0, `bundled skills should load clean: ${errors.join(' | ')}`);
+  // Original three (Pattern 1):
   assert.ok(skills.has('web_search'), 'web_search should be bundled');
   assert.ok(skills.has('rag_retrieve'), 'rag_retrieve should be bundled');
   assert.ok(skills.has('read_file'), 'read_file should be bundled');
+  // Scheduling primitives (Pattern 4):
+  assert.ok(skills.has('cron_schedule'), 'cron_schedule should be bundled');
+  assert.ok(skills.has('cron_list'), 'cron_list should be bundled');
+  assert.ok(skills.has('cron_cancel'), 'cron_cancel should be bundled');
+  assert.ok(skills.has('webhook_create'), 'webhook_create should be bundled');
+  // Sessions-as-tools (Pattern 5):
+  assert.ok(skills.has('session_list'), 'session_list should be bundled');
+  assert.ok(skills.has('session_history'), 'session_history should be bundled');
+  assert.ok(skills.has('session_spawn'), 'session_spawn should be bundled');
+  assert.ok(skills.has('session_send'), 'session_send should be bundled');
+  // Academic skills (Followup C):
+  assert.ok(skills.has('openalex_search'), 'openalex_search should be bundled');
+  assert.ok(skills.has('crossref_verify'), 'crossref_verify should be bundled');
+  assert.ok(skills.has('apa7_format'), 'apa7_format should be bundled');
 });
