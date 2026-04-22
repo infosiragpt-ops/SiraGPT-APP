@@ -80,7 +80,54 @@
     "copy": "Copy",
     "copied": "Copied!",
     "copyFailed": "Could not copy link",
-    "close": "Close"
+    "close": "Close",
+    "generateMarcoTeorico": "Generate theoretical framework",
+    "generateMarcoTeoricoDesc": "Pull academic sources, validate DOIs, write an APA 7-cited draft."
+  },
+  "marcoTeorico": {
+    "title": "Theoretical framework",
+    "subtitle": "Search, validate, and synthesise academic sources into an APA 7 draft for this project.",
+    "topic": "Research topic",
+    "topicPlaceholder": "e.g. Reliability of Likert scales in higher education",
+    "yearFrom": "From",
+    "yearTo": "To",
+    "sources": "Sources",
+    "language": "Language",
+    "generate": "Generate",
+    "regenerate": "Regenerate",
+    "cancel": "Cancel",
+    "pipeline": "Pipeline",
+    "phase": {
+
+      "search": "Search academic sources",
+
+      "validate": "Validate DOIs",
+
+      "synthesize": "Write cited markdown",
+
+      "format": "Build reference list"
+
+    },
+    "searchRunning": "Querying OpenAlex…",
+    "validateRunning": "Checking CrossRef…",
+    "synthesizeRunning": "Streaming draft…",
+    "formatRunning": "Composing references…",
+    "foundN": "{count} sources found",
+    "validatedN": "{valid}/{total} DOIs verified",
+    "yearDistribution": "Sources by year",
+    "sourcesFound": "{count} sources",
+    "preview": "Preview",
+    "saveAsChat": "Save as chat",
+    "export": "Export .md",
+    "savedAsChat": "Saved — opening chat…",
+    "saveFailed": "Save failed",
+    "emptyPreview": "Configure the search on the left and hit Generate. You will see the draft appear here as it writes.",
+    "warmingUp": "Searching…",
+    "topicTooShort": "Topic is too short",
+    "generateFailed": "Generation failed",
+    "loadFailed": "Could not load project",
+    "projectNotFound": "Project not found",
+    "backToProject": "← {name}"
   },
   "chat": {
     "placeholder": "Напишите сообщение", "send": "Отправить", "stop": "Остановить", "regenerate": "Перегенерировать",
