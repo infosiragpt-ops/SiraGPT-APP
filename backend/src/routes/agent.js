@@ -28,23 +28,34 @@ const router = express.Router();
 
 /**
  * Build the tool registry for this request from the filesystem-loaded
- * skill registry.
+ * skill registry, gated by a session capability policy.
  *
  * We keep `buildTools` below for backward compatibility — older callers
  * that pass no explicit tool preference get the legacy inline tools.
  * New callers can pass `useSkills: true` to use the skills registry
  * instead (the recommended path going forward).
  *
- * Filtering by skill id lets a caller restrict what this agent can do
- * (e.g. a chat UI exposes only a subset). If `skillIds` is omitted,
- * every loaded skill is available.
+ * The policy decides which capabilities this session can exercise and
+ * caps tool usage. Default is "main" (broad) for the authenticated
+ * user; routes that spawn sub-agents will ask for "sandbox".
+ *
+ * Return shape includes `hidden` so callers can surface skipped skills
+ * in a diagnostic frame for the UI ("browser skill not available in
+ * this mode").
  */
-function buildSkillTools({ skillIds = null } = {}) {
+function buildSkillTools({ skillIds = null, policyOpts = {} } = {}) {
   const { skills: loaded } = skills.get();
   const chosen = skillIds
     ? Array.from(loaded.values()).filter(s => skillIds.includes(s.id))
     : Array.from(loaded.values());
-  return chosen.map(s => skills.toReactTool(s));
+  const pol = skills.createPolicy(policyOpts);
+  const { skills: visible, hidden, counters } = skills.wrapSkillsWithPolicy(chosen, pol);
+  return {
+    tools: visible.map(s => skills.toReactTool(s)),
+    hidden,
+    counters,
+    policy: pol,
+  };
 }
 
 /**
@@ -118,6 +129,10 @@ router.post(
     body('model').optional().isString(),
     body('useSkills').optional().isBoolean(),
     body('skillIds').optional().isArray(),
+    body('mode').optional().isIn(['main', 'sandbox']),
+    body('allow').optional().isArray(),
+    body('deny').optional().isArray(),
+    body('maxCalls').optional().isInt({ min: 1, max: 500 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -138,9 +153,26 @@ router.post(
     // Skills path (new) vs inline tools (legacy). The inline path stays
     // so existing clients that don't know about the registry keep
     // working; new callers pass useSkills:true to get the registry.
-    const tools = req.body.useSkills
-      ? buildSkillTools({ skillIds: req.body.skillIds || null })
-      : buildTools({ openai, userId: req.user.id, collection });
+    // With skills, a capability policy also gates which tools are
+    // visible to the LLM and caps how many times each may run.
+    let tools;
+    if (req.body.useSkills) {
+      const policyOpts = {};
+      if (req.body.mode) policyOpts.mode = req.body.mode;
+      if (req.body.allow) policyOpts.allow = req.body.allow;
+      if (req.body.deny) policyOpts.deny = req.body.deny;
+      if (req.body.maxCalls) policyOpts.limits = { maxCalls: req.body.maxCalls };
+      const built = buildSkillTools({
+        skillIds: req.body.skillIds || null,
+        policyOpts,
+      });
+      tools = built.tools;
+      // Tell the client which skills were filtered out so a UI can
+      // render "browser not available" instead of silently hiding.
+      if (built.hidden.length > 0) send({ type: 'policy', hidden: built.hidden, mode: built.policy.mode });
+    } else {
+      tools = buildTools({ openai, userId: req.user.id, collection });
+    }
 
     try {
       const result = await reactAgent.run(openai, {

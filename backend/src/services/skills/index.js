@@ -9,6 +9,7 @@
 
 const registry = require('./registry');
 const capabilities = require('./capabilities');
+const policy = require('./policy');
 
 let _cache = null;
 
@@ -41,10 +42,14 @@ module.exports = {
   reload,
   registry,
   capabilities,
+  policy,
   // convenience re-exports so callers don't need to pull two modules:
   CAPABILITIES: capabilities.CAPABILITIES,
   toReactTool: registry.toReactTool,
   toAgentCoreTool: registry.toAgentCoreTool,
   filterByCapabilities: registry.filterByCapabilities,
   listSkills: registry.listSkills,
+  createPolicy: policy.createPolicy,
+  wrapSkillsWithPolicy: policy.wrapSkillsWithPolicy,
+  PolicyError: policy.PolicyError,
 };
