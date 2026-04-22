@@ -72,7 +72,21 @@ router.post('/', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { title, model, isWordConnectorChat, isExcelConnectorChat } = req.body;
+    const { title, model, isWordConnectorChat, isExcelConnectorChat, projectId } = req.body;
+
+    // If a projectId is supplied, verify ownership before associating.
+    // Silently dropping a bogus id would create chats orphaned from
+    // any project the user actually owns; returning 400 forces the
+    // client to surface the error.
+    if (projectId) {
+      const ownsProject = await prisma.project.findFirst({
+        where: { id: projectId, userId: req.user.id },
+        select: { id: true },
+      });
+      if (!ownsProject) {
+        return res.status(400).json({ error: 'projectId does not belong to the current user' });
+      }
+    }
 
     const chat = await prisma.chat.create({
       data: {
@@ -80,7 +94,8 @@ router.post('/', [
         title,
         model,
         isWordConnectorChat: isWordConnectorChat || false,
-        isExcelConnectorChat: isExcelConnectorChat || false
+        isExcelConnectorChat: isExcelConnectorChat || false,
+        projectId: projectId || null,
       },
       include: {
         messages: true

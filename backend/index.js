@@ -41,6 +41,7 @@ const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal'
 const artifactsRoutes = require('./src/routes/artifacts');
 const hooksRoutes = require('./src/routes/hooks');
 const agentKeysRoutes = require('./src/routes/agent-keys');
+const projectsRoutes = require('./src/routes/projects');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 
@@ -158,6 +159,7 @@ app.use('/api/artifacts', artifactsRoutes);
 app.use('/api/document-ai', documentGenerateAiRoutes);
 app.use('/api/hooks', hooksRoutes);
 app.use('/api/agent/keys', agentKeysRoutes);
+app.use('/api/projects', projectsRoutes);
 
 
 // Error handling middleware

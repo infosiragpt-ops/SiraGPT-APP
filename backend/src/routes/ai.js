@@ -320,8 +320,13 @@ router.post(
         ).then(results => results.filter(Boolean));
       }
 
-      // ✅ NEW: Check if chat is associated with a custom GPT
+      // ✅ NEW: Check if chat is associated with a custom GPT OR a Project.
+      // Projects use the same injection pattern as CustomGpts (persona
+      // block + knowledge files) but do NOT override model/temperature —
+      // the user keeps their model preference when chatting inside a
+      // project, since projects are task-scoped, not persona-defined.
       let customGpt = null;
+      let project = null;
       let actualModel = model;
       let actualTemperature = 0.7;
 
@@ -333,9 +338,19 @@ router.post(
               include: {
                 knowledgeFiles: true
               }
+            },
+            project: {
+              include: {
+                files: true
+              }
             }
           }
         });
+
+        if (chat && chat.project) {
+          project = chat.project;
+          console.log(`📁 Using Project: ${project.name} (${project.files?.length || 0} files)`);
+        }
 
         if (chat && chat.customGpt) {
           customGpt = chat.customGpt;
@@ -399,6 +414,7 @@ router.post(
         language: langResolution.language,
         userMessage: prompt,
         customGpt,
+        project,
         userProfile,
       });
 
