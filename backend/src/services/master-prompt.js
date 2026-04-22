@@ -328,10 +328,11 @@ function buildUserProfileBlock(profile) {
  * @param {string} opts.language   — ISO 639-1 code from language-policy
  * @param {string} [opts.userMessage] — current user message (for intent detection)
  * @param {object} [opts.customGpt] — optional custom GPT wrapper
+ * @param {object} [opts.project] — optional Project ({ name, description, instructions, files: [{ originalName, extractedText }] })
  * @param {object} [opts.userProfile] — { name, locale, preferredTone, customInstructions }
  * @returns {{ system: string, intent: string }}
  */
-function buildSystemPrompt({ language, userMessage, customGpt, userProfile }) {
+function buildSystemPrompt({ language, userMessage, customGpt, project, userProfile }) {
   const lang = language || 'es';
   const { intent, context: intentContext } = classifyIntent(userMessage || '');
 
@@ -361,6 +362,39 @@ function buildSystemPrompt({ language, userMessage, customGpt, userProfile }) {
 
     if (customGpt.conversationStarters && customGpt.conversationStarters.length > 0) {
       body += `\n\n## SUGGESTED STARTERS\n${customGpt.conversationStarters.map(s => `- ${s}`).join('\n')}`;
+    }
+  }
+
+  // Project context — the user's task-scoped workspace. Unlike
+  // CustomGpt, projects are private and goal-oriented. The model
+  // follows the project's instructions (if any) AND grounds every
+  // answer in the attached files' extracted text. We keep this BELOW
+  // customGpt so that if both happen to be set (rare edge case), the
+  // project instructions take precedence as the user's most recent
+  // expressed intent.
+  if (project && project.name) {
+    body += `\n\n## PROJECT: "${project.name}"`;
+    if (project.description) {
+      body += `\n**Goal:** ${project.description}`;
+    }
+    if (project.instructions) {
+      body += `\n\n### Project instructions (follow these in every reply)\n${project.instructions}`;
+    }
+    if (project.files && project.files.length > 0) {
+      // Cap per-file content so a 500-page PDF doesn't blow the prompt
+      // window. 12000 chars ≈ 3000 tokens per file is a reasonable
+      // ceiling that still gives the model strong grounding. Longer
+      // files get an explicit [truncated] marker so the model knows
+      // more material remains.
+      const PER_FILE_CAP = 12000;
+      const knowledge = project.files.map(f => {
+        const text = f.extractedText || '';
+        const truncated = text.length > PER_FILE_CAP
+          ? text.slice(0, PER_FILE_CAP) + '\n\n…[file truncated — full content exceeds prompt cap]'
+          : text;
+        return `### File: ${f.originalName}\n${truncated}`;
+      }).join('\n\n');
+      body += `\n\n## PROJECT FILES (authoritative — prefer these over your own prior knowledge when they conflict)\n${knowledge}`;
     }
   }
 

@@ -1628,6 +1628,28 @@ function ChatInterfaceContent() {
 
   const [input, setInput] = React.useState("")
   const [isRecording, setIsRecording] = React.useState(false)
+
+  // Project launcher prefill — when a user starts a chat from the
+  // project detail page, their typed draft is stashed under
+  // "project-prefill:<chatId>" in sessionStorage. We read it once the
+  // chat is loaded here and move it into the composer input so they
+  // don't lose their draft crossing the boundary between pages. We
+  // deliberately do NOT auto-send — the user might want to edit
+  // before firing off the prompt.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!currentChat?.id) return
+    const key = `project-prefill:${currentChat.id}`
+    try {
+      const draft = sessionStorage.getItem(key)
+      if (draft) {
+        setInput(prev => prev.trim() ? prev : draft)
+        sessionStorage.removeItem(key)
+      }
+    } catch {
+      /* private-mode / blocked storage — harmless */
+    }
+  }, [currentChat?.id])
   const [isSearching, setIsSearching] = React.useState(false)
   const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)

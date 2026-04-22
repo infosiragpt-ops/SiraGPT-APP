@@ -61,6 +61,7 @@ model User {
   sessions  Session[]
   files     File[]
   createdGpts CustomGpt[]
+  projects    Project[]
   usageAlerts UsageAlert[]
   notifications Notification[]
   subscriptionEvents SubscriptionEvent[]
@@ -143,6 +144,13 @@ model Chat {
   customGptId String?
   customGpt   CustomGpt? @relation(fields: [customGptId], references: [id], onDelete: SetNull)
 
+  // Project Integration — mirrors customGptId. When set, the AI route
+  // injects the project's instructions + attached file contents into
+  // the system prompt so a chat inside a project answers with that
+  // context baked in.
+  projectId   String?
+  project     Project?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
   // Relations
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages Message[]
@@ -199,6 +207,14 @@ model File {
 
   customGptId String?
   customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id],onDelete: SetNull)
+
+  // Files attached to a Project. Same pattern as GPT knowledge files:
+  // a File can belong to a Project (its extractedText is injected into
+  // chats that run inside that project) or stand alone (uploaded to a
+  // regular chat). SetNull on delete preserves the File row if the
+  // project is removed — the user can reattach it elsewhere.
+  projectId   String?
+  project     Project?   @relation("ProjectFiles", fields: [projectId], references: [id], onDelete: SetNull)
 
   @@map("files")
 }
@@ -384,9 +400,45 @@ model CustomGpt {
   visibility          GptVisibility @default(PRIVATE)
   shareId             String      @unique @default(cuid())
   category            String?
-  isFeatured          Boolean     @default(false) 
+  isFeatured          Boolean     @default(false)
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 
   @@map("custom_gpts")
+}
+
+// Projects — a workspace for chatting against a curated bundle of
+// files + custom instructions. Distinct from CustomGpt because:
+//   - Projects are always private to their owner (no visibility
+//     tier, no shareId, no category/featured machinery).
+//   - The goal is task-scoped knowledge ("Research paper Q1",
+//     "Thesis methodology") rather than a reusable persona that
+//     others can chat with.
+//   - Instructions are optional — a project works as a pure
+//     file-bucket even with no prompt set.
+// Otherwise the wiring is identical to CustomGpt: chats reference
+// the project via Chat.projectId, files via File.projectId, and the
+// ai.js route reads both and injects them into the system prompt.
+model Project {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name         String
+  description  String?   @db.Text
+  instructions String?   @db.Text   // Optional custom instructions; may be edited any time.
+
+  // Optional star / favourite — powers the "starred first" sort the
+  // UI offers alongside recent activity.
+  isStarred    Boolean   @default(false)
+
+  // Relations — file bucket + chats created inside this project.
+  files       File[]    @relation("ProjectFiles")
+  chats       Chat[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("projects")
+  @@index([userId, updatedAt])
 }
