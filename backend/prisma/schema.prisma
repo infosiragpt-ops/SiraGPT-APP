@@ -442,6 +442,7 @@ model Project {
   files       File[]    @relation("ProjectFiles")
   chats       Chat[]
   memories    ProjectMemory[]
+  documents   ProjectDocument[]
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -469,4 +470,34 @@ model ProjectMemory {
 
   @@map("project_memories")
   @@index([projectId, createdAt])
+}
+
+// Project documents — long-form writing surface for each project.
+// Think: thesis draft, methodology section, research notes. Edited
+// with a Tiptap-based WYSIWYG editor that serialises to Markdown;
+// `content` is the authoritative form (Markdown round-trip lets the
+// document export cleanly via the existing /api/generate-document
+// docx pipeline without a separate HTML path).
+//
+// Kept separate from File because these are NOT upload artifacts —
+// they're live documents the user authors in-app, auto-saved as
+// they type. File is for PDFs/images the user brings in; this is
+// for prose the user writes.
+model ProjectDocument {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title      String
+  content    String   @db.Text         // Markdown source of truth
+  // Optional scratchpad for editor-specific state (open/closed sections,
+  // cursor position, last-view timestamp) without forcing a schema
+  // change every time the editor grows a new affordance.
+  meta       Json?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("project_documents")
+  @@index([projectId, updatedAt])
 }

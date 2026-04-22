@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { projectsService, type ProjectDetail, type ProjectMemoryItem } from "@/lib/projects-service"
+import { DocumentsSection } from "@/components/projects/documents-section"
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
@@ -286,9 +287,10 @@ export default function ProjectDetailPage() {
             )}
           </div>
 
-          {/* ── Right column: memory / instructions / files ────────────── */}
+          {/* ── Right column: memory / docs / instructions / files ──────── */}
           <aside className="space-y-4 lg:sticky lg:top-6 self-start">
             <MemorySection t={t} memories={memories} onDelete={handleDeleteMemory} />
+            <DocumentsSection projectId={project.id} />
             <InstructionsSection
               t={t}
               project={project}
