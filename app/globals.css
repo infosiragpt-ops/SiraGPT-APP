@@ -2461,6 +2461,64 @@ html[dir="rtl"] .right-0 { left: 0; right: auto; }
 html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 
 /* ────────────────────────────────────────────────────────────
+ * Liquid-glass surface for the composer tool menu panel itself.
+ * Applied to <DropdownMenuContent> + <DropdownMenuSubContent>.
+ * Reads as a frosted water drop: translucent, blurred, with a
+ * soft top highlight pool — like a pane of glass catching light
+ * from the upper-left.
+ *
+ * The !important on bg/border/shadow is deliberate: the Radix
+ * primitive bakes bg-popover, border, shadow-md into every
+ * Content node, and we want to override without forking the
+ * shared primitive (which every other dropdown in the app uses).
+ * ──────────────────────────────────────────────────────────── */
+.liquid-menu-surface {
+  background: hsl(0 0% 100% / 0.62) !important;
+  backdrop-filter: blur(28px) saturate(1.6);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
+  border: 1px solid hsl(0 0% 100% / 0.4) !important;
+  border-radius: 18px !important;
+  padding: 6px !important;
+  overflow: hidden !important;
+  position: relative;
+  box-shadow:
+    0 14px 56px -14px hsl(0 0% 0% / 0.22),
+    0 2px 8px -2px hsl(0 0% 0% / 0.08),
+    inset 0 1px 0 0 hsl(0 0% 100% / 0.65),
+    inset 0 -1px 0 0 hsl(0 0% 0% / 0.04) !important;
+}
+/* Top-left highlight pool — the "light catch" of a glass surface. */
+.liquid-menu-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+  background: radial-gradient(
+    ellipse 65% 45% at 25% -5%,
+    hsl(0 0% 100% / 0.38),
+    transparent 65%
+  );
+}
+.dark .liquid-menu-surface {
+  background: hsl(222 13% 12% / 0.62) !important;
+  border: 1px solid hsl(0 0% 100% / 0.08) !important;
+  box-shadow:
+    0 14px 56px -14px hsl(0 0% 0% / 0.5),
+    0 2px 8px -2px hsl(0 0% 0% / 0.3),
+    inset 0 1px 0 0 hsl(0 0% 100% / 0.08),
+    inset 0 -1px 0 0 hsl(0 0% 0% / 0.2) !important;
+}
+.dark .liquid-menu-surface::before {
+  background: radial-gradient(
+    ellipse 65% 45% at 25% -5%,
+    hsl(0 0% 100% / 0.08),
+    transparent 65%
+  );
+}
+
+/* ────────────────────────────────────────────────────────────
  * Liquid hover effect for the composer tool menu (DropdownMenu
  * items). Organic blob behind the row with morphing border-
  * radius, spring-eased opacity+scale in on hover. Icon adds a

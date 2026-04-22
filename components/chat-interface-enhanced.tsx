@@ -295,7 +295,7 @@ const ActionsDropdown = ({
             <p>Attach files & tools</p>
           </TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuContent align="start" sideOffset={10} className="liquid-menu-surface w-64">
           {/* File Upload - Only for text chats */}
 
           <DropdownMenuItem className="liquid-menu-item" onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
@@ -358,7 +358,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
+            <DropdownMenuSubContent sideOffset={10} className="liquid-menu-surface w-64">
 
               {/* Gmail */}
               <DropdownMenuItem
