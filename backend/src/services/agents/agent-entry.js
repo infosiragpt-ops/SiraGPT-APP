@@ -19,6 +19,8 @@ const reactAgent = require('../react-agent');
 const executor = require('./executor');
 const skills = require('../skills');
 
+const MAX_SPAWN_DEPTH = 3;
+
 /**
  * Run the agent for a specific user, returning when the run finishes.
  *
@@ -33,6 +35,11 @@ const skills = require('../skills');
  * @param {number} [opts.maxSteps=8]
  * @param {string} [opts.model='gpt-4o']
  * @param {string} [opts.source] — free-form tag for logs ("cron:job_x").
+ * @param {number} [opts.depth=0] — recursion depth for session_spawn.
+ *                                  Sub-agents are capped at MAX_SPAWN_DEPTH
+ *                                  to prevent a runaway "agents spawning
+ *                                  agents spawning agents" loop that would
+ *                                  exhaust the LLM budget.
  *
  * @returns {Promise<{
  *   answer: string,
@@ -52,14 +59,18 @@ async function runAgent(opts) {
     maxSteps,
     model = 'gpt-4o',
     source = 'internal',
+    depth = 0,
   } = opts;
 
   if (!userId) throw new Error('agent-entry.runAgent: userId required');
   if (!prompt) throw new Error('agent-entry.runAgent: prompt required');
   if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured');
+  if (depth > MAX_SPAWN_DEPTH) {
+    throw new Error(`agent-entry.runAgent: spawn depth ${depth} exceeds max ${MAX_SPAWN_DEPTH}`);
+  }
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const ctx = { openai, userId, collection, source };
+  const ctx = { openai, userId, collection, source, depth };
 
   const { skills: loaded } = skills.get();
   const chosen = skillIds
@@ -94,4 +105,4 @@ async function runAgent(opts) {
   };
 }
 
-module.exports = { runAgent };
+module.exports = { runAgent, MAX_SPAWN_DEPTH };
