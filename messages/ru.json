@@ -6,7 +6,8 @@
     "today": "Сегодня",
     "last7Days": "Последние 7 дней",
     "older": "Ранее",
-    "projects": "Projects"
+    "projects": "Projects",
+    "design": "Дизайн"
   },
   "projects": {
     "title": "Projects",
