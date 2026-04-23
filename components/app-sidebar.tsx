@@ -179,16 +179,22 @@ export function AppSidebar() {
     }
   }, [router, SIDEBAR_ROUTES])
 
+  const [selectedType, setSelectedType] = React.useState("Text Chat")
+  const { state, toggleSidebar, isMobile, setOpen, setOpenMobile } = useSidebar()
   const [navPending, startNavTransition] = React.useTransition()
   const [pendingHref, setPendingHref] = React.useState<string | null>(null)
   const navigate = React.useCallback((href: string) => {
-    // If we're already on the route, nothing to do. Keeps click on
-    // "GPTs" while already on /gpts from triggering a needless
-    // re-render + skeleton flash.
+    // Collapse the sidebar immediately so the destination page opens
+    // with the cleanest possible workspace.
+    if (isMobile) setOpenMobile(false)
+    else setOpen(false)
+
+    // If we're already on the route, don't push again. The explicit
+    // collapse above is still intentional and should be preserved.
     if (pathname === href || pathname.startsWith(href + '/')) return
     setPendingHref(href)
     startNavTransition(() => { router.push(href) })
-  }, [pathname, router])
+  }, [isMobile, pathname, router, setOpen, setOpenMobile])
   // Clear the pending marker once navigation settled. pathname is
   // the trigger: it changes the frame after router.push resolves.
   React.useEffect(() => {
@@ -199,8 +205,6 @@ export function AppSidebar() {
   const prefetchOnHover = React.useCallback((href: string) => {
     try { router.prefetch(href) } catch { /* ignore */ }
   }, [router])
-  const [selectedType, setSelectedType] = React.useState("Text Chat")
-  const { state, toggleSidebar, isMobile, setOpenMobile } = useSidebar()
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)

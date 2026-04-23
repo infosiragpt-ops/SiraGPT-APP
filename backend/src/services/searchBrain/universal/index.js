@@ -15,9 +15,11 @@ const settings = require("./settings");
 const { CATEGORIES, REGIONS, DEFAULT_REGION } = require("./types");
 
 const { openMeteoProvider } = require("./providers/weather/openMeteo");
+const { openAlexProvider } = require("./providers/academic/openAlex");
 
 // ─── Register built-in providers (idempotent via id key) ─────────────────
 registry.register(openMeteoProvider);
+registry.register(openAlexProvider);
 
 module.exports = {
   runUniversalSearch,

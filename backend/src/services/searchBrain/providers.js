@@ -89,10 +89,19 @@ function reconstructAbstract(invertedIndex) {
 
 async function searchOpenAlex(query, opts = {}) {
   const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
-  const mailto = opts.mailto;
+  // Auth / polite-pool resolution, in priority order:
+  //   1. opts.apiKey / opts.mailto — caller explicit override (per-user
+  //      settings, ad-hoc requests).
+  //   2. OPENALEX_API_KEY — premium plan token set by ops in .env.
+  //   3. OPENALEX_MAILTO — polite-pool email (also in .env). OpenAlex's
+  //      free tier is unauthenticated but rewards callers that identify
+  //      themselves with a mailto by routing them to a faster pool.
+  const apiKey = opts.apiKey || process.env.OPENALEX_API_KEY;
+  const mailto = opts.mailto || process.env.OPENALEX_MAILTO;
   const url = new URL("https://api.openalex.org/works");
   url.searchParams.set("search", query);
   url.searchParams.set("per-page", String(Math.min(25, maxResults)));
+  if (apiKey) url.searchParams.set("api_key", apiKey);
   if (mailto) url.searchParams.set("mailto", mailto);
   const body = await fetchJson(url.toString(), { timeoutMs: opts.timeoutMs, mailto });
   if (!body || !Array.isArray(body.results)) return [];
