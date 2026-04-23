@@ -36,6 +36,47 @@ function fail(res, errors) {
   return res.status(400).json({ errors: errors.array() });
 }
 
+// ─── Palette suggester ────────────────────────────────────────────────────
+//
+// The user describes the vibe they want ("moderno minimalista",
+// "cálido editorial", "vaporwave"). We ask the LLM to return 4
+// curated named palettes — each with a short name + 4-swatch hex
+// list + one-line descriptor. If the user doesn't pick any, the
+// raw description is what the image-generator sees.
+
+router.get('/palette-suggestions', async (req, res) => {
+  const vibe = String(req.query.vibe || '').trim().slice(0, 300);
+  if (!vibe) return res.json({ palettes: [] });
+  try {
+    const OpenAI = require('openai');
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY no configurado' });
+    const openai = new OpenAI({ apiKey });
+    const sys = `Eres un director de arte. Genera 4 paletas de color COHESIVAS en JSON estricto.
+Cada paleta: { "id": "kebab-case", "name": "Nombre corto y evocador", "vibe": "descripción breve en español (≤ 60 caracteres)", "swatches": [4 hex codes] }.
+La primera swatch es fondo / más clara; la cuarta es acento / más saturada. Evita combinaciones ilegibles. No uses texto markdown. Responde SOLO {"palettes": [...]}.`;
+    const r = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'system', content: sys }, { role: 'user', content: `Vibe: ${vibe}` }],
+      temperature: 0.75, max_tokens: 800,
+      response_format: { type: 'json_object' },
+    });
+    const body = JSON.parse(r.choices?.[0]?.message?.content || '{}');
+    const palettes = Array.isArray(body?.palettes) ? body.palettes.slice(0, 4).map((p, i) => ({
+      id: String(p.id || `opt-${i+1}`).toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 40) || `opt-${i+1}`,
+      name: String(p.name || `Opción ${i+1}`).slice(0, 60),
+      vibe: String(p.vibe || vibe).slice(0, 80),
+      swatches: Array.isArray(p.swatches)
+        ? p.swatches.slice(0, 4).map(s => String(s).startsWith('#') ? s : `#${s}`).filter(s => /^#[0-9A-F]{6}$/i.test(s)).slice(0, 4)
+        : [],
+    })).filter(p => p.swatches.length === 4) : [];
+    res.json({ palettes });
+  } catch (err) {
+    console.error('[marketing] palette suggestions error:', err?.message);
+    res.status(500).json({ error: err?.message || 'No pude generar paletas' });
+  }
+});
+
 // ─── Image generation ─────────────────────────────────────────────────────
 
 router.post(

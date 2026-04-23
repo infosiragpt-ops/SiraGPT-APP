@@ -137,6 +137,15 @@ export const marketingService = {
     return handle<{ batchId: string; count: number; posts: ScheduledPost[] }>(res)
   },
 
+  async suggestPalettes(vibe: string): Promise<Palette[]> {
+    if (!vibe.trim()) return []
+    const res = await fetch(`${API_ROOT}/marketing/palette-suggestions?vibe=${encodeURIComponent(vibe)}`, {
+      credentials: "include", headers: { ...authHeader() },
+    })
+    const j = await handle<{ palettes: Palette[] }>(res)
+    return j.palettes || []
+  },
+
   async listConnections() {
     const res = await fetch(`${API_ROOT}/marketing/connections`, {
       credentials: "include", headers: { ...authHeader() },
@@ -172,10 +181,10 @@ export const DEFAULT_MODEL = "openai/gpt-5.4-image-2"
 
 // ─── Color palettes ───────────────────────────────────────────────────────
 //
-// Replaces the old single-swatch picker. Each palette is a named
-// ensemble a designer would actually ship together — harmonious,
-// platform-ready, with clear personality descriptors so the user can
-// pick by vibe, not by hex.
+// User describes the vibe in free text; the backend's
+// /palette-suggestions endpoint returns 4 AI-proposed palettes from
+// which the user picks one. If none is picked the raw description
+// flows straight into the image-generation prompt.
 
 export interface Palette {
   id: string
@@ -183,42 +192,3 @@ export interface Palette {
   vibe: string          // short descriptor passed to the image model
   swatches: string[]    // 4 hex tones, left→right
 }
-
-export const PALETTES: Palette[] = [
-  { id: "sunrise-studio", name: "Sunrise Studio",
-    vibe: "cálido, editorial, cream + terracotta + charcoal",
-    swatches: ["#F6F1E7", "#F3C89C", "#C05621", "#1A1918"] },
-  { id: "cobalt-reach", name: "Cobalt Reach",
-    vibe: "corporativo moderno, cobalto + hielo + azul profundo",
-    swatches: ["#E8F0FE", "#6098F2", "#1F3A68", "#0A1628"] },
-  { id: "matcha-clean", name: "Matcha Clean",
-    vibe: "fresco, wellness, verde salvia + crema + carbón",
-    swatches: ["#F1F6EE", "#B4C7A1", "#4F6E50", "#1E2E20"] },
-  { id: "neon-studio", name: "Neon Studio",
-    vibe: "dinámico digital, negro + magenta neón + cian",
-    swatches: ["#0F0F10", "#1B1B1F", "#E91E63", "#00E5FF"] },
-  { id: "rose-noir", name: "Rose Noir",
-    vibe: "premium moda, rosa empolvado + negro + oro",
-    swatches: ["#FFEFE9", "#F3B9B5", "#1B1B1B", "#C5A26F"] },
-  { id: "lagoon", name: "Lagoon",
-    vibe: "vacacional, turquesa + arena + azul marino",
-    swatches: ["#E7F5F5", "#5ECBC0", "#1E525D", "#E3D3A8"] },
-  { id: "graphite-minimal", name: "Graphite Minimal",
-    vibe: "minimal alto contraste, blanco + grises + carbón",
-    swatches: ["#FFFFFF", "#E5E7EB", "#6B7280", "#111827"] },
-  { id: "sunset-fiesta", name: "Sunset Fiesta",
-    vibe: "cálido vibrante, coral + amarillo + violeta profundo",
-    swatches: ["#FFC4A3", "#F97316", "#FBBF24", "#7C3AED"] },
-  { id: "botanical", name: "Botanical",
-    vibe: "orgánico natural, verde bosque + crema + terracota suave",
-    swatches: ["#EDEBDE", "#A8B98A", "#3F5530", "#C58A5E"] },
-  { id: "noir-editorial", name: "Noir Editorial",
-    vibe: "lujo serio, negro + blanco roto + acento mostaza",
-    swatches: ["#FAF7F0", "#2A2523", "#0B0B0B", "#C9A24B"] },
-  { id: "bubblegum", name: "Bubblegum",
-    vibe: "alegre juvenil, rosa + lavanda + menta",
-    swatches: ["#FFE5F1", "#F29BC9", "#C8B6FF", "#B8F2E6"] },
-  { id: "midnight-studio", name: "Midnight Studio",
-    vibe: "tecnología oscura, azul medianoche + violeta + verde lima",
-    swatches: ["#0F172A", "#1E1B4B", "#8B5CF6", "#A3E635"] },
-]

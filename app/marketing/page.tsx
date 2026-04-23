@@ -34,9 +34,9 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import {
-  marketingService, PLATFORMS, DEFAULT_MODEL, PALETTES,
+  marketingService, PLATFORMS, DEFAULT_MODEL,
   type Platform, type ScheduledPost, type ReferenceImage, type Cadence,
-  type ConnectionsStatus,
+  type ConnectionsStatus, type Palette,
 } from "@/lib/marketing-service"
 import { ConnectSocialModal } from "@/components/marketing/connect-social-modal"
 
@@ -71,7 +71,14 @@ const MAX_REFS = 6
 export default function MarketingPage() {
   // ── Composer state ───────────────────────────────────────────────
   const [prompt, setPrompt] = React.useState("")
-  const [paletteId, setPaletteId] = React.useState<string>(PALETTES[0].id)
+  // Palette is free-text by default. User describes a vibe, hits
+  // "Sugerir paletas" and the AI proposes 4 options. If they pick
+  // one we keep the Palette object; otherwise we pass the raw
+  // `paletteDesc` string straight to the image generator.
+  const [paletteDesc, setPaletteDesc] = React.useState<string>("")
+  const [paletteSuggestions, setPaletteSuggestions] = React.useState<Palette[]>([])
+  const [selectedPalette, setSelectedPalette] = React.useState<Palette | null>(null)
+  const [suggestingPalettes, setSuggestingPalettes] = React.useState(false)
   const [orientation, setOrientation] = React.useState<(typeof ORIENTATIONS)[number]>("cuadrado")
   const [animation, setAnimation] = React.useState<(typeof ANIMATIONS)[number]>("estáticos")
   const [price, setPrice] = React.useState<(typeof PRICES)[number]>("gratis")
@@ -129,7 +136,25 @@ export default function MarketingPage() {
     const d = new Date(`${date}T${time}:00`)
     return isNaN(d.getTime()) ? null : d.toISOString()
   }, [date, time])
-  const palette = React.useMemo(() => PALETTES.find(p => p.id === paletteId) || PALETTES[0], [paletteId])
+  // Effective palette vibe sent to the image model: the selected
+  // palette's vibe when one is picked, else the user's raw
+  // description, else empty string (no palette constraint).
+  const paletteVibe = selectedPalette?.vibe || paletteDesc.trim()
+  async function handleSuggestPalettes() {
+    const desc = paletteDesc.trim()
+    if (!desc) { toast.error("Describe la paleta primero"); return }
+    setSuggestingPalettes(true)
+    try {
+      const pals = await marketingService.suggestPalettes(desc)
+      if (pals.length === 0) toast.error("No pude generar paletas — intenta describir con más detalle")
+      setPaletteSuggestions(pals)
+      setSelectedPalette(null)
+    } catch (err: any) {
+      toast.error(err?.message || "Error generando paletas")
+    } finally {
+      setSuggestingPalettes(false)
+    }
+  }
 
   function togglePlatform(p: Platform) {
     const currentlyConnected = connStatus?.[p]?.connected
@@ -181,7 +206,9 @@ export default function MarketingPage() {
     try {
       const res = await marketingService.generateImage({
         prompt, model: imageModel, orientation,
-        color: palette.vibe,                // we pass the vibe, not the id
+        // Vibe comes from the selected palette, or from the user's
+        // free-text description if they skipped selecting one.
+        color: paletteVibe || undefined,
         animation, price, platforms,
       })
       setImageUrl(res.imageUrl)
@@ -201,7 +228,11 @@ export default function MarketingPage() {
       const saved = await marketingService.savePost({
         prompt, imageUrl: imageUrl || undefined, imageModel,
         platforms, scheduledAt: scheduledAtISO, status: "scheduled",
-        config: { palette: palette.id, orientation, animation, price },
+        config: {
+          paletteName: selectedPalette?.name || null,
+          paletteVibe: paletteVibe || null,
+          orientation, animation, price,
+        },
         referenceImages: references.length ? references : null,
       } as any)
       toast.success("Post programado")
@@ -225,7 +256,7 @@ export default function MarketingPage() {
         platforms,
         model: imageModel,
         orientation,
-        palette: palette.vibe,
+        palette: paletteVibe || undefined,
         animation,
         price,
         referenceImages: references.length ? references : undefined,
@@ -334,45 +365,85 @@ export default function MarketingPage() {
             )}
           </section>
 
-          {/* Paleta de colores — replaces the raw color swatches. */}
+          {/* Paleta de colores — free-text description + AI-suggested
+              options. The user is free to skip picking and just let
+              the description flow into the image prompt. */}
           <section>
             <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-foreground/80">
               <PaletteIcon className="h-3.5 w-3.5" />
               Paleta de colores
+              <span className="ml-auto text-[10.5px] font-normal text-muted-foreground">
+                Describe la vibe, sugerimos 4
+              </span>
             </div>
-            <div className="space-y-1.5">
-              {PALETTES.map(p => {
-                const active = paletteId === p.id
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setPaletteId(p.id)}
-                    className={cn(
-                      "group/pal w-full rounded-lg border p-2 text-left transition",
-                      active
-                        ? "border-foreground/40 bg-foreground/5"
-                        : "border-border/50 hover:border-border hover:bg-muted/20"
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-6 overflow-hidden rounded-md shadow-sm">
-                        {p.swatches.map((hex, i) => (
-                          <span key={i} className="block w-5" style={{ backgroundColor: hex }} />
-                        ))}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="truncate text-[12.5px] font-medium">{p.name}</div>
-                        <div className="truncate text-[10.5px] text-muted-foreground">{p.vibe}</div>
-                      </div>
-                      {active && (
-                        <Check className="h-3.5 w-3.5 shrink-0 text-foreground/70" strokeWidth={3} />
+            <Textarea
+              value={paletteDesc}
+              onChange={e => {
+                setPaletteDesc(e.target.value)
+                // User editing the description invalidates the
+                // previously selected AI palette — otherwise the
+                // chosen palette keeps overriding their new text.
+                if (selectedPalette) setSelectedPalette(null)
+              }}
+              placeholder="Ej. minimalista cálido, cream + terracotta, premium pero cercano"
+              rows={2}
+              className="resize-none text-[13px]"
+            />
+            <div className="mt-1.5 flex items-center justify-between gap-2">
+              <div className="text-[10.5px] text-muted-foreground">
+                {selectedPalette
+                  ? <>Usando paleta <strong className="text-foreground">{selectedPalette.name}</strong></>
+                  : paletteDesc.trim()
+                    ? "Si no eliges una, usaremos tu descripción tal cual"
+                    : "Opcional — la IA sugiere paletas a partir de tu descripción"}
+              </div>
+              <Button
+                type="button" size="sm" variant="outline"
+                onClick={handleSuggestPalettes}
+                disabled={suggestingPalettes || !paletteDesc.trim()}
+                className="h-7 px-2 text-[11px]"
+              >
+                {suggestingPalettes
+                  ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Generando…</>
+                  : <><Sparkles className="mr-1 h-3 w-3" />Sugerir paletas</>}
+              </Button>
+            </div>
+
+            {paletteSuggestions.length > 0 && (
+              <div className="mt-2 space-y-1.5">
+                {paletteSuggestions.map(p => {
+                  const active = selectedPalette?.id === p.id
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setSelectedPalette(active ? null : p)}
+                      className={cn(
+                        "group/pal w-full rounded-lg border p-2 text-left transition",
+                        active
+                          ? "border-foreground/40 bg-foreground/5"
+                          : "border-border/50 hover:border-border hover:bg-muted/20"
                       )}
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-6 overflow-hidden rounded-md shadow-sm shrink-0">
+                          {p.swatches.map((hex, i) => (
+                            <span key={i} className="block w-5" style={{ backgroundColor: hex }} />
+                          ))}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="truncate text-[12.5px] font-medium">{p.name}</div>
+                          <div className="truncate text-[10.5px] text-muted-foreground">{p.vibe}</div>
+                        </div>
+                        {active && (
+                          <Check className="h-3.5 w-3.5 shrink-0 text-foreground/70" strokeWidth={3} />
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </section>
 
           <FilterGroup label="Orientación" options={ORIENTATIONS as unknown as string[]}
@@ -647,15 +718,28 @@ export default function MarketingPage() {
             </div>
           </div>
 
-          <div className="mt-3 rounded-lg border border-border/50 bg-background p-2.5">
-            <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-foreground/80">
-              <div className="flex h-4 overflow-hidden rounded-sm">
-                {palette.swatches.map((h, i) => <span key={i} className="block w-2.5" style={{ backgroundColor: h }} />)}
-              </div>
-              {palette.name}
+          {(selectedPalette || paletteDesc.trim()) && (
+            <div className="mt-3 rounded-lg border border-border/50 bg-background p-2.5">
+              {selectedPalette ? (
+                <>
+                  <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-foreground/80">
+                    <div className="flex h-4 overflow-hidden rounded-sm">
+                      {selectedPalette.swatches.map((h, i) => (
+                        <span key={i} className="block w-2.5" style={{ backgroundColor: h }} />
+                      ))}
+                    </div>
+                    {selectedPalette.name}
+                  </div>
+                  <div className="text-[11px] leading-snug text-muted-foreground">{selectedPalette.vibe}</div>
+                </>
+              ) : (
+                <>
+                  <div className="mb-1 text-[11px] font-medium text-foreground/80">Paleta en texto libre</div>
+                  <div className="text-[11px] leading-snug text-muted-foreground">{paletteDesc.trim()}</div>
+                </>
+              )}
             </div>
-            <div className="text-[11px] leading-snug text-muted-foreground">{palette.vibe}</div>
-          </div>
+          )}
         </aside>
       </div>
 
