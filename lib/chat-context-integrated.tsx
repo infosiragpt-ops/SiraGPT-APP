@@ -173,6 +173,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [pendingStop, setPendingStop] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null); // ✅ AbortController ref
+  const chatsRef = useRef<Chat[]>([])
+
+  useEffect(() => {
+    chatsRef.current = chats
+  }, [chats])
 
 
   // Load user's chats
@@ -1216,6 +1221,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const selectChat = useCallback(
     async (chatId: string) => {
+      const cachedChat = chatsRef.current.find(chat => chat?.id === chatId)
+      if (cachedChat) {
+        setCurrentChat(prev => {
+          if (prev?.id === chatId && (prev.messages?.length || 0) > 0) return prev
+          return { ...cachedChat, messages: cachedChat.messages || [] }
+        })
+        localStorage.setItem('currentChatId', chatId)
+        setUploadedFiles([])
+      }
+
       try {
         const response = await apiClient.getChat(chatId)
         const chat = response.chat

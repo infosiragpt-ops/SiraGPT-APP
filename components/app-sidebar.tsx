@@ -158,10 +158,9 @@ export function AppSidebar() {
   //   2. onMouseEnter additionally prefetches (covers hot-reloaded
   //      routes + lets React be opportunistic about data fetches
   //      kicked off by the target's server components).
-  //   3. router.push runs inside React.startTransition so the click
-  //      feels instant visually: `isPending` flips true immediately
-  //      and the pressed-state styling (lower opacity + spinner dot)
-  //      renders in the same frame.
+  //   3. The target route is marked active optimistically before
+  //      router.push resolves. In dev, route compilation can take
+  //      seconds; the sidebar still acknowledges the click in-frame.
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
@@ -179,21 +178,23 @@ export function AppSidebar() {
   }, [router, SIDEBAR_ROUTES])
 
   const [selectedType, setSelectedType] = React.useState("Text Chat")
-  const { state, toggleSidebar, isMobile, setOpen, setOpenMobile } = useSidebar()
+  const { state, toggleSidebar, isMobile, setOpenMobile } = useSidebar()
   const [navPending, startNavTransition] = React.useTransition()
   const [pendingHref, setPendingHref] = React.useState<string | null>(null)
+  const [newChatPending, setNewChatPending] = React.useState(false)
+  const activePathname = pendingHref ?? pathname
   const navigate = React.useCallback((href: string) => {
-    // Collapse the sidebar immediately so the destination page opens
-    // with the cleanest possible workspace.
+    // Mobile should close the sheet immediately after a tap. Desktop
+    // stays open so the active item can change in-frame; collapsing it
+    // here makes navigation feel slower and removes the feedback target.
     if (isMobile) setOpenMobile(false)
-    else setOpen(false)
 
-    // If we're already on the route, don't push again. The explicit
-    // collapse above is still intentional and should be preserved.
+    // If we're already on the route, don't push again. Keeping the
+    // current frame avoids a redundant RSC fetch.
     if (pathname === href || pathname.startsWith(href + '/')) return
     setPendingHref(href)
-    startNavTransition(() => { router.push(href) })
-  }, [isMobile, pathname, router, setOpen, setOpenMobile])
+    startNavTransition(() => { router.push(href, { scroll: false }) })
+  }, [isMobile, pathname, router, setOpenMobile])
   // Clear the pending marker once navigation settled. pathname is
   // the trigger: it changes the frame after router.push resolves.
   React.useEffect(() => {
@@ -201,9 +202,23 @@ export function AppSidebar() {
       setPendingHref(null)
     }
   }, [navPending, pendingHref, pathname])
+  React.useEffect(() => {
+    if (!newChatPending) return
+    const id = window.setTimeout(() => setNewChatPending(false), 250)
+    return () => window.clearTimeout(id)
+  }, [newChatPending])
   const prefetchOnHover = React.useCallback((href: string) => {
     try { router.prefetch(href) } catch { /* ignore */ }
   }, [router])
+  const markNavigationIntent = React.useCallback((href: string) => {
+    if (pathname === href || pathname.startsWith(href + '/')) return
+    setPendingHref(href)
+    try { router.prefetch(href) } catch { /* ignore */ }
+  }, [pathname, router])
+  const markNewChatIntent = React.useCallback(() => {
+    setNewChatPending(true)
+    setPendingHref('/chat')
+  }, [])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
@@ -221,20 +236,24 @@ export function AppSidebar() {
   }
 
   const handleNewChat = () => {
+    markNewChatIntent()
     setCurrentChat(null);
     localStorage.removeItem('currentChatId');
 
-    // Dispatch custom event to reset all connector and tool states
-    window.dispatchEvent(new CustomEvent('resetChatState'));
+    // Reset connector/tool state after the click frame has painted.
+    // Dispatching synchronously blocks the visual "new chat" reset.
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('resetChatState'));
+    }, 0);
 
-    // Navigate to chat if not already there
-    if (!pathname.startsWith('/chat')) {
-      router.push('/chat')
+    const hasQuery = typeof window !== "undefined" && window.location.search.length > 0
+    if (!pathname.startsWith('/chat') || hasQuery) {
+      startNavTransition(() => { router.replace('/chat', { scroll: false }) })
+    } else {
+      window.setTimeout(() => setPendingHref(null), 0)
     }
     if (isMobile) {
-      setTimeout(() => {
-        setOpenMobile(false);
-      }, 500);
+      setOpenMobile(false);
     }
   }
 
@@ -332,15 +351,16 @@ export function AppSidebar() {
   const handleLibraryClick = () => navigate("/library")
 
   const handleChatClick = (chatId: string) => {
+    setPendingHref('/chat')
     selectChat(chatId)
     // Navigate to chat page if not already there
     if (!pathname.startsWith('/chat')) {
-      router.push(`/chat?id=${chatId}`)
+      startNavTransition(() => { router.push(`/chat?id=${chatId}`, { scroll: false }) })
+    } else {
+      window.setTimeout(() => setPendingHref(null), 0)
     }
     if (isMobile) {
-      setTimeout(() => {
-        setOpenMobile(false);
-      }, 500);
+      setOpenMobile(false);
     }
   }
 
@@ -475,9 +495,11 @@ export function AppSidebar() {
   }, [hasMoreChats, isLoadingMore, loadMoreChats])
 
   // Check if we're on GPTs page
-  const isOnGPTsPage = pathname.startsWith('/gpts')
-  const isOnProjectsPage = pathname.startsWith('/projects')
-  const isOnDesignPage = pathname.startsWith('/design')
+  const isOnChatPage = activePathname.startsWith('/chat')
+  const isOnLibraryPage = activePathname.startsWith('/library')
+  const isOnGPTsPage = activePathname.startsWith('/gpts')
+  const isOnProjectsPage = activePathname.startsWith('/projects')
+  const isOnDesignPage = activePathname.startsWith('/design')
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -543,7 +565,9 @@ export function AppSidebar() {
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <SidebarMenuButton
+                onPointerDown={markNewChatIntent}
                 onClick={handleNewChat}
+                isActive={newChatPending || (isOnChatPage && !currentChat)}
                 className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
               >
                 <PenSquare className="h-4 w-4 text-indigo-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
@@ -574,10 +598,12 @@ export function AppSidebar() {
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <SidebarMenuButton
+                onPointerDown={() => markNavigationIntent('/library')}
                 onClick={handleLibraryClick}
                 onMouseEnter={() => prefetchOnHover('/library')}
                 className={cn(
                   "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
+                  isOnLibraryPage && "bg-accent text-accent-foreground",
                   pendingHref === '/library' && "opacity-70"
                 )}
                 variant="default"
@@ -594,6 +620,7 @@ export function AppSidebar() {
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <SidebarMenuButton
+                onPointerDown={() => markNavigationIntent('/gpts')}
                 onClick={handleGPTsClick}
                 onMouseEnter={() => prefetchOnHover('/gpts')}
                 className={cn(
@@ -620,6 +647,7 @@ export function AppSidebar() {
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <SidebarMenuButton
+                onPointerDown={() => markNavigationIntent('/projects')}
                 onClick={handleProjectsClick}
                 onMouseEnter={() => prefetchOnHover('/projects')}
                 className={cn(
@@ -646,6 +674,7 @@ export function AppSidebar() {
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <SidebarMenuButton
+                onPointerDown={() => markNavigationIntent('/design')}
                 onClick={handleDesignClick}
                 onMouseEnter={() => prefetchOnHover('/design')}
                 className={cn(
