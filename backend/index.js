@@ -44,6 +44,7 @@ const agentKeysRoutes = require('./src/routes/agent-keys');
 const projectsRoutes = require('./src/routes/projects');
 const marcoTeoricoRoutes = require('./src/routes/marco-teorico');
 const projectDocumentsRoutes = require('./src/routes/project-documents');
+const designRoutes = require('./src/routes/design');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 
@@ -166,6 +167,7 @@ app.use('/api/projects', projectsRoutes);
 // mergeParams:true to inherit :projectId from this mount path.
 app.use('/api/projects/:projectId/marco-teorico', marcoTeoricoRoutes);
 app.use('/api/projects/:projectId/documents', projectDocumentsRoutes);
+app.use('/api/design', designRoutes);
 
 
 // Error handling middleware

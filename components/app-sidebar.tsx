@@ -25,6 +25,7 @@ import {
   Images,
   LayoutGrid,
   FolderKanban,
+  Palette,
   Loader2,
   PenSquare,
   Shield,
@@ -272,6 +273,10 @@ export function AppSidebar() {
     router.push("/projects")
   }
 
+  const handleDesignClick = () => {
+    router.push("/design")
+  }
+
   const handleLibraryClick = () => {
     router.push("/library")
   }
@@ -422,6 +427,7 @@ export function AppSidebar() {
   // Check if we're on GPTs page
   const isOnGPTsPage = pathname.startsWith('/gpts')
   const isOnProjectsPage = pathname.startsWith('/projects')
+  const isOnDesignPage = pathname.startsWith('/design')
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -571,6 +577,30 @@ export function AppSidebar() {
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
               <p>{t("projects")}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Design — siraGPT's Claude-Design-style canvas, placed
+              right under Projects since both are workspace-shaped
+              artifacts (design extends the workflow with a visual
+              output surface). Palette icon keeps it distinct from
+              FolderKanban without clashing visually. */}
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onClick={handleDesignClick}
+                className={cn(
+                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
+                  isOnDesignPage && "bg-accent text-accent-foreground"
+                )}
+                variant="default"
+              >
+                <Palette className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("design")}</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>{t("design")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>

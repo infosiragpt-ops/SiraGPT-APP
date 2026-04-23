@@ -6,7 +6,8 @@
     "today": "今天",
     "last7Days": "最近 7 天",
     "older": "更早",
-    "projects": "Projects"
+    "projects": "Projects",
+    "design": "设计"
   },
   "projects": {
     "title": "Projects",

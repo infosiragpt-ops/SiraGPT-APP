@@ -62,6 +62,7 @@ model User {
   files     File[]
   createdGpts CustomGpt[]
   projects    Project[]
+  designs     DesignProject[]
   usageAlerts UsageAlert[]
   notifications Notification[]
   subscriptionEvents SubscriptionEvent[]
@@ -500,4 +501,54 @@ model ProjectDocument {
 
   @@map("project_documents")
   @@index([projectId, updatedAt])
+}
+
+// Design projects — the siraGPT Design studio. Each row is one
+// Claude-Design-style artifact (prototype, slide deck, or arbitrary
+// "other" page) that the user iterates on via chat. The `html`
+// column holds the current full single-file HTML document rendered
+// in the canvas iframe; the `messages` JSON is the append-only
+// conversation that produced it.
+//
+// We store the full HTML (not a diff log) because the generation
+// prompt asks the model to emit the complete updated document per
+// turn — that's what makes iteration deterministic. A diff history
+// could go in a sibling table if we ever want step-by-step replay,
+// but the UX the user gets from "last stable version" is just the
+// current `html`.
+model DesignProject {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name      String
+  // Creation shape: prototype | slide_deck | template | other.
+  // Controls what system prompt is selected in the generator and
+  // what container the canvas renders in (slides get a 16:9 stage,
+  // prototypes get a responsive frame, etc.).
+  kind      String
+  // Prototype-only: "wireframe" or "high" fidelity. Null for other
+  // kinds. The wireframe mode tells the generator to use grey
+  // placeholders and system-ui type; high-fidelity gives branded
+  // palette + serif display type.
+  fidelity  String?
+
+  // Optional user-written speaker notes toggle for slide_deck.
+  speakerNotes Boolean? @default(false)
+
+  // The current canonical HTML document. May be null before the
+  // first generation.
+  html      String?   @db.Text
+  // Append-only conversation. Shape: [{role, content, at}]. Kept
+  // inline rather than in Message rows because chats in design
+  // projects aren't part of the user's regular Chat history — they
+  // are artifacts of the design iteration and should live with the
+  // design.
+  messages  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("design_projects")
+  @@index([userId, updatedAt])
 }
