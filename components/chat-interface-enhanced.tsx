@@ -12,7 +12,6 @@ import {
   Globe,
   Bot,
   ChevronDown,
-  ChevronRight,
   X,
   Upload,
   Menu,
@@ -280,7 +279,7 @@ const ActionsDropdown = ({
 
   return (
     <TooltipProvider>
-      <DropdownMenu open={isOpen} onOpenChange={handleDropdownOpenChange}>
+      <DropdownMenu dir="ltr" open={isOpen} onOpenChange={handleDropdownOpenChange}>
         <Tooltip open={!isOpen && !justClosed ? undefined : false} delayDuration={300}>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
@@ -352,9 +351,11 @@ const ActionsDropdown = ({
           <DropdownMenuSub open={connectorsOpen} onOpenChange={setConnectorsOpen}>
             <DropdownMenuSubTrigger
               className="liquid-menu-item"
+              onFocus={() => setConnectorsOpen(true)}
+              onPointerEnter={() => setConnectorsOpen(true)}
               onClick={(e) => {
                 e.preventDefault();
-                setConnectorsOpen((open) => !open);
+                setConnectorsOpen(true);
               }}
             >
               <div className="flex items-center gap-3 w-full">
@@ -368,7 +369,12 @@ const ActionsDropdown = ({
                 </div>
               </div>
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent sideOffset={10} alignOffset={-4} className="liquid-menu-surface w-64">
+            <DropdownMenuSubContent
+              sideOffset={10}
+              alignOffset={-4}
+              avoidCollisions={false}
+              className="liquid-menu-surface w-64"
+            >
               {/* Gmail */}
               <DropdownMenuItem
                 className="liquid-menu-item"
