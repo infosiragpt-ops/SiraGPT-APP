@@ -190,7 +190,10 @@ export function MessageActionRail({
   const isPureCode = hasText && /^```[\s\S]+```$/.test(trimmed)
   const showSpeak = canVoice && hasText && !isPureCode && !hasError
   const showFeedback = canFeedback && hasText && !hasError
-  const showRegenerate = canRegenerate
+  // Regeneration only makes sense after the model has finished producing a
+  // response. During the thinking/streaming state it creates visual noise and
+  // cannot safely act on a complete assistant message yet.
+  const showRegenerate = canRegenerate && !isStreaming
   const showShare = canShare && hasText && !hasError
 
   // Nothing to render? Don't render the container either — keeps the
@@ -294,8 +297,8 @@ export function MessageActionRail({
     fire("speak", () => onSpeak()).catch(() => {})
   }
 
-  // While streaming: visible but disabled — preserves layout without
-  // letting the user trigger races against the in-flight generation.
+  // While streaming: non-regenerate actions remain disabled so the user can't
+  // trigger races against the in-flight generation.
   const allDisabled = isStreaming
 
   return (
