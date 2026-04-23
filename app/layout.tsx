@@ -1,6 +1,7 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Inter, JetBrains_Mono } from "next/font/google"
+import { GeistSans } from "geist/font/sans"
+import { GeistMono } from "geist/font/mono"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/lib/auth-context-integrated"
@@ -13,29 +14,22 @@ import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
 
-// Inter — primary UI typeface. Load the full weight range + Latin-ext
-// (tildes / ñ in Spanish content) so headings at 700 and fine chrome
-// at 400/500 render crisply without falling back to system fonts.
-// `display: "swap"` keeps the first paint instant; `variable` exposes
-// `--font-sans` so Tailwind + globals.css both pull from the same font.
-const inter = Inter({
-  subsets: ["latin", "latin-ext"],
-  weight: ["300", "400", "500", "600", "700", "800"],
-  display: "swap",
-  variable: "--font-sans",
-  fallback: ["system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],
-})
-
-// JetBrains Mono — used for `code`, `pre`, and any tabular digit usage.
-// Designed for code (0 has a dot, l/1 unambiguous), ligatures off by
-// default so AI responses with markdown code blocks read cleanly.
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  display: "swap",
-  variable: "--font-mono",
-  fallback: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
-})
+// Geist Sans — Vercel's in-house UI typeface, the same font used on
+// v0.dev, Vercel's dashboard, and most serious AI/dev tooling built
+// on Next.js. It replaces the previous Inter choice because at the
+// small UI sizes we actually ship (13–15 px) Geist reads crisper,
+// has tighter apertures, and a more distinctive character-set
+// calibration than Inter.
+//
+// The `geist` package already exposes both fonts as variable-font
+// CSS vars (`--font-geist-sans` / `--font-geist-mono`). We re-expose
+// them as `--font-sans` / `--font-mono` so globals.css and Tailwind
+// stay format-agnostic — if we ever swap Geist for another typeface,
+// nothing downstream changes.
+//
+// Geist Mono pairs with it for code, pre, kbd, samp — the 0 has a
+// dot, l / 1 / I are unambiguous, ligatures off by default so AI
+// code blocks read like real source.
 
 export const metadata: Metadata = {
   title: "Sira Gpt Platform",
@@ -57,7 +51,20 @@ export default async function RootLayout({
   const dir = isRTL(locale) ? "rtl" : "ltr"
 
   return (
-    <html lang={locale} dir={dir} suppressHydrationWarning className={`${inter.variable} ${jetbrainsMono.variable}`}>
+    <html
+      lang={locale} dir={dir}
+      suppressHydrationWarning
+      className={`${GeistSans.variable} ${GeistMono.variable}`}
+      style={{
+        // Mirror Geist's native variables onto our app-wide alias so
+        // globals.css + Tailwind can reference a single --font-sans /
+        // --font-mono regardless of which typeface is active.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ["--font-sans" as any]: "var(--font-geist-sans)",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ["--font-mono" as any]: "var(--font-geist-mono)",
+      }}
+    >
       <head>
         {/* Fallback CDN if local CSS fails */}
         <link
@@ -67,7 +74,7 @@ export default async function RootLayout({
           crossOrigin="anonymous"
         />
       </head>
-      <body className={inter.className}>
+      <body className={GeistSans.className}>
         <SyncfusionBannerRemover />
         <NextIntlClientProvider locale={locale} messages={messages}>
           <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>

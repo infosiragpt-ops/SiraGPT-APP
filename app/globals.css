@@ -221,34 +221,40 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
        fallback stack that made the chat look generic). The emoji
        fonts stay last so emoji still render natively. */
     font-family:
-      var(--font-sans, "Inter"),
+      var(--font-sans, "Geist"),
       ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
       "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif,
       "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size: 15px;
-    line-height: 1.55;
-    letter-spacing: -0.006em;
-    /* Inter's pro typographic features: contextual alts (cv11 for a
-       single-storey "a"), stylistic set 1 (rounded zero, calmer
-       1/6/9), tabular nums for aligned figures in tables/stats,
-       case-sensitive forms for small caps / uppercase punctuation. */
-    font-feature-settings: "cv11", "ss01", "tnum", "case";
+    line-height: 1.6;
+    /* Geist is already tightly tracked by design — a small negative
+       adjustment keeps paragraphs looking calm without drifting into
+       "condensed" territory. */
+    letter-spacing: -0.011em;
+    /* Geist pro features: tabular digits for aligned figures in
+       tables / stats / timestamps, case-sensitive punctuation. */
+    font-feature-settings: "tnum", "ss01", "case";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
 
-  /* Headings get the same stack + slightly tighter tracking. */
+  /* Headings inherit the sans stack with a touch more negative
+     tracking (-0.02em) — matches the typographic rhythm used by
+     Vercel / Linear / v0. */
   h1, h2, h3, h4, h5, h6 {
-    font-family: var(--font-sans, "Inter"), ui-sans-serif, system-ui, sans-serif;
-    letter-spacing: -0.015em;
-    font-feature-settings: "cv11", "ss01", "case";
+    font-family: var(--font-sans, "Geist"), ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: -0.022em;
+    font-feature-settings: "ss01", "case";
+    font-weight: 600;
   }
 
-  /* Code blocks use the monospace pair we bundled in layout.tsx. */
+  /* Code / pre / kbd / samp → Geist Mono (unambiguous l/1/I, 0 with
+     dot). `calt 0` disables programming ligatures so AI code blocks
+     read like plain source. */
   code, pre, kbd, samp {
-    font-family: var(--font-mono, "JetBrains Mono"), ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-feature-settings: "calt" 0;  /* no ligatures — keeps symbols unambiguous */
+    font-family: var(--font-mono, "Geist Mono"), ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-feature-settings: "calt" 0;
   }
 
   /* Next.js mounts the tree into body > [some wrappers]; make sure
