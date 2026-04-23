@@ -71,9 +71,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
 import {
   Dialog,
@@ -195,6 +192,7 @@ const ActionsDropdown = ({
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
+  const [connectorsOpen, setConnectorsOpen] = React.useState(false);
   const [justClosed, setJustClosed] = React.useState(false);
   const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
@@ -252,6 +250,7 @@ const ActionsDropdown = ({
   const handleDropdownOpenChange = (open: boolean) => {
     setIsOpen(open);
     if (!open) {
+      setConnectorsOpen(false);
       // Prevent tooltip from showing immediately after dropdown closes
       setJustClosed(true);
       if (closeTimeoutRef.current) {
@@ -285,6 +284,7 @@ const ActionsDropdown = ({
               <Button
                 variant="ghost"
                 size="sm"
+                aria-label="Attach files & tools"
                 className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
                 disabled={isDisabled}
               >
@@ -346,21 +346,29 @@ const ActionsDropdown = ({
               )}
             </div>
           </DropdownMenuItem>
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="liquid-menu-item">
-              <div className="flex items-center gap-3 w-full">
-                <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                  <Network width="13" height="13" />
-                </div>
-                <div className="flex-1">
-                  <div className="liquid-label font-medium text-sm flex items-center">
-                    Connectors
-                  </div>
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onSelect={(e) => e.preventDefault()}
+            onClick={() => setConnectorsOpen((open) => !open)}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                <Network width="13" height="13" />
+              </div>
+              <div className="flex-1">
+                <div className="liquid-label font-medium text-sm flex items-center">
+                  Connectors
                 </div>
               </div>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent sideOffset={10} className="liquid-menu-surface w-64">
+              <ChevronRight className={cn(
+                "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                connectorsOpen && "rotate-90"
+              )} />
+            </div>
+          </DropdownMenuItem>
 
+          {connectorsOpen && (
+            <div className="my-1 ml-2 space-y-1 border-l border-border/50 pl-2">
               {/* Gmail */}
               <DropdownMenuItem
                 className="liquid-menu-item"
@@ -374,7 +382,7 @@ const ActionsDropdown = ({
                     : 'bg-red-100 dark:bg-red-900/20'
                     }`}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" />
+                    <img src="/icons/google.png" alt="" aria-hidden="true" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
                     <div className="liquid-label font-medium text-sm">
@@ -400,7 +408,7 @@ const ActionsDropdown = ({
                     : 'bg-blue-100 dark:bg-blue-900/20'
                     }`}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" />
+                    <img src="/icons/google-calendar.png" alt="" aria-hidden="true" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
                     <div className="liquid-label font-medium text-sm">
@@ -426,7 +434,7 @@ const ActionsDropdown = ({
                     : 'bg-green-100 dark:bg-green-900/20'
                     }`}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" />
+                    <img src="/icons/google-drive.png" alt="" aria-hidden="true" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
                     <div className="liquid-label font-medium text-sm">
@@ -452,7 +460,7 @@ const ActionsDropdown = ({
                     : 'bg-green-100 dark:bg-green-900/20'
                     }`}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" />
+                    <img src="/icons/spotify.png" alt="" aria-hidden="true" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
                     <div className="liquid-label font-medium text-sm">
@@ -482,7 +490,7 @@ const ActionsDropdown = ({
                     ? 'bg-blue-100 dark:bg-blue-900/20'
                     : 'bg-blue-100 dark:bg-blue-900/20'
                     }`}>
-                    <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
+                    <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
                     <div className="liquid-label font-medium text-sm">
@@ -512,7 +520,7 @@ const ActionsDropdown = ({
                     ? 'bg-blue-100 dark:bg-blue-900/20'
                     : 'bg-blue-100 dark:bg-blue-900/20'
                     }`}>
-                    <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
+                    <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
                     <div className="liquid-label font-medium text-sm">
@@ -524,8 +532,8 @@ const ActionsDropdown = ({
                   )}
                 </div>
               </DropdownMenuItem>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+            </div>
+          )}
 
           <DropdownMenuSeparator />
 
