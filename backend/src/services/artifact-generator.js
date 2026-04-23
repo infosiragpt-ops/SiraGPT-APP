@@ -79,6 +79,9 @@ UX rules:
 - When the component computes something, show the result in a large, legible card — preferably with a short explanation of what was computed.
 - For quizzes: track score, show feedback per question, final score screen at the end.
 - For calculators: live recompute on input change (no Submit button needed).
+- For professional dashboards/tools, include empty-state handling, validation messages, reset/export controls when useful, and concise helper text so the user understands what to paste or change.
+- If using storage, load saved state on mount and persist only small JSON-safe values. Never store secrets or API keys.
+- If using THREE, dispose geometries/materials/renderers in cleanup and keep the scene lightweight enough to run inside an iframe.
 
 Typical patterns for common asks:
 - "Calculadora de Cronbach's alpha" → textarea where user pastes rows of numbers (comma / tab separated), parse with papaparse, compute alpha = (k/(k-1)) * (1 - sum(var_i)/var_total), show in a card.

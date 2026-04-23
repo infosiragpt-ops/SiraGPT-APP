@@ -55,4 +55,56 @@ describe("ai-service · deterministic intent routing", () => {
     const intent = await aiService.classifyIntent("busca mi carpeta de tesis en Google Drive")
     assert.equal(intent, "google_services")
   })
+
+  it("uses the same professional fast path for offline fallback analysis", async () => {
+    const intent = await aiService.analyzeIntent("crea una plantilla UPN APA 7 en Word")
+    assert.equal(intent, "doc")
+  })
+
+  it("routes long-running autonomous software work to the task agent", async () => {
+    const intent = await aiService.classifyIntent(
+      "trabaja 2 horas revisando y autocorrigiendo mi landing page, ejecuta pruebas y entrega el informe",
+    )
+    assert.equal(intent, "agent_task")
+  })
+
+  it("routes plural 3D animation requests to live artifacts", async () => {
+    const intent = await aiService.classifyIntent(
+      "crea animaciones en 3D con Three.js para explicar una estructura molecular",
+    )
+    assert.equal(intent, "artifact")
+  })
+
+  it("routes exam-grade science problems to the math solver", async () => {
+    const intent = await aiService.classifyIntent(
+      "resuelve este examen de física con fórmulas de movimiento parabólico",
+    )
+    assert.equal(intent, "math")
+  })
+
+  it("routes ER and Mermaid-style technical diagrams to visualization", async () => {
+    const intent = await aiService.classifyIntent(
+      "crea un diagrama ER en Mermaid para un e-commerce con usuarios, pedidos y pagos",
+    )
+    assert.equal(intent, "viz")
+  })
+
+  it("routes product design requests explicitly mentioning Figma to figma", async () => {
+    const intent = await aiService.classifyIntent(
+      "diseña en Figma un user flow del onboarding de estudiantes",
+    )
+    assert.equal(intent, "figma")
+  })
+
+  it("routes ordinary landing page generation to webdev", async () => {
+    const intent = await aiService.classifyIntent(
+      "crea una landing page profesional para vender asesorías de tesis",
+    )
+    assert.equal(intent, "webdev")
+  })
+
+  it("does not treat general React explanations as web generation", async () => {
+    const intent = await aiService.analyzeIntent("explícame cómo funciona React")
+    assert.equal(intent, "text")
+  })
 })

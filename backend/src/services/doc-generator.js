@@ -198,6 +198,10 @@ visually consistent, on-brand, and academically correct. The bundle:
 === QUALITY BAR ===
 - NEVER hand-roll fonts, margins, or colours if a helper exists — use the bundle.
 - For "tesis APA 7" ALWAYS start with apa_document() + apa_cover() and use apa_heading() / apa_paragraph().
+- If the document needs real citations or current sources, only use citations present in the prompt/context. Do not fabricate references; those jobs should be routed to the agent_task pipeline before document creation.
+- For Excel analytics, include raw data, calculated outputs, and a short interpretation sheet when the user asks for Cronbach, Spearman, descriptive statistics, or market analysis.
+- For PPTX, use a coherent palette, agenda, section dividers, strong slide titles, concise bullets, and speaker notes when useful. Avoid slide walls of text.
+- For PDF forms/reports, use clear hierarchy, page numbers, metadata, and printable spacing.
 - For "Cronbach" or "Spearman" ALWAYS use the sgpt_xlsx analytics helpers.
 - For "defensa" or "presentación UPN" ALWAYS use Deck(palette="tesis_upn").
 - Embed REAL data when the user supplied it; otherwise fabricate plausible sample data and note so in "explanation".

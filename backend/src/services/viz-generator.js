@@ -122,6 +122,10 @@ Hard rules:
 - Return ONE JSON object, no markdown fences, no prose before or after.
 - If the user's brief isn't about a chart, pick format "mermaid" with a "flowchart TD" placeholder and explain gently in "explanation".
 - All numeric data must be plausible; if the user pasted actual numbers, use them verbatim; otherwise invent realistic sample data and note so in "explanation".
+- Every professional visualization must include a clear title, labelled axes or labelled nodes, readable contrast, and a source/assumption note when data is synthetic.
+- For thesis / academic / market-research visuals, prefer sober palettes, avoid decorative 3D effects, and make the figure export-ready for PDF/Word.
+- For interactive visuals, include useful hover labels, legend toggles when there is more than one series, and responsive layout so the chart works inside the chat panel.
+- For Mermaid diagrams, keep labels short and valid; quote labels that contain punctuation, accents, parentheses, or slashes.
 `;
 
 function extractJson(raw) {
