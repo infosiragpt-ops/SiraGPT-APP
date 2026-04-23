@@ -131,8 +131,11 @@ function buildShellHtml(jsx: string): string {
 
   // Header that exposes React hooks + common libs as bare identifiers,
   // and wires the artifact's `App` component to the DOM on mount.
+  // NB: backticks escaped (\`) because this string itself lives inside
+  // a template literal. Unescaped backticks would close it early and
+  // the build fails with a misleading "Expected a semicolon" error.
   const footer = `
-// Wire up — the artefact defines `App`; render it.
+// Wire up — the artefact defines \`App\`; render it.
 try {
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(React.createElement(App));
