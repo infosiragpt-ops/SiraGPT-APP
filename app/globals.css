@@ -2514,19 +2514,24 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
  * shared primitive (which every other dropdown in the app uses).
  * ──────────────────────────────────────────────────────────── */
 .liquid-menu-surface {
-  background: hsl(0 0% 100% / 0.74) !important;
-  backdrop-filter: blur(40px) saturate(1.35);
-  -webkit-backdrop-filter: blur(40px) saturate(1.35);
-  border: 1px solid hsl(0 0% 100% / 0.55) !important;
-  border-radius: 16px !important;
-  padding: 6px !important;
+  background:
+    linear-gradient(145deg, hsl(0 0% 100% / 0.78), hsl(0 0% 100% / 0.52) 58%, hsl(215 40% 98% / 0.7)),
+    radial-gradient(circle at 18% 6%, hsl(0 0% 100% / 0.92), transparent 34%),
+    radial-gradient(circle at 88% 92%, hsl(var(--primary) / 0.12), transparent 38%) !important;
+  backdrop-filter: blur(48px) saturate(1.55) contrast(1.03);
+  -webkit-backdrop-filter: blur(48px) saturate(1.55) contrast(1.03);
+  border: 1px solid hsl(0 0% 100% / 0.72) !important;
+  border-radius: 24px !important;
+  padding: 8px !important;
   overflow: hidden !important;
   position: relative;
   box-shadow:
-    0 4px 7px -1px hsl(0 0% 0% / 0.06),
-    0 22px 48px -12px hsl(0 0% 0% / 0.14),
-    inset 0 1px 0 0 hsl(0 0% 100% / 0.85),
-    inset 0 0 0 1px hsl(0 0% 100% / 0.25) !important;
+    0 10px 20px -14px hsl(220 35% 20% / 0.22),
+    0 34px 74px -28px hsl(220 40% 18% / 0.26),
+    0 1px 0 0 hsl(0 0% 100% / 0.9) inset,
+    0 -18px 38px -28px hsl(var(--primary) / 0.35) inset,
+    0 0 0 1px hsl(0 0% 100% / 0.3) inset !important;
+  animation: liquid-menu-enter 260ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 /* Top-left highlight pool — the "light catch" of a glass surface. */
 .liquid-menu-surface::before {
@@ -2536,27 +2541,41 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   pointer-events: none;
   border-radius: inherit;
   z-index: 0;
-  background: radial-gradient(
-    ellipse 55% 38% at 18% 0%,
-    hsl(0 0% 100% / 0.45),
-    transparent 62%
-  );
+  background:
+    radial-gradient(ellipse 62% 42% at 12% 0%, hsl(0 0% 100% / 0.62), transparent 64%),
+    linear-gradient(120deg, transparent 18%, hsl(0 0% 100% / 0.26) 42%, transparent 62%);
+  mix-blend-mode: screen;
+}
+.liquid-menu-surface::after {
+  content: "";
+  position: absolute;
+  inset: -42% -22% auto auto;
+  width: 70%;
+  height: 70%;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 999px;
+  background: radial-gradient(circle, hsl(var(--primary) / 0.08), transparent 64%);
+  filter: blur(12px);
+  transform: rotate(-12deg);
 }
 .dark .liquid-menu-surface {
-  background: hsl(222 14% 11% / 0.72) !important;
-  border: 1px solid hsl(0 0% 100% / 0.1) !important;
+  background:
+    linear-gradient(145deg, hsl(222 18% 13% / 0.8), hsl(222 18% 9% / 0.66) 58%, hsl(222 20% 14% / 0.7)),
+    radial-gradient(circle at 18% 6%, hsl(0 0% 100% / 0.12), transparent 34%),
+    radial-gradient(circle at 88% 92%, hsl(var(--primary) / 0.18), transparent 38%) !important;
+  border: 1px solid hsl(0 0% 100% / 0.14) !important;
   box-shadow:
-    0 4px 7px -1px hsl(0 0% 0% / 0.35),
-    0 24px 52px -14px hsl(0 0% 0% / 0.55),
-    inset 0 1px 0 0 hsl(0 0% 100% / 0.1),
-    inset 0 0 0 1px hsl(0 0% 100% / 0.04) !important;
+    0 12px 28px -16px hsl(0 0% 0% / 0.55),
+    0 34px 76px -26px hsl(0 0% 0% / 0.7),
+    inset 0 1px 0 0 hsl(0 0% 100% / 0.13),
+    inset 0 -18px 38px -28px hsl(var(--primary) / 0.32),
+    inset 0 0 0 1px hsl(0 0% 100% / 0.05) !important;
 }
 .dark .liquid-menu-surface::before {
-  background: radial-gradient(
-    ellipse 55% 38% at 18% 0%,
-    hsl(0 0% 100% / 0.06),
-    transparent 62%
-  );
+  background:
+    radial-gradient(ellipse 62% 42% at 12% 0%, hsl(0 0% 100% / 0.11), transparent 64%),
+    linear-gradient(120deg, transparent 18%, hsl(0 0% 100% / 0.06) 42%, transparent 62%);
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -2580,6 +2599,19 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   100% { opacity: 0.92; transform: scale(1); }
 }
 
+@keyframes liquid-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
 .liquid-menu-item {
   position: relative;
   isolation: isolate;
@@ -2589,39 +2621,45 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .liquid-menu-item::before {
   content: "";
   position: absolute;
-  inset: 2px;
+  inset: 1px;
   z-index: -1;
   background: linear-gradient(
     135deg,
-    hsl(var(--primary) / 0.07) 0%,
-    hsl(var(--primary) / 0.04) 45%,
-    hsl(var(--primary) / 0.09) 100%
+    hsl(0 0% 100% / 0.72) 0%,
+    hsl(var(--primary) / 0.08) 46%,
+    hsl(0 0% 100% / 0.42) 100%
   );
-  border-radius: 10px;
+  border-radius: 18px 14px 20px 14px;
   opacity: 0;
-  transform: scale(0.97);
+  transform: scale(0.965) translateY(1px);
   transition:
     opacity 220ms cubic-bezier(0.25, 0.1, 0.25, 1),
     transform 220ms cubic-bezier(0.25, 0.1, 0.25, 1),
     border-radius 280ms cubic-bezier(0.25, 0.1, 0.25, 1);
   pointer-events: none;
-  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.12);
+  box-shadow:
+    0 10px 24px -18px hsl(220 35% 20% / 0.42),
+    inset 0 1px 0 hsl(0 0% 100% / 0.68),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.55);
 }
 .dark .liquid-menu-item::before {
   background: linear-gradient(
     135deg,
-    hsl(var(--primary) / 0.12) 0%,
-    hsl(var(--primary) / 0.06) 50%,
-    hsl(var(--primary) / 0.14) 100%
+    hsl(0 0% 100% / 0.08) 0%,
+    hsl(var(--primary) / 0.18) 46%,
+    hsl(0 0% 100% / 0.05) 100%
   );
-  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.06);
+  box-shadow:
+    0 10px 24px -18px hsl(0 0% 0% / 0.75),
+    inset 0 1px 0 hsl(0 0% 100% / 0.12),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.65);
 }
 .liquid-menu-item:hover::before,
 .liquid-menu-item[data-highlighted]::before,
 .liquid-menu-item:focus-visible::before {
   opacity: 1;
-  transform: scale(1);
-  border-radius: 12px;
+  transform: scale(1) translateY(0);
+  border-radius: 18px 22px 16px 22px;
   animation: liquid-shimmer 520ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
 }
 

@@ -73,6 +73,7 @@ import {
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
+  DropdownMenuPortal,
 } from "@/components/ui/dropdown-menu"
 import {
   Dialog,
@@ -298,7 +299,7 @@ const ActionsDropdown = ({
             <p>Attach files & tools</p>
           </TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="start" sideOffset={10} className="liquid-menu-surface w-64">
+        <DropdownMenuContent align="start" sideOffset={10} className="liquid-menu-surface w-64 overflow-visible">
           {/* File Upload - Only for text chats */}
 
           <DropdownMenuItem className="liquid-menu-item" onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
@@ -369,176 +370,178 @@ const ActionsDropdown = ({
                 </div>
               </div>
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent
-              sideOffset={10}
-              alignOffset={-4}
-              avoidCollisions={false}
-              className="liquid-menu-surface w-64"
-            >
-              {/* Gmail */}
-              <DropdownMenuItem
-                className="liquid-menu-item"
-                data-brand="gmail"
-                onClick={handleGmailToggle}
-                disabled={isProcessingGmail}
+            <DropdownMenuPortal>
+              <DropdownMenuSubContent
+                sideOffset={10}
+                alignOffset={-4}
+                avoidCollisions={false}
+                className="liquid-menu-surface w-64"
               >
-                <div className="flex items-center gap-3 w-full">
-                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
-                    ? 'bg-red-100 dark:bg-red-900/20'
-                    : 'bg-red-100 dark:bg-red-900/20'
-                    }`}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="liquid-label font-medium text-sm">
-                      {isGmailActive ? 'Gmail Active' : 'Gmail'}
+                {/* Gmail */}
+                <DropdownMenuItem
+                  className="liquid-menu-item"
+                  data-brand="gmail"
+                  onClick={handleGmailToggle}
+                  disabled={isProcessingGmail}
+                >
+                  <div className="flex items-center gap-3 w-full">
+                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
+                      ? 'bg-red-100 dark:bg-red-900/20'
+                      : 'bg-red-100 dark:bg-red-900/20'
+                      }`}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/icons/google.png" alt="" aria-hidden="true" className="h-4 w-4" />
                     </div>
+                    <div className="flex-1">
+                      <div className="liquid-label font-medium text-sm">
+                        {isGmailActive ? 'Gmail Active' : 'Gmail'}
+                      </div>
+                    </div>
+                    {isGmailActive && (
+                      <div className="w-2 h-2 bg-red-500 rounded-full" />
+                    )}
                   </div>
-                  {isGmailActive && (
-                    <div className="w-2 h-2 bg-red-500 rounded-full" />
-                  )}
-                </div>
-              </DropdownMenuItem>
+                </DropdownMenuItem>
 
-              {/* Google Calendar */}
-              <DropdownMenuItem
-                className="liquid-menu-item"
-                data-brand="calendar"
-                onClick={handleGoogleCalendarToggle}
-                disabled={isProcessingGoogleServices}
-              >
-                <div className="flex items-center gap-3 w-full">
-                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleCalendarActive
-                    ? 'bg-blue-100 dark:bg-blue-900/20'
-                    : 'bg-blue-100 dark:bg-blue-900/20'
-                    }`}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google-calendar.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="liquid-label font-medium text-sm">
-                      {isGoogleCalendarActive ? 'Calendar Active' : 'Google Calendar'}
+                {/* Google Calendar */}
+                <DropdownMenuItem
+                  className="liquid-menu-item"
+                  data-brand="calendar"
+                  onClick={handleGoogleCalendarToggle}
+                  disabled={isProcessingGoogleServices}
+                >
+                  <div className="flex items-center gap-3 w-full">
+                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleCalendarActive
+                      ? 'bg-blue-100 dark:bg-blue-900/20'
+                      : 'bg-blue-100 dark:bg-blue-900/20'
+                      }`}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/icons/google-calendar.png" alt="" aria-hidden="true" className="h-4 w-4" />
                     </div>
+                    <div className="flex-1">
+                      <div className="liquid-label font-medium text-sm">
+                        {isGoogleCalendarActive ? 'Calendar Active' : 'Google Calendar'}
+                      </div>
+                    </div>
+                    {isGoogleCalendarActive && (
+                      <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                    )}
                   </div>
-                  {isGoogleCalendarActive && (
-                    <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                  )}
-                </div>
-              </DropdownMenuItem>
+                </DropdownMenuItem>
 
-              {/* Google Drive */}
-              <DropdownMenuItem
-                className="liquid-menu-item"
-                data-brand="drive"
-                onClick={handleGoogleDriveToggle}
-                disabled={isProcessingGoogleServices}
-              >
-                <div className="flex items-center gap-3 w-full">
-                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleDriveActive
-                    ? 'bg-green-100 dark:bg-green-900/20'
-                    : 'bg-green-100 dark:bg-green-900/20'
-                    }`}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google-drive.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="liquid-label font-medium text-sm">
-                      {isGoogleDriveActive ? 'Drive Active' : 'Google Drive'}
+                {/* Google Drive */}
+                <DropdownMenuItem
+                  className="liquid-menu-item"
+                  data-brand="drive"
+                  onClick={handleGoogleDriveToggle}
+                  disabled={isProcessingGoogleServices}
+                >
+                  <div className="flex items-center gap-3 w-full">
+                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleDriveActive
+                      ? 'bg-green-100 dark:bg-green-900/20'
+                      : 'bg-green-100 dark:bg-green-900/20'
+                      }`}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/icons/google-drive.png" alt="" aria-hidden="true" className="h-4 w-4" />
                     </div>
+                    <div className="flex-1">
+                      <div className="liquid-label font-medium text-sm">
+                        {isGoogleDriveActive ? 'Drive Active' : 'Google Drive'}
+                      </div>
+                    </div>
+                    {isGoogleDriveActive && (
+                      <div className="w-2 h-2 bg-green-500 rounded-full" />
+                    )}
                   </div>
-                  {isGoogleDriveActive && (
-                    <div className="w-2 h-2 bg-green-500 rounded-full" />
-                  )}
-                </div>
-              </DropdownMenuItem>
+                </DropdownMenuItem>
 
-              {/* Spotify */}
-              <DropdownMenuItem
-                className="liquid-menu-item"
-                data-brand="spotify"
-                onClick={handleSpotifyToggle}
-                disabled={isProcessingSpotify}
-              >
-                <div className="flex items-center gap-3 w-full">
-                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isSpotifyActive
-                    ? 'bg-green-100 dark:bg-green-900/20'
-                    : 'bg-green-100 dark:bg-green-900/20'
-                    }`}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/spotify.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="liquid-label font-medium text-sm">
-                      {isSpotifyActive ? 'Spotify Active' : 'Spotify'}
+                {/* Spotify */}
+                <DropdownMenuItem
+                  className="liquid-menu-item"
+                  data-brand="spotify"
+                  onClick={handleSpotifyToggle}
+                  disabled={isProcessingSpotify}
+                >
+                  <div className="flex items-center gap-3 w-full">
+                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isSpotifyActive
+                      ? 'bg-green-100 dark:bg-green-900/20'
+                      : 'bg-green-100 dark:bg-green-900/20'
+                      }`}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/icons/spotify.png" alt="" aria-hidden="true" className="h-4 w-4" />
                     </div>
+                    <div className="flex-1">
+                      <div className="liquid-label font-medium text-sm">
+                        {isSpotifyActive ? 'Spotify Active' : 'Spotify'}
+                      </div>
+                    </div>
+                    {isSpotifyActive && (
+                      <div className="w-2 h-2 bg-green-500 rounded-full" />
+                    )}
                   </div>
-                  {isSpotifyActive && (
-                    <div className="w-2 h-2 bg-green-500 rounded-full" />
-                  )}
-                </div>
-              </DropdownMenuItem>
+                </DropdownMenuItem>
 
-              {/* Word Connector */}
-              <DropdownMenuItem
-                className="liquid-menu-item"
-                data-brand="word"
-                onClick={() => {
-                  if (handleWordConnectorToggle) {
-                    handleWordConnectorToggle();
-                  }
-                  setIsOpen(false);
-                }}
-                disabled={isDisabled}
-              >
-                <div className="flex items-center gap-3 w-full">
-                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
-                    ? 'bg-blue-100 dark:bg-blue-900/20'
-                    : 'bg-blue-100 dark:bg-blue-900/20'
-                    }`}>
-                    <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="liquid-label font-medium text-sm">
-                      {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
+                {/* Word Connector */}
+                <DropdownMenuItem
+                  className="liquid-menu-item"
+                  data-brand="word"
+                  onClick={() => {
+                    if (handleWordConnectorToggle) {
+                      handleWordConnectorToggle();
+                    }
+                    setIsOpen(false);
+                  }}
+                  disabled={isDisabled}
+                >
+                  <div className="flex items-center gap-3 w-full">
+                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
+                      ? 'bg-blue-100 dark:bg-blue-900/20'
+                      : 'bg-blue-100 dark:bg-blue-900/20'
+                      }`}>
+                      <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-4 w-4" />
                     </div>
+                    <div className="flex-1">
+                      <div className="liquid-label font-medium text-sm">
+                        {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
+                      </div>
+                    </div>
+                    {isWordConnectorActive && (
+                      <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                    )}
                   </div>
-                  {isWordConnectorActive && (
-                    <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                  )}
-                </div>
-              </DropdownMenuItem>
+                </DropdownMenuItem>
 
-              {/* Excel Connector */}
-              <DropdownMenuItem
-                className="liquid-menu-item"
-                data-brand="excel"
-                onClick={() => {
-                  if (handleExcelConnectorToggle) {
-                    handleExcelConnectorToggle();
-                  }
-                  setIsOpen(false);
-                }}
-                disabled={isDisabled}
-              >
-                <div className="flex items-center gap-3 w-full">
-                  <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
-                    ? 'bg-blue-100 dark:bg-blue-900/20'
-                    : 'bg-blue-100 dark:bg-blue-900/20'
-                    }`}>
-                    <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="liquid-label font-medium text-sm">
-                      {isExcelConnectorActive ? 'Excel Connector Active' : 'Excel Connector'}
+                {/* Excel Connector */}
+                <DropdownMenuItem
+                  className="liquid-menu-item"
+                  data-brand="excel"
+                  onClick={() => {
+                    if (handleExcelConnectorToggle) {
+                      handleExcelConnectorToggle();
+                    }
+                    setIsOpen(false);
+                  }}
+                  disabled={isDisabled}
+                >
+                  <div className="flex items-center gap-3 w-full">
+                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
+                      ? 'bg-blue-100 dark:bg-blue-900/20'
+                      : 'bg-blue-100 dark:bg-blue-900/20'
+                      }`}>
+                      <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-4 w-4" />
                     </div>
+                    <div className="flex-1">
+                      <div className="liquid-label font-medium text-sm">
+                        {isExcelConnectorActive ? 'Excel Connector Active' : 'Excel Connector'}
+                      </div>
+                    </div>
+                    {isExcelConnectorActive && (
+                      <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                    )}
                   </div>
-                  {isExcelConnectorActive && (
-                    <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                  )}
-                </div>
-              </DropdownMenuItem>
-            </DropdownMenuSubContent>
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuPortal>
           </DropdownMenuSub>
 
           <DropdownMenuSeparator />
