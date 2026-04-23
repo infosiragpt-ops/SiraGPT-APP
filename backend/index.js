@@ -49,6 +49,8 @@ const planRoutes = require('./src/routes/plan');
 const computeRoutes = require('./src/routes/compute');
 const mathRoutes = require('./src/routes/math');
 const vizRoutes = require('./src/routes/viz');
+const docRoutes = require('./src/routes/doc');
+const artifactRoutes = require('./src/routes/artifact');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 
@@ -176,6 +178,8 @@ app.use('/api/plan', planRoutes);
 app.use('/api/compute', computeRoutes);
 app.use('/api/math', mathRoutes);
 app.use('/api/viz', vizRoutes);
+app.use('/api/doc', docRoutes);
+app.use('/api/artifact', artifactRoutes);
 
 
 // Error handling middleware

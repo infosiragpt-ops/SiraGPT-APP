@@ -1356,6 +1356,22 @@ class ApiClient {
     return this._sseStream('/viz/generate', data, onEvent, opts);
   }
 
+  async generateDocStream(
+    data: { prompt: string; chatId?: string; model?: string },
+    onEvent: (ev: any) => void,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    return this._sseStream('/doc/generate', data, onEvent, opts);
+  }
+
+  async generateArtifactStream(
+    data: { prompt: string; chatId?: string; model?: string },
+    onEvent: (ev: any) => void,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    return this._sseStream('/artifact/generate', data, onEvent, opts);
+  }
+
   async generatePlanStream(
     data: { prompt: string; chatId?: string; model?: string },
     onEvent: (ev: any) => void,

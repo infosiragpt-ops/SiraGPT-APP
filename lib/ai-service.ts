@@ -138,6 +138,26 @@ export class AIService {
     if (/\b(integral|integrar|derivada|derivar|d\/dx|ecuaci[oó]n|resuelve(\s+la|\s+el)?|calcul[ae](\s+la|\s+el)?|cronbach|alpha\s+de\s+cronbach|autovalor|eigenval|matriz\s+(inversa|transpuesta|determinante)|regresi[oó]n|chi[- ]?cuadrado|anova|t[- ]?test|p[- ]valor|probabilidad\s+(de|binomial|normal|poisson)|varianza|desviaci[oó]n\s+est[aá]ndar|media\s+aritm|desv(iaci[oó]n)?\s+t[ií]pica|l[ií]mite\s+cuando|serie\s+de\s+fourier|transformada\s+de\s+laplace|sistema\s+de\s+ecuaciones|factorizar|simplifica\s+(la\s+)?expresi[oó]n|despejar|funci[oó]n\s+(derivada|continua|inversa))\b/i.test(lc)) {
       return 'math';
     }
+    // Artifact intent — interactive React component rendered live in
+    // the chat (calculators, simulators, quizzes, dashboards with
+    // inputs, editors with live validation). The user expects the
+    // UI to RECALCULATE or RESPOND to their input inline. Routes
+    // to /api/artifact/generate which produces a JSX body that the
+    // front-end mounts in a sandboxed iframe with React + Babel.
+    if (/\b(calculadora\s+(interactiva|de|para|con)|simulador|quiz|cuestionario|widget|componente\s+interactivo|editor\s+(apa|en\s+tiempo\s+real|de\s+citas?)|dashboard\s+(interactivo|con\s+inputs|que\s+(calcul|actualiz|responda))|herramienta\s+(interactiva|para\s+calcular)|interfaz\s+interactiva|visualizador\s+(interactivo|que\s+recalcul)|mapa\s+interactivo)\b/i.test(lc)) {
+      return 'artifact';
+    }
+    // Doc intent — generate a downloadable document (Word, Excel,
+    // PowerPoint, PDF, SVG). Routes to /api/doc/generate which runs
+    // python-docx / openpyxl / xlsxwriter / python-pptx / reportlab
+    // in the sandbox and ships the file back as a base64 data URL.
+    // We catch it BEFORE 'viz' so "dame un excel con..." doesn't get
+    // grabbed by the plot regex (no 'grafico' keyword in that phrase
+    // but guard against future edits) and BEFORE 'plan' so
+    // "presentación / PPT / PowerPoint" wins over arch-plan.
+    if (/\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|informe\s+(apa|a\s*pa|word|pdf)|tesis\s+(formato|apa|word)|hoja\s+de\s+c[aá]lculo|spreadsheet|presentaci[oó]n(\s+ppt)?|descargar?\s+(un\s+)?(documento|archivo|informe|reporte|pdf|word|excel)|genera(r|me)?\s+(un\s+)?(documento|archivo|informe|reporte|pdf|word|excel|pptx?|docx?)|crea(me)?\s+(un\s+)?(documento|pdf|word|excel|pptx?|docx?|presentaci[oó]n)|exporta(r|me)?\s+(a|en|como)\s+(pdf|word|excel|docx|xlsx|pptx))\b/i.test(lc)) {
+      return 'doc';
+    }
     // Viz intent — charts, plots and technical diagrams. Broader than
     // the legacy 'chart' intent (which goes through OpenAI Code
     // Interpreter and returns PNG only): 'viz' routes through the
@@ -171,6 +191,8 @@ export class AIService {
 - 'chart': Creating charts or graphs. Examples: "create a bar chart", "make a pie graph".
 - 'figma': Creating flowcharts, process diagrams,sequence diagrams, class diagrams, state diagrams, ER diagrams, user journey diagrams, git graphs, or design diagrams. Examples: "create a flowchart of login flow", "make a process diagram", "design a workflow".
 - 'plan': Creating architectural FLOOR PLANS / blueprints of buildings, houses, apartments, rooms. The output is a CAD/DXF drawing with walls, doors, windows, dimensions. Examples in multiple languages: "crea el plano de una casa", "dibújame un plano arquitectónico", "blueprint for a 3 bedroom house", "planta de un departamento 80 m2", "floor plan of an office", "plano de una vivienda con 2 baños". Do NOT classify generic "house" conversation as 'plan' — only when the user is explicitly asking for a drawing / plano / blueprint / floor plan / planta arquitectónica.
+- 'artifact': Building an INTERACTIVE React component that runs live inside the chat (calculator, simulator, quiz, dashboard with inputs, editor with real-time validation, interactive map). The user expects to TYPE / CLICK / DRAG something and see the UI respond. Examples: "calculadora de Cronbach's alpha donde pegue los valores", "simulador SMED con inputs", "quiz con 10 preguntas sobre X", "dashboard de tesis con filtros", "editor de citas APA 7 en tiempo real", "visualizador S-curve EVM que recalcule al cambiar inputs". Only route here when the output is clearly a LIVE, stateful UI — not a static chart (that is 'viz') and not a downloadable document (that is 'doc').
+- 'doc': Generating a downloadable document — Word (.docx), Excel (.xlsx), PowerPoint (.pptx), PDF, or SVG. Examples: "dame un informe en Word con...", "genera un Excel con estas columnas", "crea una presentación PowerPoint de defensa de tesis", "exporta a PDF el contrato", "genera un archivo SVG del logo". Only route here when the user clearly wants a FILE they can download (keywords: word, excel, pptx, docx, pdf, hoja de cálculo, presentación, informe, exportar).
 - 'viz': Building a chart, plot, or technical diagram. Covers S-curve Earned Value charts, Pareto diagrams, Ishikawa fishbone diagrams, histograms, scatter + regression, box plots, interactive dashboards, heatmaps, sankey, treemaps, flowcharts, ER diagrams, UML class/sequence/state diagrams, Gantt charts, user-journey diagrams. Examples: "dibuja un diagrama de Pareto con estos datos", "plot a histogram of weights", "interactive scatter with hover", "flowchart del proceso de onboarding", "diagrama ER de un e-commerce", "Gantt de 5 fases del proyecto", "S-curve de Earned Value". If the user wants to SEE data rendered as a picture / plot / diagram → 'viz'. If they want to COMPUTE a statistic → 'math'.
 - 'math': Solving a mathematics, statistics, or quantitative-science problem that benefits from LaTeX formulas and (optionally) numerical Python execution. Examples: "resuelve la integral de x^2·sin(x) dx por partes", "calcula el Cronbach's alpha de [...]", "autovalores de la matriz [[2,1],[1,3]]", "probabilidad binomial n=10 p=0.3 k=4", "derivada parcial de x^2·y respecto a y", "solve the system 2x + 3y = 12, x - y = 1", "factoriza x^3 - 6x^2 + 11x - 6", "limite cuando x->0 de sin(x)/x". Generic "what is 2+2" stays 'text'. Only route to 'math' when the problem has symbolic or numerical content worth showing with LaTeX or running Python on.
 - 'webdev': Building websites or UI components. Examples: "build a login page", "create a React component".
@@ -240,7 +262,7 @@ Respond with only one word.
       const intent = data.choices[0].message.content.toLowerCase().trim();
       console.log('intent FROM OPEN AI', intent);
 
-      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'plan', 'math', 'viz', 'chart', 'webdev', 'text'];
+      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'plan', 'math', 'viz', 'doc', 'artifact', 'chart', 'webdev', 'text'];
       if (validIntents.includes(intent)) {
         return intent;
       }

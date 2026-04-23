@@ -49,6 +49,8 @@ import ChartComponent from './chart-component';
 import { FigmaDiagramDisplay } from './figma-diagram-component';
 import { PlanArtifactDisplay } from './plan/plan-artifact-display';
 import { VizArtifactDisplay } from './viz/viz-artifact-display';
+import { DocArtifactDisplay } from './doc/doc-artifact-display';
+import { InteractiveArtifactDisplay } from './artifact/interactive-artifact-display';
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import { ArtifactCard, isExecutableArtifact } from "./chat/ArtifactCard"
@@ -2091,6 +2093,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <FigmaDiagramDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <PlanArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <VizArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
+                                <DocArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
+                                <InteractiveArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <GmailConnectionDisplay />
                                 <GoogleServicesConnectionDisplay />
                                 <SpotifyConnectionDisplay />

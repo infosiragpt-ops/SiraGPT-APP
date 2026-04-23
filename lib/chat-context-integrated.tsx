@@ -476,6 +476,159 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setIsStreaming(false);
           setCurrentStreamId(null);
 
+        } else if (intent === 'artifact') {
+          // Interactive React artefact — calculators, simulators,
+          // quizzes, dashboards with inputs. Server emits JSX; front
+          // mounts it in a sandboxed iframe with React + Babel +
+          // curated CDN libs.
+          const controller = new AbortController();
+          abortControllerRef.current = controller;
+          let finalMsg: any = null;
+          let lastStage = 'Diseñando el artefacto';
+          let lastPct = 0;
+          const renderProgress = () => {
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id
+                  ? { ...m, content: '', progressStage: lastStage, progressPct: lastPct }
+                  : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          };
+          try {
+            await apiClient.generateArtifactStream(
+              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              (ev: any) => {
+                if (controller.signal.aborted) return;
+                if (ev.type === 'stage') {
+                  lastStage = ev.label || lastStage;
+                  lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
+                  renderProgress();
+                } else if (ev.type === 'final') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: ev.content || 'Listo.',
+                    files: ev.file ? [ev.file] : [],
+                  };
+                } else if (ev.type === 'error') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: `No pude generar el artefacto: ${ev.error || 'error desconocido'}.`,
+                    files: [],
+                  };
+                }
+              },
+              { signal: controller.signal },
+            );
+          } catch (err: any) {
+            if (err?.name !== 'AbortError') {
+              finalMsg = finalMsg || {
+                id: aiMessagePlaceholder.id,
+                role: 'ASSISTANT',
+                content: `No pude generar el artefacto: ${err?.message || 'error de red'}.`,
+                files: [],
+              };
+            }
+          }
+          if (finalMsg) {
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id ? finalMsg : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          }
+          abortControllerRef.current = null;
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+
+        } else if (intent === 'doc') {
+          // Document generation — Word / Excel / PowerPoint / PDF / SVG.
+          // Same SSE + progressStage contract as viz/math/plan; the
+          // assistant message carries a `doc`-typed file with a base64
+          // data URL that <DocArtifactDisplay/> turns into a download
+          // card (and inline preview for PDF/SVG).
+          const controller = new AbortController();
+          abortControllerRef.current = controller;
+          let finalMsg: any = null;
+          let lastStage = 'Generando documento';
+          let lastPct = 0;
+          const renderProgress = () => {
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id
+                  ? { ...m, content: '', progressStage: lastStage, progressPct: lastPct }
+                  : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          };
+          try {
+            await apiClient.generateDocStream(
+              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              (ev: any) => {
+                if (controller.signal.aborted) return;
+                if (ev.type === 'stage') {
+                  lastStage = ev.label || lastStage;
+                  lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
+                  renderProgress();
+                } else if (ev.type === 'final') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: ev.content || 'Listo.',
+                    files: ev.file ? [ev.file] : [],
+                  };
+                  // The persisted assistantMessage strips the
+                  // dataUrl to keep rows small; the SSE `file`
+                  // payload still has it. Patch the assistant
+                  // message's first file with the real dataUrl so
+                  // the in-session download button works.
+                  if (finalMsg?.files?.[0] && ev.file?.dataUrl) {
+                    finalMsg.files[0] = { ...finalMsg.files[0], dataUrl: ev.file.dataUrl };
+                  }
+                } else if (ev.type === 'error') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: `No pude generar el documento: ${ev.error || 'error desconocido'}.`,
+                    files: [],
+                  };
+                }
+              },
+              { signal: controller.signal },
+            );
+          } catch (err: any) {
+            if (err?.name !== 'AbortError') {
+              finalMsg = finalMsg || {
+                id: aiMessagePlaceholder.id,
+                role: 'ASSISTANT',
+                content: `No pude generar el documento: ${err?.message || 'error de red'}.`,
+                files: [],
+              };
+            }
+          }
+          if (finalMsg) {
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id ? finalMsg : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          }
+          abortControllerRef.current = null;
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+
         } else if (intent === 'viz') {
           // Data-visualisation dispatch. The server picks the best
           // renderer (matplotlib PNG for static reports, Plotly for
