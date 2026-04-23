@@ -257,6 +257,64 @@ async function searchDOAJ(query, opts = {}) {
   });
 }
 
+// ─── SciELO ──────────────────────────────────────────────────────────────
+// SciELO doesn't expose a public free-text API. Crossref's `member:530`
+// filter returns SciELO-published articles only (FapUNIFESP/SciELO),
+// which is the canonical way to free-text-search SciELO without
+// scraping search.scielo.org.
+
+async function searchSciELO(query, opts = {}) {
+  const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
+  const offset = typeof opts.offset === "number" ? opts.offset : 0;
+  const filters = ["member:530"];
+  if (typeof opts.language === "string" && /^[a-z]{2}$/i.test(opts.language)) {
+    filters.push(`language:${opts.language.toLowerCase()}`);
+  }
+  const url = new URL("https://api.crossref.org/works");
+  url.searchParams.set("query", query);
+  url.searchParams.set("rows", String(Math.min(50, maxResults)));
+  url.searchParams.set("filter", filters.join(","));
+  // Crossref's works/?query route doesn't expose `language` in `select`
+  // — keep the field off the projection or the API returns 400.
+  url.searchParams.set("select", [
+    "DOI", "title", "author", "published-print", "published-online",
+    "container-title", "abstract", "URL", "type",
+    "is-referenced-by-count", "issued", "created",
+  ].join(","));
+  if (offset > 0) url.searchParams.set("offset", String(offset));
+  if (opts.mailto) url.searchParams.set("mailto", opts.mailto);
+
+  const body = await fetchJson(url.toString(), { timeoutMs: opts.timeoutMs, mailto: opts.mailto });
+  const items = body?.message?.items;
+  if (!Array.isArray(items)) return [];
+
+  return items.slice(0, maxResults).map((it, i) => {
+    const doi = typeof it.DOI === "string" ? it.DOI : undefined;
+    const title = Array.isArray(it.title) ? it.title[0] : (it.title || "Untitled");
+    const venue = Array.isArray(it["container-title"]) ? it["container-title"][0] : it["container-title"];
+    const year = it["published-print"]?.["date-parts"]?.[0]?.[0]
+              || it["published-online"]?.["date-parts"]?.[0]?.[0]
+              || it.created?.["date-parts"]?.[0]?.[0];
+    const abstract = typeof it.abstract === "string"
+      ? it.abstract.replace(/<[^>]+>/g, "").trim()
+      : undefined;
+    return {
+      source: "scielo",
+      title,
+      authors: normaliseAuthors(it.author),
+      year: safeInt(year),
+      journal: venue,
+      doi,
+      url: doi ? `https://doi.org/${doi}` : (it.URL || ""),
+      abstract,
+      citationCount: safeInt(it["is-referenced-by-count"]),
+      openAccess: true,
+      providerRank: i + offset,
+      raw: it,
+    };
+  });
+}
+
 // ─── Registry + dispatcher ───────────────────────────────────────────────
 
 const REGISTRY = {
@@ -265,17 +323,23 @@ const REGISTRY = {
   crossref: searchCrossRef,
   pubmed: searchPubMed,
   doaj: searchDOAJ,
+  scielo: searchSciELO,
 };
 
 /**
  * Run one (source, query) retrieval. Safe to call concurrently via
  * Promise.allSettled in the orchestrator.
+ *
+ * `offset` is honoured by providers that natively paginate
+ * (openalex via `page`, scielo via Crossref `offset`); others
+ * ignore it and return the same first page (the agentic batcher
+ * dedupes anyway).
  */
-async function retrieveFromProvider({ source, query, maxResults, timeoutMs, mailto }) {
+async function retrieveFromProvider({ source, query, maxResults, timeoutMs, mailto, offset, language }) {
   const fn = REGISTRY[source];
   if (!fn) return [];
   try {
-    const out = await fn(query, { maxResults, timeoutMs, mailto });
+    const out = await fn(query, { maxResults, timeoutMs, mailto, offset, language });
     return Array.isArray(out) ? out : [];
   } catch {
     return [];
@@ -289,6 +353,7 @@ module.exports = {
   searchCrossRef,
   searchPubMed,
   searchDOAJ,
+  searchSciELO,
   reconstructAbstract,
   normaliseAuthors,
   REGISTRY,

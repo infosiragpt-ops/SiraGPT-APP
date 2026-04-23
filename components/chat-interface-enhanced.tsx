@@ -97,6 +97,7 @@ import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import { webSearchService } from "@/lib/web-search-service"
+import { agenticSearchService } from "@/lib/agentic-search-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
@@ -4452,86 +4453,69 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return { ...prevChat, messages: updatedMessages };
       });
 
-      let accumulatedContent = '';
+      // Live message body — progress text grows above; the final
+      // markdown summary replaces it once the run finishes. Keeping
+      // them in two strings means we can swap the entire bubble for
+      // the synthesized report without losing the trace if rendering
+      // is interrupted (e.g. on `error`).
+      let progressText = '';
+      let finalSummary = '';
 
-      await webSearchService.searchStream(
-        searchQuery,
-        activeChat.id,
-        selectedModel,
-        selectProvider,
-        (content: string) => {
-          accumulatedContent += content;
-          setCurrentChat(prev => {
-            if (!prev) return prev;
-            const newMessages = prev.messages.map(msg =>
-              msg.id === aiMessage.id
-                ? { ...msg, content: accumulatedContent }
-                : msg
-            );
-            return { ...prev, messages: newMessages };
-          });
+      const updateBubble = (content: string) => {
+        setCurrentChat(prev => {
+          if (!prev) return prev;
+          const newMessages = prev.messages.map(msg =>
+            msg.id === aiMessage.id ? { ...msg, content } : msg
+          );
+          return { ...prev, messages: newMessages };
+        });
+      };
+
+      await agenticSearchService.runStream(
+        {
+          query: searchQuery,
+          chatId: activeChat.id,
+          target: 500,
+          batchSize: 10,
+          topK: 25,
         },
-        (data: any) => {
-          // Final update to ensure UI reflects completion
-          if (data.dbMessage) {
-            setCurrentChat(prev => {
-              if (!prev) return prev;
-              // Replace the temporary message with the final one from the database
-              const newMessages = prev.messages.map(msg =>
-                msg.id === aiMessage.id ? data.dbMessage : msg
-              );
-              return { ...prev, messages: newMessages };
-            });
-          } else if (!data.results || data.results.length === 0) {
-            // If there are no results, the content is already updated to "No Results Found"
-            // We just need to stop the loading state.
-          } else {
-            // Fallback to re-fetch if dbMessage is not available but results are
-            selectChat(activeChat.id || '');
-          }
-          setIsWebSearching(false);
-          toast.success('Web search completed');
-        },
-        (error: Error) => {
-          console.error('Web search failed:', error);
-
-          const errorMessage = error.message || 'Web search failed';
-
-          // Check for monthly API limit exceeded error
-          if (isMonthlyLimitError(errorMessage)) {
-
-            // Show upgrade modal for API limit errors
-            setSubscribeOpen(true);
-            toast.error('Monthly API limit exceeded. Please upgrade to continue.');
-
-            // Update the AI message to reflect the limit error
-            setCurrentChat(prev => {
-              if (!prev) return prev;
-              const newMessages = prev.messages.map(msg =>
-                msg.id === aiMessage.id
-                  ? { ...msg, content: `Monthly API limit exceeded. Please upgrade your plan to continue using web search.` }
-                  : msg
-              );
-              return { ...prev, messages: newMessages };
-            });
+        {
+          onProgressText: (text) => {
+            progressText += text;
+            updateBubble(progressText);
+          },
+          onSummary: (markdown) => {
+            finalSummary = markdown;
+            // Replace the live progress with the polished summary so
+            // the user ends up with a clean markdown report instead of
+            // a wall of trace lines.
+            updateBubble(markdown);
+          },
+          onDone: (stats) => {
+            const tail = `\n\n---\n*Búsqueda agéntica · ${stats.totalCollected} fuentes recopiladas · ${stats.dedupedCount} únicas · ${stats.selectedCount} seleccionadas` +
+              (stats.elapsedMs ? ` · ${(stats.elapsedMs / 1000).toFixed(1)}s` : '') + `*`;
+            updateBubble((finalSummary || progressText) + tail);
             setIsWebSearching(false);
-            return;
-          }
-
-          toast.error(errorMessage);
-          setIsWebSearching(false);
-          // If search fails, update the AI message to reflect the error
-          setCurrentChat(prev => {
-            if (!prev) return prev;
-            const newMessages = prev.messages.map(msg =>
-              msg.id === aiMessage.id
-                ? { ...msg, content: `Web search failed: ${errorMessage}` }
-                : msg
-            );
-            return { ...prev, messages: newMessages };
-          });
+            toast.success('Búsqueda agéntica completada');
+            // Re-fetch the chat so the persisted dbMessage replaces the
+            // temporary one (matches the legacy flow's behaviour).
+            if (activeChat?.id) selectChat(activeChat.id);
+          },
+          onError: (error) => {
+            console.error('Agentic search failed:', error);
+            const errorMessage = error.message || 'Agentic search failed';
+            if (isMonthlyLimitError(errorMessage)) {
+              setSubscribeOpen(true);
+              toast.error('Monthly API limit exceeded. Please upgrade to continue.');
+              updateBubble('Monthly API limit exceeded. Please upgrade your plan to continue using web search.');
+              setIsWebSearching(false);
+              return;
+            }
+            toast.error(errorMessage);
+            updateBubble((progressText || '') + `\n\n❌ **Búsqueda fallida:** ${errorMessage}`);
+            setIsWebSearching(false);
+          },
         },
-
       );
 
     } catch (error: any) {
