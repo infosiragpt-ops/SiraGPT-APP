@@ -14,7 +14,8 @@
  * Tailwind CDN, Recharts, Lucide, Lodash, D3, Math.js, Plotly,
  * PapaParse, SheetJS, Three.js (small set), and exposes them on
  * `window` so the generated JSX can use them via globals (no imports
- * / no bundler — simpler for the LLM to author).
+ * / no bundler — simpler for the LLM to author). It also exposes a
+ * safe async `window.storage` bridge scoped to this artifact.
  */
 
 import * as React from "react"
@@ -44,10 +45,61 @@ export function InteractiveArtifactDisplay({ files }: { files: any[] }) {
 }
 
 function ArtifactCard({ artefact }: { artefact: ArtifactFile }) {
+  const iframeRef = React.useRef<HTMLIFrameElement | null>(null)
   const [expanded, setExpanded] = React.useState(false)
   const [showSource, setShowSource] = React.useState(false)
   const [reloadKey, setReloadKey] = React.useState(0)
   const srcDoc = React.useMemo(() => buildShellHtml(artefact.jsx), [artefact.jsx])
+  const storageScope = React.useMemo(
+    () => artifactStorageScope(artefact),
+    [artefact.title, artefact.jsx]
+  )
+
+  React.useEffect(() => {
+    const maxBytes = 5 * 1024 * 1024
+    const prefix = `siraGPT:artifact:${storageScope}:`
+    const reply = (id: string, payload: any) => {
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: "sgpt-artifact-storage-result", id, ...payload },
+        "*"
+      )
+    }
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) return
+      const msg = event.data
+      if (!msg || msg.type !== "sgpt-artifact-storage" || typeof msg.id !== "string") return
+      const key = typeof msg.key === "string" ? msg.key : ""
+      const storageKey = `${prefix}${key}`
+
+      try {
+        if (msg.action === "get") {
+          const raw = localStorage.getItem(storageKey)
+          reply(msg.id, { ok: true, value: raw == null ? msg.fallback ?? null : JSON.parse(raw) })
+        } else if (msg.action === "set") {
+          if (!key) throw new Error("storage key is required")
+          const raw = JSON.stringify(msg.value)
+          if (new Blob([raw]).size > maxBytes) throw new Error("storage value exceeds 5MB")
+          localStorage.setItem(storageKey, raw)
+          reply(msg.id, { ok: true, value: true })
+        } else if (msg.action === "delete") {
+          localStorage.removeItem(storageKey)
+          reply(msg.id, { ok: true, value: true })
+        } else if (msg.action === "list") {
+          const keys: string[] = []
+          for (let i = 0; i < localStorage.length; i += 1) {
+            const k = localStorage.key(i)
+            if (k?.startsWith(prefix)) keys.push(k.slice(prefix.length))
+          }
+          reply(msg.id, { ok: true, value: keys })
+        }
+      } catch (error: any) {
+        reply(msg.id, { ok: false, error: error?.message || "storage error" })
+      }
+    }
+
+    window.addEventListener("message", onMessage)
+    return () => window.removeEventListener("message", onMessage)
+  }, [storageScope])
 
   function downloadHtml() {
     const blob = new Blob([srcDoc], { type: "text/html" })
@@ -94,6 +146,7 @@ function ArtifactCard({ artefact }: { artefact: ArtifactFile }) {
       ) : (
         <div className={expanded ? "h-[75vh]" : "h-[560px]"}>
           <iframe
+            ref={iframeRef}
             key={reloadKey}
             srcDoc={srcDoc}
             className="h-full w-full border-0 bg-white"
@@ -108,6 +161,15 @@ function ArtifactCard({ artefact }: { artefact: ArtifactFile }) {
 
 // ─── HTML shell ────────────────────────────────────────────────────────────
 
+function artifactStorageScope(artefact: ArtifactFile): string {
+  const seed = `${artefact.title || ""}\n${artefact.jsx || ""}`
+  let hash = 5381
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = ((hash << 5) + hash) ^ seed.charCodeAt(i)
+  }
+  return Math.abs(hash >>> 0).toString(36)
+}
+
 /**
  * Build a self-contained HTML document that hosts the artefact JSX
  * inside an isolated iframe. The shell:
@@ -116,6 +178,8 @@ function ArtifactCard({ artefact }: { artefact: ArtifactFile }) {
  *     <script type="text/babel" data-presets="env,react">
  *   · pre-populates Recharts / lucide / lodash / d3 / mathjs / plotly
  *     / papaparse / sheetjs / three as globals
+ *   · exposes an async storage bridge as window.storage:
+ *     get(key, fallback), set(key, value), delete(key), list()
  *   · exposes React hooks (useState, etc.) via a small header so the
  *     LLM can write `useState()` without `React.` prefix
  *   · mounts the component into <div id="root">
@@ -161,18 +225,50 @@ try {
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<!-- Visual / data libs — kept small-ish, omits three.js + tensorflow to
-     keep boot time reasonable; the user can load them inside their
-     component via fetch(...) if they really need them. -->
-<script src="https://unpkg.com/lodash/lodash.min.js"></script>
-<script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
-<script src="https://unpkg.com/mathjs/lib/browser/math.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-<script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
-<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
-<script src="https://unpkg.com/lucide@latest"></script>
-</head>
+	<!-- Visual / data libs — intentionally curated for chat artifacts. -->
+	<script src="https://unpkg.com/lodash/lodash.min.js"></script>
+	<script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+	<script src="https://unpkg.com/mathjs/lib/browser/math.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+	<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+	<script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+	<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+	<script src="https://unpkg.com/lucide@latest"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+	<script>
+	(function () {
+	  let seq = 0;
+	  const pending = new Map();
+	  window.addEventListener('message', function (event) {
+	    const msg = event.data;
+	    if (!msg || msg.type !== 'sgpt-artifact-storage-result') return;
+	    const entry = pending.get(msg.id);
+	    if (!entry) return;
+	    pending.delete(msg.id);
+	    clearTimeout(entry.timer);
+	    if (msg.ok) entry.resolve(msg.value);
+	    else entry.reject(new Error(msg.error || 'storage error'));
+	  });
+	  function request(action, key, value, fallback) {
+	    const id = 'storage-' + (++seq) + '-' + Date.now();
+	    return new Promise(function (resolve, reject) {
+	      const timer = setTimeout(function () {
+	        pending.delete(id);
+	        reject(new Error('storage timeout'));
+	      }, 3000);
+	      pending.set(id, { resolve, reject, timer });
+	      window.parent.postMessage({ type: 'sgpt-artifact-storage', id, action, key, value, fallback }, '*');
+	    });
+	  }
+	  window.storage = {
+	    get: function (key, fallback) { return request('get', String(key || ''), undefined, fallback); },
+	    set: function (key, value) { return request('set', String(key || ''), value); },
+	    delete: function (key) { return request('delete', String(key || '')); },
+	    list: function () { return request('list'); }
+	  };
+	})();
+	</script>
+	</head>
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="env,react">
@@ -187,6 +283,8 @@ const Plotly = window.Plotly;
 const Papa = window.Papa;
 const XLSX = window.XLSX;
 const lucide = window.lucide;
+const THREE = window.THREE;
+const storage = window.storage;
 
 // ─── Generated artefact ──────────────────────────────────────────────
 ${safeJsx}

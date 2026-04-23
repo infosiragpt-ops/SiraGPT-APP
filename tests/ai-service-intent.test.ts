@@ -22,4 +22,37 @@ describe("ai-service · deterministic intent routing", () => {
     const intent = await aiService.classifyIntent("crea un documento Word vacío")
     assert.equal(intent, "doc")
   })
+
+  it("routes academic research without a file to web search", async () => {
+    const intent = await aiService.classifyIntent(
+      "investiga artículos científicos recientes sobre SMED y dame fuentes con DOI",
+    )
+    assert.equal(intent, "web_search")
+  })
+
+  it("routes statistics and science computation to the math solver", async () => {
+    const intent = await aiService.classifyIntent(
+      "Calcula el Cronbach's alpha de estas respuestas Likert: [[4,5,3],[5,5,4],[4,4,3]]",
+    )
+    assert.equal(intent, "math")
+  })
+
+  it("routes professional charts and diagrams to the visualization pipeline", async () => {
+    const intent = await aiService.classifyIntent(
+      "crea un diagrama de Pareto y un histograma con estos datos",
+    )
+    assert.equal(intent, "viz")
+  })
+
+  it("routes live calculators and 3D interactives to artifacts", async () => {
+    const intent = await aiService.classifyIntent(
+      "crea una calculadora interactiva de Cronbach con animación 3D",
+    )
+    assert.equal(intent, "artifact")
+  })
+
+  it("keeps Google Drive searches on connectors instead of web search", async () => {
+    const intent = await aiService.classifyIntent("busca mi carpeta de tesis en Google Drive")
+    assert.equal(intent, "google_services")
+  })
 })

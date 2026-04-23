@@ -4,7 +4,7 @@ import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
-import { aiService } from "./ai-service"
+import { aiService, type ChatIntent } from "./ai-service"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 
@@ -112,10 +112,10 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     initialContent?: string,
     initialFiles?: string[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; initialIntent?: ChatIntent }
   ) => Promise<any>
   selectChat: (chatId: string) => void
-  addMessage: (content: string, files?: string[], chat?: any, skipUserMessage?: boolean) => Promise<void>
+  addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => Promise<void>
   addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
   addThesisMessage: (topics: string[]) => Promise<void>
   clearCurrentChat: () => void
@@ -386,9 +386,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentStreamId, isStreaming, isLoading]);
   const addMessage = useCallback(
-    async (content: string, fileIds?: string[], chat?: any, skipUserMessage?: boolean) => { // Added skipUserMessage and forceFlowChartDiagram parameters
+    async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !token) return;
+      const displayFiles = Array.isArray(fileIds) ? fileIds.filter(Boolean) : [];
+      const normalizedFileIds = displayFiles
+        .map((file: any) => (typeof file === 'string' ? file : file?.id))
+        .filter(Boolean);
 
       // STEP 1: User ka message UI mein dikhayein (agar already nahi dikhaya gaya)
       if (!skipUserMessage) {
@@ -398,7 +402,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           role: 'USER',
           content,
           timestamp: new Date().toISOString(),
-          files: fileIds?.length ? fileIds : undefined,
+          files: displayFiles.length ? displayFiles : undefined,
         };
 
         // Update chat with user message
@@ -435,7 +439,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Reset pending stop state
       setPendingStop(false);
       try {
-        const intent = await aiService.classifyIntent(content, currentChat?.messages || []);
+        const intent = intentOverride || await aiService.classifyIntent(content, activeChat?.messages || currentChat?.messages || []);
         console.log('intent', intent);
 
         if (intent === 'chart') {
@@ -896,7 +900,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               model: selectedModel,
               prompt: content,
               chatId: activeChat.id,
-              files: fileIds || [],
+              files: normalizedFileIds,
               streamId: streamId,
             },
             (chunk) => {
@@ -1096,7 +1100,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: string[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; initialIntent?: ChatIntent }
   ) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
@@ -1201,7 +1205,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
               break;
             default:
-              await addMessage(initialContent, initialFiles, newChat);
+              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent);
               break;
           }
           await selectChat(newChat.id);

@@ -7,6 +7,43 @@ export interface IntentAnalysis {
   confidence: number
 }
 
+export type ChatIntent =
+  | 'gmail'
+  | 'google_services'
+  | 'web_search'
+  | 'image'
+  | 'video'
+  | 'ppt'
+  | 'figma'
+  | 'plan'
+  | 'math'
+  | 'viz'
+  | 'doc'
+  | 'artifact'
+  | 'chart'
+  | 'webdev'
+  | 'agent_task'
+  | 'text'
+
+export const VALID_CHAT_INTENTS: ChatIntent[] = [
+  'gmail',
+  'google_services',
+  'web_search',
+  'image',
+  'video',
+  'ppt',
+  'figma',
+  'plan',
+  'math',
+  'viz',
+  'doc',
+  'artifact',
+  'chart',
+  'webdev',
+  'agent_task',
+  'text',
+]
+
 // Enhanced AI Service
 export class AIService {
   private apiKey: string = process.env.NEXT_PUBLIC_OPENAI_API_KEY || ""
@@ -96,7 +133,7 @@ export class AIService {
   //   }
 
 
-  async analyzeIntent(prompt: string) {
+  async analyzeIntent(prompt: string): Promise<ChatIntent> {
 
     console.error("Dummy Intent.");
     // Fallback to basic keyword matching
@@ -119,7 +156,7 @@ export class AIService {
     prompt: string,
     conversationHistory: any[] = [],
     signal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<ChatIntent> {
 
     // Fast-path: unambiguous architectural-plan phrases bypass the
     // LLM classifier. Before this, "crea un plano de una casa" was
@@ -128,6 +165,11 @@ export class AIService {
     // the specific word "plano" / "planta" / "blueprint" removes
     // that ambiguity entirely and saves ~1.5s per message.
     const lc = prompt.toLowerCase();
+    const isGmailCommand = /\b(gmail|e-?mail|correo(s)?|mail|inbox|bandeja\s+de\s+entrada|redacta(r)?\s+(un\s+)?correo|env[ií]a(r)?\s+(un\s+)?correo)\b/i.test(lc);
+    const isGoogleServicesCommand = /\b(google\s+(calendar|calendario|drive)|calendar|calendario|evento|event|meeting|reuni[oó]n|agenda|drive|carpeta|folder)\b/i.test(lc);
+    if (isGmailCommand) return 'gmail';
+    if (isGoogleServicesCommand) return 'google_services';
+
     // Compound agentic task — route BEFORE the document fast-path.
     // A prompt like "investiga X y dame un Word/Excel/PPT" is not a
     // simple file-generation request: it needs search, processing,
@@ -138,9 +180,20 @@ export class AIService {
     if (asksForDeliverableFile && (asksForExternalResearch || asksForDataWork)) {
       return 'agent_task';
     }
+    if (asksForExternalResearch && /\b(investiga(r|ci[oó]n)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|art[ií]culos?|papers?|literatura|acad[eé]mic[ao]s?|cient[ií]fic[ao]s?|mercado|benchmark|competidores|estado\s+del\s+arte|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi)\b/i.test(lc)) {
+      return 'web_search';
+    }
 
     if (/\b(plano|planos|blueprint|floor[- ]?plan|planta\s+(arquitect|baj|alt))\b/i.test(lc)) {
       return 'plan';
+    }
+    // Artifact intent — interactive React component rendered live in
+    // the chat (calculators, simulators, quizzes, dashboards with
+    // inputs, editors with live validation). It must run before math
+    // so "calculadora interactiva de Cronbach" becomes a live tool,
+    // not a one-off statistical answer.
+    if (/\b(calculadora\s+(interactiva|de|para|con)|simulador|quiz|cuestionario|widget|componente\s+interactivo|editor\s+(apa|en\s+tiempo\s+real|de\s+citas?)|dashboard\s+(interactivo|con\s+inputs|que\s+(calcul|actualiz|responda))|herramienta\s+(interactiva|para\s+calcular)|interfaz\s+interactiva|visualizador\s+(interactivo|que\s+recalcul)|mapa\s+interactivo|animaci[oó]n\s+3d|three\.?js|threejs|modelo\s+3d|visor\s+3d|evaluador\s+de\s+ensayos|grader|r[uú]brica\s+interactiva)\b/i.test(lc)) {
+      return 'artifact';
     }
     // Same idea for math/science. Keywords that should never be
     // anything but 'math' — integrals, derivatives, statistics
@@ -148,15 +201,6 @@ export class AIService {
     // cronbach's alpha" to 'text', which skips the solver.
     if (/\b(integral|integrar|derivada|derivar|d\/dx|ecuaci[oó]n|resuelve(\s+la|\s+el)?|calcul[ae](\s+la|\s+el)?|cronbach|alpha\s+de\s+cronbach|autovalor|eigenval|matriz\s+(inversa|transpuesta|determinante)|regresi[oó]n|chi[- ]?cuadrado|anova|t[- ]?test|p[- ]valor|probabilidad\s+(de|binomial|normal|poisson)|varianza|desviaci[oó]n\s+est[aá]ndar|media\s+aritm|desv(iaci[oó]n)?\s+t[ií]pica|l[ií]mite\s+cuando|serie\s+de\s+fourier|transformada\s+de\s+laplace|sistema\s+de\s+ecuaciones|factorizar|simplifica\s+(la\s+)?expresi[oó]n|despejar|funci[oó]n\s+(derivada|continua|inversa))\b/i.test(lc)) {
       return 'math';
-    }
-    // Artifact intent — interactive React component rendered live in
-    // the chat (calculators, simulators, quizzes, dashboards with
-    // inputs, editors with live validation). The user expects the
-    // UI to RECALCULATE or RESPOND to their input inline. Routes
-    // to /api/artifact/generate which produces a JSX body that the
-    // front-end mounts in a sandboxed iframe with React + Babel.
-    if (/\b(calculadora\s+(interactiva|de|para|con)|simulador|quiz|cuestionario|widget|componente\s+interactivo|editor\s+(apa|en\s+tiempo\s+real|de\s+citas?)|dashboard\s+(interactivo|con\s+inputs|que\s+(calcul|actualiz|responda))|herramienta\s+(interactiva|para\s+calcular)|interfaz\s+interactiva|visualizador\s+(interactivo|que\s+recalcul)|mapa\s+interactivo)\b/i.test(lc)) {
-      return 'artifact';
     }
     // Doc intent — generate a downloadable document (Word, Excel,
     // PowerPoint, PDF, SVG). Routes to /api/doc/generate which runs
@@ -185,7 +229,7 @@ export class AIService {
       const messages = [
         {
           role: "system",
-          content: `You are an expert at classifying user intent. Analyze the user's prompt (which could be in any language including Roman Urdu, Urdu, English, German, Spanish, etc.) and classify it into one of these categories: 'gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'chart', 'webdev', or 'text'.
+          content: `You are an expert at classifying user intent. Analyze the user's prompt (which could be in any language including Roman Urdu, Urdu, English, German, Spanish, etc.) and classify it into exactly one of these categories: 'gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'figma', 'plan', 'math', 'viz', 'doc', 'artifact', 'chart', 'webdev', 'agent_task', or 'text'.
 
 - 'gmail': Sending, reading, or managing emails. Examples: "send an email to hamza", "read my last 5 emails", "enviar un correo electrónico".
 - 'google_services': Interacting with Google Calendar or Drive. Examples: "show my meetings for tomorrow", "find my marketing presentation on Drive", "mostrar mis eventos del calendario".
@@ -285,9 +329,8 @@ Respond with only one word.
       const intent = data.choices[0].message.content.toLowerCase().trim();
       console.log('intent FROM OPEN AI', intent);
 
-      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'plan', 'math', 'viz', 'doc', 'artifact', 'chart', 'webdev', 'agent_task', 'text'];
-      if (validIntents.includes(intent)) {
-        return intent;
+      if (VALID_CHAT_INTENTS.includes(intent as ChatIntent)) {
+        return intent as ChatIntent;
       }
       return 'text'; // Default fallback
     } catch (error: any) {

@@ -61,7 +61,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
-import { aiService } from "@/lib/ai-service"
+import { aiService, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -3607,9 +3607,20 @@ REWRITTEN TEXT:`;
         (msgLower.includes('presentation') && msgLower.includes('vector'))
       );
 
+      const runContextPipeline = async (pipelineIntent: ChatIntent) => {
+        if (isNewChat) {
+          await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent });
+        } else {
+          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent);
+        }
+      };
+
       switch (intent) {
         case 'image':
           await handleImageGeneration(msg, filesToSend.map(f => f.id));
+          break;
+        case 'video':
+          await handleVideoGeneration(msg);
           break;
         case 'ppt':
           // Check if user wants vector PPT
@@ -3623,12 +3634,18 @@ REWRITTEN TEXT:`;
           await handleWebDevGeneration(msg);
           break;
         case 'figma':
-          // Figma flowchart generation is handled in addMessage function
-          if (isNewChat) {
-            await createNewChat('text', msg, filesToSend);
-          } else {
-            await addMessage(msg, filesToSend, chatToUpdate, true);
-          }
+          // Figma flowchart generation is handled in addMessage; pass the
+          // already-classified intent so the chat bar does not spend a second
+          // classifying the same prompt twice.
+          await runContextPipeline(intent);
+          break;
+        case 'chart':
+        case 'plan':
+        case 'math':
+        case 'viz':
+        case 'doc':
+        case 'artifact':
+          await runContextPipeline(intent);
           break;
         case 'web_search':
           // The intent classifier already decided this turn is an
@@ -3645,11 +3662,7 @@ REWRITTEN TEXT:`;
           await handleAgentTask(msg);
           break;
         default:
-          if (isNewChat) {
-            await createNewChat('text', msg, filesToSend);
-          } else {
-            await addMessage(msg, filesToSend, chatToUpdate, true); // skipUserMessage is true
-          }
+          await runContextPipeline(intent);
           break;
       }
     } catch (err: any) {

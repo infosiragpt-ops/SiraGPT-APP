@@ -14,7 +14,8 @@
  * The LLM emits ONLY the JSX component body. The client wraps it in a
  * HTML shell that loads React 18 + Babel standalone + a curated set
  * of CDN libraries (recharts, lucide, lodash, d3, mathjs, plotly,
- * papaparse, sheetjs, three.js) and mounts the component inside an
+ * papaparse, sheetjs, three.js) plus a small async window.storage API,
+ * and mounts the component inside an
  * iframe sandbox="allow-scripts" (no allow-same-origin — the
  * artifact cannot reach the parent's cookies / localStorage / DOM).
  */
@@ -61,6 +62,12 @@ How the sandbox runs your code (DO NOT try to change this):
     Plotly
     Papa (papaparse)
     XLSX (sheetjs)
+    THREE (three.js)
+    storage: async key-value API scoped to this artifact:
+      await storage.get(key, fallbackValue)
+      await storage.set(key, jsonSerializableValue)
+      await storage.delete(key)
+      await storage.list()
 - Tailwind CSS is loaded via CDN → use utility classes freely. Prefer neutral palette, generous spacing, rounded-xl cards.
 - NO external network calls (fetch / XHR) — the iframe has no network-origin trust.
 - NO imports / requires. No bundler. You write one JSX block that the Babel-standalone transpiler accepts.
@@ -78,6 +85,8 @@ Typical patterns for common asks:
 - "Quiz con N preguntas" → array-of-questions embedded in the code, step through them, track answers.
 - "Simulador SMED" → inputs for internal/external times, compute reduction pct, show a before/after bar.
 - "Dashboard de tesis" → static data embedded, Recharts LineChart + stat cards.
+- "Tracker de tesis persistente" → use storage.get/set in useEffect to remember chapter/progress between reloads.
+- "Animación 3D" → use THREE with a requestAnimationFrame loop, cleanup in useEffect, and keep geometry lightweight.
 
 Return exactly ONE JSON object with the three fields. The jsx field must be a JSON-escaped string (newlines as \\n). Keep jsx under 250 lines.`;
 
