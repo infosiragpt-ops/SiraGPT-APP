@@ -27,6 +27,8 @@ const { body, param, query, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const projectMemory = require('../services/project-memory');
+const { buildProjectContextManifest } = require('../services/project-context');
+const { buildChatListWhere, parsePositiveInt } = require('../services/chat-scope');
 const crypto = require('crypto');
 
 const router = express.Router();
@@ -194,6 +196,102 @@ router.get('/:id', param('id').isString(), async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch project' });
   }
 });
+
+// ─── GET /:id/context — Claude-style project manifest ─────────────────────
+
+router.get('/:id/context', param('id').isString(), async (req, res) => {
+  try {
+    if (validationFail(req, res)) return;
+    const project = await prisma.project.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      include: {
+        files: {
+          select: {
+            id: true,
+            originalName: true,
+            mimeType: true,
+            size: true,
+            extractedText: true,
+            createdAt: true,
+          },
+        },
+        _count: { select: { files: true, chats: true, memories: true, documents: true } },
+      },
+    });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    res.json({ context: buildProjectContextManifest(project) });
+  } catch (err) {
+    console.error('[projects] context error:', err);
+    res.status(500).json({ error: 'Failed to build project context' });
+  }
+});
+
+// ─── GET /:id/chats — isolated project chat search/list ───────────────────
+
+router.get(
+  '/:id/chats',
+  [
+    param('id').isString(),
+    query('search').optional().isString(),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
+  ],
+  async (req, res) => {
+    try {
+      if (validationFail(req, res)) return;
+      const owned = await ownProject(req.user.id, req.params.id);
+      if (!owned) return res.status(404).json({ error: 'Project not found' });
+
+      const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+      const limit = parsePositiveInt(req.query.limit, 25, { min: 1, max: 100 });
+      const where = buildChatListWhere({
+        userId: req.user.id,
+        projectId: owned.id,
+        search,
+      });
+
+      const chats = await prisma.chat.findMany({
+        where,
+        select: {
+          id: true,
+          title: true,
+          model: true,
+          createdAt: true,
+          updatedAt: true,
+          messages: {
+            where: search
+              ? { content: { contains: search, mode: 'insensitive' } }
+              : undefined,
+            select: { role: true, content: true, timestamp: true },
+            orderBy: { timestamp: search ? 'asc' : 'desc' },
+            take: 1,
+          },
+          _count: { select: { messages: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: limit,
+      });
+
+      res.json({
+        chats: chats.map(chat => {
+          const match = chat.messages[0] || null;
+          return {
+            id: chat.id,
+            title: chat.title,
+            model: chat.model,
+            createdAt: chat.createdAt,
+            updatedAt: chat.updatedAt,
+            messageCount: chat._count.messages,
+            snippet: match ? String(match.content || '').slice(0, 260) : '',
+            snippetRole: match ? match.role : null,
+          };
+        }),
+      });
+    } catch (err) {
+      console.error('[projects] chat-search error:', err);
+      res.status(500).json({ error: 'Failed to list project chats' });
+    }
+  }
+);
 
 // ─── PUT /:id — update ────────────────────────────────────────────────────
 

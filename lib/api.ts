@@ -124,12 +124,12 @@ class ApiClient {
   }
 
   // Chat endpoints
-  async getChats(params?: { page?: number; limit?: number }) {
+  async getChats(params?: { page?: number; limit?: number; projectId?: string; includeProjects?: boolean; search?: string }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/chats${query ? `?${query}` : ''}`);
   }
 
-  async createChat(data: { title: string; model: string; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean }) {
+  async createChat(data: { title: string; model: string; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string }) {
     return this.request('/chats', {
       method: 'POST',
       body: JSON.stringify(data),

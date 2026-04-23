@@ -6,6 +6,7 @@ const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
 const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
 const streamCache = require('../services/stream-cache');
+const { buildChatListWhere, parseBoolean, parsePositiveInt } = require('../services/chat-scope');
 
 const router = express.Router();
 
@@ -22,12 +23,31 @@ router.get('/:chatId/pending-stream', authenticateToken, (req, res) => {
 // Get user's chats
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
+    const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 10000 });
+    const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });
+    const includeProjects = parseBoolean(req.query.includeProjects);
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
     const skip = (page - 1) * limit;
+
+    if (projectId) {
+      const ownsProject = await prisma.project.findFirst({
+        where: { id: projectId, userId: req.user.id },
+        select: { id: true },
+      });
+      if (!ownsProject) return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const where = buildChatListWhere({
+      userId: req.user.id,
+      projectId: projectId || null,
+      includeProjects,
+      search,
+    });
 
     const [chats, total] = await Promise.all([
       prisma.chat.findMany({
-        where: { userId: req.user.id },
+        where,
         include: {
           messages: {
             orderBy: { timestamp: 'asc' },
@@ -39,7 +59,7 @@ router.get('/', authenticateToken, async (req, res) => {
         orderBy: { updatedAt: 'desc' }
       }),
       prisma.chat.count({
-        where: { userId: req.user.id }
+        where
       })
     ]);
 
@@ -49,8 +69,8 @@ router.get('/', authenticateToken, async (req, res) => {
     res.json({
       chats: serializedChats,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total,
         pages: Math.ceil(total / limit)
       }

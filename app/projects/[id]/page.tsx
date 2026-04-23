@@ -33,6 +33,7 @@ import {
   ArrowLeft, MoreHorizontal, Star, Plus, Send,
   FileText, Trash2, Lock, Loader2, Paperclip, Pencil,
   Share2, Link as LinkIcon, Check, X, BookOpen,
+  Search, Database, MessageSquare, ShieldCheck,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -47,7 +48,13 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
-import { projectsService, type ProjectDetail, type ProjectMemoryItem } from "@/lib/projects-service"
+import {
+  projectsService,
+  type ProjectChatSummary,
+  type ProjectContextManifest,
+  type ProjectDetail,
+  type ProjectMemoryItem,
+} from "@/lib/projects-service"
 import { DocumentsSection } from "@/components/projects/documents-section"
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
@@ -60,9 +67,14 @@ export default function ProjectDetailPage() {
   const t = useTranslations("projects")
 
   const [project, setProject] = React.useState<ProjectDetail | null>(null)
+  const [context, setContext] = React.useState<ProjectContextManifest | null>(null)
   const [memories, setMemories] = React.useState<ProjectMemoryItem[]>([])
+  const [projectChats, setProjectChats] = React.useState<ProjectChatSummary[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [chatsLoading, setChatsLoading] = React.useState(false)
   const [draft, setDraft] = React.useState("")
+  const [chatSearch, setChatSearch] = React.useState("")
+  const [debouncedChatSearch, setDebouncedChatSearch] = React.useState("")
   const [launching, setLaunching] = React.useState(false)
   const [instructionsOpen, setInstructionsOpen] = React.useState(false)
   const [shareOpen, setShareOpen] = React.useState(false)
@@ -73,12 +85,14 @@ export default function ProjectDetailPage() {
       // Load project + memory in parallel — memory fetch is allowed
       // to fail (memory is a nice-to-have, not required for the
       // page to render), so we catch locally and default to [].
-      const [p, mem] = await Promise.all([
+      const [p, mem, ctx] = await Promise.all([
         projectsService.get(id),
         projectsService.listMemory(id).catch(() => [] as ProjectMemoryItem[]),
+        projectsService.context(id).catch(() => null),
       ])
       setProject(p)
       setMemories(mem)
+      setContext(ctx)
     } catch (err: any) {
       toast.error(err?.message || t("detailLoadFailed"))
     } finally {
@@ -87,6 +101,22 @@ export default function ProjectDetailPage() {
   }, [id, t])
 
   React.useEffect(() => { reload() }, [reload])
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedChatSearch(chatSearch.trim()), 220)
+    return () => clearTimeout(timer)
+  }, [chatSearch])
+
+  React.useEffect(() => {
+    if (!project) return
+    let cancelled = false
+    setChatsLoading(true)
+    projectsService.listChats(project.id, { search: debouncedChatSearch, limit: 50 })
+      .then((rows) => { if (!cancelled) setProjectChats(rows) })
+      .catch((err: any) => { if (!cancelled) toast.error(err?.message || "No se pudieron cargar las conversaciones del proyecto") })
+      .finally(() => { if (!cancelled) setChatsLoading(false) })
+    return () => { cancelled = true }
+  }, [project, debouncedChatSearch])
 
   async function handleDeleteMemory(factId: string) {
     if (!project) return
@@ -260,35 +290,19 @@ export default function ProjectDetailPage() {
               </div>
             </button>
 
-            {/* Recent chats within this project — empty state when
-                the project has none yet, mirroring the reference UX. */}
-            {project.chats.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border/60 py-8 px-6 text-center text-sm text-muted-foreground">
-                {t("startConversation")}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 px-1">
-                  {t("chatsInProject")}
-                </div>
-                {project.chats.map(c => (
-                  <button
-                    key={c.id}
-                    onClick={() => openRecentChat(c.id)}
-                    className="w-full text-left rounded-lg border border-border/60 px-4 py-3 hover:bg-muted/40 transition-colors"
-                  >
-                    <div className="text-sm font-medium truncate">{c.title}</div>
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      {new Date(c.updatedAt).toLocaleString()}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
+            <ProjectChatsSection
+              chats={projectChats}
+              search={chatSearch}
+              loading={chatsLoading}
+              onSearchChange={setChatSearch}
+              onOpen={openRecentChat}
+              emptyText={t("startConversation")}
+            />
           </div>
 
           {/* ── Right column: memory / docs / instructions / files ──────── */}
           <aside className="space-y-4 lg:sticky lg:top-6 self-start">
+            <ProjectContextSection project={project} context={context} memoryCount={memories.length} />
             <MemorySection t={t} memories={memories} onDelete={handleDeleteMemory} />
             <DocumentsSection projectId={project.id} />
             <InstructionsSection
@@ -327,6 +341,176 @@ export default function ProjectDetailPage() {
 }
 
 // ─── Right-panel cards ────────────────────────────────────────────────────
+
+function ProjectContextSection({
+  project,
+  context,
+  memoryCount,
+}: {
+  project: ProjectDetail
+  context: ProjectContextManifest | null
+  memoryCount: number
+}) {
+  const counts = context?.counts || {
+    files: project.files.length,
+    chats: project.chats.length,
+    memories: memoryCount,
+    documents: 0,
+  }
+  const coverage = context?.textCoverage
+  const readyItems = [
+    { label: "Instrucciones", ok: Boolean(project.instructions) },
+    { label: "Conocimiento", ok: counts.files > 0 },
+    { label: "Memoria", ok: counts.memories > 0 },
+    { label: "Chats aislados", ok: counts.chats > 0 },
+  ]
+
+  return (
+    <div className="rounded-xl border border-emerald-500/25 bg-gradient-to-br from-emerald-500/[0.08] via-card to-card" data-testid="project-context-card">
+      <div className="flex items-start justify-between px-4 pt-4">
+        <div>
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-emerald-600" />
+            Contexto del proyecto
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+            Este workspace mantiene archivos, instrucciones, memoria y conversaciones separados del chat general.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 px-4 py-3">
+        <ContextMetric icon={Database} label="Archivos" value={counts.files} />
+        <ContextMetric icon={MessageSquare} label="Chats" value={counts.chats} />
+        <ContextMetric icon={BookOpen} label="Docs" value={counts.documents} />
+        <ContextMetric icon={Lock} label="Memoria" value={counts.memories} />
+      </div>
+
+      <div className="px-4 pb-4 space-y-2">
+        {coverage && coverage.total > 0 && (
+          <div className="rounded-lg bg-background/70 px-3 py-2">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Texto extraído para IA</span>
+              <span>{coverage.extracted}/{coverage.total} · {coverage.percent}%</span>
+            </div>
+            <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div className="h-full rounded-full bg-emerald-500" style={{ width: `${coverage.percent}%` }} />
+            </div>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-1.5">
+          {readyItems.map(item => (
+            <span
+              key={item.label}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[10px]",
+                item.ok
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                  : "border-border/70 bg-background/70 text-muted-foreground"
+              )}
+            >
+              {item.ok ? "Activo" : "Pendiente"} · {item.label}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ContextMetric({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  value: number
+}) {
+  return (
+    <div className="rounded-lg bg-background/70 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <Icon className="h-3.5 w-3.5" />
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+    </div>
+  )
+}
+
+function ProjectChatsSection({
+  chats,
+  search,
+  loading,
+  onSearchChange,
+  onOpen,
+  emptyText,
+}: {
+  chats: ProjectChatSummary[]
+  search: string
+  loading: boolean
+  onSearchChange: (value: string) => void
+  onOpen: (chatId: string) => void
+  emptyText: string
+}) {
+  return (
+    <section className="space-y-3" data-testid="project-chats-section">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 px-1">
+            Conversaciones del proyecto
+          </div>
+          <p className="px-1 text-xs text-muted-foreground">
+            La búsqueda queda aislada a este proyecto.
+          </p>
+        </div>
+        {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+      </div>
+
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Buscar solo en este proyecto..."
+          className="h-10 pl-9"
+          data-testid="project-chat-search"
+        />
+      </div>
+
+      {chats.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border/60 py-8 px-6 text-center text-sm text-muted-foreground">
+          {search.trim() ? "No hay conversaciones del proyecto que coincidan." : emptyText}
+        </div>
+      ) : (
+        <div className="space-y-2" data-testid="project-chat-results">
+          {chats.map(c => (
+            <button
+              key={c.id}
+              onClick={() => onOpen(c.id)}
+              className="w-full text-left rounded-lg border border-border/60 px-4 py-3 hover:bg-muted/40 transition-colors"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium truncate">{c.title}</div>
+                <div className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                  {c.messageCount} msg
+                </div>
+              </div>
+              {c.snippet && (
+                <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                  {c.snippet.replace(/\s+/g, " ")}
+                </div>
+              )}
+              <div className="text-[11px] text-muted-foreground mt-1.5">
+                {new Date(c.updatedAt).toLocaleString()}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
 
 function MemorySection({
   t, memories, onDelete,

@@ -15,6 +15,7 @@
  */
 
 const { LANG_NAMES, buildSystemRule } = require('./language-policy');
+const { buildProjectPromptHeader } = require('./project-context');
 
 // ────────────────────────────────────────────────────────────────────
 // 10 absolute rules — always present, never removed by downstream code.
@@ -374,6 +375,7 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
   // expressed intent.
   if (project && project.name) {
     body += `\n\n## PROJECT: "${project.name}"`;
+    body += `\n\n${buildProjectPromptHeader(project)}`;
     if (project.description) {
       body += `\n**Goal:** ${project.description}`;
     }

@@ -80,6 +80,7 @@ interface Chat {
   updatedAt: string
   messages: Message[]
   customGptId?: string
+  projectId?: string | null
   customGpt?: {
     id: string
     name: string
@@ -128,7 +129,7 @@ interface ChatContextType {
   chatType: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis'
   uploadedFiles: any[]
   setChatType: React.Dispatch<React.SetStateAction<'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis'>>
-  setUploadedFiles: (files: any[]) => void
+  setUploadedFiles: React.Dispatch<React.SetStateAction<any[]>>
   regenerateLastMessage: () => void
   regenerateMessage: (messageId?: string) => void
   editAndRegenerate: (messageId: string, newContent: string, files?: any[]) => void

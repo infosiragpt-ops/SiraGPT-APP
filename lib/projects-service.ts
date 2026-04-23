@@ -58,6 +58,43 @@ export interface ProjectDetail extends Project {
   }>
 }
 
+export interface ProjectContextManifest {
+  projectId: string | null
+  name: string
+  isolation: "project_scoped"
+  hasInstructions: boolean
+  counts: {
+    files: number
+    chats: number
+    memories: number
+    documents: number
+  }
+  fileTypes: Record<string, number>
+  textCoverage: {
+    extracted: number
+    total: number
+    percent: number
+  }
+  updatedAt: string | null
+  status: {
+    knowledgeReady: boolean
+    instructionsReady: boolean
+    conversationsReady: boolean
+    memoryReady: boolean
+  }
+}
+
+export interface ProjectChatSummary {
+  id: string
+  title: string
+  model: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+  snippet: string
+  snippetRole: "USER" | "ASSISTANT" | null
+}
+
 export interface CreateProjectInput {
   name: string
   description?: string
@@ -123,6 +160,28 @@ export const projectsService = {
     })
     const json = await handle<{ project: ProjectDetail }>(res)
     return json.project
+  },
+
+  async context(id: string): Promise<ProjectContextManifest> {
+    const res = await fetch(`${baseUrl}/${id}/context`, {
+      credentials: "include",
+      headers: authHeaders(),
+    })
+    const json = await handle<{ context: ProjectContextManifest }>(res)
+    return json.context
+  },
+
+  async listChats(id: string, opts: { search?: string; limit?: number } = {}): Promise<ProjectChatSummary[]> {
+    const params = new URLSearchParams()
+    if (opts.search) params.set("search", opts.search)
+    if (opts.limit) params.set("limit", String(opts.limit))
+    const qs = params.toString()
+    const res = await fetch(`${baseUrl}/${id}/chats${qs ? `?${qs}` : ""}`, {
+      credentials: "include",
+      headers: authHeaders(),
+    })
+    const json = await handle<{ chats: ProjectChatSummary[] }>(res)
+    return json.chats
   },
 
   async create(input: CreateProjectInput): Promise<Project> {
