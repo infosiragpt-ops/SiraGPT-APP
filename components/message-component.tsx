@@ -423,7 +423,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const isUser = message.role === "USER";
 
     // Ahem Condition: Kya yeh ek khali AI message hai?
-    const isThinking = isAssistant && !message.content && !message.error;
+    // Also treat messages that carry explicit SSE-driven progress
+    // metadata (progressStage / progressPct set by the plan / math /
+    // viz dispatchers) as "thinking" so the unified placeholder with
+    // the animated SVG bars stays visible for the whole activity.
+    const isThinking = isAssistant && !message.error && (
+      !message.content || !!(message as any).progressStage
+    );
     // const isThinking = isAssistant && message.content === null;
 
     // For Share Functionality - Individual Message
@@ -2044,7 +2050,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (
-                            <ThinkingPlaceholder />
+                            <ThinkingPlaceholder
+                                stage={(message as any).progressStage || null}
+                                pct={(message as any).progressPct ?? null}
+                            />
                         ) : (
                             <>
                                 {hasGmailEntry ? (

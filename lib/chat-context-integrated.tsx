@@ -489,13 +489,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           let lastStage = 'Generando visualización';
           let lastPct = 0;
           const renderProgress = () => {
-            const filled = Math.max(0, Math.min(10, Math.floor(lastPct / 10)));
-            const bar = '▰'.repeat(filled) + '▱'.repeat(10 - filled);
-            const body = `📊  **${lastStage}**\n\n${bar}  ${lastPct}%`;
             setCurrentChat((prev) => {
               if (!prev) return prev;
               const msgs = prev.messages.map((m: any) =>
-                m.id === aiMessagePlaceholder.id ? { ...m, content: body } : m
+                m.id === aiMessagePlaceholder.id
+                  ? { ...m, content: '', progressStage: lastStage, progressPct: lastPct }
+                  : m
               );
               return { ...prev, messages: msgs };
             });
@@ -566,13 +565,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           let lastPct = 0;
 
           const renderProgress = () => {
-            const filled = Math.max(0, Math.min(10, Math.floor(lastPct / 10)));
-            const bar = '▰'.repeat(filled) + '▱'.repeat(10 - filled);
-            const body = `🧮  **${lastStage}**\n\n${bar}  ${lastPct}%`;
             setCurrentChat((prev) => {
               if (!prev) return prev;
               const msgs = prev.messages.map((m: any) =>
-                m.id === aiMessagePlaceholder.id ? { ...m, content: body } : m
+                m.id === aiMessagePlaceholder.id
+                  ? { ...m, content: '', progressStage: lastStage, progressPct: lastPct }
+                  : m
               );
               return { ...prev, messages: msgs };
             });
@@ -647,15 +645,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           let tokenCount = 0;
 
           const renderProgress = () => {
-            const bar = '▰'.repeat(Math.floor(lastPct / 10)) + '▱'.repeat(10 - Math.floor(lastPct / 10));
-            const tokenLine = tokenCount
-              ? `\n\n${bar}  ${lastPct}%  ·  ${(tokenCount / 1000).toFixed(1)}k tokens`
-              : `\n\n${bar}  ${lastPct}%`;
-            const body = `🏗️  **${lastStage}**${tokenLine}`;
+            // When the LLM is streaming tokens, append a compact
+            // counter to the stage so the user sees motion even
+            // while pct hovers in one band.
+            const stageLabel = tokenCount
+              ? `${lastStage} · ${(tokenCount / 1000).toFixed(1)}k tokens`
+              : lastStage;
             setCurrentChat((prev) => {
               if (!prev) return prev;
               const msgs = prev.messages.map((m: any) =>
-                m.id === aiMessagePlaceholder.id ? { ...m, content: body } : m
+                m.id === aiMessagePlaceholder.id
+                  ? { ...m, content: '', progressStage: stageLabel, progressPct: lastPct }
+                  : m
               );
               return { ...prev, messages: msgs };
             });
