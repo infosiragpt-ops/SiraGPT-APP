@@ -5,6 +5,7 @@ const prisma = require('../config/database');
 const fetch = require('node-fetch');
 const OpenAI = require('openai');
 const { serializeBigIntFields } = require('../utils/bigint-serializer');
+const { runAgenticBatch } = require('../services/searchBrain/agenticBatch');
 
 const router = express.Router();
 
@@ -297,6 +298,33 @@ async function searchOpenAIWeb(query, intent, resultCount) {
 /**
  * Main Web Search Route with Streaming
  */
+/**
+ * Back-compat proxy to the agentic orchestrator.
+ *
+ * The legacy POST /api/search/web used to pipe an LLM "search-preview"
+ * completion into the chat. That path produced raw JSON when the
+ * model's response was non-parseable, and the chat surface rendered
+ * the JSON verbatim into the message bubble. See commit 317a8b7 for
+ * the canonical agentic implementation and for the chat-interface
+ * wiring; here we only preserve the old URL + SSE event shape so
+ * cached clients keep working.
+ *
+ * Event translation:
+ *   agentic `start`            → legacy `start` + intro markdown
+ *   agentic `batch`            → legacy `content` with a one-line
+ *                                progress row (`🟡 [N] provider
+ *                                +X/target`)
+ *   agentic `batch_error`      → legacy `content` warning line
+ *   agentic `provider_done`    → legacy `content` one-liner
+ *   agentic `collection_done`  → legacy `content` separator + tally
+ *   agentic `ranking_start`    → legacy `content` message
+ *   agentic `selected`         → nothing (the final summary carries
+ *                                the whole top-K already)
+ *   agentic `summary`          → legacy `content` with the markdown
+ *                                report (the whole polished output)
+ *   agentic `done`             → legacy `done` + persisted dbMessage
+ *   agentic `error`            → legacy `error`
+ */
 router.post(
   '/web',
   [
@@ -305,50 +333,35 @@ router.post(
   ],
   authenticateToken,
   async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const { query, chatId } = req.body;
-      const userId = req.user.id;
+    const { query, chatId } = req.body;
+    const userId = req.user.id;
+    const cleanedQuery = cleanSearchQuery(query);
 
-      // Clean and validate query
-      const cleanedQuery = cleanSearchQuery(query);
-      console.log(`🔍 Original query: "${query}"`);
-      console.log(`🔍 Cleaned query: "${cleanedQuery}"`);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
-      if (!isValidSearchQuery(cleanedQuery)) {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        res.setHeader('X-Accel-Buffering', 'no');
-        res.flushHeaders();
+    const send = (obj) => {
+      try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ }
+    };
 
-        res.write(`data: ${JSON.stringify({
-          type: 'content',
-          content: "❌ **Invalid Search Query**\n\nPlease provide a meaningful search query with proper words and terms.\n\n**Good examples:**\n• 'latest AI developments'\n• 'how to learn Python programming'\n• 'climate change research 2024'\n• 'best practices for web development'\n\nPlease try again with a valid search query."
-        })}\n\n`);
+    if (!isValidSearchQuery(cleanedQuery)) {
+      send({
+        type: 'content',
+        content: "❌ **Invalid Search Query**\n\nPlease provide a meaningful search query with proper words and terms.",
+      });
+      send({ type: 'done' });
+      try { res.end(); } catch { /* already closed */ }
+      return;
+    }
 
-        res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-        res.end();
-        return;
-      }
-
-      // Analyze query to determine intent and result count
-      const { intent, resultCount } = analyzeQuery(cleanedQuery);
-      console.log(`🎯 Query Analysis - Intent: ${intent}, Result Count: ${resultCount}`);
-
-      // Set up streaming
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('X-Accel-Buffering', 'no');
-      res.flushHeaders();
-
-      // Save user query
-      if (chatId) {
+    if (chatId) {
+      try {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (chat) {
           await prisma.message.create({
@@ -357,128 +370,128 @@ router.post(
               role: 'USER',
               content: `🔍 Web Search: ${query}`,
               timestamp: new Date(),
-            }
+            },
           });
+        }
+      } catch (persistErr) {
+        console.warn('[search/web] failed to persist user turn:', persistErr.message);
+      }
+    }
+
+    const controller = new AbortController();
+    req.on('close', () => { if (!res.writableEnded) controller.abort(); });
+
+    send({
+      type: 'start',
+      content: `🤖 **Búsqueda agéntica** de "${cleanedQuery}"\nObjetivo: 500 fuentes · lotes de 10 · top 25\n\n`,
+    });
+
+    let fullContent = `🤖 **Búsqueda agéntica** de "${cleanedQuery}"\nObjetivo: 500 fuentes · lotes de 10 · top 25\n\n`;
+    let summaryMarkdown = '';
+    let selectedSources = [];
+    let finalStats = null;
+    let dbMessage = null;
+
+    const append = (piece) => {
+      fullContent += piece;
+      send({ type: 'content', content: piece });
+    };
+
+    try {
+      for await (const evt of runAgenticBatch({
+        query: cleanedQuery,
+        target: 500,
+        batchSize: 10,
+        topK: 25,
+        mailto: req.user?.email || process.env.SEARCH_BRAIN_MAILTO,
+        signal: controller.signal,
+      })) {
+        switch (evt.type) {
+          case 'batch':
+            append(
+              `🟡 \`[${String(evt.batchN).padStart(2, '0')}]\` **${evt.provider}** → +${evt.unique} nuevas` +
+              (evt.duplicates > 0 ? ` (·${evt.duplicates} dup)` : '') +
+              ` · ${evt.totalCollected}/${evt.target}\n`
+            );
+            break;
+          case 'batch_error':
+            append(`⚠️ \`[${evt.batchN}]\` ${evt.provider} falló: ${evt.error}\n`);
+            break;
+          case 'provider_done':
+            append(`✓ **${evt.provider}** agotado (${evt.contributed} contribuidas)\n`);
+            break;
+          case 'collection_done':
+            append(`\n✅ **Recopilación completa:** ${evt.totalCollected} fuentes (${evt.deduped} únicas) en ${(evt.elapsedMs / 1000).toFixed(1)}s\n\n`);
+            break;
+          case 'ranking_start':
+            append(`🧠 ${evt.message}\n\n`);
+            break;
+          case 'rerank_error':
+            append(`⚠️ Reranking parcial: ${evt.error}\n`);
+            break;
+          case 'selected':
+            selectedSources = Array.isArray(evt.sources) ? evt.sources : [];
+            append(`✨ **Top ${evt.topK} seleccionado**${evt.rerankerWasUsed ? ' con reranker LLM' : ' (heurístico)'}.\n\n---\n\n`);
+            break;
+          case 'summary':
+            summaryMarkdown = typeof evt.markdown === 'string' ? evt.markdown : '';
+            // The trace lines above already narrate the run — the
+            // summary is the polished report the user actually wants
+            // to keep, so it becomes the canonical dbMessage content.
+            append(summaryMarkdown);
+            break;
+          case 'done':
+            finalStats = evt.stats || null;
+            break;
+          case 'error':
+            send({ type: 'error', error: evt.message || 'agentic search failed' });
+            try { res.end(); } catch { /* already closed */ }
+            return;
+          default:
+            // Unhandled event types (aborted, persist_error, etc.)
+            // are silently dropped — they don't map to the legacy
+            // wire format and the agentic endpoint handles them.
+            break;
         }
       }
 
-      // Stream initial message with query analysis
-      res.write(`data: ${JSON.stringify({
-        type: 'start',
-        content: `🔍 **Analyzing your search...**\n\n📊 **Query Type:** ${intent.charAt(0).toUpperCase() + intent.slice(1)}\n📈 **Fetching:**  high-quality results\n\n⏳ Searching the web...\n\n`
-      })}\n\n`);
-
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Perform intelligent web search
-      const { results, error } = await searchOpenAIWeb(cleanedQuery, intent, resultCount);
-      let dbMessage = null;
-
-      if (error || results.length === 0) {
-        res.write(`data: ${JSON.stringify({
-          type: 'content',
-          content: `⚠️ **No Results Found**\n\n${error || 'We couldn\'t find relevant results for your query.'}\n\n**Suggestions:**\n• Try different keywords\n• Be more specific or more general\n• Check spelling\n• Try related terms\n\n`
-        })}\n\n`);
-      } else {
-        // Stream results header
-        const header = `✅ **Found ${results.length} Relevant Results**\n\n---\n\n`;
-        res.write(`data: ${JSON.stringify({ type: 'content', content: header })}\n\n`);
-
-        // Group results by relevance if available
-        const highRelevance = results.filter(r => r.relevance === 'High');
-        const mediumRelevance = results.filter(r => r.relevance === 'Medium');
-        const otherResults = results.filter(r => !r.relevance || r.relevance === 'Low');
-
-        const orderedResults = [...highRelevance, ...mediumRelevance, ...otherResults];
-
-        // Stream each result with formatting
-        for (let i = 0; i < orderedResults.length; i++) {
-          const result = orderedResults[i];
-
-          let resultText = `### ${i + 1}. [${result.title}](${result.url})\n\n`;
-
-          // Add metadata badges
-          const badges = [];
-          if (result.type) badges.push(`📄 ${result.type}`);
-          if (result.source) badges.push(`🔗 ${result.source}`);
-          if (result.date && result.date !== 'null') badges.push(`📅 ${result.date}`);
-          if (result.relevance) badges.push(`🎯 ${result.relevance} Relevance`);
-
-          if (badges.length > 0) {
-            resultText += `${badges.join(' • ')}\n\n`;
-          }
-
-          resultText += `${result.snippet}\n\n`;
-
-          if (result.credibility && result.credibility === 'High') {
-            resultText += `✅ *Highly credible source*\n\n`;
-          }
-
-          resultText += `---\n\n`;
-
-          res.write(`data: ${JSON.stringify({ type: 'content', content: resultText })}\n\n`);
-          await new Promise(resolve => setTimeout(resolve, 200));
-        }
-
-        // Stream summary footer
-        const footer = `\n**📊 Search Summary:**\n` +
-          `• Query Type: ${intent.charAt(0).toUpperCase() + intent.slice(1)}\n` +
-          `• Results Found: ${results.length}\n` +
-          `• Search Time: ${new Date().toLocaleTimeString()}\n\n` +
-          `*🤖 Powered by AI-enhanced web search*`;
-
-        res.write(`data: ${JSON.stringify({ type: 'content', content: footer })}\n\n`);
-
-        // Construct the full content exactly as it was streamed
-        let fullContent = `🔍 **Analyzing your search...**\n\n📊 **Query Type:** ${intent.charAt(0).toUpperCase() + intent.slice(1)}\n📈 **Fetching:**  high-quality results\n\n⏳ Searching the web...\n\n`;
-        fullContent += `✅ **Found ${results.length} Relevant Results**\n\n---\n\n`;
-
-        for (let i = 0; i < orderedResults.length; i++) {
-          const result = orderedResults[i];
-          let resultText = `### ${i + 1}. [${result.title}](${result.url})\n\n`;
-          const badges = [];
-          if (result.type) badges.push(`📄 ${result.type}`);
-          if (result.source) badges.push(`🔗 ${result.source}`);
-          if (result.date && result.date !== 'null') badges.push(`📅 ${result.date}`);
-          if (result.relevance) badges.push(`🎯 ${result.relevance} Relevance`);
-          if (badges.length > 0) {
-            resultText += `${badges.join(' • ')}\n\n`;
-          }
-          resultText += `${result.snippet}\n\n`;
-          if (result.credibility && result.credibility === 'High') {
-            resultText += `✅ *Highly credible source*\n\n`;
-          }
-          resultText += `---\n\n`;
-          fullContent += resultText;
-        }
-
-        fullContent += footer;
-
-        // Save the complete, streamed response to the database
-        if (chatId) {
+      // Save the final polished report as the assistant message so a
+      // chat reload shows the top-K report (not the progress trace).
+      if (chatId && (summaryMarkdown || fullContent)) {
+        try {
           const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
           if (chat) {
             dbMessage = await prisma.message.create({
               data: {
                 chatId,
                 role: 'ASSISTANT',
-                content: fullContent,
-                tokens: 100, // Note: This should be calculated properly
+                content: summaryMarkdown || fullContent,
+                tokens: Math.ceil((summaryMarkdown || fullContent).length / 4),
                 timestamp: new Date(),
-              }
+                metadata: {
+                  source: 'agentic-search',
+                  selectedSources,
+                  stats: finalStats,
+                },
+              },
             });
           }
+        } catch (persistErr) {
+          console.warn('[search/web] failed to persist assistant message:', persistErr.message);
         }
       }
 
-      const serializedMessage = dbMessage ? serializeBigIntFields(dbMessage) : null;
-      res.write(`data: ${JSON.stringify({ type: 'done', results, dbMessage: serializedMessage })}\n\n`);
-      res.end();
-
+      send({
+        type: 'done',
+        results: selectedSources,
+        dbMessage: dbMessage ? serializeBigIntFields(dbMessage) : null,
+        stats: finalStats,
+      });
+      try { res.end(); } catch { /* already closed */ }
     } catch (error) {
-      console.error('Web search error:', error);
-      res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
-      res.end();
+      console.error('[search/web] agentic pipeline error:', error);
+      send({ type: 'error', error: error.message || 'agentic search failed' });
+      try { res.end(); } catch { /* already closed */ }
     }
   }
 );
