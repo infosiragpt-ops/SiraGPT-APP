@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { CanvasIframe } from "@/components/design/canvas-iframe"
 import { ChatPanel } from "@/components/design/chat-panel"
-import { designService, type DesignDetail } from "@/lib/design-service"
+import { designService, type DesignDetail, type DesignQualityReport } from "@/lib/design-service"
 
 export default function DesignCanvasPage() {
   const { id } = useParams<{ id: string }>()
@@ -43,18 +43,23 @@ export default function DesignCanvasPage() {
     return () => { cancelled = true }
   }, [id])
 
-  function handleUpdated(html: string, updatedAt: string) {
+  function handleUpdated(html: string, updatedAt: string, instruction: string, quality?: DesignQualityReport | null) {
     setDesign(prev => prev ? {
       ...prev,
       html,
       updatedAt,
       messages: [
         ...prev.messages,
-        // Reflect optimistic append of the last turn. The server
-        // already persisted; we just mirror it client-side so the
-        // chat shows without a refresh.
-        { role: "user" as const,      content: "(sent)",           at: new Date().toISOString() },
-        { role: "assistant" as const, content: "HTML updated",      at: new Date().toISOString() },
+        { role: "user" as const, content: instruction, at: new Date().toISOString() },
+        {
+          role: "assistant" as const,
+          content: quality
+            ? `HTML actualizado · revisión ${quality.score}/100`
+            : "HTML actualizado",
+          at: new Date().toISOString(),
+          htmlChars: html.length,
+          quality: quality || undefined,
+        },
       ],
     } : prev)
   }

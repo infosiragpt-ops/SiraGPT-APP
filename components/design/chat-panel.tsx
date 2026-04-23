@@ -21,17 +21,19 @@ import { toast } from "sonner"
 
 import { DesignComposer } from "./design-composer"
 import {
-  designService, type DesignDetail,
+  designService, type DesignDetail, type DesignQualityReport,
 } from "@/lib/design-service"
 
 interface Props {
   design: DesignDetail
-  onUpdated: (html: string, updatedAt: string) => void
+  onUpdated: (html: string, updatedAt: string, instruction: string, quality?: DesignQualityReport | null) => void
 }
 
 export function ChatPanel({ design, onUpdated }: Props) {
   const [running, setRunning] = React.useState(false)
   const [progressChars, setProgressChars] = React.useState(0)
+  const [stage, setStage] = React.useState<"generating" | "reviewing" | "repairing">("generating")
+  const [quality, setQuality] = React.useState<DesignQualityReport | null>(null)
   const abortRef = React.useRef<AbortController | null>(null)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
 
@@ -49,21 +51,28 @@ export function ChatPanel({ design, onUpdated }: Props) {
   }) {
     if (running) return
     setRunning(true)
+    setStage("generating")
+    setQuality(null)
     setProgressChars(0)
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
     try {
-      // effort is captured but not yet threaded to the backend — the
-      // generator is a single LLM call today (no planner loop), so
-      // the effort knob is UI-forward-compat until we decide whether
-      // to map it onto temperature, max_tokens, or a second pass.
       for await (const ev of designService.generate(design.id, instruction, {
         model,
+        effort,
         signal: ctrl.signal,
       })) {
         if (ev.type === "progress") setProgressChars(ev.chars)
-        else if (ev.type === "final") onUpdated(ev.html, ev.updatedAt)
+        else if (ev.type === "review") {
+          setStage("reviewing")
+          setQuality(ev.quality)
+        }
+        else if (ev.type === "repair") {
+          setStage("repairing")
+          setQuality(ev.quality)
+        }
+        else if (ev.type === "final") onUpdated(ev.html, ev.updatedAt, instruction, ev.quality)
         else if (ev.type === "error") {
           if (ev.error !== "aborted") toast.error(ev.error)
           break
@@ -111,6 +120,8 @@ export function ChatPanel({ design, onUpdated }: Props) {
         <DesignComposer
           running={running}
           progressChars={progressChars}
+          stage={stage}
+          quality={quality}
           onSend={handleSend}
           onStop={handleStop}
           placeholder={

@@ -43,6 +43,7 @@ import {
   DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import type { DesignQualityReport } from "@/lib/design-service"
 
 // ─── Models API + curation ────────────────────────────────────────────────
 
@@ -106,6 +107,8 @@ interface Props {
   disabled?: boolean
   running?: boolean
   progressChars?: number
+  stage?: "generating" | "reviewing" | "repairing"
+  quality?: DesignQualityReport | null
   onSend: (opts: { instruction: string; model: string; effort: Effort }) => void
   onStop?: () => void
   placeholder?: string
@@ -113,7 +116,7 @@ interface Props {
 }
 
 export function DesignComposer({
-  disabled, running, progressChars = 0,
+  disabled, running, progressChars = 0, stage = "generating", quality = null,
   onSend, onStop, placeholder, initialModel,
 }: Props) {
   const [value, setValue] = React.useState("")
@@ -386,8 +389,12 @@ export function DesignComposer({
           >
             <Loader2 className="h-3 w-3 animate-spin" />
             <span>
-              Generating with <span className="font-medium">{currentDisplay}</span>
+              {stage === "generating" && "Generando"}
+              {stage === "reviewing" && "Revisando calidad"}
+              {stage === "repairing" && "Autocorrigiendo"}
+              {" "}con <span className="font-medium">{currentDisplay}</span>
               {progressChars > 0 && ` · ${progressChars.toLocaleString()} chars`}
+              {quality && ` · calidad ${quality.score}/100`}
             </span>
           </motion.div>
         )}

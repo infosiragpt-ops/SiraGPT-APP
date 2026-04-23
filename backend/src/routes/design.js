@@ -169,6 +169,7 @@ router.post(
     param('id').isString(),
     body('instruction').isString().trim().isLength({ min: 2, max: 6000 }),
     body('model').optional().isString(),
+    body('effort').optional().isIn(['rapid', 'balanced', 'thorough']),
   ],
   async (req, res) => {
     if (validationFail(req, res)) return;
@@ -213,6 +214,7 @@ router.post(
     try {
       send({ type: 'start', model: req.body.model || null });
       let finalHtml = '';
+      let quality = null;
       let seenChars = 0;
       // We pass `null` for the client — the generator builds its own
       // based on the model name (OpenAI / OpenRouter / Gemini).
@@ -224,10 +226,20 @@ router.post(
         fidelity: owned.fidelity,
         speakerNotes: owned.speakerNotes,
         model: req.body.model,
+        effort: req.body.effort || 'balanced',
         signal: controller.signal,
       })) {
+        if (chunk.phase === 'review') {
+          send({ type: 'review', quality: chunk.report });
+          continue;
+        }
+        if (chunk.phase === 'repair') {
+          send({ type: 'repair', quality: chunk.report });
+          continue;
+        }
         if (chunk.final) {
           finalHtml = chunk.full;
+          quality = chunk.quality || null;
           break;
         }
         // Throttle the on-the-wire chunk rate. The model emits
@@ -252,13 +264,21 @@ router.post(
           messages: [
             ...history,
             userMsg,
-            { role: 'assistant', content: '(generated HTML)', at: new Date().toISOString(), htmlChars: finalHtml.length },
+            {
+              role: 'assistant',
+              content: quality
+                ? `HTML actualizado · calidad ${quality.score}/100 · ${quality.issues.length} errores bloqueantes`
+                : '(generated HTML)',
+              at: new Date().toISOString(),
+              htmlChars: finalHtml.length,
+              quality,
+            },
           ],
         },
         select: { id: true, name: true, updatedAt: true },
       });
 
-      send({ type: 'final', html: finalHtml, updatedAt: updated.updatedAt });
+      send({ type: 'final', html: finalHtml, updatedAt: updated.updatedAt, quality });
     } catch (err) {
       if (err?.name === 'AbortError') {
         send({ type: 'error', error: 'aborted' });

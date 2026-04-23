@@ -25,7 +25,7 @@ export interface DesignSummary {
 
 export interface DesignDetail extends DesignSummary {
   html: string | null
-  messages: Array<{ role: "user" | "assistant"; content: string; at: string; htmlChars?: number }>
+  messages: Array<{ role: "user" | "assistant"; content: string; at: string; htmlChars?: number; quality?: DesignQualityReport }>
 }
 
 export interface CreateDesignInput {
@@ -35,10 +35,21 @@ export interface CreateDesignInput {
   speakerNotes?: boolean
 }
 
+export interface DesignQualityReport {
+  passed: boolean
+  score: number
+  issues: Array<{ id: string; message: string }>
+  warnings: Array<{ id: string; message: string }>
+}
+
+export type DesignEffort = "rapid" | "balanced" | "thorough"
+
 export type GenerateEvent =
-  | { type: "start" }
+  | { type: "start"; model?: string | null }
   | { type: "progress"; chars: number }
-  | { type: "final"; html: string; updatedAt: string }
+  | { type: "review"; quality: DesignQualityReport }
+  | { type: "repair"; quality: DesignQualityReport }
+  | { type: "final"; html: string; updatedAt: string; quality?: DesignQualityReport | null }
   | { type: "error"; error: string }
 
 function authHeader(): Record<string, string> {
@@ -118,14 +129,14 @@ export const designService = {
   async *generate(
     id: string,
     instruction: string,
-    opts: { model?: string; signal?: AbortSignal } = {},
+    opts: { model?: string; effort?: DesignEffort; signal?: AbortSignal } = {},
   ): AsyncGenerator<GenerateEvent> {
-    const { model, signal } = opts
+    const { model, effort, signal } = opts
     const res = await fetch(`${API_ROOT}/design/${id}/generate`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ instruction, model }),
+      body: JSON.stringify({ instruction, model, effort }),
       signal,
     })
     if (!res.ok) {
