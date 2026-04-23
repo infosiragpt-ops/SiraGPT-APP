@@ -1588,15 +1588,20 @@ const NavbarModelSelector = ({
 };
 
 export default function ChatInterface() {
-  // NB: no local SidebarProvider here. The app-wrapper already wraps
-  // every chat-mode page in one (app-wrapper.tsx → AppShell →
-  // AppSidebar + SidebarInset), and THAT is the provider backing the
-  // sidebar the user actually sees. Declaring a second provider here
-  // made useSidebar() inside ChatInterfaceContent resolve to the
-  // nearer-but-invisible inner provider — so setOpen(false) from our
-  // auto-collapse effect was toggling the wrong store and the visible
-  // sidebar never moved.
-  return <ChatInterfaceContent />
+  // We keep the inner SidebarProvider — other code inside this
+  // component subtree (NavbarModelSelector etc.) depends on it and
+  // removing it breaks hook-count invariants when Radix portals
+  // mount outside the tree.
+  //
+  // Cross-provider communication (the OUTER provider in
+  // app-wrapper.tsx backs the visible sidebar) happens via a
+  // browser-level CustomEvent — see the auto-collapse effect
+  // below and the matching listener in app-shell.tsx.
+  return (
+    <SidebarProvider>
+      <ChatInterfaceContent />
+    </SidebarProvider>
+  )
 }
 
 function ChatInterfaceContent() {
@@ -2884,13 +2889,20 @@ But first, you need to connect your Spotify account securely using the button be
   const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile } = useSidebar();
 
   // ────────────────────────────────────────────────────────────
-  // Auto-collapse the sidebar when ANY power-tool becomes active.
-  // Once the user picks Web Search / Image / Video / Spotify /
-  // Computer-Use / DocumentAI / SearchBrain the workspace widens
-  // automatically so the tool has room. We only trigger on the
-  // false→true edge so deactivating a tool does NOT auto-reopen
-  // the sidebar — restoring it stays the user's call. On mobile
-  // the sidebar is a sheet, so collapsing is a no-op.
+  // Auto-collapse the OUTER (visible) sidebar when ANY power-tool
+  // becomes active. Once the user picks Web Search / Image / Video
+  // / Spotify / Computer-Use / a Google connector / Word / Excel
+  // the workspace widens automatically so the tool's UI has room.
+  //
+  // Why a CustomEvent instead of setSidebarOpen(false) directly:
+  // the useSidebar() hook above resolves to this component's INNER
+  // SidebarProvider (required by child components for their own
+  // state). The visible sidebar is backed by the OUTER provider in
+  // app-wrapper.tsx. We bridge the two contexts with a browser-level
+  // event that a listener inside AppShell (under the outer provider)
+  // picks up and forwards to setOpen(false). Edge-triggered on
+  // false→true so deactivating a tool does NOT auto-reopen the
+  // sidebar. Mobile is a no-op.
   // ────────────────────────────────────────────────────────────
   const prevAnyToolActiveRef = React.useRef<boolean>(false);
   React.useEffect(() => {
@@ -2906,8 +2918,9 @@ But first, you need to connect your Spotify account securely using the button be
       !!isGoogleDriveActive ||
       !!isWordConnectorActive ||
       !!isExcelConnectorActive;
-    if (anyActive && !prevAnyToolActiveRef.current && sidebarOpen) {
-      setSidebarOpen(false);
+    if (anyActive && !prevAnyToolActiveRef.current) {
+      try { window.dispatchEvent(new CustomEvent('siragpt:collapse-sidebar')); }
+      catch { /* SSR / non-browser env */ }
     }
     prevAnyToolActiveRef.current = anyActive;
   }, [
@@ -2915,7 +2928,7 @@ But first, you need to connect your Spotify account securely using the button be
     isVideoGenerationActive, isComputerUseActive,
     isGmailActive, isGoogleCalendarActive, isGoogleDriveActive,
     isWordConnectorActive, isExcelConnectorActive,
-    isSidebarMobile, sidebarOpen, setSidebarOpen,
+    isSidebarMobile,
   ]);
 
   // ────────────────────────────────────────────────────────────
