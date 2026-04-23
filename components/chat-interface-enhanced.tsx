@@ -1283,6 +1283,28 @@ const NavbarModelSelector = ({
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
   const [searchQuery, setSearchQuery] = React.useState("");
 
+  // ALL hooks MUST be declared before any early return. Keeping the
+  // `useState(recents)` + `useCallback` + `useEffect` below the chat-
+  // type / custom-GPT branches caused "Rendered fewer hooks than
+  // expected" crashes whenever the caller switched chat types (hooks
+  // ran 1 time vs 4 times between renders → React invariant violation).
+  const RECENTS_KEY = "sira:model-recents";
+  const [recents, setRecents] = React.useState<string[]>([]);
+  const refreshRecents = React.useCallback(() => {
+    if (typeof window === "undefined") return;
+    try { setRecents(JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]")); } catch { setRecents([]); }
+  }, []);
+  React.useEffect(() => { refreshRecents(); }, [refreshRecents]);
+  const recordRecent = (modelName: string) => {
+    if (typeof window === "undefined") return;
+    try {
+      const cur: string[] = JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]");
+      const next = [modelName, ...cur.filter(n => n !== modelName)].slice(0, 3);
+      localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+      setRecents(next);
+    } catch {}
+  };
+
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
@@ -1387,25 +1409,6 @@ const NavbarModelSelector = ({
       </div>
     );
   }
-
-  // Recents — last 3 selected models, persisted in localStorage so the
-  // user's preferred picks float to the top across sessions.
-  const RECENTS_KEY = "sira:model-recents";
-  const [recents, setRecents] = React.useState<string[]>([]);
-  const refreshRecents = React.useCallback(() => {
-    if (typeof window === "undefined") return;
-    try { setRecents(JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]")); } catch { setRecents([]); }
-  }, []);
-  React.useEffect(() => { refreshRecents(); }, [refreshRecents]);
-  const recordRecent = (modelName: string) => {
-    if (typeof window === "undefined") return;
-    try {
-      const cur: string[] = JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]");
-      const next = [modelName, ...cur.filter(n => n !== modelName)].slice(0, 3);
-      localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
-      setRecents(next);
-    } catch {}
-  };
 
   // Tier inference — derives a one-glance capability tag + ES subtitle
   // from the model name, so the picker reads like ChatGPT's tiered
