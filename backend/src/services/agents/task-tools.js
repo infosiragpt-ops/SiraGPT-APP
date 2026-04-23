@@ -42,8 +42,8 @@ function ensureArtifactDir() {
   }
 }
 
-function artifactIdFor(buf) {
-  return crypto.createHash('sha1').update(buf).digest('hex').slice(0, 16);
+function artifactIdFor(buf, scope = '') {
+  return crypto.createHash('sha1').update(scope).update(buf).digest('hex').slice(0, 16);
 }
 
 const EXTENSION_TO_MIME = {
@@ -58,15 +58,29 @@ const EXTENSION_TO_MIME = {
   md:   'text/markdown',
 };
 
-function saveArtifact({ filename, base64, mime }) {
+function metadataPathFor(id) {
+  return path.join(ARTIFACT_DIR, `${id}.json`);
+}
+
+function saveArtifact({ filename, base64, mime, ownerUserId, chatId }) {
   ensureArtifactDir();
   const clean = String(filename || 'artifact').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
   const buf = Buffer.from(base64 || '', 'base64');
-  const id = artifactIdFor(Buffer.concat([Buffer.from(clean), buf]));
+  const scope = `${ownerUserId || 'anonymous'}:${chatId || 'no-chat'}:`;
+  const id = artifactIdFor(Buffer.concat([Buffer.from(clean), buf]), scope);
   const ext = path.extname(clean).slice(1).toLowerCase() || 'bin';
   const stored = `${id}-${clean}`;
   const full = path.join(ARTIFACT_DIR, stored);
   fs.writeFileSync(full, buf);
+  fs.writeFileSync(metadataPathFor(id), JSON.stringify({
+    id,
+    filename: clean,
+    ownerUserId: ownerUserId || null,
+    chatId: chatId || null,
+    mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
+    sizeBytes: buf.length,
+    createdAt: new Date().toISOString(),
+  }, null, 2));
   return {
     id,
     filename: clean,
@@ -284,7 +298,13 @@ const createDocument = {
 
     const raw = fs.readFileSync(tmpOut);
     const b64 = raw.toString('base64');
-    const artifact = saveArtifact({ filename: cleanName, base64: b64, mime: EXTENSION_TO_MIME[ext] });
+    const artifact = saveArtifact({
+      filename: cleanName,
+      base64: b64,
+      mime: EXTENSION_TO_MIME[ext],
+      ownerUserId: ctx.userId,
+      chatId: ctx.chatId,
+    });
     try { fs.unlinkSync(tmpOut); } catch { /* may have been moved */ }
 
     ctx.onEvent?.({
@@ -363,5 +383,5 @@ module.exports = {
   saveArtifact,
   ARTIFACT_DIR,
   EXTENSION_TO_MIME,
-  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, previewText, artifactIdFor },
+  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, previewText, artifactIdFor, metadataPathFor },
 };

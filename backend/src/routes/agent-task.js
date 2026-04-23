@@ -2,7 +2,7 @@
  * agent-task — Claude-style agentic task runner.
  *
  * POST /api/agent/task (SSE)
- *   body: { goal: string, chatId?: string, model?: string, maxSteps?: number }
+ *   body: { goal: string, chatId?: string, model?: string, maxSteps?: number, maxRuntimeMs?: number }
  *
  *   Emits an event stream of structured "step cards" the frontend
  *   renders as collapsible tiles (title → code preview → ✓ Listo →
@@ -66,6 +66,14 @@ router.get('/artifact/:id', authenticateToken, (req, res) => {
   const entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
   if (!entry) return res.status(404).json({ error: 'artifact not found' });
 
+  const metadata = readArtifactMetadata(id);
+  if (!metadata?.ownerUserId) {
+    return res.status(403).json({ error: 'artifact ownership metadata missing' });
+  }
+  if (String(metadata.ownerUserId) !== String(req.user?.id)) {
+    return res.status(403).json({ error: 'artifact not found' });
+  }
+
   const full = path.join(ARTIFACT_DIR, entry);
   const userSuppliedName = typeof req.query.name === 'string' ? req.query.name : entry.slice(id.length + 1);
   const safeName = userSuppliedName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
@@ -81,7 +89,8 @@ router.post(
     body('goal').isString().trim().isLength({ min: 3, max: 4000 }).withMessage('goal must be 3-4000 chars'),
     body('chatId').optional().isString(),
     body('model').optional().isString(),
-    body('maxSteps').optional().isInt({ min: 2, max: 20 }),
+    body('maxSteps').optional().isInt({ min: 2, max: 120 }),
+    body('maxRuntimeMs').optional().isInt({ min: 60000, max: 7200000 }),
   ],
   authenticateToken,
   async (req, res) => {
@@ -99,15 +108,41 @@ router.post(
       try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ }
     };
 
+    const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
     const controller = new AbortController();
-    req.on('close', () => { if (!res.writableEnded) controller.abort(); });
+    let clientConnected = true;
+    req.on('close', () => {
+      clientConnected = false;
+      // If the task belongs to a chat, keep it running and persist the
+      // final trace. This is the practical "continue while I leave the
+      // browser" path. Orphaned requests are aborted to avoid leaks.
+      if (!chatId) controller.abort();
+    });
+
+    const heartbeat = setInterval(() => {
+      if (!clientConnected || res.writableEnded) return;
+      try { res.write(': keep-alive\n\n'); } catch { /* client gone */ }
+    }, 25000);
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const tools = buildTaskTools();
     const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
-    const maxSteps = typeof req.body.maxSteps === 'number' ? req.body.maxSteps : 10;
+    const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
+    const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
+    const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
+    const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
+    const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
 
-    send({
+    let streamState = initialAgentState();
+    const applyEvent = (obj) => {
+      streamState = reduceAgentState(streamState, obj);
+      return obj;
+    };
+    const emit = (obj) => {
+      send(applyEvent(obj));
+    };
+
+    emit({
       type: 'meta',
       goal: req.body.goal,
       model,
@@ -126,6 +161,7 @@ router.post(
       userEmail: req.user?.email,
       openai,
       signal: controller.signal,
+      chatId,
       onEvent: (evt) => {
         // Forward tool-level events (tool_call / tool_output / file_artifact)
         // to the client with the active stepId so it can nest them.
@@ -133,12 +169,11 @@ router.post(
         if (evt.type === 'file_artifact') {
           artifacts.push(evt.artifact);
         }
-        send(payload);
+        emit(payload);
       },
     };
 
     // Persist the user turn up front so a chat reload shows the prompt.
-    const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
     if (chatId && prisma) {
       try {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: req.user.id } });
@@ -155,10 +190,11 @@ router.post(
         query: req.body.goal,
         tools,
         maxSteps,
+        maxRuntimeMs,
         model,
         extraSystem: TASK_SYSTEM_PROMPT,
         ctx: toolCtx,
-        onStep: (step) => {
+        onStepStart: (step) => {
           // react-agent gives us THE assistant turn (thought + tool
           // invocations). We turn the `thought` line into a
           // step_start card so the UI has an immediate tile to show,
@@ -170,43 +206,61 @@ router.post(
           const firstAction = step.actions?.[0];
           const label = thought || firstAction?.tool || 'Pensando…';
           const icon = inferIconFor(firstAction?.tool);
-          send({ type: 'step_start', id: currentStepId, label: shortLabel(label), icon });
+          emit({ type: 'step_start', id: currentStepId, label: shortLabel(label), icon });
+        },
+        onStepDone: (step) => {
+          const firstAction = step.actions?.[0];
           // tool_call / tool_output already streamed via toolCtx.onEvent
-          send({ type: 'step_done', id: currentStepId, ok: !firstAction?.observation?.error });
+          emit({ type: 'step_done', id: currentStepId, ok: !firstAction?.observation?.error });
+          currentStepId = null;
         },
       });
 
       if (result.finalAnswer) {
-        send({ type: 'final_text', markdown: result.finalAnswer });
+        emit({ type: 'final_text', markdown: result.finalAnswer });
       }
+
+      const doneEvent = applyEvent({
+        type: 'done',
+        stoppedReason: result.stoppedReason,
+        stats: { steps: result.steps.length, artifacts: artifacts.length },
+      });
 
       // Persist the final assistant message with artifacts metadata.
       let dbMessage = null;
-      if (chatId && prisma && result.finalAnswer) {
+      if (chatId && prisma && (result.finalAnswer || streamState.steps.length || artifacts.length)) {
         try {
           dbMessage = await prisma.message.create({
             data: {
               chatId,
               role: 'ASSISTANT',
-              content: result.finalAnswer,
-              tokens: Math.ceil(result.finalAnswer.length / 4),
+              content: serializeAgentState(streamState),
+              tokens: Math.ceil((result.finalAnswer || serializeAgentState(streamState)).length / 4),
               timestamp: new Date(),
-              metadata: { source: 'agent-task', artifacts, stoppedReason: result.stoppedReason },
+              metadata: {
+                source: 'agent-task',
+                artifacts,
+                stoppedReason: result.stoppedReason,
+                maxSteps,
+                maxRuntimeMs,
+              },
             },
           });
         } catch (e) { /* non-fatal */ }
       }
 
       send({
-        type: 'done',
-        stoppedReason: result.stoppedReason,
-        stats: { steps: result.steps.length, artifacts: artifacts.length },
+        ...doneEvent,
         dbMessageId: dbMessage?.id || null,
       });
+      clearTimeout(runtimeTimer);
+      clearInterval(heartbeat);
       try { res.end(); } catch { /* already closed */ }
     } catch (err) {
       console.error('[agent-task] fatal:', err);
-      send({ type: 'error', message: err.message || 'agent task failed' });
+      emit({ type: 'error', message: err.message || 'agent task failed' });
+      clearTimeout(runtimeTimer);
+      clearInterval(heartbeat);
       try { res.end(); } catch { /* already closed */ }
     }
   }
@@ -229,6 +283,84 @@ function inferIconFor(toolName) {
     case 'finalize':        return 'check';
     default:                return 'thought';
   }
+}
+
+function readArtifactMetadata(id) {
+  const metadataPath = path.join(ARTIFACT_DIR, `${id}.json`);
+  try {
+    if (!fs.existsSync(metadataPath)) return null;
+    return JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function initialAgentState() {
+  return { steps: [], artifacts: [], finalText: '', done: false };
+}
+
+function reduceAgentState(state, evt) {
+  switch (evt.type) {
+    case 'meta':
+      return { ...state, meta: { goal: evt.goal, model: evt.model, tools: evt.tools } };
+    case 'step_start':
+      return {
+        ...state,
+        steps: [...state.steps, {
+          id: evt.id,
+          label: evt.label,
+          icon: evt.icon,
+          status: 'running',
+          toolCalls: [],
+        }],
+      };
+    case 'tool_call':
+      return {
+        ...state,
+        steps: state.steps.map(step =>
+          step.id === evt.stepId
+            ? { ...step, toolCalls: [...step.toolCalls, { tool: evt.tool, preview: evt.preview, language: evt.language, codePreview: evt.codePreview }] }
+            : step
+        ),
+      };
+    case 'tool_output':
+      return {
+        ...state,
+        steps: state.steps.map(step => {
+          if (step.id !== evt.stepId) return step;
+          const toolCalls = [...step.toolCalls];
+          for (let i = toolCalls.length - 1; i >= 0; i--) {
+            if (toolCalls[i].tool === evt.tool && !toolCalls[i].output) {
+              toolCalls[i] = { ...toolCalls[i], output: { ok: evt.ok, preview: evt.preview } };
+              break;
+            }
+          }
+          return { ...step, toolCalls };
+        }),
+      };
+    case 'step_done':
+      return {
+        ...state,
+        steps: state.steps.map(step =>
+          step.id === evt.id ? { ...step, status: evt.ok ? 'done' : 'error' } : step
+        ),
+      };
+    case 'file_artifact':
+      return { ...state, artifacts: [...state.artifacts, evt.artifact] };
+    case 'final_text':
+      return { ...state, finalText: evt.markdown };
+    case 'done':
+      return { ...state, done: true, stoppedReason: evt.stoppedReason };
+    case 'error':
+      return { ...state, done: true, error: evt.message };
+    default:
+      return state;
+  }
+}
+
+function serializeAgentState(state) {
+  const fenced = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
+  return state.finalText ? `${fenced}\n\n${state.finalText}` : fenced;
 }
 
 module.exports = router;

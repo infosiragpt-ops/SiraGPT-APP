@@ -128,6 +128,17 @@ export class AIService {
     // the specific word "plano" / "planta" / "blueprint" removes
     // that ambiguity entirely and saves ~1.5s per message.
     const lc = prompt.toLowerCase();
+    // Compound agentic task — route BEFORE the document fast-path.
+    // A prompt like "investiga X y dame un Word/Excel/PPT" is not a
+    // simple file-generation request: it needs search, processing,
+    // self-checking, and then a deliverable artifact.
+    const asksForExternalResearch = /\b(investiga(r|ci[oó]n)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|art[ií]culos?|papers?|literatura|acad[eé]mic[ao]s?|cient[ií]fic[ao]s?|mercado|benchmark|competidores|estado\s+del\s+arte)\b/i.test(lc);
+    const asksForDeliverableFile = /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|informe|reporte|presentaci[oó]n|hoja\s+de\s+c[aá]lculo|spreadsheet|archivo|documento)\b/i.test(lc);
+    const asksForDataWork = /\b(calcula(r)?|analiza(r)?|procesa(r)?|limpia(r)?|extrae(r)?|clasifica(r)?|resume(n|ir)?|tabla|matriz|gr[aá]fic[ao]|regresi[oó]n|estad[ií]stic[ao]|csv|datos|dataset)\b/i.test(lc);
+    if (asksForDeliverableFile && (asksForExternalResearch || asksForDataWork)) {
+      return 'agent_task';
+    }
+
     if (/\b(plano|planos|blueprint|floor[- ]?plan|planta\s+(arquitect|baj|alt))\b/i.test(lc)) {
       return 'plan';
     }

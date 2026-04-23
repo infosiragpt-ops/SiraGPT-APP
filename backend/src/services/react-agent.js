@@ -3,7 +3,7 @@
  * a pluggable tool registry, driven by OpenAI tool/function calling.
  *
  * Shape:
- *   run(openai, { query, tools, maxSteps, onStep })
+ *   run(openai, { query, tools, maxSteps, maxRuntimeMs, onStepStart, onStepDone, onStep })
  *     → { finalAnswer, steps[], stoppedReason }
  *
  * Tools are plain objects:
@@ -18,9 +18,10 @@
  * `finalize` — this is the single most important safety property, since
  * a buggy tool or a confused model can otherwise drift forever.
  *
- * `onStep(step)` fires for every Thought / Action / Observation triple,
- * so a caller can stream progress to the UI. The full trace is also
- * returned, for logging / replay.
+ * `onStepStart(step)` fires before tool execution, `onStepDone(step)`
+ * fires after observations are available, and `onStep(step)` is kept
+ * as the legacy completed-step callback. The full trace is returned
+ * for logging / replay.
  *
  * Why roll a loop instead of using the Assistants API:
  *   - Assistants is a stateful resource with its own lifecycle; we want
@@ -30,6 +31,7 @@
  */
 
 const DEFAULT_MAX_STEPS = 8;
+const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
 const SYSTEM_PROMPT = `You are a rigorous research agent. Solve the user's request by deciding which tool to call next, observing the result, then deciding again. Keep going until you can give a confident, well-grounded answer.
 
 Rules:
@@ -59,6 +61,9 @@ function toOpenAITool(tool) {
  * and course-correct, rather than throwing out of the loop.
  */
 async function dispatchTool(registry, name, argsRaw, ctx) {
+  if (ctx?.signal?.aborted) {
+    return { error: 'aborted' };
+  }
   const tool = registry.find(t => t.name === name);
   if (!tool) {
     return { error: `unknown_tool: ${name}` };
@@ -95,6 +100,9 @@ async function run(openai, opts) {
     query,
     tools,
     maxSteps = DEFAULT_MAX_STEPS,
+    maxRuntimeMs = DEFAULT_MAX_RUNTIME_MS,
+    onStepStart = () => {},
+    onStepDone = () => {},
     onStep = () => {},
     ctx = {},
     model = 'gpt-4o',
@@ -132,8 +140,18 @@ async function run(openai, opts) {
   const steps = [];
   let finalAnswer = null;
   let stoppedReason = 'max_steps';
+  const startedAt = Date.now();
 
   for (let step = 0; step < maxSteps; step++) {
+    if (ctx?.signal?.aborted) {
+      stoppedReason = 'aborted';
+      break;
+    }
+    if (Date.now() - startedAt > maxRuntimeMs) {
+      stoppedReason = 'runtime_budget_exhausted';
+      break;
+    }
+
     // If we're at the last step, force a finalize by narrowing the
     // tool choice — the model can't keep exploring past the budget.
     const isLast = step === maxSteps - 1;
@@ -149,7 +167,7 @@ async function run(openai, opts) {
         tools: toolsSchema,
         tool_choice: toolChoice,
         temperature: 0.3,
-      });
+      }, ctx?.signal ? { signal: ctx.signal } : undefined);
     } catch (err) {
       stoppedReason = `model_error: ${err.message}`;
       break;
@@ -178,9 +196,28 @@ async function run(openai, opts) {
     }
 
     const stepRecord = { step, thought, actions: [] };
+    onStepStart({
+      step,
+      thought,
+      actions: toolCalls.map(call => ({
+        tool: call.function?.name,
+        args: call.function?.arguments || '',
+      })),
+    });
     let finalized = false;
 
     for (const call of toolCalls) {
+      if (ctx?.signal?.aborted) {
+        stoppedReason = 'aborted';
+        finalized = true;
+        break;
+      }
+      if (Date.now() - startedAt > maxRuntimeMs) {
+        stoppedReason = 'runtime_budget_exhausted';
+        finalized = true;
+        break;
+      }
+
       const toolName = call.function?.name;
       const dispatch = await dispatchTool(registry, toolName, call.function?.arguments, ctx);
 
@@ -209,6 +246,7 @@ async function run(openai, opts) {
 
     steps.push(stepRecord);
     onStep(stepRecord);
+    onStepDone(stepRecord);
 
     if (finalized) break;
   }
@@ -216,4 +254,4 @@ async function run(openai, opts) {
   return { finalAnswer, steps, stoppedReason };
 }
 
-module.exports = { run, DEFAULT_MAX_STEPS, SYSTEM_PROMPT };
+module.exports = { run, DEFAULT_MAX_STEPS, DEFAULT_MAX_RUNTIME_MS, SYSTEM_PROMPT };

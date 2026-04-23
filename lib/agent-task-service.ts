@@ -39,6 +39,7 @@ export interface AgentTaskRunArgs {
   chatId?: string
   model?: string
   maxSteps?: number
+  maxRuntimeMs?: number
   signal?: AbortSignal
 }
 
@@ -129,31 +130,56 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           toolCalls: [],
         }],
       }
-    case "tool_call":
+    case "tool_call": {
+      const callStepId = evt.stepId || `tool-${state.steps.length + 1}`
+      const callSteps = state.steps.some(s => s.id === callStepId)
+        ? state.steps
+        : [...state.steps, {
+          id: callStepId,
+          label: evt.tool,
+          icon: "thought" as AgenticIcon,
+          status: "running" as const,
+          toolCalls: [],
+        }]
       return {
         ...state,
-        steps: state.steps.map(s =>
-          s.id === evt.stepId
+        steps: callSteps.map(s =>
+          s.id === callStepId
             ? { ...s, toolCalls: [...s.toolCalls, { tool: evt.tool, preview: evt.preview, language: evt.language, codePreview: evt.codePreview }] }
             : s
         ),
       }
-    case "tool_output":
+    }
+    case "tool_output": {
+      const outputStepId = evt.stepId || `tool-${state.steps.length + 1}`
+      const outputSteps = state.steps.some(s => s.id === outputStepId)
+        ? state.steps
+        : [...state.steps, {
+          id: outputStepId,
+          label: evt.tool,
+          icon: "thought" as AgenticIcon,
+          status: "running" as const,
+          toolCalls: [{ tool: evt.tool, preview: "" }],
+        }]
       return {
         ...state,
-        steps: state.steps.map(s => {
-          if (s.id !== evt.stepId) return s
+        steps: outputSteps.map(s => {
+          if (s.id !== outputStepId) return s
           const calls = [...s.toolCalls]
           // Attach the output to the most recent unattached call for this tool.
+          let attached = false
           for (let i = calls.length - 1; i >= 0; i--) {
             if (calls[i].tool === evt.tool && !calls[i].output) {
               calls[i] = { ...calls[i], output: { ok: evt.ok, preview: evt.preview } }
+              attached = true
               break
             }
           }
+          if (!attached) calls.push({ tool: evt.tool, preview: "", output: { ok: evt.ok, preview: evt.preview } })
           return { ...s, toolCalls: calls }
         }),
       }
+    }
     case "step_done":
       return {
         ...state,

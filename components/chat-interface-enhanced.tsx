@@ -4666,6 +4666,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           goal: goalText,
           chatId: activeChat.id,
           model: selectedModel,
+          maxSteps: 80,
+          maxRuntimeMs: 2 * 60 * 60 * 1000,
           signal: controller.signal,
         })) {
           state = reduceEvent(state, evt);

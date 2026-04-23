@@ -17,6 +17,9 @@ type ReactAgent = {
       execute: (args: unknown, ctx: unknown) => Promise<unknown> | unknown
     }>
     maxSteps?: number
+    maxRuntimeMs?: number
+    onStepStart?: (step: ReactStep) => void
+    onStepDone?: (step: ReactStep) => void
     onStep?: (step: ReactStep) => void
     ctx?: unknown
     model?: string
@@ -94,6 +97,31 @@ describe("react-agent · happy path", () => {
     })
     assert.equal(seen.length, 1)
     assert.equal(seen[0].actions[0].tool, "finalize")
+  })
+
+  it("fires step_start before tool execution and step_done after observation", async () => {
+    const fake = new FakeOpenAI([
+      { content: "Need a tool.", tool_calls: [
+        { id: "call_1", function: { name: "echo", arguments: JSON.stringify({ text: "hi" }) } },
+      ]},
+      { content: "Finalizing.", tool_calls: [finalizeCall("call_2", "done")] },
+    ])
+    const order: string[] = []
+    await reactAgent.run(fake, {
+      query: "q",
+      tools: [{
+        name: "echo",
+        description: "echoes text back",
+        execute: async () => {
+          order.push("tool")
+          return { ok: true }
+        },
+      }],
+      onStepStart: () => order.push("start"),
+      onStep: () => order.push("legacy"),
+      onStepDone: () => order.push("done"),
+    })
+    assert.deepEqual(order.slice(0, 4), ["start", "tool", "legacy", "done"])
   })
 })
 
