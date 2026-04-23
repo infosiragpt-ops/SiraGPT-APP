@@ -496,7 +496,7 @@ export function AppSidebar() {
                 onClick={handleNewChat}
                 className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
               >
-                <PenSquare className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <PenSquare className="h-4 w-4 text-indigo-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
                 <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("newChat")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
@@ -512,7 +512,7 @@ export function AppSidebar() {
                 className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
                 variant="default"
               >
-                <Search className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <Search className="h-4 w-4 text-sky-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
                 <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("searchChats")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
@@ -528,7 +528,7 @@ export function AppSidebar() {
                 className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
                 variant="default"
               >
-                <Images className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <Images className="h-4 w-4 text-amber-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
                 <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("library")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
@@ -547,7 +547,7 @@ export function AppSidebar() {
                 )}
                 variant="default"
               >
-                <LayoutGrid className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <LayoutGrid className="h-4 w-4 text-emerald-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
                 <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("gpts")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
@@ -571,7 +571,7 @@ export function AppSidebar() {
                 )}
                 variant="default"
               >
-                <FolderKanban className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <FolderKanban className="h-4 w-4 text-rose-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
                 <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("projects")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
@@ -595,7 +595,7 @@ export function AppSidebar() {
                 )}
                 variant="default"
               >
-                <Palette className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <Palette className="h-4 w-4 text-fuchsia-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
                 <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("design")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
