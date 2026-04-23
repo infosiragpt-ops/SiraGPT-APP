@@ -288,25 +288,25 @@ Liveness (200) or readiness failure (503 if OPENAI_API_KEY missing).
 
 ## Persistence
 
-**Default**: in-memory Maps keyed by `(userId, collection)`. Data dies
-on process restart.
+**Default**: in-memory storage via `rag-store.js` keyed by
+`(userId, collection)`. Data dies on process restart.
 
 **Production**: set `USE_PG_STORE=1` and run migration
 `20260420000000_rag_store`. Adds `rag_chunks` + `rag_triples` tables
 with pgvector cosine indices. See `backend/src/services/rag-store.js`.
 
-**Migration status**: the adapter is in place (`rag-store.js`) and the
-SQL migration is ready to apply. The core `rag-service.js` still uses
-its internal Map for most paths as a transitional measure — the
-cutover is a separate focused change to keep the 300+ test baseline
-green while we verify the pg paths in production.
+**Migration status**: the `rag-service.js` chunk store has been cut over
+to `rag-store.js`, so `USE_PG_STORE=1` now routes ingest / retrieve /
+list / clear / stats through the pgvector-backed adapter. The triple
+graph and GraphRAG community index remain in-memory for now; they can
+be rebuilt from persisted chunks after restart.
 
 ---
 
 ## Roadmap
 
-- [ ] Cut over `rag-service` internal Map to `rag-store` adapter (behind
-      `USE_PG_STORE`) so restart survives.
+- [x] Cut over `rag-service` internal Map to `rag-store` adapter (behind
+      `USE_PG_STORE`) so restart survives for chunk storage.
 - [ ] Frontend: wire the chat input to `/api/se-agents/chat` with a
       "Agent: <intent>" banner when the router picks a specialist.
 - [ ] Per-tier budget caps (FREE / PRO / ENTERPRISE from existing user

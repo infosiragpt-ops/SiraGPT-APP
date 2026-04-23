@@ -67,7 +67,7 @@ registerHistogram('se_agent_duration_ms', {
   labels: ['agent', 'terminatedBy'],
 });
 registerGauge('se_agent_rag_chunks', {
-  help: 'Chunks currently resident in the in-memory RAG store',
+  help: 'Chunks currently resident in the active RAG store backend',
   labels: ['collection'],
 });
 

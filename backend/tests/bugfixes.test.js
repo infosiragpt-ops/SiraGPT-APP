@@ -162,7 +162,7 @@ test('fuseByRRF: identical chunks DO merge (accumulate score)', () => {
 test('rag.retrieve hybrid: preserves distinct chunks even when text matches', async () => {
   const uid = `hy-${Math.random()}`;
   const col = 'hy-dup';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'common fragment about pricing', source: 'a.md' },
     { text: 'common fragment about pricing', source: 'b.md' }, // same text, different source
@@ -265,7 +265,7 @@ test('agent-tools.search_code: still returns identifier matches', async () => {
   const tools = require('../src/services/agents/agent-tools');
   const uid = `sc-${Math.random()}`;
   const col = 'sc-post';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'function createUser(email) { return { email }; }', source: 'a.js' },
     { text: 'function deleteUser(id) { return null; }', source: 'b.js' },

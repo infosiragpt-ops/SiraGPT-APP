@@ -100,7 +100,7 @@ test('code-review: missing findings → empty array, not crash', () => {
 test('code-review: end-to-end with scripted LLM', async () => {
   const uid = `rv-${Math.random()}`;
   const col = 'rv-e2e';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [{ text: 'function f(){ return eval(x); }', source: 'danger.js' }]);
 
   const openai = scriptedChat([
@@ -246,7 +246,7 @@ test('code-gen: strategy forwarded', () => {
 test('static-check: returns no findings when files clean', async () => {
   const uid = `sc-${Math.random()}`;
   const col = 'sc-clean';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [{ text: 'const x = 1;\nconst y = 2;', source: 'clean.js' }]);
   const openai = scriptedChat([]); // should not be called — zero findings
   const r = await staticCheck.check({
@@ -259,7 +259,7 @@ test('static-check: returns no findings when files clean', async () => {
 test('static-check: runs LLM audit when static findings exist', async () => {
   const uid = `sc-${Math.random()}`;
   const col = 'sc-dirty';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [{ text: '// TODO: fix later\nconst x = 1;', source: 'dirty.js' }]);
   const openai = scriptedChat([
     JSON.stringify({
@@ -300,7 +300,7 @@ test('orchestrator.routeIntent: unknown intent → general', async () => {
 test('orchestrator.pipeline: review_and_test runs review then test-gen on flagged files', async () => {
   const uid = `or-${Math.random()}`;
   const col = 'or-pipe';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [{ text: 'function f(){ return 1; }', source: 'svc.js' }]);
 
   // Script:

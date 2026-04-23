@@ -151,10 +151,11 @@ function pgBackend() {
           r.meta ? JSON.stringify(r.meta) : null,
         );
       }
-      const { _count } = await prisma.ragChunks.aggregate({
-        _count: true, where: { userId, collection },
-      }).catch(() => ({ _count: chunks.length }));
-      return { inserted: chunks.length, total: _count };
+      const countRows = await prisma.$queryRawUnsafe(
+        `SELECT COUNT(*)::int AS total FROM rag_chunks WHERE user_id = $1 AND collection = $2`,
+        userId, collection,
+      ).catch(() => [{ total: chunks.length }]);
+      return { inserted: chunks.length, total: Number(countRows?.[0]?.total || chunks.length) };
     },
     async getAll(userId, collection) {
       const rows = await prisma.$queryRawUnsafe(

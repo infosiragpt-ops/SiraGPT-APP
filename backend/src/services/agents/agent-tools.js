@@ -84,7 +84,7 @@ const read_file = {
     if (!src || typeof src !== 'string') return { error: 'missing "source"' };
     const maxChars = Math.max(200, Math.min(Number(args?.max_chars) || 8000, 40000));
 
-    const chunks = rag.getBySource(ctx.userId, ctx.collection, src);
+    const chunks = await rag.getBySource(ctx.userId, ctx.collection, src);
     if (chunks.length === 0) return { error: `no chunks with source="${src}"` };
 
     const prefix = commentPrefixFor(src);
@@ -108,7 +108,7 @@ const list_files = {
   schema: { contains: 'string (optional — filter sources whose id includes this substring, case-insensitive)' },
   async handler(args, ctx) {
     ensureCollection(ctx);
-    let sources = rag.listSources(ctx.userId, ctx.collection);
+    let sources = await rag.listSources(ctx.userId, ctx.collection);
     const needle = typeof args?.contains === 'string' ? args.contains.trim().toLowerCase() : '';
     if (needle) sources = sources.filter(s => String(s.source).toLowerCase().includes(needle));
     return {
@@ -198,7 +198,7 @@ const get_symbol = {
     const { source, symbol } = args || {};
     if (!source || !symbol) return { error: 'missing "source" or "symbol"' };
 
-    const chunks = rag.getBySource(ctx.userId, ctx.collection, source);
+    const chunks = await rag.getBySource(ctx.userId, ctx.collection, source);
     if (chunks.length === 0) return { error: `no content for source="${source}"` };
 
     // Fast path: when the file was ingested via ingestCode, each chunk's

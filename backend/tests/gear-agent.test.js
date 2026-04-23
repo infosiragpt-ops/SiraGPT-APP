@@ -203,7 +203,7 @@ function scriptedOpenAI({ triplesPerHop = [], reasonsPerHop = [], rewritesPerHop
 }
 
 async function seedCollection(uid, col) {
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'Stephen Curry was born in Akron, Ohio in 1988.', source: 'curry.md' },
     { text: 'Dell Curry played for the Cleveland Cavaliers early in his career.', source: 'dell.md' },

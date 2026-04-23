@@ -263,12 +263,12 @@ function buildMemoryBlock(facts) {
   return `\n\n## REMEMBERED ABOUT THE USER\nThese are durable facts carried over from previous conversations. Prefer answers that are consistent with them unless the user contradicts a fact in the current turn (in which case the new information wins and the memory block will be refreshed).\n${lines.join('\n')}`;
 }
 
-function clearUserMemory(userId) {
-  rag.clear(userId, collectionFor(userId));
+async function clearUserMemory(userId) {
+  await rag.clear(userId, collectionFor(userId));
   factMeta.delete(userId);
 }
 
-function memoryStats(userId) {
+async function memoryStats(userId) {
   return rag.stats(userId, collectionFor(userId));
 }
 

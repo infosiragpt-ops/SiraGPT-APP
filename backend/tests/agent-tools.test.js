@@ -129,7 +129,7 @@ test('propose_patch: rejects missing replacement', async () => {
 test('read_file: reads chunks of a source', async () => {
   const uid = `at-${Math.random()}`;
   const col = 'at-read';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'Chunk alpha about foo', source: 'foo.md' },
     { text: 'Chunk beta about foo', source: 'foo.md' },
@@ -144,7 +144,7 @@ test('read_file: reads chunks of a source', async () => {
 test('read_file: unknown source returns error', async () => {
   const uid = `at-${Math.random()}`;
   const col = 'at-read2';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [{ text: 'only this', source: 'a.md' }]);
   const out = await tools.read_file.handler({ source: 'b.md' }, { userId: uid, collection: col });
   assert.ok(out.error);
@@ -153,7 +153,7 @@ test('read_file: unknown source returns error', async () => {
 test('list_files: enumerates distinct sources', async () => {
   const uid = `at-${Math.random()}`;
   const col = 'at-list';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'chunk 1', source: 'alpha.md' },
     { text: 'chunk 2', source: 'beta.md' },
@@ -169,7 +169,7 @@ test('list_files: enumerates distinct sources', async () => {
 test('search_docs: returns ranked snippets', async () => {
   const uid = `at-${Math.random()}`;
   const col = 'at-search';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'pricing plan details per month', source: 'pricing.md' },
     { text: 'refund policy for annual', source: 'refunds.md' },

@@ -1,11 +1,11 @@
 /**
  * rag-service — retrieval-augmented generation primitives.
  *
- * Today's implementation is deliberately in-memory: a Map keyed by
- * (userId, collection) holding an array of { text, embedding, meta }
- * chunks. Retrieval scores every chunk by cosine similarity and
- * returns the top-K. That's enough to validate the product shape and
- * to integrate RAG into the chat flow without waiting on DB migrations.
+ * Storage is delegated to rag-store.js: in-memory by default, or
+ * pgvector-backed when USE_PG_STORE=1 and the migration is applied.
+ * Retrieval still scores chunks in-process by cosine similarity and
+ * returns the top-K; the persistence cutover is about durability and
+ * multi-instance correctness, not a rewrite of ranking semantics.
  *
  * The service exposes three primitives:
  *   - chunk(text, {size, overlap}) — token-approximate splitter
@@ -14,14 +14,10 @@
  *   - retrieve(userId, collection, query, k) — top-K cosine hits
  *   - clear(userId, collection)
  *
- * Why a pluggable shape (and not pgvector directly): production will
- * swap the in-memory store for pgvector or Qdrant. Keeping the API
- * surface narrow (ingest / retrieve / clear) means the swap is a
- * single file change, not a rewrite of the callers.
- *
- * Concretely: swap `store` below for a thin wrapper around
- * `prisma.$executeRaw` against a `documents_embeddings` pgvector
- * table. The callers (routes + ai-service) never see the difference.
+ * Why a pluggable shape (and not pgvector logic inline): callers should
+ * not care whether chunks live in RAM or Postgres. Keeping the API
+ * surface narrow (ingest / retrieve / clear) lets the durability layer
+ * evolve without rewriting routes, agents, or chat flows.
  */
 
 const OpenAI = require('openai');
@@ -36,6 +32,7 @@ const tripleExtractor = require('./triple-extractor');
 const { diverseTripleBeamSearch, flattenBeamsBFS } = require('./diverse-beam-search');
 const gistMemory = require('./gist-memory');
 const { runWithLock } = require('./agents/mutex');
+const ragStore = require('./rag-store');
 
 const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
@@ -50,8 +47,6 @@ const MAX_COLLECTION_CHUNKS = 2000;              // safety cap per (user, collec
 const OVERFETCH_MULTIPLIER = 3;
 const OVERFETCH_FLOOR = 12;
 const OVERFETCH_CEILING = 40;
-
-const store = new Map(); // key = `${userId}:${collection}` → Array<Chunk>
 
 function storeKey(userId, collection) {
   return `${userId || 'anon'}:${collection || 'default'}`;
@@ -178,12 +173,14 @@ async function ingest(userId, collection, docs, opts = {}) {
   const vectors = await embed(allChunks.map(c => c.text));
   const key = storeKey(userId, collection);
 
-  return runWithLock(`rag:${key}`, () => {
-    const existing = store.get(key) || [];
-    const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
-    const trimmed = evictAndCleanOrphans(userId, collection, merged);
-    store.set(key, trimmed);
-    return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
+  return runWithLock(`rag:${key}`, async () => {
+    await ragStore.appendChunks(
+      userId,
+      collection,
+      allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })),
+    );
+    const { totalChunks } = await evictAndCleanOrphans(userId, collection);
+    return { chunksAdded: allChunks.length, totalChunks };
   });
 }
 
@@ -198,32 +195,19 @@ async function ingest(userId, collection, docs, opts = {}) {
  * backing chunk. This helper does the eviction AND scrubs the graph
  * for any source that no longer has a chunk in the collection.
  *
- * Returns the trimmed array.
+ * Returns `{ removed, removedSources, totalChunks }`.
  */
-function evictAndCleanOrphans(userId, collection, merged) {
-  if (merged.length <= MAX_COLLECTION_CHUNKS) return merged;
-
-  const trimmed = merged.slice(merged.length - MAX_COLLECTION_CHUNKS);
-
-  // Compare source sets; any source present BEFORE but not AFTER gets
-  // its triples cleaned.
-  const stillPresent = new Set();
-  for (const e of trimmed) if (e.source) stillPresent.add(e.source);
-
-  const evictedSources = new Set();
-  for (let i = 0; i < merged.length - trimmed.length; i++) {
-    const src = merged[i].source;
-    if (src && !stillPresent.has(src)) evictedSources.add(src);
-  }
-
-  if (evictedSources.size > 0) {
+async function evictAndCleanOrphans(userId, collection) {
+  const trimmed = await ragStore.trim(userId, collection, MAX_COLLECTION_CHUNKS);
+  if (trimmed.removedSources.length > 0) {
     // Lazy-require to avoid the circular dep reversing on us.
     const tg = require('./triple-graph');
-    for (const src of evictedSources) {
+    for (const src of trimmed.removedSources) {
       tg.clearSource(userId, collection, src);
     }
   }
-  return trimmed;
+  const stats = await ragStore.stats(userId, collection);
+  return { ...trimmed, totalChunks: stats.chunks };
 }
 
 /**
@@ -249,7 +233,7 @@ function evictAndCleanOrphans(userId, collection, merged) {
 async function retrieve(userId, collection, query, k = 5, opts = {}) {
   if (!query || typeof query !== 'string') return [];
   const key = storeKey(userId, collection);
-  const entries = store.get(key);
+  const entries = await ragStore.getAll(userId, collection);
   if (!entries || entries.length === 0) return [];
 
   const {
@@ -667,12 +651,14 @@ async function ingestCode(userId, collection, files, opts = {}) {
   const vectors = await embed(allChunks.map(c => c.text));
   const key = storeKey(userId, collection);
 
-  return runWithLock(`rag:${key}`, () => {
-    const existing = store.get(key) || [];
-    const merged = existing.concat(allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })));
-    const trimmed = evictAndCleanOrphans(userId, collection, merged);
-    store.set(key, trimmed);
-    return { chunksAdded: allChunks.length, totalChunks: trimmed.length };
+  return runWithLock(`rag:${key}`, async () => {
+    await ragStore.appendChunks(
+      userId,
+      collection,
+      allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })),
+    );
+    const { totalChunks } = await evictAndCleanOrphans(userId, collection);
+    return { chunksAdded: allChunks.length, totalChunks };
   });
 }
 
@@ -692,8 +678,7 @@ async function ingestCode(userId, collection, files, opts = {}) {
  * shared OpenAI client so triple quality is comparable to the paper's.
  */
 async function ingestTriples(userId, collection, { openai = null, sources = null, model = 'gpt-4o-mini' } = {}) {
-  const key = storeKey(userId, collection);
-  const entries = store.get(key) || [];
+  const entries = await ragStore.getAll(userId, collection);
   if (entries.length === 0) return { chunksScanned: 0, triplesAdded: 0, totalTriples: 0 };
 
   const filter = Array.isArray(sources) && sources.length > 0 ? new Set(sources) : null;
@@ -731,25 +716,8 @@ async function ingestTriples(userId, collection, { openai = null, sources = null
  * Returns `[{ source, title, chunks, preview, firstSeen }]` sorted by
  * source for stable output.
  */
-function listSources(userId, collection) {
-  const entries = store.get(storeKey(userId, collection)) || [];
-  if (entries.length === 0) return [];
-  const bySource = new Map();
-  for (const e of entries) {
-    const src = e.source || '(no-source)';
-    let rec = bySource.get(src);
-    if (!rec) {
-      rec = {
-        source: src,
-        title: e.title || null,
-        chunks: 0,
-        preview: (e.text || '').slice(0, 120),
-      };
-      bySource.set(src, rec);
-    }
-    rec.chunks++;
-  }
-  return [...bySource.values()].sort((a, b) => String(a.source).localeCompare(String(b.source)));
+async function listSources(userId, collection) {
+  return ragStore.listSources(userId, collection);
 }
 
 /**
@@ -760,27 +728,24 @@ function listSources(userId, collection) {
  *
  * Returns [] when the source doesn't exist in the collection.
  */
-function getBySource(userId, collection, source) {
+async function getBySource(userId, collection, source) {
   if (!source) return [];
-  const entries = store.get(storeKey(userId, collection)) || [];
-  const out = [];
-  for (const e of entries) {
-    if (e.source === source) {
-      const { embedding, ...rest } = e;
-      out.push(rest);
-    }
-  }
-  return out;
+  const entries = await ragStore.getBySource(userId, collection, source);
+  return entries.map(({ embedding, ...rest }) => rest);
 }
 
-function clear(userId, collection) {
-  store.delete(storeKey(userId, collection));
+async function clear(userId, collection) {
+  await ragStore.clearCollection(userId, collection);
   tripleGraph.clear(userId, collection);
 }
 
-function stats(userId, collection) {
-  const entries = store.get(storeKey(userId, collection));
-  return { chunks: entries ? entries.length : 0, dim: EMBED_DIM };
+async function stats(userId, collection) {
+  const current = await ragStore.stats(userId, collection);
+  return {
+    chunks: current?.chunks || 0,
+    sources: current?.sources || 0,
+    dim: current?.dim || EMBED_DIM,
+  };
 }
 
 module.exports = {

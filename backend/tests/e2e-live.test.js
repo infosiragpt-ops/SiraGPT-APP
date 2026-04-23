@@ -65,7 +65,7 @@ export function subtract(a: number, b: number): number {
 `;
 
   test('e2e-live: seed a tiny code collection', async () => {
-    rag.clear(uid, col);
+    await rag.clear(uid, col);
     const r = await rag.ingestCode(uid, col, [{
       filename: 'math.ts', content: SRC, language: 'typescript',
     }]);

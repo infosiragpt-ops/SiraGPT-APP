@@ -149,9 +149,9 @@ router.get(
   '/stats',
   authenticateToken,
   [query('collection').optional().isString()],
-  (req, res) => {
+  async (req, res) => {
     const collection = req.query.collection || 'default';
-    res.json({ ok: true, collection, ...rag.stats(req.user.id, collection) });
+    res.json({ ok: true, collection, ...(await rag.stats(req.user.id, collection)) });
   }
 );
 
@@ -249,8 +249,8 @@ router.post(
 );
 
 /** DELETE /api/rag/:collection */
-router.delete('/:collection', authenticateToken, (req, res) => {
-  rag.clear(req.user.id, req.params.collection);
+router.delete('/:collection', authenticateToken, async (req, res) => {
+  await rag.clear(req.user.id, req.params.collection);
   res.json({ ok: true, collection: req.params.collection });
 });
 

@@ -234,7 +234,7 @@ test('tripleGraph.linkTriple: valid triple still works', async () => {
 test('rag.passageLink: retrieves without BM25 for short triple sentence', async () => {
   const uid = `pl-${Math.random()}`;
   const col = 'pl';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'Stephen Curry is a point guard for the Golden State Warriors.', source: 'curry.md' },
     { text: 'The Warriors won the NBA championship in 2022.', source: 'title.md' },
@@ -328,7 +328,7 @@ test('orchestrator.consensus: requires numAgents >= 2', async () => {
 test('orchestrator.consensus: picks the candidate with fewest severe findings', async () => {
   const uid = `cons-${Math.random()}`;
   const col = 'cons';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
 
   // Script each tool call path. We need code-gen to return 3 different
   // code drafts, then code-review to return different finding sets.

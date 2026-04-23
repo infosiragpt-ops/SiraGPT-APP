@@ -52,7 +52,7 @@ const rag = require('../src/services/rag-service');
 test('hybrid retrieval: doc matching BOTH keyword and semantic wins', async () => {
   const uid = `test-${Math.random()}`;
   const col = 'hybrid-test';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
 
   await rag.ingest(uid, col, [
     { text: 'The pricing plan for enterprise customers starts at five thousand dollars monthly.' },
@@ -77,7 +77,7 @@ test('hybrid retrieval: doc matching BOTH keyword and semantic wins', async () =
 test('hybrid retrieval: returned hits do not leak internal fields', async () => {
   const uid = `test-${Math.random()}`;
   const col = 'hybrid-leak';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
 
   await rag.ingest(uid, col, [
     { text: 'alpha beta gamma' },
@@ -96,7 +96,7 @@ test('hybrid retrieval: returned hits do not leak internal fields', async () => 
 test('cosine-only path still works (regression guard)', async () => {
   const uid = `test-${Math.random()}`;
   const col = 'cosine-only';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
 
   await rag.ingest(uid, col, [
     { text: 'cats are mammals' },

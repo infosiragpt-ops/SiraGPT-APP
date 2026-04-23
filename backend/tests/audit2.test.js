@@ -48,7 +48,7 @@ const gear = require('../src/services/gear-agent');
 test('rag + tripleGraph: eviction of a source drops its triples from the graph', async () => {
   const uid = `orph-${Math.random()}`;
   const col = 'orph-test';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
 
   // Shrink the cap for this test. We can't change the const, so we
   // simulate eviction by calling listSources + clearSource directly
@@ -121,7 +121,7 @@ test('reranker cache: does not grow beyond CACHE_MAX even when nothing expires',
 test('agent-tools.read_file: uses # prefix for .py files', async () => {
   const uid = `rf-py-${Math.random()}`;
   const col = 'rf-py';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   // Simulate ingestCode output by adding chunks with title metadata.
   await rag.ingestCode(uid, col, [{
     filename: 'foo.py',

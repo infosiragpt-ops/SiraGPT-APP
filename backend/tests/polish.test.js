@@ -51,13 +51,13 @@ const logAgent = require('../src/services/agents/log-analysis-agent');
 test('rag.listSources: enumerates distinct sources deterministically', async () => {
   const uid = `p-${Math.random()}`;
   const col = 'p-list';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'alpha 1', source: 'a.md' },
     { text: 'alpha 2', source: 'a.md' },
     { text: 'beta', source: 'b.md' },
   ]);
-  const out = rag.listSources(uid, col);
+  const out = await rag.listSources(uid, col);
   assert.equal(out.length, 2);
   // Alphabetically sorted for stability.
   assert.equal(out[0].source, 'a.md');
@@ -66,22 +66,22 @@ test('rag.listSources: enumerates distinct sources deterministically', async () 
   assert.equal(out[1].chunks, 1);
 });
 
-test('rag.listSources: empty collection returns []', () => {
+test('rag.listSources: empty collection returns []', async () => {
   const uid = `p-${Math.random()}`;
-  rag.clear(uid, 'empty');
-  assert.deepEqual(rag.listSources(uid, 'empty'), []);
+  await rag.clear(uid, 'empty');
+  assert.deepEqual(await rag.listSources(uid, 'empty'), []);
 });
 
 test('rag.getBySource: returns all chunks for one source, in ingest order', async () => {
   const uid = `p-${Math.random()}`;
   const col = 'p-get';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'first chunk', source: 'x.md' },
     { text: 'second chunk', source: 'x.md' },
     { text: 'other', source: 'y.md' },
   ]);
-  const chunks = rag.getBySource(uid, col, 'x.md');
+  const chunks = await rag.getBySource(uid, col, 'x.md');
   assert.equal(chunks.length, 2);
   assert.equal(chunks[0].text, 'first chunk');
   assert.equal(chunks[1].text, 'second chunk');
@@ -92,9 +92,9 @@ test('rag.getBySource: returns all chunks for one source, in ingest order', asyn
 test('rag.getBySource: unknown source returns []', async () => {
   const uid = `p-${Math.random()}`;
   const col = 'p-get2';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [{ text: 't', source: 'a.md' }]);
-  assert.deepEqual(rag.getBySource(uid, col, 'nope'), []);
+  assert.deepEqual(await rag.getBySource(uid, col, 'nope'), []);
 });
 
 // ─── agent-core.findBalancedJSON ───────────────────────────────────────────
@@ -314,7 +314,7 @@ test('static_checks: empty catch block flagged in JS', async () => {
 test('read_file: returns full text for an ingested file', async () => {
   const uid = `p-${Math.random()}`;
   const col = 'p-rf';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [{ text: 'complete file content', source: 'only.md' }]);
   const out = await tools.read_file.handler({ source: 'only.md' }, { userId: uid, collection: col });
   assert.ok(out.text.includes('complete file content'));
@@ -324,7 +324,7 @@ test('read_file: returns full text for an ingested file', async () => {
 test('read_file: missing source returns error', async () => {
   const uid = `p-${Math.random()}`;
   const col = 'p-rf2';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [{ text: 'x', source: 'a.md' }]);
   const out = await tools.read_file.handler({ source: 'nope.md' }, { userId: uid, collection: col });
   assert.ok(out.error);
@@ -333,7 +333,7 @@ test('read_file: missing source returns error', async () => {
 test('list_files: returns deterministic alphabetical list', async () => {
   const uid = `p-${Math.random()}`;
   const col = 'p-lf';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 'c', source: 'gamma.md' },
     { text: 'a', source: 'alpha.md' },
@@ -347,7 +347,7 @@ test('list_files: returns deterministic alphabetical list', async () => {
 test('list_files: contains filter narrows results', async () => {
   const uid = `p-${Math.random()}`;
   const col = 'p-lf2';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   await rag.ingest(uid, col, [
     { text: 't', source: 'src/auth/login.ts' },
     { text: 't', source: 'src/auth/logout.ts' },
@@ -360,7 +360,7 @@ test('list_files: contains filter narrows results', async () => {
 test('get_symbol: fast path uses ingestCode metadata for correct line numbers', async () => {
   const uid = `p-${Math.random()}`;
   const col = 'p-gs';
-  rag.clear(uid, col);
+  await rag.clear(uid, col);
   const src = `// some preamble
 import { x } from 'y';
 
