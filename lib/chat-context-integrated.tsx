@@ -476,6 +476,81 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setIsStreaming(false);
           setCurrentStreamId(null);
 
+        } else if (intent === 'viz') {
+          // Data-visualisation dispatch. The server picks the best
+          // renderer (matplotlib PNG for static reports, Plotly for
+          // interactive, Chart.js / Recharts for dashboards, D3 for
+          // custom visuals, Mermaid for diagrams) and emits an
+          // assistant message with a single `viz`-typed file. Inline
+          // rendering is handled by <VizArtifactDisplay/>.
+          const controller = new AbortController();
+          abortControllerRef.current = controller;
+          let finalMsg: any = null;
+          let lastStage = 'Generando visualización';
+          let lastPct = 0;
+          const renderProgress = () => {
+            const filled = Math.max(0, Math.min(10, Math.floor(lastPct / 10)));
+            const bar = '▰'.repeat(filled) + '▱'.repeat(10 - filled);
+            const body = `📊  **${lastStage}**\n\n${bar}  ${lastPct}%`;
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id ? { ...m, content: body } : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          };
+          try {
+            await apiClient.generateVizStream(
+              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              (ev: any) => {
+                if (controller.signal.aborted) return;
+                if (ev.type === 'stage') {
+                  lastStage = ev.label || lastStage;
+                  lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
+                  renderProgress();
+                } else if (ev.type === 'final') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: ev.content || 'Listo.',
+                    files: ev.file ? [ev.file] : [],
+                  };
+                } else if (ev.type === 'error') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: `No pude generar la visualización: ${ev.error || 'error desconocido'}.`,
+                    files: [],
+                  };
+                }
+              },
+              { signal: controller.signal },
+            );
+          } catch (err: any) {
+            if (err?.name !== 'AbortError') {
+              finalMsg = finalMsg || {
+                id: aiMessagePlaceholder.id,
+                role: 'ASSISTANT',
+                content: `No pude generar la visualización: ${err?.message || 'error de red'}.`,
+                files: [],
+              };
+            }
+          }
+          if (finalMsg) {
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id ? finalMsg : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          }
+          abortControllerRef.current = null;
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+
         } else if (intent === 'math') {
           // Math / science solver via SSE. The backend streams staging
           // events ("Analizando el problema → Consultando modelo →

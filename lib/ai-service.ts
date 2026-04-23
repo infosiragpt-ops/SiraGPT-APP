@@ -138,6 +138,16 @@ export class AIService {
     if (/\b(integral|integrar|derivada|derivar|d\/dx|ecuaci[oó]n|resuelve(\s+la|\s+el)?|calcul[ae](\s+la|\s+el)?|cronbach|alpha\s+de\s+cronbach|autovalor|eigenval|matriz\s+(inversa|transpuesta|determinante)|regresi[oó]n|chi[- ]?cuadrado|anova|t[- ]?test|p[- ]valor|probabilidad\s+(de|binomial|normal|poisson)|varianza|desviaci[oó]n\s+est[aá]ndar|media\s+aritm|desv(iaci[oó]n)?\s+t[ií]pica|l[ií]mite\s+cuando|serie\s+de\s+fourier|transformada\s+de\s+laplace|sistema\s+de\s+ecuaciones|factorizar|simplifica\s+(la\s+)?expresi[oó]n|despejar|funci[oó]n\s+(derivada|continua|inversa))\b/i.test(lc)) {
       return 'math';
     }
+    // Viz intent — charts, plots and technical diagrams. Broader than
+    // the legacy 'chart' intent (which goes through OpenAI Code
+    // Interpreter and returns PNG only): 'viz' routes through the
+    // new /api/viz SSE pipeline that can emit matplotlib PNG, Plotly
+    // interactive, Chart.js, Recharts, D3, or Mermaid based on what
+    // best fits the user's brief.
+    if (/\b(gr[aá]fic[oa]s?|plot|plotear|histogram(a|as)?|pareto|ishikawa|fishbone|espina\s+de\s+pescado|box[- ]?plot|diagrama\s+de\s+caja|scatter|dispersi[oó]n|s[- ]?curve|curva\s+s|earned\s+value|gantt|sankey|treemap|mapa\s+de\s+[aá]rbol|heatmap|mapa\s+de\s+calor|flujo\s+de\s+(datos|procesos?)|diagrama\s+(de\s+)?(flujo|ER|entidad[- ]relaci[oó]n|clases?|secuencia|estados?|uml|jerarqu[ií]a|jornada|journey)|dashboard\s+(de|para|con)|visuali(c|z)a[rc](i[oó]n)?|torta|pastel|barras\s+apiladas?)\b/i.test(lc)
+        || /\b(grafica|grafic[ao]|grafico)(me|r)?\b/i.test(lc)) {
+      return 'viz';
+    }
 
     try {
 
@@ -161,6 +171,7 @@ export class AIService {
 - 'chart': Creating charts or graphs. Examples: "create a bar chart", "make a pie graph".
 - 'figma': Creating flowcharts, process diagrams,sequence diagrams, class diagrams, state diagrams, ER diagrams, user journey diagrams, git graphs, or design diagrams. Examples: "create a flowchart of login flow", "make a process diagram", "design a workflow".
 - 'plan': Creating architectural FLOOR PLANS / blueprints of buildings, houses, apartments, rooms. The output is a CAD/DXF drawing with walls, doors, windows, dimensions. Examples in multiple languages: "crea el plano de una casa", "dibújame un plano arquitectónico", "blueprint for a 3 bedroom house", "planta de un departamento 80 m2", "floor plan of an office", "plano de una vivienda con 2 baños". Do NOT classify generic "house" conversation as 'plan' — only when the user is explicitly asking for a drawing / plano / blueprint / floor plan / planta arquitectónica.
+- 'viz': Building a chart, plot, or technical diagram. Covers S-curve Earned Value charts, Pareto diagrams, Ishikawa fishbone diagrams, histograms, scatter + regression, box plots, interactive dashboards, heatmaps, sankey, treemaps, flowcharts, ER diagrams, UML class/sequence/state diagrams, Gantt charts, user-journey diagrams. Examples: "dibuja un diagrama de Pareto con estos datos", "plot a histogram of weights", "interactive scatter with hover", "flowchart del proceso de onboarding", "diagrama ER de un e-commerce", "Gantt de 5 fases del proyecto", "S-curve de Earned Value". If the user wants to SEE data rendered as a picture / plot / diagram → 'viz'. If they want to COMPUTE a statistic → 'math'.
 - 'math': Solving a mathematics, statistics, or quantitative-science problem that benefits from LaTeX formulas and (optionally) numerical Python execution. Examples: "resuelve la integral de x^2·sin(x) dx por partes", "calcula el Cronbach's alpha de [...]", "autovalores de la matriz [[2,1],[1,3]]", "probabilidad binomial n=10 p=0.3 k=4", "derivada parcial de x^2·y respecto a y", "solve the system 2x + 3y = 12, x - y = 1", "factoriza x^3 - 6x^2 + 11x - 6", "limite cuando x->0 de sin(x)/x". Generic "what is 2+2" stays 'text'. Only route to 'math' when the problem has symbolic or numerical content worth showing with LaTeX or running Python on.
 - 'webdev': Building websites or UI components. Examples: "build a login page", "create a React component".
 - 'text': For all other general conversation, questions, and text generation. 
@@ -229,7 +240,7 @@ Respond with only one word.
       const intent = data.choices[0].message.content.toLowerCase().trim();
       console.log('intent FROM OPEN AI', intent);
 
-      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'plan', 'math', 'chart', 'webdev', 'text'];
+      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'plan', 'math', 'viz', 'chart', 'webdev', 'text'];
       if (validIntents.includes(intent)) {
         return intent;
       }
