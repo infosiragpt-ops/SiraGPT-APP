@@ -3612,6 +3612,15 @@ REWRITTEN TEXT:`;
             await addMessage(msg, filesToSend, chatToUpdate, true);
           }
           break;
+        case 'web_search':
+          // The intent classifier already decided this turn is an
+          // information-seeking request. Run the agentic pipeline
+          // automatically — no explicit Web Search toggle required.
+          // handleWebSearch owns the SVG progress UI, the Stop
+          // button wiring, and the persistence; it also creates a
+          // chat if `activeChat` is missing.
+          await handleWebSearch(msg);
+          break;
         default:
           if (isNewChat) {
             await createNewChat('text', msg, filesToSend);

@@ -315,6 +315,77 @@ async function searchSciELO(query, opts = {}) {
   });
 }
 
+// ─── Scopus (Elsevier) ───────────────────────────────────────────────────
+// https://dev.elsevier.com/api_docs.html
+//
+// Requires a valid SCOPUS_API_KEY (plus optional SCOPUS_INSTTOKEN) in
+// the environment. Without a key we soft-skip — the rest of the
+// agentic pool still runs.
+
+async function searchScopus(query, opts = {}) {
+  const apiKey = opts.apiKey || process.env.SCOPUS_API_KEY;
+  if (!apiKey) return [];
+  const insttoken = opts.insttoken || process.env.SCOPUS_INSTTOKEN;
+  const count = Math.min(200, Math.max(1, opts.maxResults ?? DEFAULT_MAX_RESULTS));
+  const start = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
+
+  const url = new URL("https://api.elsevier.com/content/search/scopus");
+  url.searchParams.set("query", query);
+  url.searchParams.set("count", String(count));
+  if (start > 0) url.searchParams.set("start", String(start));
+  url.searchParams.set("view", "STANDARD");
+  url.searchParams.set("sort", "relevancy");
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs || DEFAULT_TIMEOUT_MS);
+  let body;
+  try {
+    const headers = {
+      Accept: "application/json",
+      "User-Agent": USER_AGENT,
+      "X-ELS-APIKey": apiKey,
+    };
+    if (insttoken) headers["X-ELS-Insttoken"] = insttoken;
+    const res = await fetch(url.toString(), { signal: controller.signal, headers });
+    if (!res.ok) return [];
+    body = await res.json();
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const entries = body?.["search-results"]?.entry;
+  if (!Array.isArray(entries)) return [];
+
+  return entries.map((entry, i) => {
+    const doi = entry?.["prism:doi"];
+    const year = typeof entry?.["prism:coverDate"] === "string"
+      ? Number(entry["prism:coverDate"].slice(0, 4))
+      : undefined;
+    const authors = Array.isArray(entry?.author)
+      ? entry.author.slice(0, 8).map(a => a?.authname || a?.["ce:indexed-name"]).filter(Boolean)
+      : (entry?.["dc:creator"] ? [entry["dc:creator"]] : []);
+    const scopusLink = Array.isArray(entry?.link)
+      ? entry.link.find(l => l?.["@ref"] === "scopus")?.["@href"]
+      : undefined;
+    return {
+      source: "scopus",
+      title: entry?.["dc:title"] || "Untitled",
+      authors,
+      year: safeInt(year),
+      journal: entry?.["prism:publicationName"],
+      doi,
+      url: scopusLink || (doi ? `https://doi.org/${doi}` : (entry?.["prism:url"] || "")),
+      abstract: undefined, // STANDARD view doesn't include abstract
+      citationCount: entry?.["citedby-count"] ? Number(entry["citedby-count"]) : undefined,
+      openAccess: entry?.openaccess === "1" || entry?.openaccess === 1,
+      providerRank: i + start,
+      raw: entry,
+    };
+  });
+}
+
 // ─── Registry + dispatcher ───────────────────────────────────────────────
 
 const REGISTRY = {
@@ -324,6 +395,7 @@ const REGISTRY = {
   pubmed: searchPubMed,
   doaj: searchDOAJ,
   scielo: searchSciELO,
+  scopus: searchScopus,
 };
 
 /**
@@ -335,11 +407,11 @@ const REGISTRY = {
  * ignore it and return the same first page (the agentic batcher
  * dedupes anyway).
  */
-async function retrieveFromProvider({ source, query, maxResults, timeoutMs, mailto, offset, language }) {
+async function retrieveFromProvider({ source, query, maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken }) {
   const fn = REGISTRY[source];
   if (!fn) return [];
   try {
-    const out = await fn(query, { maxResults, timeoutMs, mailto, offset, language });
+    const out = await fn(query, { maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken });
     return Array.isArray(out) ? out : [];
   } catch {
     return [];
@@ -354,6 +426,7 @@ module.exports = {
   searchPubMed,
   searchDOAJ,
   searchSciELO,
+  searchScopus,
   reconstructAbstract,
   normaliseAuthors,
   REGISTRY,

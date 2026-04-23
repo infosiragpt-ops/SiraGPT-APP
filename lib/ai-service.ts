@@ -178,7 +178,13 @@ export class AIService {
 
 - 'gmail': Sending, reading, or managing emails. Examples: "send an email to hamza", "read my last 5 emails", "enviar un correo electrónico".
 - 'google_services': Interacting with Google Calendar or Drive. Examples: "show my meetings for tomorrow", "find my marketing presentation on Drive", "mostrar mis eventos del calendario".
-- 'web_search': Finding information on the internet. Examples: "who is the president of France?", "what is the weather today?", "¿quién es el presidente de Francia?".
+- 'web_search': Any request that needs REAL external sources — academic papers, news, facts that could be out of the LLM's training cutoff, or anything where the user explicitly asks for references/citations. Triggers the multi-provider agentic pipeline (Scopus, OpenAlex, SciELO, Semantic Scholar, Crossref, PubMed, DOAJ). Examples:
+  * "busca 10 artículos sobre embarazo adolescente" / "dame 20 fuentes sobre alfa de Cronbach"
+  * "find papers on gene editing crispr 2024" / "give me sources for systematic review on SMED"
+  * "¿quién es el presidente de Francia?" / "who is the president of France?"
+  * "what's the latest news on OpenAI?" / "últimas noticias de la NASA"
+  * "investiga sobre X" / "investigate X" / "research X"
+  * Any question where the user wants citations, a literature scan, or an answer grounded in real web/scholarly sources. If in doubt AND the request asks for information the LLM cannot safely answer from memory, prefer 'web_search' over 'text'.
 - 'image': Generating images. Examples: "create an image of a sunset", "genera una imagen de un gato".
 - 'video': Generating videos. Examples: "make a video of a beach", "crea un video de la ciudad".
 - 'ppt': Creating PowerPoint presentations. Examples in multiple languages:

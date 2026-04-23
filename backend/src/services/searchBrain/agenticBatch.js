@@ -38,7 +38,12 @@ const { callLLM } = require("./llmClient");
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_TARGET = 500;
 const DEFAULT_TOP_K = 25;
-const DEFAULT_PROVIDERS = ["openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"];
+// Default academic pool for the agentic batcher. Scopus sits first
+// when a SCOPUS_API_KEY is present (so its relevance-sorted results
+// seed the top of the ranked pool); the provider soft-skips to []
+// when no key is configured, and the rest of the pool carries the
+// run.
+const DEFAULT_PROVIDERS = ["scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"];
 const DEFAULT_TIMEOUT_MS = 12000;
 const MAX_PROVIDER_ERRORS = 2;
 const HARD_ROUND_CAP = 60; // safety: never spin more rounds than this
