@@ -1588,11 +1588,15 @@ const NavbarModelSelector = ({
 };
 
 export default function ChatInterface() {
-  return (
-    <SidebarProvider>
-      <ChatInterfaceContent />
-    </SidebarProvider>
-  )
+  // NB: no local SidebarProvider here. The app-wrapper already wraps
+  // every chat-mode page in one (app-wrapper.tsx → AppShell →
+  // AppSidebar + SidebarInset), and THAT is the provider backing the
+  // sidebar the user actually sees. Declaring a second provider here
+  // made useSidebar() inside ChatInterfaceContent resolve to the
+  // nearer-but-invisible inner provider — so setOpen(false) from our
+  // auto-collapse effect was toggling the wrong store and the visible
+  // sidebar never moved.
+  return <ChatInterfaceContent />
 }
 
 function ChatInterfaceContent() {
