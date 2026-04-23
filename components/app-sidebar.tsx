@@ -140,7 +140,64 @@ export function AppSidebar() {
     pagination
   } = useChat()
   const router = useRouter()
+  // NB: pathname is declared here (not further down like the original)
+  // because the navigation helpers below depend on it. The later
+  // `const pathname = usePathname()` line is intentionally removed as
+  // part of the same change.
   const pathname = usePathname()
+
+  // ────────────────────────────────────────────────────────────
+  // Perceived-latency fixes for sidebar navigation.
+  //
+  // Problem: clicking "GPTs" (or any other nav item that fires
+  // router.push synchronously) felt sluggish because Next needs to
+  // fetch the route's JS + RSC payload before the new page paints.
+  // Fix is 3-layer:
+  //   1. On mount, prefetch every top-level destination. By the time
+  //      the user clicks, the payload is already warm in memory.
+  //   2. onMouseEnter additionally prefetches (covers hot-reloaded
+  //      routes + lets React be opportunistic about data fetches
+  //      kicked off by the target's server components).
+  //   3. router.push runs inside React.startTransition so the click
+  //      feels instant visually: `isPending` flips true immediately
+  //      and the pressed-state styling (lower opacity + spinner dot)
+  //      renders in the same frame.
+  // ────────────────────────────────────────────────────────────
+  const SIDEBAR_ROUTES = React.useMemo(
+    () => [
+      '/chat', '/gpts', '/projects', '/design', '/library',
+      '/billing', '/settings', '/profile',
+    ],
+    [],
+  )
+  React.useEffect(() => {
+    // Fire-and-forget. Next.js dedupes internally, so repeated
+    // prefetches from re-mounts are cheap.
+    for (const p of SIDEBAR_ROUTES) {
+      try { router.prefetch(p) } catch { /* ignore */ }
+    }
+  }, [router, SIDEBAR_ROUTES])
+
+  const [navPending, startNavTransition] = React.useTransition()
+  const [pendingHref, setPendingHref] = React.useState<string | null>(null)
+  const navigate = React.useCallback((href: string) => {
+    // If we're already on the route, nothing to do. Keeps click on
+    // "GPTs" while already on /gpts from triggering a needless
+    // re-render + skeleton flash.
+    if (pathname === href || pathname.startsWith(href + '/')) return
+    setPendingHref(href)
+    startNavTransition(() => { router.push(href) })
+  }, [pathname, router])
+  // Clear the pending marker once navigation settled. pathname is
+  // the trigger: it changes the frame after router.push resolves.
+  React.useEffect(() => {
+    if (!navPending && pendingHref && (pathname === pendingHref || pathname.startsWith(pendingHref + '/'))) {
+      setPendingHref(null)
+    }
+  }, [navPending, pendingHref, pathname])
+  const prefetchOnHover = React.useCallback((href: string) => {
+    try { router.prefetch(href) } catch { /* ignore */ }
+  }, [router])
   const [selectedType, setSelectedType] = React.useState("Text Chat")
   const { state, toggleSidebar, isMobile, setOpenMobile } = useSidebar()
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
@@ -265,21 +322,10 @@ export function AppSidebar() {
     setUpgradeOpen(true)
   }
 
-  const handleGPTsClick = () => {
-    router.push("/gpts")
-  }
-
-  const handleProjectsClick = () => {
-    router.push("/projects")
-  }
-
-  const handleDesignClick = () => {
-    router.push("/design")
-  }
-
-  const handleLibraryClick = () => {
-    router.push("/library")
-  }
+  const handleGPTsClick = () => navigate("/gpts")
+  const handleProjectsClick = () => navigate("/projects")
+  const handleDesignClick = () => navigate("/design")
+  const handleLibraryClick = () => navigate("/library")
 
   const handleChatClick = (chatId: string) => {
     selectChat(chatId)
@@ -525,7 +571,11 @@ export function AppSidebar() {
             <TooltipTrigger asChild>
               <SidebarMenuButton
                 onClick={handleLibraryClick}
-                className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
+                onMouseEnter={() => prefetchOnHover('/library')}
+                className={cn(
+                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
+                  pendingHref === '/library' && "opacity-70"
+                )}
                 variant="default"
               >
                 <Images className="h-4 w-4 text-amber-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
@@ -541,9 +591,11 @@ export function AppSidebar() {
             <TooltipTrigger asChild>
               <SidebarMenuButton
                 onClick={handleGPTsClick}
+                onMouseEnter={() => prefetchOnHover('/gpts')}
                 className={cn(
                   "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnGPTsPage && "bg-accent text-accent-foreground"
+                  isOnGPTsPage && "bg-accent text-accent-foreground",
+                  pendingHref === '/gpts' && "opacity-70"
                 )}
                 variant="default"
               >
@@ -565,9 +617,11 @@ export function AppSidebar() {
             <TooltipTrigger asChild>
               <SidebarMenuButton
                 onClick={handleProjectsClick}
+                onMouseEnter={() => prefetchOnHover('/projects')}
                 className={cn(
                   "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnProjectsPage && "bg-accent text-accent-foreground"
+                  isOnProjectsPage && "bg-accent text-accent-foreground",
+                  pendingHref === '/projects' && "opacity-70"
                 )}
                 variant="default"
               >
@@ -589,9 +643,11 @@ export function AppSidebar() {
             <TooltipTrigger asChild>
               <SidebarMenuButton
                 onClick={handleDesignClick}
+                onMouseEnter={() => prefetchOnHover('/design')}
                 className={cn(
                   "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnDesignPage && "bg-accent text-accent-foreground"
+                  isOnDesignPage && "bg-accent text-accent-foreground",
+                  pendingHref === '/design' && "opacity-70"
                 )}
                 variant="default"
               >
@@ -886,7 +942,8 @@ export function AppSidebar() {
                   )}
                 >
                   <DropdownMenuItem
-                    onClick={() => router.push("/profile")}
+                    onClick={() => navigate("/profile")}
+                    onMouseEnter={() => prefetchOnHover("/profile")}
                     className={LG_ITEM}
                   >
                     <User className="mr-2 h-4 w-4" />
@@ -894,21 +951,24 @@ export function AppSidebar() {
                   </DropdownMenuItem>
 
                   <DropdownMenuItem
-                    onClick={() => router.push("/billing")}
+                    onClick={() => navigate("/billing")}
+                    onMouseEnter={() => prefetchOnHover("/billing")}
                     className={LG_ITEM}
                   >
                     <CreditCard className="mr-2 h-4 w-4" />
                     {t("billing")}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onClick={() => router.push("/settings")}
+                    onClick={() => navigate("/settings")}
+                    onMouseEnter={() => prefetchOnHover("/settings")}
                     className={LG_ITEM}
                   >
                     <Settings className="mr-2 h-4 w-4" />
                     {t("settings")}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    onClick={() => router.push("/privacy-policy")}
+                    onClick={() => navigate("/privacy-policy")}
+                    onMouseEnter={() => prefetchOnHover("/privacy-policy")}
                     className={LG_ITEM}
                   >
                     <Shield className="mr-2 h-4 w-4" />
@@ -918,7 +978,8 @@ export function AppSidebar() {
                     <>
                       <DropdownMenuSeparator className={LG_SEP} />
                       <DropdownMenuItem
-                        onClick={() => router.push("/admin")}
+                        onClick={() => navigate("/admin")}
+                        onMouseEnter={() => prefetchOnHover("/admin")}
                         className={LG_ITEM}
                       >
                         <Settings className="mr-2 h-4 w-4" />
@@ -930,7 +991,8 @@ export function AppSidebar() {
                     <>
                       <DropdownMenuSeparator className={LG_SEP} />
                       <DropdownMenuItem
-                        onClick={() => router.push("/super-admin")}
+                        onClick={() => navigate("/super-admin")}
+                        onMouseEnter={() => prefetchOnHover("/super-admin")}
                         className={LG_ITEM}
                       >
                         <Shield className="mr-2 h-4 w-4 text-red-600" />
