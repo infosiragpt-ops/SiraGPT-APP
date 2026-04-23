@@ -6,8 +6,7 @@
     "today": "Сегодня",
     "last7Days": "Последние 7 дней",
     "older": "Ранее",
-    "projects": "Projects",
-    "agentPlayground": "Лаборатория агентов"
+    "projects": "Projects"
   },
   "projects": {
     "title": "Projects",
