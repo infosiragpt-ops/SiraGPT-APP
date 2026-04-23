@@ -2896,7 +2896,12 @@ But first, you need to connect your Spotify account securely using the button be
       !!isSpotifyActive ||
       !!isImageGenerationActive ||
       !!isVideoGenerationActive ||
-      !!isComputerUseActive;
+      !!isComputerUseActive ||
+      !!isGmailActive ||
+      !!isGoogleCalendarActive ||
+      !!isGoogleDriveActive ||
+      !!isWordConnectorActive ||
+      !!isExcelConnectorActive;
     if (anyActive && !prevAnyToolActiveRef.current && sidebarOpen) {
       setSidebarOpen(false);
     }
@@ -2904,6 +2909,8 @@ But first, you need to connect your Spotify account securely using the button be
   }, [
     isWebSearchActive, isSpotifyActive, isImageGenerationActive,
     isVideoGenerationActive, isComputerUseActive,
+    isGmailActive, isGoogleCalendarActive, isGoogleDriveActive,
+    isWordConnectorActive, isExcelConnectorActive,
     isSidebarMobile, sidebarOpen, setSidebarOpen,
   ]);
 
