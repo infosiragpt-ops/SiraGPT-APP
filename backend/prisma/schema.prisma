@@ -64,6 +64,7 @@ model User {
   projects    Project[]
   designs     DesignProject[]
   scheduledPosts ScheduledPost[]
+  socialConnections SocialConnection[]
   usageAlerts UsageAlert[]
   notifications Notification[]
   subscriptionEvents SubscriptionEvent[]
@@ -595,6 +596,18 @@ model ScheduledPost {
   // time the product grows a new toggle.
   config       Json?
 
+  // Reference images the user uploaded so the agent grounds its
+  // generation on brand assets. Shape: array of { name, dataUrl,
+  // size, type }. Kept inline in the row for now; future migration
+  // to S3 / uploads table when size becomes a concern.
+  referenceImages Json?
+
+  // Auto-series batch id — posts generated together by the
+  // "Programación automática" flow share one batchId so the UI can
+  // group them ("Serie de 10 posts · 24-29 abril"). Null for
+  // one-off posts.
+  batchId      String?
+
   // Last worker attempt metadata. Populated by the scheduler when it
   // tries to publish. Useful for the UI's "re-try" button.
   lastError    String?  @db.Text
@@ -606,4 +619,39 @@ model ScheduledPost {
   @@map("scheduled_posts")
   @@index([userId, scheduledAt])
   @@index([userId, status])
+}
+
+// ─── Marketing — social-account OAuth connections ─────────────────────────
+//
+// One row per (user × platform). We persist the access token the user
+// granted us when they clicked "Conectar con Facebook" (or Instagram /
+// YouTube / TikTok / LinkedIn), plus a snapshot of the account profile
+// so the LLM can ground its suggestions ("voy a escribir como
+// @tu_marca, que vende X a un público Y").
+//
+// Tokens are stored raw for now; wire up encryption when the rest of
+// the app (Gmail / Spotify tokens) gets the same treatment.
+model SocialConnection {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  platform     String   // facebook | instagram | youtube | tiktok | linkedin
+  accountId    String?  // platform-side user id / page id
+  accountName  String?  // handle displayed to the user ("@tu_marca")
+  accessToken  String?  @db.Text
+  refreshToken String?  @db.Text
+  expiresAt    DateTime?
+
+  // Profile snapshot the LLM grounds post generation on:
+  //   { name, bio, website, industry, recentPosts: [...] }
+  profile      Json?
+  scopes       Json?    // OAuth scopes granted
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, platform])
+  @@map("social_connections")
+  @@index([userId])
 }
