@@ -50,9 +50,14 @@ Rules:
 - When the user asks for a file (Excel, Word, PPT, PDF), use create_document. Write a complete Python script that writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab.
 - Use python_exec for data wrangling, verification, numeric work — ANY time you'd otherwise "estimate" a number.
 - Every tool call must be justified by a one-sentence thought in the assistant text preceding the call.
-- Self-supervise: after each step, decide whether you have what the user asked for or whether to take one more action. Iterate until you can answer confidently.
-- When ready, call the \`finalize\` tool with markdown. Do NOT write the final answer as free text — only via finalize.
-- Respond in the same language as the user. Keep thoughts short (1-2 sentences); save the depth for the finalize markdown.`;
+- **MANDATORY self-supervision**: after EVERY create_document call, you MUST call verify_artifact with the returned id. Read the structured summary it returns:
+  · For an Excel: confirm the sheet exists, the row/column count matches what the user asked for, the headers are exactly what was requested.
+  · For a Word/PDF: confirm the paragraph/page count is reasonable for the brief.
+  · For a CSV/JSON: confirm the row count and columns/keys match.
+  If verification reveals a gap (wrong count, missing column, wrong header), call create_document AGAIN with a corrected script. Do not finalize until verify_artifact returns a result that satisfies the original request.
+- If web_search returned fewer sources than the user asked for, call web_search again with a refined query before building the deliverable.
+- When ready, call the \`finalize\` tool with markdown that summarises what you delivered (numbers verified, file location, key findings). Do NOT write the final answer as free text — only via finalize.
+- Respond in the same language as the user. Keep thoughts short (1-2 sentences); save the depth for the finalize markdown. Each thought line should describe what you're about to do in concrete terms ("Construyendo el Excel con 30 filas en hoja 'Fuentes'", not just "Working on Excel").`;
 
 // ─── GET /api/agent/artifact/:id ────────────────────────────────────────
 
@@ -279,6 +284,7 @@ function inferIconFor(toolName) {
     case 'bash_exec':       return 'bash';
     case 'web_search':      return 'search';
     case 'create_document': return 'doc';
+    case 'verify_artifact': return 'verify';
     case 'rag_retrieve':    return 'search';
     case 'finalize':        return 'check';
     default:                return 'thought';

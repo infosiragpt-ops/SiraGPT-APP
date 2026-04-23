@@ -13,7 +13,7 @@
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
-export type AgenticIcon = "python" | "bash" | "search" | "doc" | "thought" | "check"
+export type AgenticIcon = "python" | "bash" | "search" | "doc" | "verify" | "thought" | "check"
 
 export interface AgentArtifact {
   id: string

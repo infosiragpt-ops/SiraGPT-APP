@@ -22,7 +22,7 @@
 import * as React from "react"
 import {
   Loader2, Check, X, ChevronDown, ChevronRight,
-  Terminal, FileCode, Search, FileText, Download, Sparkles,
+  Terminal, FileCode, Search, FileText, Download, Sparkles, ShieldCheck,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { AgentTaskState, AgenticIcon, AgentArtifact } from "@/lib/agent-task-service"
@@ -37,6 +37,7 @@ const ICON_MAP: Record<AgenticIcon, React.ComponentType<{ className?: string }>>
   bash: Terminal,
   search: Search,
   doc: FileText,
+  verify: ShieldCheck,
   thought: Sparkles,
   check: Check,
 }
@@ -55,6 +56,7 @@ function ToolBadge({ tool, language }: { tool: string; language?: string }) {
     if (language === "javascript") return "JavaScript"
     if (language === "bash") return "Bash"
     if (tool === "create_document") return "Script"
+    if (tool === "verify_artifact") return "Verify"
     if (tool === "web_search") return "Search"
     if (tool === "rag_retrieve") return "RAG"
     return tool

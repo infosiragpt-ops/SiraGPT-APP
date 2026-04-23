@@ -368,6 +368,187 @@ const ragRetrieve = {
   },
 };
 
+// ─── Tool 6: verify_artifact (self-supervision) ─────────────────────────
+//
+// Reads an artifact the agent just created back from disk and returns
+// a structured summary (sheet names, row counts, column headers,
+// paragraph counts, byte size). The agent uses this to close the
+// "did I actually deliver what the user asked for?" loop without the
+// user having to download the file and report back.
+//
+// Format-specific summaries:
+//   .xlsx → list of (sheet, rows, columns, headers[])
+//   .docx → paragraph count + first-N paragraph previews
+//   .csv  → first row, total rows, columns
+//   .json → top-level keys + element count if array
+//   .txt  → line count + first/last lines
+//   anything else → byte size only
+//
+// Implemented as a Python snippet executed in the same sandbox as
+// python_exec — that way we don't add new top-level deps and the
+// detector code lives next to the writer code.
+
+const verifyArtifact = {
+  name: 'verify_artifact',
+  description: 'Read an artifact you just created back from disk and return a structured summary (sheet/row counts for xlsx, paragraph counts for docx, line/row counts for csv/txt, key list for json). Call this AFTER create_document to confirm the file actually contains what the user asked for. If verification reveals a gap (wrong row count, missing column, empty sheet), call create_document again with a corrected script.',
+  parameters: {
+    type: 'object',
+    properties: {
+      artifactId: { type: 'string', description: 'The id from a previous file_artifact event (e.g. the `id` field in the create_document result).' },
+    },
+    required: ['artifactId'],
+    additionalProperties: false,
+  },
+  async execute({ artifactId }, ctx = {}) {
+    ctx.onEvent?.({ type: 'tool_call', tool: 'verify_artifact', preview: `verificando ${artifactId}` });
+    const id = String(artifactId || '').replace(/[^a-f0-9]/gi, '');
+    if (!id) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'invalid artifact id' });
+      return { ok: false, error: 'invalid artifact id' };
+    }
+    if (!fs.existsSync(ARTIFACT_DIR)) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'no artifacts dir' });
+      return { ok: false, error: 'no artifacts directory yet' };
+    }
+    const entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
+    if (!entry) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact not found' });
+      return { ok: false, error: `artifact ${id} not found` };
+    }
+    const full = path.join(ARTIFACT_DIR, entry);
+    const ext = path.extname(entry).slice(1).toLowerCase();
+    const sizeBytes = fs.statSync(full).size;
+
+    // Stdlib-only Python: openpyxl/python-docx might be missing in
+    // some environments; we degrade gracefully and still return
+    // size + extension so the agent at least confirms the file exists.
+    const py = `
+import sys, json, os
+path = ${JSON.stringify(full)}
+ext = ${JSON.stringify(ext)}
+result = {"ok": True, "ext": ext, "sizeBytes": os.path.getsize(path)}
+try:
+    if ext == "xlsx":
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            sheets = []
+            for name in wb.sheetnames:
+                ws = wb[name]
+                # max_row/max_column include trailing empties; they're
+                # still the truth the user cares about ("how many rows
+                # are in my Excel right now").
+                rows = ws.max_row or 0
+                cols = ws.max_column or 0
+                headers = []
+                if rows > 0 and cols > 0:
+                    for c in range(1, min(cols, 30) + 1):
+                        v = ws.cell(row=1, column=c).value
+                        headers.append(None if v is None else str(v))
+                sheets.append({"name": name, "rows": rows, "columns": cols, "headers": headers})
+            result["sheets"] = sheets
+            result["totalRows"] = sum(s["rows"] for s in sheets)
+        except ImportError as e:
+            result["warning"] = f"openpyxl not installed ({e}); reported size only"
+    elif ext == "docx":
+        try:
+            from docx import Document
+            doc = Document(path)
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            result["paragraphCount"] = len(paragraphs)
+            result["firstParagraphs"] = paragraphs[:5]
+        except ImportError as e:
+            result["warning"] = f"python-docx not installed ({e}); reported size only"
+    elif ext == "pptx":
+        try:
+            from pptx import Presentation
+            prs = Presentation(path)
+            slides = []
+            for i, slide in enumerate(prs.slides, 1):
+                texts = []
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        for para in shape.text_frame.paragraphs:
+                            t = "".join(run.text for run in para.runs).strip()
+                            if t: texts.append(t)
+                slides.append({"slide": i, "textPreview": texts[:3]})
+            result["slideCount"] = len(slides)
+            result["slides"] = slides[:10]
+        except ImportError as e:
+            result["warning"] = f"python-pptx not installed ({e}); reported size only"
+    elif ext == "csv":
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        result["lineCount"] = len(lines)
+        if lines:
+            header = lines[0].rstrip("\\n").split(",")
+            result["columns"] = header
+            result["firstDataRow"] = lines[1].rstrip("\\n") if len(lines) > 1 else None
+    elif ext == "json":
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            result["arrayLength"] = len(data)
+            result["firstItem"] = data[0] if data else None
+        elif isinstance(data, dict):
+            result["topLevelKeys"] = list(data.keys())[:50]
+        else:
+            result["scalar"] = repr(data)[:200]
+    elif ext in ("txt", "md", "svg"):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        result["charCount"] = len(text)
+        result["lineCount"] = text.count("\\n") + 1
+        result["firstChars"] = text[:240]
+    elif ext == "pdf":
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(path)
+            result["pageCount"] = len(reader.pages)
+        except ImportError as e:
+            result["warning"] = f"pypdf not installed ({e}); reported size only"
+    else:
+        result["warning"] = f"no specialised verifier for .{ext} — reported size only"
+except Exception as e:
+    result = {"ok": False, "error": str(e), "ext": ext, "sizeBytes": os.path.getsize(path)}
+print(json.dumps(result))
+`;
+    const r = await sandbox.run({ language: 'python', source: py, timeoutMs: 12000 });
+    let summary;
+    try {
+      summary = JSON.parse((r.stdout || '').trim().split('\n').filter(Boolean).pop() || '{}');
+    } catch {
+      summary = { ok: false, error: 'verifier output was not valid JSON', stdout: previewText(r.stdout || '', 600), stderr: previewText(r.stderr || '', 600) };
+    }
+    summary.sizeBytes = summary.sizeBytes || sizeBytes;
+    summary.filename = entry.slice(id.length + 1);
+    summary.artifactId = id;
+    ctx.onEvent?.({
+      type: 'tool_output',
+      tool: 'verify_artifact',
+      ok: Boolean(summary.ok),
+      preview: summarisePreview(summary),
+    });
+    return summary;
+  },
+};
+
+function summarisePreview(s) {
+  if (!s) return 'sin datos';
+  const parts = [];
+  if (s.ext) parts.push(`.${s.ext}`);
+  if (typeof s.sizeBytes === 'number') parts.push(`${Math.max(1, Math.round(s.sizeBytes / 1024))} KB`);
+  if (Array.isArray(s.sheets)) parts.push(`${s.sheets.length} hojas, ${s.totalRows ?? 0} filas`);
+  if (typeof s.paragraphCount === 'number') parts.push(`${s.paragraphCount} párrafos`);
+  if (typeof s.slideCount === 'number') parts.push(`${s.slideCount} diapositivas`);
+  if (typeof s.lineCount === 'number') parts.push(`${s.lineCount} líneas`);
+  if (typeof s.pageCount === 'number') parts.push(`${s.pageCount} páginas`);
+  if (Array.isArray(s.columns)) parts.push(`${s.columns.length} columnas`);
+  if (s.warning) parts.push(`⚠ ${s.warning}`);
+  if (s.error) parts.push(`✗ ${s.error}`);
+  return parts.join(' · ');
+}
+
 // ─── Assembly ──────────────────────────────────────────────────────────
 
 /**
@@ -375,7 +556,7 @@ const ragRetrieve = {
  * `tools` parameter.
  */
 function buildTaskTools() {
-  return [pythonExec, bashExec, webSearch, createDocument, ragRetrieve];
+  return [pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact];
 }
 
 module.exports = {
@@ -383,5 +564,5 @@ module.exports = {
   saveArtifact,
   ARTIFACT_DIR,
   EXTENSION_TO_MIME,
-  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, previewText, artifactIdFor, metadataPathFor },
+  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact, previewText, artifactIdFor, metadataPathFor, summarisePreview },
 };
