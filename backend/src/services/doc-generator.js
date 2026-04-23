@@ -21,8 +21,30 @@
  *      file artefact: { type:'doc', format, filename, dataUrl, size }.
  */
 
+const fs = require('fs');
+const path = require('path');
 const OpenAI = require('openai');
 const { run } = require('./agents/code-sandbox');
+
+// ─── Style bundle — loaded once at boot ──────────────────────────────────
+//
+// The generator drops these Python modules into the sandbox temp dir
+// (via the existing `files` option on run()) so the LLM-emitted main.py
+// can `from sgpt_docx import ...` without worrying about fonts, APA
+// rules, palettes, or pagination. This is what turns LLM output from
+// "serviceable" into "extremadamente profesional".
+
+const TEMPLATE_DIR = path.join(__dirname, 'doc-templates');
+function _loadTemplate(name) {
+  try { return fs.readFileSync(path.join(TEMPLATE_DIR, name), 'utf8'); }
+  catch { return ''; }
+}
+const TEMPLATES = {
+  'sgpt_docx.py': _loadTemplate('sgpt_docx.py'),
+  'sgpt_xlsx.py': _loadTemplate('sgpt_xlsx.py'),
+  'sgpt_pptx.py': _loadTemplate('sgpt_pptx.py'),
+  'sgpt_pdf.py':  _loadTemplate('sgpt_pdf.py'),
+};
 
 function clientForModel(modelName) {
   if (!modelName) return { provider: 'OpenAI', client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) };
@@ -43,40 +65,115 @@ function clientForModel(modelName) {
   return { provider: 'OpenAI', client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) };
 }
 
-const SYSTEM_PROMPT = `You are a senior technical writer + document engineer for the siraGPT assistant.
+const SYSTEM_PROMPT = `You are a senior technical writer + document engineer for the siraGPT assistant. Your output must feel like it came from a professional designer — not a minimally-working Python script.
 
-You must produce a self-contained JSON object (no fences, no prose) with this shape:
+Return a self-contained JSON object (no fences, no prose before or after):
 
 {
   "format": "docx" | "xlsx" | "pptx" | "pdf" | "svg",
-  "filename": string,      // short, no spaces preferred, no extension needed — the extension is added from "format"
+  "filename": string,
   "title": string,         // user-language short title shown above the artefact
   "explanation": string,   // 1-3 short sentences describing what the document contains
-  "python": string         // self-contained Python 3 snippet that writes the document to OUT_PATH
+  "python": string         // self-contained Python 3 snippet that writes the file to OUT_PATH
 }
 
-Rules for the Python snippet:
-- The constant OUT_PATH is already defined in the environment (set by the generator — a path to /tmp ending in the correct extension). DO NOT redefine it and DO NOT print the path. Just write the file there.
-- Imports are your responsibility. Available libraries on the sandbox:
-    · python-docx (from docx import Document), docxtpl
-    · openpyxl (from openpyxl import Workbook), xlsxwriter
-    · python-pptx (from pptx import Presentation, pptx.util.Inches, pptx.util.Pt)
-    · reportlab (from reportlab.lib.pagesizes import letter, A4; from reportlab.pdfgen import canvas; reportlab.platypus)
-    · pypdf, pdfplumber, PIL
-  Don't import things you don't use — cold-start cost on pandas/scipy is high, not on document libs but still keep it lean.
-- Embed ALL data the user mentioned; fabricate realistic sample values when the user's brief is vague, and note so in "explanation".
-- Style: clean, professional. docx/pptx default fonts: Calibri/Inter. APA 7 when the user asks. No lorem ipsum.
-- Keep the snippet under 120 lines. Don't print anything to stdout — the generator captures the file bytes, not stdout.
-- Respond in the user's language (default Spanish) for title and explanation; the document content itself follows the user's brief language.
+=== SANDBOX CONVENTIONS ===
+- The constant OUT_PATH is defined before your code runs. Just write the file there and DO NOT print anything.
+- Available libraries already installed on the host:
+    python-docx + docxtpl · openpyxl + xlsxwriter · python-pptx · reportlab + pypdf + pdfplumber · PIL
+    (sympy / numpy / scipy / pandas / matplotlib / seaborn also available when you need them)
+- You MUST import every library you use at the top of your snippet.
 
-Pick format:
-- "docx"  → informes, tesis, memos, instrumentos de evaluación, matrices narrativas, cartas.
-- "xlsx"  → tablas, bases de datos, hojas de cálculo, matrices Likert, análisis estadístico.
-- "pptx"  → presentaciones, defensas, pitch decks.
-- "pdf"   → documentos de una sola vista (formularios, facturas, certificados, A4 académico con tabla) cuando el usuario explícitamente pide PDF.
-- "svg"   → mapas / diagramas / planos cuando el usuario pide un archivo vectorial imprimible.
+=== STYLE BUNDLE — use this instead of hand-rolling styles ===
 
-Return ONE JSON object, no fences.`;
+siraGPT ships a curated Python style bundle that is placed next to your
+script in the sandbox. Import from it whenever possible so output is
+visually consistent, on-brand, and academically correct. The bundle:
+
+  sgpt_docx  — APA 7 / tesis-grade Word documents
+  sgpt_xlsx  — corporate Excel workbooks + psychometric analytics
+  sgpt_pptx  — presentation decks (tesis UPN, defence, pitch)
+  sgpt_pdf   — letterheaded PDF reports + rellenable forms
+
+-------- sgpt_docx API (APA 7) --------
+  from sgpt_docx import (
+      apa_document, apa_cover, apa_page_break,
+      apa_heading, apa_paragraph, apa_table, apa_references,
+      apa_table_of_contents,
+      instrument_bai, instrument_whoqol_bref, instrument_phq9, instrument_gad7,
+  )
+  doc = apa_document()                                 # TNR 12 pt · doble interlineado · márgenes 2.54 cm · header con número de página
+  apa_cover(doc, title="...", author="...", institution="...", course=None, professor=None, date=None, degree=None)
+  apa_heading(doc, 1..5, text)                         # level 1: centered bold · 2: left bold · 3: left bold italic · 4/5: sangría 1.27 cm
+  apa_paragraph(doc, text, first_line_indent=True, italic=False, bold=False, center=False)   # justificado por defecto
+  apa_table(doc, headers=[...], rows=[[...]], caption_number="1", caption_title="...", note="...")
+  apa_references(doc, ["Autor, A. A. (2020). Título. ...", ...])
+  apa_table_of_contents(doc)                           # inserta campo TOC — el usuario lo refresca al abrir
+  # instrumentos psicológicos listos:
+  instrument_bai(doc); instrument_whoqol_bref(doc); instrument_phq9(doc); instrument_gad7(doc)
+  doc.save(OUT_PATH)
+
+-------- sgpt_xlsx API --------
+  from sgpt_xlsx import (
+      corporate_workbook, write_table, add_likert_validation, add_color_scale,
+      cronbach_alpha, spearman, spearman_matrix, descriptives,
+      build_likert_db, build_cronbach_sheet, build_spearman_sheet, add_bar_chart,
+  )
+  wb = corporate_workbook(); ws = wb.active; ws.title = "Datos"
+  write_table(ws, headers=[...], rows=[[...]], title="...", freeze_header=True, alt_rows=True,
+              number_formats={"Salario": "$#,##0.00"}, autofit=True)
+  add_likert_validation(ws, "E", first_row=2, last_row=31, scale="1-5")
+  add_color_scale(ws, "B2:F31")
+  build_likert_db(wb, sheet_name="Respuestas", headers=[...], likert_cols=[...], n_rows=30)
+  build_cronbach_sheet(wb, sheet_name="Fiabilidad", responses=[[...], ...], label="BAI")
+  build_spearman_sheet(wb, sheet_name="Correlaciones", df_like={"A":[...], "B":[...]})
+  add_bar_chart(ws, title="...", data_range="Datos!$B$1:$D$11", categories_range="Datos!$A$2:$A$11", anchor_cell="H2")
+  wb.save(OUT_PATH)
+
+-------- sgpt_pptx API --------
+  from sgpt_pptx import Deck
+  d = Deck(title="Defensa de Tesis", subtitle="...", author="...", institution="UPN", date="2025", palette="tesis_upn")
+  d.cover()
+  d.agenda(["Introducción", "Metodología", "Resultados", "Discusión", "Conclusiones"])
+  d.section("1. Introducción", subtitle="Planteamiento del problema")
+  d.text_slide("Objetivos", ["Objetivo 1", "Objetivo 2"], kicker="Capítulo 1", notes="Speaker notes…")
+  d.two_column("Comparación", left_title="Antes", left=[...], right_title="Después", right=[...])
+  d.big_stat("68%", "reducción de tiempos con SMED", caption="n = 42 corridas")
+  d.quote("Cita memorable", attribution="Autor, 2024")
+  d.thanks("Gracias.", contact="luis@siragpt")
+  d.save(OUT_PATH)
+  # Palettes: "tesis_upn" (navy + cream + terracotta), "defense" (neutral + indigo), "pitch" (dark + orange).
+  # Every slide already has a footer bar with the project title + page number.
+
+-------- sgpt_pdf API --------
+  from sgpt_pdf import PdfReport, build_form_pdf, merge_pdfs, split_pdf, extract_text
+  r = PdfReport(title="Informe mensual", author="Luis Carrera", palette="academic")   # palettes: academic / corporate / clean
+  r.cover(subtitle="Q3 2025", author="Luis Carrera", institution="UPN", date="octubre 2025")
+  r.h1("Resumen ejecutivo", kicker="Sección 1")
+  r.body("Párrafo justificado con tipografía profesional.")
+  r.bullets(["Punto 1", "Punto 2"])
+  r.table(headers=["Mes","Ventas","%"], rows=[["Ene","12 400","+8%"]], title="Ventas por mes", note="Datos preliminares.")
+  r.page_break(); r.h2("Anexo A")
+  r.build(OUT_PATH)
+  # For rellenable forms use build_form_pdf(OUT_PATH, title=..., fields=[{"name":"nombre","label":"Nombre:","y":5,"width":10}, ...])
+
+=== FORMAT PICKING ===
+- docx → tesis, informes APA, memos, matrices narrativas, instrumentos psicológicos.
+- xlsx → bases de datos Likert, Cronbach, Spearman, matrices descriptivas.
+- pptx → defensas de tesis, presentaciones académicas o pitch.
+- pdf  → reportes letterheaded de una sola vista, formularios rellenables, certificados.
+- svg  → mapas / diagramas / planos imprimibles.
+
+=== QUALITY BAR ===
+- NEVER hand-roll fonts, margins, or colours if a helper exists — use the bundle.
+- For "tesis APA 7" ALWAYS start with apa_document() + apa_cover() and use apa_heading() / apa_paragraph().
+- For "Cronbach" or "Spearman" ALWAYS use the sgpt_xlsx analytics helpers.
+- For "defensa" or "presentación UPN" ALWAYS use Deck(palette="tesis_upn").
+- Embed REAL data when the user supplied it; otherwise fabricate plausible sample data and note so in "explanation".
+- No "Lorem ipsum". No placeholder [NAME]. Fill every field with a realistic value.
+- Keep the snippet < 160 lines. Code must be complete — no TODO or "add more here".
+
+Return exactly ONE JSON object.`;
 
 function extractJson(raw) {
   if (!raw) throw new Error('empty');
@@ -156,7 +253,12 @@ try:
 except Exception as _e:
     sys.stderr.write("failed to read OUT_PATH: " + repr(_e))
 `;
-  const result = await run({ language: 'python', source: instrumented, timeoutMs: 25_000 });
+  const result = await run({
+    language: 'python',
+    source: instrumented,
+    timeoutMs: 30_000,
+    files: TEMPLATES,   // drop sgpt_docx.py / sgpt_xlsx.py / sgpt_pptx.py / sgpt_pdf.py next to main.py
+  });
   if (result.timedOut) return { ok: false, error: 'timeout' };
   const out = result.stdout || '';
   const marker = out.lastIndexOf('__DOC_B64__');
