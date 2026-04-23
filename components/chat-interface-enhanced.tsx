@@ -71,6 +71,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
 import {
   Dialog,
@@ -346,29 +349,26 @@ const ActionsDropdown = ({
               )}
             </div>
           </DropdownMenuItem>
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            onSelect={(e) => e.preventDefault()}
-            onClick={() => setConnectorsOpen((open) => !open)}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                <Network width="13" height="13" />
-              </div>
-              <div className="flex-1">
-                <div className="liquid-label font-medium text-sm flex items-center">
-                  Connectors
+          <DropdownMenuSub open={connectorsOpen} onOpenChange={setConnectorsOpen}>
+            <DropdownMenuSubTrigger
+              className="liquid-menu-item"
+              onClick={(e) => {
+                e.preventDefault();
+                setConnectorsOpen((open) => !open);
+              }}
+            >
+              <div className="flex items-center gap-3 w-full">
+                <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                  <Network width="13" height="13" />
+                </div>
+                <div className="flex-1">
+                  <div className="liquid-label font-medium text-sm flex items-center">
+                    Connectors
+                  </div>
                 </div>
               </div>
-              <ChevronRight className={cn(
-                "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
-                connectorsOpen && "rotate-90"
-              )} />
-            </div>
-          </DropdownMenuItem>
-
-          {connectorsOpen && (
-            <div className="my-1 ml-2 space-y-1 border-l border-border/50 pl-2">
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent sideOffset={10} alignOffset={-4} className="liquid-menu-surface w-64">
               {/* Gmail */}
               <DropdownMenuItem
                 className="liquid-menu-item"
@@ -532,8 +532,8 @@ const ActionsDropdown = ({
                   )}
                 </div>
               </DropdownMenuItem>
-            </div>
-          )}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
 
           <DropdownMenuSeparator />
 
