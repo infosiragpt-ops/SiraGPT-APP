@@ -2883,6 +2883,57 @@ But first, you need to connect your Spotify account securely using the button be
   const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile } = useSidebar();
 
   // ────────────────────────────────────────────────────────────
+  // Tool activation → auto-collapse the OUTER (visible) sidebar.
+  //
+  // Why a CustomEvent bridge instead of calling setSidebarOpen(false)
+  // directly: the useSidebar() above resolves to THIS component's
+  // INNER SidebarProvider. The sidebar the user actually sees is
+  // driven by a DIFFERENT provider mounted in app-wrapper.tsx. We
+  // dispatch a window event on the false→true edge and a tiny
+  // listener inside AppShell (which lives under the outer provider)
+  // forwards it to setOpen(false).
+  //
+  // Hardening notes:
+  //   · Edge-triggered via a ref so deactivating a tool does NOT
+  //     re-fire the collapse; reopening the sidebar remains a user
+  //     action.
+  //   · All mutable bits that the effect reads from are funnelled
+  //     through one derived boolean so the dependency array stays
+  //     tight and React doesn't retrigger on unrelated renders.
+  //   · Mobile viewports are a no-op — the outer sidebar there is a
+  //     sheet, collapsing is meaningless.
+  //   · Guarded for SSR / non-browser environments.
+  // ────────────────────────────────────────────────────────────
+  const prevAnyToolActiveRef = React.useRef<boolean>(false);
+  const anyToolActive =
+    !!isWebSearchActive ||
+    !!isSpotifyActive ||
+    !!isImageGenerationActive ||
+    !!isVideoGenerationActive ||
+    !!isComputerUseActive ||
+    !!isGmailActive ||
+    !!isGoogleCalendarActive ||
+    !!isGoogleDriveActive ||
+    !!isWordConnectorActive ||
+    !!isExcelConnectorActive;
+  React.useEffect(() => {
+    if (isSidebarMobile) {
+      prevAnyToolActiveRef.current = anyToolActive;
+      return;
+    }
+    if (anyToolActive && !prevAnyToolActiveRef.current) {
+      try {
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(new CustomEvent('siragpt:collapse-sidebar'));
+        }
+      } catch {
+        /* non-browser env — safe to ignore */
+      }
+    }
+    prevAnyToolActiveRef.current = anyToolActive;
+  }, [anyToolActive, isSidebarMobile]);
+
+  // ────────────────────────────────────────────────────────────
   // Resizable split — chat ↔ right panel (Word/Excel/preview).
   // Ratio is the LEFT pane's width as a percentage. Persisted in
   // localStorage across sessions, defaults to 50/50, clamped to
