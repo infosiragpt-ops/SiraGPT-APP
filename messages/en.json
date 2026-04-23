@@ -27,8 +27,7 @@
     "today": "Today",
     "last7Days": "Last 7 days",
     "older": "Older",
-    "projects": "Projects",
-    "agentPlayground": "Agent playground"
+    "projects": "Projects"
   },
   "projects": {
     "title": "Projects",
