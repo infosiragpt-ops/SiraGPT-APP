@@ -44,6 +44,80 @@ export const VALID_CHAT_INTENTS: ChatIntent[] = [
   'text',
 ]
 
+export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, string>> = {
+  math: [
+    'Render all formulas with LaTeX using $...$ inline and $$...$$ display blocks.',
+    'Use Python-backed verification when the task is numeric, statistical, matrix-based, or data-heavy; prefer SymPy, NumPy, SciPy, and Pandas as appropriate.',
+    'Show assumptions, units, sample size, formulas used, and a concise interpretation. Do not invent missing data.',
+    'For psychometrics such as Cronbach alpha or Spearman, explain reliability/correlation conservatively and include the computation path.',
+  ].join('\n'),
+  viz: [
+    'Choose the renderer professionally: Matplotlib/Seaborn for thesis-ready static figures, Plotly/Recharts for interactive dashboards, D3 for custom structures, Chart.js for clean simple charts, Mermaid for technical diagrams.',
+    'Include title, labelled axes or labelled nodes, readable contrast, source/assumption note, and responsive layout.',
+    'Use the user-provided data exactly. If data is missing, create clearly-labelled sample data and state that it is synthetic.',
+    'For academic/market visuals, prefer sober palettes and export-ready composition over decorative effects.',
+  ].join('\n'),
+  doc: [
+    'Generate a polished downloadable file using the document style bundle when available: APA 7 DOCX, corporate XLSX, thesis/pitch PPTX, letterheaded PDF, or clean SVG.',
+    'Never fabricate citations, DOIs, journals, or current sources. If real sources are required but not provided, the request should be handled by the agentic research pipeline.',
+    'For Excel analytics, include raw data, formulas/results, and an interpretation sheet. For PPTX, use agenda, section dividers, strong titles, concise bullets, and speaker notes when useful.',
+    'No Lorem ipsum, TODOs, empty placeholders, or unfinished sections.',
+  ].join('\n'),
+  artifact: [
+    'Build a live React artifact that defines App and works inside a sandboxed iframe with no imports, no bundler, and no external network calls.',
+    'Use available globals only: React, Recharts, d3, Plotly, mathjs, papaparse, SheetJS, lodash, Three.js, and async storage.get/set/delete/list.',
+    'Make it accessible, responsive, keyboard-usable, validated, and stateful where relevant. Show empty states, errors, reset/export controls, and concise helper text.',
+    'For Three.js, keep scenes lightweight and dispose renderer, geometries, and materials in cleanup. Never store secrets or API keys in artifact storage.',
+  ].join('\n'),
+  agent_task: [
+    'Operate as a long-running autonomous agent: plan, retrieve/search, execute code, generate deliverables, verify artifacts, repair failures, then finalize.',
+    'Use web search for real/current/academic/market sources; use private RAG when the user references uploaded or project files.',
+    'For every file deliverable, verify row counts, sheet names, paragraph/page counts, headers, and non-empty content before finalizing.',
+    'Separate verified evidence from assumptions and keep citations/DOIs/URLs/years intact.',
+  ].join('\n'),
+  web_search: [
+    'Ground the answer in real sources. Prefer recent, authoritative, citable references when the user asks for academic, scientific, legal, market, or current information.',
+    'Return concise synthesis with source metadata: title, year/date, venue/publisher, DOI/URL when available, and limitations.',
+    'Do not fabricate citations or overstate findings.',
+  ].join('\n'),
+  plan: [
+    'Produce an architectural floor-plan deliverable with scaled walls, doors, windows, room labels, dimensions, north arrow, legend, and print-readable geometry.',
+    'Keep assumptions explicit when dimensions or room counts are missing.',
+  ].join('\n'),
+  figma: [
+    'Create a professional design/diagram artifact with clear hierarchy, labelled nodes, consistent spacing, and implementation-ready structure.',
+    'Prefer accessible naming and clean information architecture over decorative complexity.',
+  ].join('\n'),
+  ppt: [
+    'Create a professional presentation with coherent palette, agenda, section dividers, strong slide titles, concise bullets, visual hierarchy, and speaker notes when useful.',
+    'Avoid text-heavy slides and unfinished placeholders.',
+  ].join('\n'),
+  webdev: [
+    'Build production-grade responsive UI, not a generic template: clear visual direction, accessible semantics, working interactions, polished states, and mobile layout.',
+    'Include realistic content, no Lorem ipsum, no broken buttons, no placeholder-only sections, and avoid reproducing the chat UI itself.',
+  ].join('\n'),
+  image: [
+    'Preserve the user intent while improving composition, lighting, material detail, and professional visual direction.',
+    'Avoid adding text unless the user explicitly requests typography.',
+  ].join('\n'),
+  video: [
+    'Preserve the user intent while specifying cinematic motion, continuity, camera direction, lighting, and safe concise scene structure.',
+  ].join('\n'),
+}
+
+export function buildProfessionalCapabilityPrompt(intent: ChatIntent, prompt: string): string {
+  const contract = PROFESSIONAL_CAPABILITY_CONTRACTS[intent]
+  if (!contract) return prompt
+  return [
+    prompt,
+    '',
+    '---',
+    `siraGPT professional execution contract for ${intent}:`,
+    contract,
+    '---',
+  ].join('\n')
+}
+
 const normalizePrompt = (prompt: string) =>
   (prompt || '')
     .toLowerCase()

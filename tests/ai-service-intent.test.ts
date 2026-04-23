@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { aiService } from "../lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt } from "../lib/ai-service"
 
 describe("ai-service · deterministic intent routing", () => {
   it("routes research plus a deliverable file to the long-running agent", async () => {
@@ -106,5 +106,24 @@ describe("ai-service · deterministic intent routing", () => {
   it("does not treat general React explanations as web generation", async () => {
     const intent = await aiService.analyzeIntent("explícame cómo funciona React")
     assert.equal(intent, "text")
+  })
+
+  it("adds professional execution contracts without replacing the user prompt", () => {
+    const prompt = "Calcula el Cronbach's alpha de esta tabla Likert"
+    const enriched = buildProfessionalCapabilityPrompt("math", prompt)
+    assert.ok(enriched.startsWith(prompt))
+    assert.match(enriched, /LaTeX/)
+    assert.match(enriched, /Python-backed verification/)
+  })
+
+  it("keeps plain text prompts unmodified when no professional contract applies", () => {
+    const prompt = "hola, cómo estás"
+    assert.equal(buildProfessionalCapabilityPrompt("text", prompt), prompt)
+  })
+
+  it("enforces artifact safety in the professional contract", () => {
+    const enriched = buildProfessionalCapabilityPrompt("artifact", "crea un grader interactivo")
+    assert.match(enriched, /no external network calls/i)
+    assert.match(enriched, /Never store secrets/i)
   })
 })

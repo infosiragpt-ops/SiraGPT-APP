@@ -4,7 +4,7 @@ import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
-import { aiService, type ChatIntent } from "./ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, type ChatIntent } from "./ai-service"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 
@@ -440,12 +440,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setPendingStop(false);
       try {
         const intent = intentOverride || await aiService.classifyIntent(content, activeChat?.messages || currentChat?.messages || []);
+        const professionalPrompt = buildProfessionalCapabilityPrompt(intent, content);
         console.log('intent', intent);
 
         if (intent === 'chart') {
           const fileId = uploadedFiles.length > 0 ? uploadedFiles[0].id : undefined;
           const chartResponse = await apiClient.generateChart({
-            prompt: content,
+            prompt: professionalPrompt,
             chatId: activeChat.id,
             fileId,
           });
@@ -467,7 +468,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         } else if (intent === 'figma') {
           // Handle Figma flowchart generation
           const figmaResponse = await apiClient.generateFigmaFlowchart({
-            prompt: content,
+            prompt: professionalPrompt,
             chatId: activeChat.id,
             conversationHistory: activeChat.messages || [],
           });
@@ -509,7 +510,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           };
           try {
             await apiClient.generateArtifactStream(
-              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -582,7 +583,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           };
           try {
             await apiClient.generateDocStream(
-              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -664,7 +665,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           };
           try {
             await apiClient.generateVizStream(
-              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -741,7 +742,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
           try {
             await apiClient.solveMathStream(
-              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -827,7 +828,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
           try {
             await apiClient.generatePlanStream(
-              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {

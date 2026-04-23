@@ -61,7 +61,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
-import { aiService, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -4136,6 +4136,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleWebDevGeneration = async (prompt: string) => {
     // Use dedicated webdev streaming API endpoint
     const filesToSend = [...uploadedFiles];
+    const professionalPrompt = buildProfessionalCapabilityPrompt('webdev', prompt);
     setUploadedFiles([]); // Clear UI immediately
 
     try {
@@ -4196,7 +4197,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // Call dedicated webdev streaming endpoint
       const streamId = crypto.randomUUID();
       const payload = {
-        prompt,
+        prompt: professionalPrompt,
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
@@ -4239,6 +4240,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handlePPTGeneration = async (prompt: string, files?: any[]) => {
     setIsGeneratingPPT(true);
     try {
+      const professionalPrompt = buildProfessionalCapabilityPrompt('ppt', prompt);
       let newChat = currentChat;
       if (!currentChat) {
         const response = await apiClient.createChat({
@@ -4280,7 +4282,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       });
 
       const payload = {
-        prompt,
+        prompt: professionalPrompt,
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
@@ -4303,6 +4305,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleVectorPPTGeneration = async (prompt: string, files?: any[]) => {
     setIsGeneratingPPT(true);
     try {
+      const professionalPrompt = buildProfessionalCapabilityPrompt('ppt', prompt);
       let newChat = currentChat;
       if (!currentChat) {
         const response = await apiClient.createChat({
@@ -4343,7 +4346,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       });
 
       const payload = {
-        prompt,
+        prompt: professionalPrompt,
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
@@ -4634,6 +4637,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Please enter a task');
       return;
     }
+    const professionalGoal = buildProfessionalCapabilityPrompt('agent_task', goalText);
     let activeChat = currentChat;
     const isNewChat = !activeChat;
 
@@ -4693,7 +4697,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [] };
       try {
         for await (const evt of agentTaskService.runIterator({
-          goal: goalText,
+          goal: professionalGoal,
           chatId: activeChat.id,
           model: selectedModel,
           maxSteps: 80,
