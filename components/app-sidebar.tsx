@@ -26,6 +26,7 @@ import {
   LayoutGrid,
   FolderKanban,
   Palette,
+  Megaphone,
   Loader2,
   PenSquare,
   Shield,
@@ -165,7 +166,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/projects', '/design', '/library',
+      '/chat', '/gpts', '/projects', '/design', '/marketing', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -325,6 +326,7 @@ export function AppSidebar() {
   const handleGPTsClick = () => navigate("/gpts")
   const handleProjectsClick = () => navigate("/projects")
   const handleDesignClick = () => navigate("/design")
+  const handleMarketingClick = () => navigate("/marketing")
   const handleLibraryClick = () => navigate("/library")
 
   const handleChatClick = (chatId: string) => {
@@ -474,6 +476,7 @@ export function AppSidebar() {
   const isOnGPTsPage = pathname.startsWith('/gpts')
   const isOnProjectsPage = pathname.startsWith('/projects')
   const isOnDesignPage = pathname.startsWith('/design')
+  const isOnMarketingPage = pathname.startsWith('/marketing')
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -657,6 +660,31 @@ export function AppSidebar() {
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
               <p>{t("design")}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Marketing — intelligent social-publishing agent. Users
+              compose an idea, schedule date/time, select target
+              networks (FB/IG/YT/TikTok/LinkedIn) and let the agent
+              generate the post image via the configured image model. */}
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onClick={handleMarketingClick}
+                onMouseEnter={() => prefetchOnHover('/marketing')}
+                className={cn(
+                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
+                  isOnMarketingPage && "bg-accent text-accent-foreground",
+                  pendingHref === '/marketing' && "opacity-70"
+                )}
+                variant="default"
+              >
+                <Megaphone className="h-4 w-4 text-blue-600 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">Marketing</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>Marketing</p>
             </TooltipContent>
           </Tooltip>
 

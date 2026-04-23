@@ -63,6 +63,7 @@ model User {
   createdGpts CustomGpt[]
   projects    Project[]
   designs     DesignProject[]
+  scheduledPosts ScheduledPost[]
   usageAlerts UsageAlert[]
   notifications Notification[]
   subscriptionEvents SubscriptionEvent[]
@@ -551,4 +552,58 @@ model DesignProject {
 
   @@map("design_projects")
   @@index([userId, updatedAt])
+}
+
+// ─── Marketing — agente de publicación programada ─────────────────────────
+//
+// One row per scheduled / published social post. The UI (/marketing)
+// lets the user write an idea, pick a posting time on a calendar,
+// choose target networks, and generate the post image with the
+// OpenAI image model. We store the *intent* here — real distribution
+// to the networks is a worker's job (out-of-band), so `status` moves
+// draft → scheduled → publishing → published | failed.
+model ScheduledPost {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The user-provided prompt / idea the agent will post about.
+  prompt       String   @db.Text
+  // Optional caption shown on the social card. When null the UI
+  // derives one from the prompt.
+  caption      String?  @db.Text
+
+  // Server-generated image URL. Currently a data: URL or a persisted
+  // file path — depending on how we stored the OpenAI result.
+  imageUrl     String?  @db.Text
+  // The image model used (`openai/gpt-5.4-image-2` today).
+  imageModel   String?
+
+  // Target platforms as a JSON array of strings:
+  //   ["facebook", "instagram", "youtube", "tiktok", "linkedin"]
+  platforms    Json
+
+  // Absolute publish time in UTC. Null = draft, not yet scheduled.
+  scheduledAt  DateTime?
+
+  // draft | scheduled | publishing | published | failed | cancelled
+  status       String   @default("draft")
+
+  // Freeform config (filters the composer exposes — color /
+  // orientation / animation / price / extra knobs the frontend may
+  // add over time). Kept as JSON so we don't have to migrate every
+  // time the product grows a new toggle.
+  config       Json?
+
+  // Last worker attempt metadata. Populated by the scheduler when it
+  // tries to publish. Useful for the UI's "re-try" button.
+  lastError    String?  @db.Text
+  publishedAt  DateTime?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("scheduled_posts")
+  @@index([userId, scheduledAt])
+  @@index([userId, status])
 }
