@@ -97,6 +97,7 @@ import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import { agenticSearchService } from "@/lib/agentic-search-service"
+import { agentTaskService, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
@@ -3621,6 +3622,11 @@ REWRITTEN TEXT:`;
           // chat if `activeChat` is missing.
           await handleWebSearch(msg);
           break;
+        case 'agent_task':
+          // Compound multi-step task — research + code + deliverable
+          // file. Routes to the Claude-style step-card runner.
+          await handleAgentTask(msg);
+          break;
         default:
           if (isNewChat) {
             await createNewChat('text', msg, filesToSend);
@@ -4583,6 +4589,106 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       console.error('Web search failed:', error);
       toast.error(error.message || 'Web search failed');
       setIsWebSearching(false);
+    }
+  };
+
+  // ─── Agent task (Claude-style step cards) ────────────────────────────
+  // The chat bubble's `content` becomes a JSON-encoded payload wrapped
+  // in a sentinel fence (```agent-task-state ... ```). MessageComponent
+  // detects the fence and renders <AgenticStepsRenderer state={...}/>.
+  // This way step cards live INSIDE the regular message bubble — no
+  // parallel surface to maintain — and the persisted message survives
+  // a chat reload (the JSON is the source of truth for replay).
+  const handleAgentTask = async (goalText: string) => {
+    if (!goalText) {
+      toast.error('Please enter a task');
+      return;
+    }
+    let activeChat = currentChat;
+    const isNewChat = !activeChat;
+
+    if (!activeChat) {
+      try {
+        const response = await apiClient.createChat({
+          title: `🤖 Tarea: ${goalText.substring(0, 30)}`,
+          model: selectedModel,
+        });
+        activeChat = response.chat;
+        await selectChat(activeChat?.id ?? "");
+        if (!activeChat?.id) {
+          toast.error('Failed to create chat for the agent task');
+          return;
+        }
+      } catch (err) {
+        toast.error('Failed to create chat for the agent task');
+        return;
+      }
+    }
+
+    setIsWebSearching(true); // reuse the busy flag — Stop button is wired the same way
+
+    try {
+      if (isNewChat) {
+        const userMessage = {
+          id: `msg-user-${Date.now()}`,
+          chatId: activeChat.id,
+          role: 'USER' as const,
+          content: `🤖 Tarea: ${goalText}`,
+          timestamp: new Date().toISOString(),
+        };
+        setCurrentChat(prev => prev ? { ...prev, messages: [...(prev.messages || []), userMessage] } : prev);
+      }
+
+      const aiMessage = {
+        id: `msg-ai-${Date.now() + 1}`,
+        chatId: activeChat.id,
+        role: 'ASSISTANT' as const,
+        content: '```agent-task-state\n' + JSON.stringify({ ...initialAgentState, steps: [], artifacts: [] }) + '\n```',
+        timestamp: new Date().toISOString(),
+      };
+      setCurrentChat(prev => prev ? { ...prev, messages: [...(prev.messages || []), aiMessage] } : prev);
+
+      const updateBubble = (state: AgentTaskState) => {
+        const fenced = '```agent-task-state\n' + JSON.stringify(state) + '\n```' +
+          (state.finalText ? '\n\n' + state.finalText : '');
+        setCurrentChat(prev => prev ? {
+          ...prev,
+          messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content: fenced } : m),
+        } : prev);
+      };
+
+      const controller = new AbortController();
+      searchAbortControllerRef.current = controller;
+
+      let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [] };
+      try {
+        for await (const evt of agentTaskService.runIterator({
+          goal: goalText,
+          chatId: activeChat.id,
+          model: selectedModel,
+          signal: controller.signal,
+        })) {
+          state = reduceEvent(state, evt);
+          updateBubble(state);
+        }
+      } catch (err: any) {
+        if (controller.signal.aborted || /abort/i.test(err?.message || '')) {
+          state = { ...state, done: true, error: 'aborted' };
+          updateBubble(state);
+        } else {
+          throw err;
+        }
+      }
+
+      setIsWebSearching(false);
+      searchAbortControllerRef.current = null;
+      toast.success('Tarea completada');
+      if (activeChat?.id) selectChat(activeChat.id);
+    } catch (err: any) {
+      console.error('Agent task failed:', err);
+      toast.error(err?.message || 'Agent task failed');
+      setIsWebSearching(false);
+      searchAbortControllerRef.current = null;
     }
   };
 

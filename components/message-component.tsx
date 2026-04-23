@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
+import { AgenticStepsRenderer } from "@/components/agentic-steps"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
 import { Badge } from "@/components/ui/badge"
@@ -613,6 +614,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         if (!inline && match) {
             const language = match[1];
             const codeString = String(children).replace(/\n$/, '');
+            if (language === 'agent-task-state') {
+                try {
+                    const state = JSON.parse(codeString);
+                    return <AgenticStepsRenderer state={state} />;
+                } catch {
+                    return null;
+                }
+            }
             if (isExecutableArtifact(language, codeString)) {
                 return <ArtifactCard code={codeString} language={language} />;
             }
@@ -742,6 +751,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         if (!inline && match) {
                             const lang = (match[1] || '').toLowerCase();
                             const codeString = String(children).replace(/\n$/, '');
+                            // Agent task state: rendered as Claude-style step
+                            // cards instead of a raw code block. The chat
+                            // surface persists agent runs as a fenced JSON
+                            // payload so a chat reload can re-hydrate them.
+                            if (lang === 'agent-task-state') {
+                                try {
+                                    const state = JSON.parse(codeString);
+                                    return <AgenticStepsRenderer state={state} />;
+                                } catch {
+                                    return null;
+                                }
+                            }
                             // Will the block become an artifact once streaming
                             // finishes? Run the same detector we use post-
                             // stream so the header + final card stay aligned.

@@ -202,7 +202,13 @@ export class AIService {
 - 'viz': Building a chart, plot, or technical diagram. Covers S-curve Earned Value charts, Pareto diagrams, Ishikawa fishbone diagrams, histograms, scatter + regression, box plots, interactive dashboards, heatmaps, sankey, treemaps, flowcharts, ER diagrams, UML class/sequence/state diagrams, Gantt charts, user-journey diagrams. Examples: "dibuja un diagrama de Pareto con estos datos", "plot a histogram of weights", "interactive scatter with hover", "flowchart del proceso de onboarding", "diagrama ER de un e-commerce", "Gantt de 5 fases del proyecto", "S-curve de Earned Value". If the user wants to SEE data rendered as a picture / plot / diagram → 'viz'. If they want to COMPUTE a statistic → 'math'.
 - 'math': Solving a mathematics, statistics, or quantitative-science problem that benefits from LaTeX formulas and (optionally) numerical Python execution. Examples: "resuelve la integral de x^2·sin(x) dx por partes", "calcula el Cronbach's alpha de [...]", "autovalores de la matriz [[2,1],[1,3]]", "probabilidad binomial n=10 p=0.3 k=4", "derivada parcial de x^2·y respecto a y", "solve the system 2x + 3y = 12, x - y = 1", "factoriza x^3 - 6x^2 + 11x - 6", "limite cuando x->0 de sin(x)/x". Generic "what is 2+2" stays 'text'. Only route to 'math' when the problem has symbolic or numerical content worth showing with LaTeX or running Python on.
 - 'webdev': Building websites or UI components. Examples: "build a login page", "create a React component".
-- 'text': For all other general conversation, questions, and text generation. 
+- 'agent_task': Multi-step compound tasks that require BOTH research AND building a deliverable file (Excel/Word/PPT/PDF) AND running code. The task agent will plan, search the web, write Python, generate the document, and self-verify before delivering. Use this when the user asks for things like:
+  * "busca 30 artículos sobre X y mételos en un Excel" / "find 30 papers on X and put them in an Excel"
+  * "investiga sobre Y y dame un informe Word con citas APA" / "research Y and give me a Word report with APA citations"
+  * "crea un PPT con los datos del CSV adjunto" / "build a PPT from the attached CSV"
+  * "calcula la regresión lineal de estos datos y entrega un PDF con la gráfica"
+  * Anything that combines: search → process → produce file. Single-deliverable requests like "just create an empty Word doc" stay in 'doc'; pure data analysis without a deliverable file stays in 'math' or 'viz'.
+- 'text': For all other general conversation, questions, and text generation.
   This includes structured text outputs such as tables, dummy data, formatted lists, or code-generated textual data.
   If the user asks to create a "table", "list", "dataset", or "dummy data" without explicitly mentioning charts, slides, or presentations, classify as 'text'.
 
@@ -268,7 +274,7 @@ Respond with only one word.
       const intent = data.choices[0].message.content.toLowerCase().trim();
       console.log('intent FROM OPEN AI', intent);
 
-      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'plan', 'math', 'viz', 'doc', 'artifact', 'chart', 'webdev', 'text'];
+      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'plan', 'math', 'viz', 'doc', 'artifact', 'chart', 'webdev', 'agent_task', 'text'];
       if (validIntents.includes(intent)) {
         return intent;
       }
