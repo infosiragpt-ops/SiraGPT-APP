@@ -2880,6 +2880,34 @@ But first, you need to connect your Spotify account securely using the button be
   const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile } = useSidebar();
 
   // ────────────────────────────────────────────────────────────
+  // Auto-collapse the sidebar when ANY power-tool becomes active.
+  // Once the user picks Web Search / Image / Video / Spotify /
+  // Computer-Use / DocumentAI / SearchBrain the workspace widens
+  // automatically so the tool has room. We only trigger on the
+  // false→true edge so deactivating a tool does NOT auto-reopen
+  // the sidebar — restoring it stays the user's call. On mobile
+  // the sidebar is a sheet, so collapsing is a no-op.
+  // ────────────────────────────────────────────────────────────
+  const prevAnyToolActiveRef = React.useRef<boolean>(false);
+  React.useEffect(() => {
+    if (isSidebarMobile) return;
+    const anyActive =
+      !!isWebSearchActive ||
+      !!isSpotifyActive ||
+      !!isImageGenerationActive ||
+      !!isVideoGenerationActive ||
+      !!isComputerUseActive;
+    if (anyActive && !prevAnyToolActiveRef.current && sidebarOpen) {
+      setSidebarOpen(false);
+    }
+    prevAnyToolActiveRef.current = anyActive;
+  }, [
+    isWebSearchActive, isSpotifyActive, isImageGenerationActive,
+    isVideoGenerationActive, isComputerUseActive,
+    isSidebarMobile, sidebarOpen, setSidebarOpen,
+  ]);
+
+  // ────────────────────────────────────────────────────────────
   // Resizable split — chat ↔ right panel (Word/Excel/preview).
   // Ratio is the LEFT pane's width as a percentage. Persisted in
   // localStorage across sessions, defaults to 50/50, clamped to
