@@ -1,23 +1,25 @@
 "use client"
 
 /**
- * ChatPanel — left column on the canvas page. User types an
- * instruction, hits send, stream fires, iframe on the right updates
- * once the full HTML is ready.
+ * ChatPanel — left column on the canvas page. Pairs the rich
+ * DesignComposer (model picker, effort dial, visibility badge) with
+ * the message history. Each send call threads the user's model
+ * choice through to /api/design/:id/generate, so the backend
+ * provider router picks OpenAI / OpenRouter / Gemini as the name
+ * dictates.
  *
- * We don't render partial HTML streams into the iframe — a half-
- * generated `<div>` with unclosed tags produces meaningless layout
- * thrash. The toolbar shows a generating pulse while the model
- * writes; the iframe swap happens on `final`.
+ * We don't render partial HTML into the iframe — a half-generated
+ * <div> with unclosed tags produces meaningless layout thrash. The
+ * generating pulse shows live char count; the iframe swaps on the
+ * `final` event only.
  */
 
 import * as React from "react"
 import { motion } from "framer-motion"
-import { Send, Square, Loader2, Sparkles } from "lucide-react"
+import { Sparkles } from "lucide-react"
 import { toast } from "sonner"
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { cn } from "@/lib/utils"
+
+import { DesignComposer } from "./design-composer"
 import {
   designService, type DesignDetail,
 } from "@/lib/design-service"
@@ -28,29 +30,38 @@ interface Props {
 }
 
 export function ChatPanel({ design, onUpdated }: Props) {
-  const [instruction, setInstruction] = React.useState("")
   const [running, setRunning] = React.useState(false)
   const [progressChars, setProgressChars] = React.useState(0)
   const abortRef = React.useRef<AbortController | null>(null)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
 
-  // Scroll the chat to bottom whenever messages change
   React.useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [design.messages.length, running])
 
-  async function send() {
-    const q = instruction.trim()
-    if (!q || running) return
-    setInstruction("")
+  async function handleSend({
+    instruction, model, effort,
+  }: {
+    instruction: string
+    model: string
+    effort: "rapid" | "balanced" | "thorough"
+  }) {
+    if (running) return
     setRunning(true)
     setProgressChars(0)
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
     try {
-      for await (const ev of designService.generate(design.id, q, ctrl.signal)) {
+      // effort is captured but not yet threaded to the backend — the
+      // generator is a single LLM call today (no planner loop), so
+      // the effort knob is UI-forward-compat until we decide whether
+      // to map it onto temperature, max_tokens, or a second pass.
+      for await (const ev of designService.generate(design.id, instruction, {
+        model,
+        signal: ctrl.signal,
+      })) {
         if (ev.type === "progress") setProgressChars(ev.chars)
         else if (ev.type === "final") onUpdated(ev.html, ev.updatedAt)
         else if (ev.type === "error") {
@@ -66,15 +77,15 @@ export function ChatPanel({ design, onUpdated }: Props) {
     }
   }
 
-  function stop() {
+  function handleStop() {
     abortRef.current?.abort()
   }
 
   const hasMessages = design.messages.length > 0
 
   return (
-    <aside className="w-full lg:w-[380px] shrink-0 flex flex-col border-r border-border/60 bg-card">
-      {/* Header */}
+    <aside className="w-full lg:w-[400px] shrink-0 flex flex-col border-r border-border/60 bg-card">
+      {/* Kind / name header */}
       <div className="border-b border-border/60 px-4 py-3">
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
           <Sparkles className="h-3 w-3" />
@@ -93,54 +104,25 @@ export function ChatPanel({ design, onUpdated }: Props) {
         {design.messages.map((m, i) => (
           <MessageBubble key={i} role={m.role} content={m.content} />
         ))}
-
-        {running && (
-          <motion.div
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex items-center gap-2 text-xs text-muted-foreground"
-          >
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>Generating{progressChars > 0 && ` · ${progressChars.toLocaleString()} chars`}</span>
-          </motion.div>
-        )}
       </div>
 
       {/* Composer */}
       <div className="border-t border-border/60 p-3">
-        <div className="rounded-xl border border-border/60 bg-background focus-within:border-foreground/40 transition-colors">
-          <Textarea
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            placeholder={hasMessages ? "Refine or ask for changes…" : "Describe what to build…"}
-            rows={3}
-            disabled={running}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                send()
-              }
-            }}
-            className="border-0 resize-none text-sm focus-visible:ring-0 focus-visible:ring-offset-0 min-h-[64px]"
-          />
-          <div className="flex items-center justify-end px-2 pb-2">
-            {running ? (
-              <Button onClick={stop} variant="outline" size="sm" className="gap-1.5 h-8">
-                <Square className="h-3 w-3" /> Stop
-              </Button>
-            ) : (
-              <Button
-                onClick={send}
-                disabled={!instruction.trim()}
-                size="sm"
-                className={cn("gap-1.5 h-8")}
-              >
-                <Send className="h-3 w-3" />
-                Send
-              </Button>
-            )}
-          </div>
-        </div>
+        <DesignComposer
+          running={running}
+          progressChars={progressChars}
+          onSend={handleSend}
+          onStop={handleStop}
+          placeholder={
+            hasMessages
+              ? "Solicitar cambios de seguimiento"
+              : design.kind === "slide_deck"
+              ? "Describe la presentación que quieres construir…"
+              : design.kind === "prototype"
+              ? "Describe el prototipo que quieres construir…"
+              : "Describe el diseño…"
+          }
+        />
       </div>
     </aside>
   )

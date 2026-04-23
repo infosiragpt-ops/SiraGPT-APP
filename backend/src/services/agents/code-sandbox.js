@@ -52,7 +52,7 @@ const LANGUAGE_CONFIG = {
 };
 
 function stripEnv() {
-  return {
+  const env = {
     PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
     HOME: '/tmp',
     LANG: process.env.LANG || 'C.UTF-8',
@@ -60,6 +60,17 @@ function stripEnv() {
     PYTHONDONTWRITEBYTECODE: '1',
     NODE_OPTIONS: `--max-old-space-size=${DEFAULT_MEMORY_MB}`,
   };
+  // Whitelist scientific-Python site-packages so SymPy / NumPy /
+  // SciPy / Pandas resolve inside the sandbox. Without this, HOME is
+  // rewritten to /tmp and Python can't find the user-installed libs.
+  // SANDBOX_PYTHONPATH can be set explicitly in the environment (prod
+  // deploys); otherwise we fall back to the host's PYTHONPATH +
+  // PYTHONUSERBASE so a local dev machine with `pip install --user
+  // sympy numpy scipy pandas` just works.
+  const ppath = process.env.SANDBOX_PYTHONPATH || process.env.PYTHONPATH;
+  if (ppath) env.PYTHONPATH = ppath;
+  if (process.env.PYTHONUSERBASE) env.PYTHONUSERBASE = process.env.PYTHONUSERBASE;
+  return env;
 }
 
 async function mkTempDir() {

@@ -1330,6 +1330,80 @@ class ApiClient {
     });
   }
 
+  async generatePlan(data: { prompt: string; chatId?: string; model?: string }) {
+    return this.request('/plan/generate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // SSE streamer for the plan generator. The server emits progress events
+  // so the chat can render live feedback instead of a silent spinner.
+  // Events: { type: 'stage'|'tokens'|'final'|'error', ... }
+  async solveMathStream(
+    data: { prompt: string; chatId?: string; model?: string },
+    onEvent: (ev: any) => void,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    return this._sseStream('/math/solve', data, onEvent, opts);
+  }
+
+  async generatePlanStream(
+    data: { prompt: string; chatId?: string; model?: string },
+    onEvent: (ev: any) => void,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    return this._sseStream('/plan/generate', data, onEvent, opts);
+  }
+
+  // Shared SSE reader for POST-body → event-stream endpoints. Extracted
+  // so the plan + math streamers share one implementation and any new
+  // streaming route (compute, agent-step, etc.) can reuse it.
+  async _sseStream(
+    path: string,
+    data: any,
+    onEvent: (ev: any) => void,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+    const res = await fetch(`${this.baseURL}${path}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+      signal: opts.signal,
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const j = await res.json(); msg = j.error || msg; } catch {}
+      throw new Error(msg);
+    }
+    if (!res.body) throw new Error('Stream body missing');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const raw = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        const payload = raw
+          .split('\n')
+          .filter(l => l.startsWith('data: '))
+          .map(l => l.slice(6))
+          .join('\n');
+        if (!payload) continue;
+        try { onEvent(JSON.parse(payload)); } catch {}
+      }
+    }
+  }
+
   // Web Development Streaming endpoint
   async generateWebDevStream(
     data: {

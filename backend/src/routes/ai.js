@@ -35,6 +35,16 @@ const { use } = require('passport');
 // // const openai = new OpenAI({
 // //   apiKey: process.env.OPENAI_API_KEY
 // // });
+/** OpenRouter slug — kept in sync with prisma/seed.js */
+const KIMI_K26_OPENROUTER = {
+  name: 'moonshotai/kimi-k2.6',
+  displayName: 'Kimi K2.6',
+  provider: 'OpenRouter',
+  type: 'TEXT',
+  icon: 'OpenRouterLogo',
+  description: 'Moonshot Kimi K2.6 via OpenRouter: long context, multimodal, coding & agents.',
+};
+
 // ✅ Get available AI models
 router.get('/models', async (req, res) => {
   try {
@@ -49,7 +59,7 @@ router.get('/models', async (req, res) => {
     }
 
 
-    const models = await prisma.aiModel.findMany({
+    let models = await prisma.aiModel.findMany({
       where: whereClause,
       select: {
         id: true,
@@ -62,6 +72,30 @@ router.get('/models', async (req, res) => {
       },
       orderBy: { createdAt: 'asc' }
     });
+
+    // If OpenRouter is configured but Kimi was never seeded (or DB is empty),
+    // expose Kimi K2.6 anyway so the picker always shows it. Skip when a DB row
+    // exists (active or inactive) so admin disable/delete is respected.
+    const wantText = !type || type === 'TEXT';
+    if (wantText && String(process.env.OPENROUTER_API_KEY || '').trim()) {
+      const alreadyListed = models.some((m) => m.name === KIMI_K26_OPENROUTER.name);
+      if (!alreadyListed) {
+        const kimiRow = await prisma.aiModel.findFirst({
+          where: { name: KIMI_K26_OPENROUTER.name },
+          select: { id: true },
+        });
+        if (!kimiRow) {
+          models = [
+            {
+              id: '__virtual_openrouter_kimi_k26__',
+              ...KIMI_K26_OPENROUTER,
+            },
+            ...models,
+          ];
+        }
+      }
+    }
+
     res.json({ models });
   } catch (error) {
     console.error('Get AI models error:', error);
@@ -368,7 +402,7 @@ router.post(
 
           // ✅ Provider detection logic merged here
           if (actualModel.includes('x-ai/') || actualModel.includes('openrouter/') || actualModel.includes('anthropic/') || actualModel.includes('meta-llama/') || actualModel.includes("deepseek/") ||
-            actualModel.includes("meta-llama/") || actualModel.includes("/gpt-oss")
+            actualModel.includes("meta-llama/") || actualModel.includes("/gpt-oss") || actualModel.includes("moonshotai/")
           ) {
             actualProvider = 'OpenRouter';
           } else if (actualModel.includes('gemini') || actualModel.includes('imagen')) {

@@ -54,6 +54,8 @@ const MODEL_CONTEXT_LIMITS = {
   'deepseek/deepseek-r1': 65000,
   'x-ai/grok-2': 131000,
   'x-ai/grok-beta': 131000,
+  // Moonshot / Kimi (OpenRouter slug)
+  'moonshotai/kimi-k2.6': 262144,
 };
 
 const DEFAULT_CONTEXT_LIMIT = 8192;

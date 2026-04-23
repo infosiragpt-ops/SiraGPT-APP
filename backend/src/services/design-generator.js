@@ -31,6 +31,44 @@ const OpenAI = require('openai');
 const DEFAULT_MODEL = 'gpt-4o';
 const MAX_HTML_CHARS_IN_PROMPT = 24000;
 
+// ─── Provider routing ─────────────────────────────────────────────────────
+//
+// The design studio's model dropdown lets the user pick from any of
+// the ~345 text models in AiModel. These resolve to three distinct
+// upstream providers, each with its own API base + key. Mirrors the
+// routing logic in routes/ai.js so anything that works in the main
+// chat also works in the design canvas.
+
+function clientForModel(modelName) {
+  if (!modelName) return null;
+  const m = String(modelName);
+  // OpenRouter catches everything that looks like a namespaced slug
+  // (anthropic/..., x-ai/..., openrouter/..., meta-llama/..., etc.).
+  if (/^(anthropic|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|google|moonshotai)\//i.test(m)
+      || m.includes('/gpt-oss')) {
+    return {
+      provider: 'OpenRouter',
+      client: new OpenAI({
+        apiKey: process.env.OPENROUTER_API_KEY,
+        baseURL: 'https://openrouter.ai/api/v1',
+      }),
+    };
+  }
+  if (m.includes('gemini') || m.includes('imagen')) {
+    return {
+      provider: 'Gemini',
+      client: new OpenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+      }),
+    };
+  }
+  return {
+    provider: 'OpenAI',
+    client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
+  };
+}
+
 // ─── System prompts ───────────────────────────────────────────────────────
 
 const CORE_RULES = `You are a senior product designer using the siraGPT Design studio.
@@ -131,12 +169,23 @@ function extractHtml(raw) {
  * @param {AbortSignal} [args.signal]
  * @param {string} [args.model]
  */
-async function* streamGeneration(openai, args) {
+async function* streamGeneration(openaiIgnored, args) {
   const {
     instruction, history = [], currentHtml = null,
     kind, fidelity, speakerNotes, signal, model = DEFAULT_MODEL,
   } = args;
   if (!instruction) throw new Error('design-generator: instruction required');
+
+  // Route to the right provider. Callers used to pass in a pre-built
+  // OpenAI client; we ignore that now (kept in signature for back-
+  // compat) and construct the right one based on the model name,
+  // because a single design studio session can freely switch between
+  // OpenAI / Anthropic / OpenRouter / Gemini per request.
+  const routed = clientForModel(model);
+  if (!routed || !routed.client) {
+    throw new Error(`design-generator: no API key configured for model "${model}"`);
+  }
+  const openai = routed.client;
 
   const system = systemPromptFor({ kind, fidelity, speakerNotes });
 
@@ -185,4 +234,4 @@ async function* streamGeneration(openai, args) {
   yield { delta: '', full: cleaned, final: true };
 }
 
-module.exports = { streamGeneration, extractHtml, systemPromptFor };
+module.exports = { streamGeneration, extractHtml, systemPromptFor, clientForModel };

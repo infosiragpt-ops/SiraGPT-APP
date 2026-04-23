@@ -202,7 +202,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     padding: 0;
     overflow: hidden;
     overscroll-behavior: none;
-    scrollbar-gutter: stable;
+    /* scrollbar-gutter intentionally NOT set here: the body has
+       overflow:hidden so no scrollbar ever renders, and reserving a
+       gutter pushes the inner chat ScrollArea ~15 px in from the
+       right edge of the window, creating a visible dead band. */
     /* Forces the layout engine to treat the body as the viewport
        origin; prevents iOS from treating body scroll as "the page"
        when there are nested scrollers. */

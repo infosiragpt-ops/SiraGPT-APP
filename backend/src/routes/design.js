@@ -9,7 +9,6 @@
 
 const express = require('express');
 const { body, param, query, validationResult } = require('express-validator');
-const OpenAI = require('openai');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const generator = require('../services/design-generator');
@@ -173,12 +172,22 @@ router.post(
   ],
   async (req, res) => {
     if (validationFail(req, res)) return;
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
-    }
 
     const owned = await ownDesign(req.user.id, req.params.id);
     if (!owned) return res.status(404).json({ error: 'Design not found' });
+
+    // The generator routes to the right provider based on the model
+    // name (OpenAI / OpenRouter / Gemini); each has its own key. We
+    // check at least one is set — not all of them — so the route
+    // works if the user only has OpenAI or only OpenRouter.
+    const hasAnyKey = !!(
+      process.env.OPENAI_API_KEY ||
+      process.env.OPENROUTER_API_KEY ||
+      process.env.GEMINI_API_KEY
+    );
+    if (!hasAnyKey) {
+      return res.status(500).json({ error: 'No AI provider key configured' });
+    }
 
     // SSE headers + client-disconnect propagation. If the user
     // closes the tab mid-generation, abort the underlying OpenAI
@@ -193,16 +202,21 @@ router.post(
     const controller = new AbortController();
     req.on('close', () => controller.abort());
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
     const history = Array.isArray(owned.messages) ? owned.messages : [];
-    const userMsg = { role: 'user', content: req.body.instruction, at: new Date().toISOString() };
+    const userMsg = {
+      role: 'user',
+      content: req.body.instruction,
+      at: new Date().toISOString(),
+      model: req.body.model || null,
+    };
 
     try {
-      send({ type: 'start' });
+      send({ type: 'start', model: req.body.model || null });
       let finalHtml = '';
       let seenChars = 0;
-      for await (const chunk of generator.streamGeneration(openai, {
+      // We pass `null` for the client — the generator builds its own
+      // based on the model name (OpenAI / OpenRouter / Gemini).
+      for await (const chunk of generator.streamGeneration(null, {
         instruction: req.body.instruction,
         history: history.map(m => ({ role: m.role, content: m.content })),
         currentHtml: owned.html,

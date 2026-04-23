@@ -47,6 +47,7 @@ import ImageGenerationEffect from './ImageGenerationEffect';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 import ChartComponent from './chart-component';
 import { FigmaDiagramDisplay } from './figma-diagram-component';
+import { PlanArtifactDisplay } from './plan/plan-artifact-display';
 import { PresentationView } from './presentation-view';
 import { CustomCodeBlock } from "./ui/custom-code-block"
 import { ArtifactCard, isExecutableArtifact } from "./chat/ArtifactCard"
@@ -2078,6 +2079,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <FileDisplay />
                                 <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} onImageClick={(url) => setSelectedImage(url)} />
                                 <FigmaDiagramDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
+                                <PlanArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <GmailConnectionDisplay />
                                 <GoogleServicesConnectionDisplay />
                                 <SpotifyConnectionDisplay />

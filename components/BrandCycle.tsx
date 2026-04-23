@@ -832,7 +832,7 @@ const BRANDS: Brand[] = [
   { id: "chatgpt",  accent: "#10a37f", tagline: "CHATEA CON CHATGPT PRO",    Visual: ChatGPTVisual },
   { id: "gemini",   accent: "#4285f4", tagline: "POTENCIA CON GEMINI 2.5",   Visual: GeminiVisual },
   { id: "grok",     accent: "#0f172a", tagline: "EXPLORA CON GROK 4",        Visual: GrokVisual },
-  { id: "kimi",     accent: "#3b82f6", tagline: "USA KIMI K2",               Visual: KimiVisual },
+  { id: "kimi",     accent: "#3b82f6", tagline: "USA KIMI K2.6",             Visual: KimiVisual },
   { id: "images",   accent: "#6366f1", tagline: "GENERA IMÁGENES IA",        Visual: ImagesVisual },
   { id: "video",    accent: "#dc2626", tagline: "CREA VIDEOS 4K",            Visual: VideoVisual },
   { id: "excel",    accent: "#107c41", tagline: "CREA EXCEL PROFESIONAL",    Visual: ExcelVisual },

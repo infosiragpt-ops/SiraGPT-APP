@@ -18,14 +18,16 @@ const modelsToSeed = [
     { name: 'gpt-4o-mini', displayName: 'GPT-4o Mini', provider: 'OpenAI', type: 'TEXT', icon: 'ChatGPTLogo', description: 'GPT-4o ka compact aur efficient version.', isActive: true },
     { name: 'gpt-4.1', displayName: 'GPT-4.1', provider: 'OpenAI', type: 'TEXT', icon: 'ChatGPTLogo', description: 'GPT-4 ki ek advanced aur behtar iteration.', isActive: true },
 
-    // --- OpenRouter Models ---
-    // Provider specific logos (Deepseek, Grok, Claude) ya OpenRouter ka apna logo
-    { name: 'openai/gpt-oss-120b', displayName: 'GPT-OSS 120B', provider: 'OpenRouter', type: 'TEXT', icon: 'OpenRouterLogo', description: 'OpenRouter ke zariye available ek bara open-source GPT model.', isActive: true },
-    { name: 'deepseek/deepseek-chat-v3-0324', displayName: 'Deepseek V3', provider: 'OpenRouter', type: 'TEXT', icon: 'DeepseekLogo', description: 'Deepseek AI ka sabse naya aur muassar model.', isActive: true },
-    { name: 'deepseek/deepseek-r1-0528', displayName: 'DeepSeek R1', provider: 'OpenRouter', type: 'TEXT', icon: 'DeepseekLogo', description: 'Deepseek ka aik mazboot reasoning (tarqeeb) model.', isActive: true },
-    { name: 'anthropic/claude-3-haiku', displayName: 'Claude 3 Haiku', provider: 'OpenRouter', type: 'TEXT', icon: 'ClaudeLogo', description: 'Anthropic ka tez aur compact model, low-latency applications ke liye.', isActive: true },
-    { name: 'x-ai/grok-3-mini', displayName: 'Grok 3 Mini', provider: 'OpenRouter', type: 'TEXT', icon: 'GrokLogo', description: 'xAI ka real-time knowledge wala model.', isActive: true },
-    { name: 'x-ai/grok-code-fast-1', displayName: 'Grok Code Fast 1', provider: 'OpenRouter', type: 'TEXT', icon: 'GrokLogo', description: 'xAI ka khaas model jo tez code generation ke liye banaya gaya hai.', isActive: true },
+    // --- OpenRouter — unified on Kimi K2.6 (moonshotai/kimi-k2.6) ---
+    {
+      name: 'moonshotai/kimi-k2.6',
+      displayName: 'Kimi K2.6',
+      provider: 'OpenRouter',
+      type: 'TEXT',
+      icon: 'OpenRouterLogo',
+      description: 'Moonshot Kimi K2.6 via OpenRouter: multimodal, long context, coding and agentic tasks.',
+      isActive: true,
+    },
 
     // --- Gemini Models (via Direct API) ---
     // Sabhi Gemini models ke liye GeminiLogo ka istemal

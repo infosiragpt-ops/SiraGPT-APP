@@ -476,6 +476,173 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setIsStreaming(false);
           setCurrentStreamId(null);
 
+        } else if (intent === 'math') {
+          // Math / science solver via SSE. The backend streams staging
+          // events ("Analizando el problema → Consultando modelo →
+          // Ejecutado Python en 340 ms → Formateando respuesta con
+          // LaTeX") then emits the final markdown string, which the
+          // existing ReactMarkdown + remark-math + rehype-katex
+          // pipeline renders with KaTeX automatically.
+          const controller = new AbortController();
+          abortControllerRef.current = controller;
+
+          let finalMsg: any = null;
+          let lastStage = 'Resolviendo';
+          let lastPct = 0;
+
+          const renderProgress = () => {
+            const filled = Math.max(0, Math.min(10, Math.floor(lastPct / 10)));
+            const bar = '▰'.repeat(filled) + '▱'.repeat(10 - filled);
+            const body = `🧮  **${lastStage}**\n\n${bar}  ${lastPct}%`;
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id ? { ...m, content: body } : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          };
+
+          try {
+            await apiClient.solveMathStream(
+              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              (ev: any) => {
+                if (controller.signal.aborted) return;
+                if (ev.type === 'stage') {
+                  lastStage = ev.label || lastStage;
+                  lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
+                  renderProgress();
+                } else if (ev.type === 'final') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: ev.content || 'Listo.',
+                    files: [],
+                  };
+                } else if (ev.type === 'error') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: `No pude resolver el problema: ${ev.error || 'error desconocido'}.`,
+                    files: [],
+                  };
+                }
+              },
+              { signal: controller.signal },
+            );
+          } catch (err: any) {
+            if (err?.name !== 'AbortError') {
+              finalMsg = finalMsg || {
+                id: aiMessagePlaceholder.id,
+                role: 'ASSISTANT',
+                content: `No pude resolver el problema: ${err?.message || 'error de red'}.`,
+                files: [],
+              };
+            }
+          }
+
+          if (finalMsg) {
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id ? finalMsg : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          }
+
+          abortControllerRef.current = null;
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+
+        } else if (intent === 'plan') {
+          // Architectural floor-plan DXF generation via SSE. The server
+          // emits progress events (stage / tokens) so the user sees
+          // "Consultando modelo · 2.3k tokens · 45%" instead of a silent
+          // spinner for 30-60s. On `final`/`error` we swap the
+          // placeholder for the assistant message returned by the
+          // backend (which is already persisted in the DB).
+          const controller = new AbortController();
+          abortControllerRef.current = controller;
+
+          let finalMsg: any = null;
+          let lastStage = 'Generando plano';
+          let lastPct = 0;
+          let tokenCount = 0;
+
+          const renderProgress = () => {
+            const bar = '▰'.repeat(Math.floor(lastPct / 10)) + '▱'.repeat(10 - Math.floor(lastPct / 10));
+            const tokenLine = tokenCount
+              ? `\n\n${bar}  ${lastPct}%  ·  ${(tokenCount / 1000).toFixed(1)}k tokens`
+              : `\n\n${bar}  ${lastPct}%`;
+            const body = `🏗️  **${lastStage}**${tokenLine}`;
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id ? { ...m, content: body } : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          };
+
+          try {
+            await apiClient.generatePlanStream(
+              { prompt: content, chatId: activeChat.id, model: selectedModel },
+              (ev: any) => {
+                if (controller.signal.aborted) return;
+                if (ev.type === 'stage') {
+                  lastStage = ev.label || lastStage;
+                  lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
+                  renderProgress();
+                } else if (ev.type === 'tokens') {
+                  tokenCount = ev.count || tokenCount;
+                  lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
+                  renderProgress();
+                } else if (ev.type === 'final') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: 'Plano generado.',
+                    files: [{ type: 'plan', dxf: ev.dxf, plan: ev.plan }],
+                  };
+                } else if (ev.type === 'error') {
+                  finalMsg = ev.assistantMessage || {
+                    id: aiMessagePlaceholder.id,
+                    role: 'ASSISTANT',
+                    content: `No pude generar el plano: ${ev.error || 'error desconocido'}.`,
+                    files: [],
+                  };
+                }
+              },
+              { signal: controller.signal },
+            );
+          } catch (err: any) {
+            if (err?.name !== 'AbortError') {
+              finalMsg = finalMsg || {
+                id: aiMessagePlaceholder.id,
+                role: 'ASSISTANT',
+                content: `No pude generar el plano: ${err?.message || 'error de red'}.`,
+                files: [],
+              };
+            }
+          }
+
+          if (finalMsg) {
+            setCurrentChat((prev) => {
+              if (!prev) return prev;
+              const msgs = prev.messages.map((m: any) =>
+                m.id === aiMessagePlaceholder.id ? finalMsg : m
+              );
+              return { ...prev, messages: msgs };
+            });
+          }
+
+          abortControllerRef.current = null;
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+
         } else {
           // Create new AbortController for this request
           const controller = new AbortController();

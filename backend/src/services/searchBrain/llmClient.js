@@ -39,7 +39,7 @@ function getDefaultModel() {
   return (
     process.env.SEARCH_BRAIN_MODEL ||
     process.env.SMALL_MODEL ||
-    (process.env.OPENROUTER_API_KEY ? "anthropic/claude-3-haiku" : "gpt-4o-mini")
+    (process.env.OPENROUTER_API_KEY ? "moonshotai/kimi-k2.6" : "gpt-4o-mini")
   );
 }
 

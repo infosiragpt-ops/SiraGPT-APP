@@ -27,7 +27,7 @@ function getFallbackChain() {
     if (!raw) {
         const defaults = ['gpt-4o-mini'];
         if (process.env.OPENROUTER_API_KEY) {
-            defaults.push('anthropic/claude-3-haiku', 'deepseek/deepseek-chat-v3-0324');
+            defaults.push('moonshotai/kimi-k2.6');
         }
         if (process.env.GEMINI_API_KEY) {
             defaults.push('gemini-2.5-flash');
@@ -45,7 +45,7 @@ function getFallbackChain() {
  */
 function providerForModel(model) {
     if (!model) return 'OpenAI';
-    if (/^(x-ai|openrouter|anthropic|meta-llama|deepseek|mistralai|qwen|nvidia|microsoft|cohere)\//i.test(model)) return 'OpenRouter';
+    if (/^(x-ai|openrouter|anthropic|meta-llama|deepseek|mistralai|qwen|nvidia|microsoft|cohere|moonshotai)\//i.test(model)) return 'OpenRouter';
     if (/^\/?(gpt-oss|zephyr)/i.test(model)) return 'OpenRouter';
     if (/^(gemini|imagen)/i.test(model)) return 'Gemini';
     return 'OpenAI';

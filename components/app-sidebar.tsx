@@ -603,6 +603,7 @@ export function AppSidebar() {
               <p>{t("design")}</p>
             </TooltipContent>
           </Tooltip>
+
         </TooltipProvider>
 
       </div>
@@ -663,7 +664,7 @@ export function AppSidebar() {
 
                         return (
                           <SidebarMenuItem key={chat.id}>
-                            <div className="flex items-center w-full group">
+                            <div className="flex w-full items-center gap-0.5 group">
                               {isEditing ? (
                                 <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
                                   <Input
@@ -708,12 +709,7 @@ export function AppSidebar() {
                                           isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
                                           onClick={() => !isEditing && handleChatClick(chat.id)}
                                           className={cn(
-                                            // Single-row, fixed-height layout — 2x the density of
-                                            // the previous stacked title+timestamp. Right-padding
-                                            // holds room for the 3-dot menu (pr-8) or the streaming
-                                            // spinner + 3-dot (pr-14).
-                                            "flex-1 justify-start h-8 py-0 transition-all",
-                                            isStreaming ? "pr-14" : "pr-8",
+                                            "h-8 min-w-0 flex-1 justify-start py-0 pr-1 transition-all",
                                           )}
                                         >
                                           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -736,25 +732,27 @@ export function AppSidebar() {
                                       )}
                                     </Tooltip>
                                   </TooltipProvider>
-                                  {/* Always-on blue spinner while this chat's
-                                      background stream is still generating. Sits
-                                      to the LEFT of the 3-dot dropdown so the
-                                      user always sees which thread is working. */}
                                   {isStreaming && (
-                                    <Loader2
-                                      aria-label="Chat en progreso"
-                                      className="pointer-events-none absolute right-9 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-blue-500"
-                                    />
+                                    <span
+                                      className="flex h-8 w-7 shrink-0 items-center justify-center"
+                                      title="Generando…"
+                                    >
+                                      <Loader2
+                                        aria-label="Chat en progreso"
+                                        className="h-3.5 w-3.5 animate-spin text-primary"
+                                        strokeWidth={2.25}
+                                      />
+                                    </span>
                                   )}
                                   <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 absolute right-2 transition-opacity"
+                                        className="flex h-8 w-8 shrink-0 items-center justify-center p-0 opacity-0 transition-opacity group-hover:opacity-100"
                                         onClick={(e) => e.stopPropagation()}
                                       >
-                                        <MoreHorizontal className="h-3 w-3" />
+                                        <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
                                       </Button>
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>

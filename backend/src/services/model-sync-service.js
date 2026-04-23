@@ -353,6 +353,7 @@ class ModelSyncService {
     if (modelId.includes('gpt-3.5')) return 'Efficient GPT-3.5 based model';
     if (modelId.includes('claude')) return 'Anthropic Claude model via OpenRouter';
     if (modelId.includes('llama')) return 'Meta Llama model via OpenRouter';
+    if (modelId.includes('kimi')) return 'Moonshot Kimi model via OpenRouter';
     if (modelId.includes('gemini')) return 'Google Gemini model';
     if (modelId.includes('dall-e')) return 'OpenAI image generation model';
 

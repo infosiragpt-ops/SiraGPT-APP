@@ -109,6 +109,7 @@ export class AIService {
     if (/\b(ppt|presentation|slides)\b/i.test(lowerCasePrompt)) return 'ppt';
     if (/\b(chart|graph|diagram)\b/i.test(lowerCasePrompt)) return 'chart';
     if (/\b(flowchart|flow chart|flow diagram|process flow|workflow|figma|diagram design)\b/i.test(lowerCasePrompt)) return 'figma';
+    if (/\b(plano|planta|blueprint|floor ?plan|arquitect|casa|vivienda|residencia|depto|departamento|dormitorio|dxf|arquitectónico)\b/i.test(lowerCasePrompt)) return 'plan';
     if (/\b(website|webpage|html|css|javascript)\b/i.test(lowerCasePrompt)) return 'webdev';
     return 'text';
 
@@ -120,10 +121,23 @@ export class AIService {
     signal?: AbortSignal
   ): Promise<string> {
 
-    // const intent = await this.analyzeIntent(prompt);
-    // if (intent) {
-    //   return intent;
-    // }
+    // Fast-path: unambiguous architectural-plan phrases bypass the
+    // LLM classifier. Before this, "crea un plano de una casa" was
+    // landing in 'webdev' because the classifier saw "crea" and
+    // concluded the user wanted a UI page. A deterministic regex on
+    // the specific word "plano" / "planta" / "blueprint" removes
+    // that ambiguity entirely and saves ~1.5s per message.
+    const lc = prompt.toLowerCase();
+    if (/\b(plano|planos|blueprint|floor[- ]?plan|planta\s+(arquitect|baj|alt))\b/i.test(lc)) {
+      return 'plan';
+    }
+    // Same idea for math/science. Keywords that should never be
+    // anything but 'math' — integrals, derivatives, statistics
+    // helpers. The classifier LLM sometimes routes "calcula el
+    // cronbach's alpha" to 'text', which skips the solver.
+    if (/\b(integral|integrar|derivada|derivar|d\/dx|ecuaci[oó]n|resuelve(\s+la|\s+el)?|calcul[ae](\s+la|\s+el)?|cronbach|alpha\s+de\s+cronbach|autovalor|eigenval|matriz\s+(inversa|transpuesta|determinante)|regresi[oó]n|chi[- ]?cuadrado|anova|t[- ]?test|p[- ]valor|probabilidad\s+(de|binomial|normal|poisson)|varianza|desviaci[oó]n\s+est[aá]ndar|media\s+aritm|desv(iaci[oó]n)?\s+t[ií]pica|l[ií]mite\s+cuando|serie\s+de\s+fourier|transformada\s+de\s+laplace|sistema\s+de\s+ecuaciones|factorizar|simplifica\s+(la\s+)?expresi[oó]n|despejar|funci[oó]n\s+(derivada|continua|inversa))\b/i.test(lc)) {
+      return 'math';
+    }
 
     try {
 
@@ -146,6 +160,8 @@ export class AIService {
 * French: "crée une présentation sur l'IA", "génère des slides"
 - 'chart': Creating charts or graphs. Examples: "create a bar chart", "make a pie graph".
 - 'figma': Creating flowcharts, process diagrams,sequence diagrams, class diagrams, state diagrams, ER diagrams, user journey diagrams, git graphs, or design diagrams. Examples: "create a flowchart of login flow", "make a process diagram", "design a workflow".
+- 'plan': Creating architectural FLOOR PLANS / blueprints of buildings, houses, apartments, rooms. The output is a CAD/DXF drawing with walls, doors, windows, dimensions. Examples in multiple languages: "crea el plano de una casa", "dibújame un plano arquitectónico", "blueprint for a 3 bedroom house", "planta de un departamento 80 m2", "floor plan of an office", "plano de una vivienda con 2 baños". Do NOT classify generic "house" conversation as 'plan' — only when the user is explicitly asking for a drawing / plano / blueprint / floor plan / planta arquitectónica.
+- 'math': Solving a mathematics, statistics, or quantitative-science problem that benefits from LaTeX formulas and (optionally) numerical Python execution. Examples: "resuelve la integral de x^2·sin(x) dx por partes", "calcula el Cronbach's alpha de [...]", "autovalores de la matriz [[2,1],[1,3]]", "probabilidad binomial n=10 p=0.3 k=4", "derivada parcial de x^2·y respecto a y", "solve the system 2x + 3y = 12, x - y = 1", "factoriza x^3 - 6x^2 + 11x - 6", "limite cuando x->0 de sin(x)/x". Generic "what is 2+2" stays 'text'. Only route to 'math' when the problem has symbolic or numerical content worth showing with LaTeX or running Python on.
 - 'webdev': Building websites or UI components. Examples: "build a login page", "create a React component".
 - 'text': For all other general conversation, questions, and text generation. 
   This includes structured text outputs such as tables, dummy data, formatted lists, or code-generated textual data.
@@ -213,7 +229,7 @@ Respond with only one word.
       const intent = data.choices[0].message.content.toLowerCase().trim();
       console.log('intent FROM OPEN AI', intent);
 
-      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'chart', 'webdev', 'text'];
+      const validIntents = ['gmail', 'google_services', 'web_search', 'image', 'video', 'ppt','figma', 'plan', 'math', 'chart', 'webdev', 'text'];
       if (validIntents.includes(intent)) {
         return intent;
       }

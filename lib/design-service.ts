@@ -110,13 +110,22 @@ export const designService = {
    * Yields generate events as they arrive. Caller drives the UI;
    * the `final` event carries the complete HTML document, which
    * the iframe then renders.
+   *
+   * `model` is threaded to the backend so its provider router
+   * picks OpenAI / OpenRouter / Gemini based on the model name.
+   * Omitted → backend default (gpt-4o).
    */
-  async *generate(id: string, instruction: string, signal?: AbortSignal): AsyncGenerator<GenerateEvent> {
+  async *generate(
+    id: string,
+    instruction: string,
+    opts: { model?: string; signal?: AbortSignal } = {},
+  ): AsyncGenerator<GenerateEvent> {
+    const { model, signal } = opts
     const res = await fetch(`${API_ROOT}/design/${id}/generate`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ instruction }),
+      body: JSON.stringify({ instruction, model }),
       signal,
     })
     if (!res.ok) {

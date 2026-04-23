@@ -1513,13 +1513,13 @@ const NavbarModelSelector = ({
       <DropdownMenuTrigger
         className={cn(
           "group/model inline-flex h-10 items-center gap-2 rounded-xl px-3",
-          "bg-muted/40 text-foreground",
+          "bg-transparent text-foreground",
           "border border-transparent",
           "text-[13.5px] font-semibold tracking-tight",
-          "transition-[background-color,border-color] duration-200",
-          "hover:bg-muted/60",
+          "transition-colors duration-200",
+          "hover:bg-muted/40",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-          "data-[state=open]:bg-muted/70",
+          "data-[state=open]:bg-muted/50",
         )}
       >
         {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4 shrink-0" />}
@@ -1527,7 +1527,7 @@ const NavbarModelSelector = ({
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-[340px] p-0 overflow-hidden rounded-xl border-border/60 shadow-lg">
+      <DropdownMenuContent align="start" sideOffset={6} collisionPadding={12} className="w-[340px] p-0 overflow-hidden rounded-xl border-border/60 shadow-lg">
         <div className="border-b border-border/50 p-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
@@ -1543,7 +1543,7 @@ const NavbarModelSelector = ({
           </div>
         </div>
 
-        <ScrollArea className="max-h-[440px]">
+        <ScrollArea className="h-[440px]">
           {/* Recents — only shown when no search query is active. */}
           {recentModels.length > 0 && (
             <div className="px-1.5 pt-2">
@@ -5048,8 +5048,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               ) : (
                 <>
                   {/* Messages */}
-                  <ScrollArea className="flex-1 px-0 md:px-4 pb-2 mb-6" ref={scrollAreaRef}>
-                    <div className="space-y-2 max-w-3xl mx-auto w-full px-4 md:px-0 pt-24 pb-40">
+                  <ScrollArea className="flex-1 w-full pb-2 mb-6" ref={scrollAreaRef}>
+                    <div className="space-y-2 max-w-3xl mx-auto w-full px-4 md:px-4 pt-24 pb-40">
                       {(() => {
                         const messages = currentChat?.messages || [];
                         const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
