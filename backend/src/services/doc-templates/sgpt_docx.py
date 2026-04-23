@@ -26,6 +26,7 @@ Usage:
     )
 """
 
+import io
 from docx import Document
 from docx.shared import Pt, Cm, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING, WD_BREAK
@@ -421,6 +422,65 @@ GAD7_ITEMS = [
     'Enfadarse o irritarse con facilidad',
     'Sentir miedo como si algo terrible pudiera suceder',
 ]
+
+
+# ─── docxtpl — data-driven templates for matrices narrativas ──────────────
+#
+# When the user has a structured data set (rows of references, authors,
+# categorías, etc.) and wants them dropped into a styled Word template,
+# docxtpl is the cleanest tool. We expose a one-liner that takes a
+# template path + context dict and saves the result.
+#
+# Typical flow the LLM uses:
+#     from sgpt_docx import build_narrative_matrix
+#     rows = [{"autor":"García (2020)","tema":"X","muestra":"120","hallazgo":"..."}]
+#     build_narrative_matrix(OUT_PATH, title="Matriz narrativa", rows=rows,
+#                            columns=["autor","tema","muestra","hallazgo"])
+#
+# No external template file is needed — we build it with python-docx
+# using the APA-style helpers and then fill it in-place.
+
+def build_narrative_matrix(out_path, *, title, rows, columns,
+                           intro=None, institution=None, author=None):
+    """One-shot APA matriz narrativa: portada mini + tabla con las
+    columnas elegidas + una nota. Columnas aceptan str keys (misma
+    key que los dicts en `rows`)."""
+    doc = apa_document()
+    if author or institution:
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        txt = ' · '.join(x for x in [author, institution] if x)
+        _set_font(p.add_run(txt), size=10, italic=True)
+    apa_heading(doc, 1, title)
+    if intro:
+        apa_paragraph(doc, intro)
+    # Normalise column keys → labels
+    if columns and isinstance(columns[0], tuple):
+        keys  = [k for k, _ in columns]
+        headers = [lbl for _, lbl in columns]
+    else:
+        keys = list(columns)
+        headers = [k.replace('_', ' ').capitalize() for k in keys]
+    body = [[str(r.get(k, '')) for k in keys] for r in rows]
+    apa_table(
+        doc,
+        headers=headers, rows=body,
+        caption_number='1',
+        caption_title='Matriz narrativa de referencias',
+        note=f'N = {len(rows)}. Elaboración propia.',
+    )
+    doc.save(out_path)
+    return out_path
+
+
+def render_template(template_path, context, out_path):
+    """Render a docxtpl Jinja-flavoured .docx template with a context
+    dict. The template can use {{ variable }} and {% for %} blocks."""
+    from docxtpl import DocxTemplate
+    tpl = DocxTemplate(template_path)
+    tpl.render(context)
+    tpl.save(out_path)
+    return out_path
 
 
 def instrument_gad7(doc):

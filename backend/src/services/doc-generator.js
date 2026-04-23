@@ -25,6 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const OpenAI = require('openai');
 const { run } = require('./agents/code-sandbox');
+const { renderPreview } = require('./doc-preview');
 
 // ─── Style bundle — loaded once at boot ──────────────────────────────────
 //
@@ -44,6 +45,7 @@ const TEMPLATES = {
   'sgpt_xlsx.py': _loadTemplate('sgpt_xlsx.py'),
   'sgpt_pptx.py': _loadTemplate('sgpt_pptx.py'),
   'sgpt_pdf.py':  _loadTemplate('sgpt_pdf.py'),
+  'sgpt_svg.py':  _loadTemplate('sgpt_svg.py'),
 };
 
 function clientForModel(modelName) {
@@ -145,6 +147,35 @@ visually consistent, on-brand, and academically correct. The bundle:
   # Palettes: "tesis_upn" (navy + cream + terracotta), "defense" (neutral + indigo), "pitch" (dark + orange).
   # Every slide already has a footer bar with the project title + page number.
 
+-------- sgpt_svg API (arch maps / urban plans) --------
+  from sgpt_svg import ArchMap
+  m = ArchMap(title="Plaza de Armas · San Marcos Huari",
+              width=1400, height=1000, palette="earthy")    # palettes: earthy · mono
+  m.street([(100,500),(1300,500)], name="Av. Central", width=24)
+  m.building([(200,100),(500,100),(500,450),(200,450)], name="Municipalidad", floors=2)
+  m.plaza([(560,120),(900,120),(900,460),(560,460)], name="Plaza Mayor")
+  m.water([(1050,300),(1300,300),(1300,500),(1050,500)], name="Río Mosna")
+  m.point((700, 290), label="Fuente", color=None)           # uses accent colour by default
+  m.north(x=1320, y=80)                                     # optional x/y — defaults to top-right
+  m.scale_bar(x=80, y=940, total_m=100, seg_m=25, unit="m")
+  m.legend(items=[("#c05621","Edificación"), ("#9aaf7a","Plaza"), ("#b8aa8a","Calle")])
+  m.save(OUT_PATH)
+
+-------- Narrative matrices (matrices narrativas APA) --------
+  from sgpt_docx import build_narrative_matrix
+  rows = [
+      {"autor":"García (2020)","tema":"Motivación","muestra":"120","hallazgo":"Relación positiva..."},
+      {"autor":"Smith (2023)", "tema":"Autoeficacia","muestra":"85","hallazgo":"..."},
+  ]
+  build_narrative_matrix(
+      OUT_PATH,
+      title="Matriz narrativa · Antecedentes internacionales",
+      rows=rows,
+      columns=["autor","tema","muestra","hallazgo"],
+      intro="Se sintetizan 10 estudios entre 2020-2024...",
+      author="Luis Carrera", institution="UPN",
+  )
+
 -------- sgpt_pdf API --------
   from sgpt_pdf import PdfReport, build_form_pdf, merge_pdfs, split_pdf, extract_text
   r = PdfReport(title="Informe mensual", author="Luis Carrera", palette="academic")   # palettes: academic / corporate / clean
@@ -162,7 +193,7 @@ visually consistent, on-brand, and academically correct. The bundle:
 - xlsx → bases de datos Likert, Cronbach, Spearman, matrices descriptivas.
 - pptx → defensas de tesis, presentaciones académicas o pitch.
 - pdf  → reportes letterheaded de una sola vista, formularios rellenables, certificados.
-- svg  → mapas / diagramas / planos imprimibles.
+- svg  → mapas arquitectónicos / urbanos / planos imprimibles. Use sgpt_svg.ArchMap for maps (e.g. San Marcos Huari, plaza / barrio / campus). For pure floor plans the /api/plan pipeline is a better fit — only use this format when the user asks for a map.
 
 === QUALITY BAR ===
 - NEVER hand-roll fonts, margins, or colours if a helper exists — use the bundle.
@@ -199,26 +230,47 @@ const EXT_MIME = {
 async function callLlm({ prompt, model, signal }) {
   const routed = clientForModel(model);
   if (!routed.client) throw new Error(`doc-generator: no API key for "${model}"`);
-  const callModel = async (useJsonMode) => {
+
+  const callModel = async (modelId, useJsonMode) => {
     const params = {
-      model: model || 'gpt-4o',
+      model: modelId,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
       temperature: 0.2,
-      max_tokens: 4000,
+      max_tokens: 4500,
     };
     if (useJsonMode && routed.provider !== 'Gemini') params.response_format = { type: 'json_object' };
     return routed.client.chat.completions.create(params, { signal });
   };
-  let resp;
-  try { resp = await callModel(true); }
-  catch (err) {
-    if (/response_format|json_object|invalid.*param/i.test(err?.message || '')) resp = await callModel(false);
-    else throw err;
+
+  const tryModel = async (modelId) => {
+    let resp;
+    try { resp = await callModel(modelId, true); }
+    catch (err) {
+      if (/response_format|json_object|invalid.*param/i.test(err?.message || '')) {
+        resp = await callModel(modelId, false);
+      } else {
+        throw err;
+      }
+    }
+    return extractJson(resp.choices?.[0]?.message?.content || '');
+  };
+
+  // Try the caller's model first. If it returns unparseable JSON —
+  // common on small models with our long system prompt — upgrade to
+  // gpt-4o (OpenAI) once and retry. This keeps the single-failed-JSON
+  // case from surfacing to the user.
+  try {
+    return await tryModel(model || 'gpt-4o');
+  } catch (err) {
+    const shouldUpgrade = /JSON parse failed|Unexpected|JSON/i.test(err?.message || '')
+      && routed.provider === 'OpenAI' && (model || '').includes('mini');
+    if (!shouldUpgrade) throw err;
+    console.warn('[doc-generator] JSON parse failed on', model, '→ retrying on gpt-4o');
+    return await tryModel('gpt-4o');
   }
-  return extractJson(resp.choices?.[0]?.message?.content || '');
 }
 
 function sanitiseFilename(name, ext) {
@@ -269,12 +321,25 @@ except Exception as _e:
   const size = Math.floor(b64.length * 0.75); // approximate byte count
   const filename = sanitiseFilename(parsed.filename || parsed.title || 'document', format);
   const mime = EXT_MIME[format];
+
+  // Generate an HTML preview for docx/xlsx so the chat can render a
+  // real in-card view instead of just a download button. Failure is
+  // non-fatal — the card falls back to the compact download layout.
+  let htmlPreview = null;
+  try {
+    const preview = await renderPreview(format, b64);
+    if (preview && preview.html) htmlPreview = preview.html;
+  } catch (err) {
+    console.warn('[doc-generator] preview render failed:', err?.message);
+  }
+
   return {
     ok: true,
     dataUrl: `data:${mime};base64,${b64}`,
     mime,
     filename,
     size,
+    htmlPreview,
     stderr: result.stderr,
   };
 }
@@ -284,6 +349,7 @@ function buildArtefact({ parsed, rendered, renderError }) {
   const file = {
     type: 'doc',
     format,
+    htmlPreview: rendered?.htmlPreview || null,
     title: title || 'Documento',
     explanation: explanation || '',
     filename: rendered?.filename || sanitiseFilename(parsed.filename || title, format),
