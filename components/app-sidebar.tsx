@@ -25,6 +25,7 @@ import {
   Images,
   LayoutGrid,
   FolderKanban,
+  Network,
   Loader2,
   PenSquare,
   Shield,
@@ -272,6 +273,10 @@ export function AppSidebar() {
     router.push("/projects")
   }
 
+  const handleAgentPlaygroundClick = () => {
+    router.push("/agent-playground")
+  }
+
   const handleLibraryClick = () => {
     router.push("/library")
   }
@@ -422,6 +427,7 @@ export function AppSidebar() {
   // Check if we're on GPTs page
   const isOnGPTsPage = pathname.startsWith('/gpts')
   const isOnProjectsPage = pathname.startsWith('/projects')
+  const isOnAgentPlaygroundPage = pathname.startsWith('/agent-playground')
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -571,6 +577,29 @@ export function AppSidebar() {
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
               <p>{t("projects")}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Agent playground — live graph of the planner/executor
+              loop. Power-user / debug surface; placed below the user-
+              facing entries (Chat / GPTs / Projects) so the default
+              eye-sweep doesn't prioritise it. */}
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onClick={handleAgentPlaygroundClick}
+                className={cn(
+                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
+                  isOnAgentPlaygroundPage && "bg-accent text-accent-foreground"
+                )}
+                variant="default"
+              >
+                <Network className="h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("agentPlayground")}</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>{t("agentPlayground")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>

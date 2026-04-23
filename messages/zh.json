@@ -6,7 +6,8 @@
     "today": "今天",
     "last7Days": "最近 7 天",
     "older": "更早",
-    "projects": "Projects"
+    "projects": "Projects",
+    "agentPlayground": "智能体实验室"
   },
   "projects": {
     "title": "Projects",

@@ -6,7 +6,8 @@
     "today": "Heute",
     "last7Days": "Letzte 7 Tage",
     "older": "Älter",
-    "projects": "Projects"
+    "projects": "Projects",
+    "agentPlayground": "Agent-Labor"
   },
   "projects": {
     "title": "Projects",
