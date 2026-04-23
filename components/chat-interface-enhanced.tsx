@@ -1729,6 +1729,10 @@ function ChatInterfaceContent() {
   // Local sending / intent state so Stop button appears immediately on Enter
   const [isSending, setIsSending] = React.useState(false);
   const intentAbortControllerRef = React.useRef<AbortController | null>(null);
+  // Separate controller for the agentic search so Stop can cancel the
+  // SSE stream without clobbering other in-flight requests (intent
+  // classification, chat streaming) that live under intentAbortController.
+  const searchAbortControllerRef = React.useRef<AbortController | null>(null);
 
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
@@ -4452,13 +4456,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return { ...prevChat, messages: updatedMessages };
       });
 
-      // Live message body — progress text grows above; the final
-      // markdown summary replaces it once the run finishes. Keeping
-      // them in two strings means we can swap the entire bubble for
-      // the synthesized report without losing the trace if rendering
-      // is interrupted (e.g. on `error`).
-      let progressText = '';
-      let finalSummary = '';
+      // UI philosophy: the orchestrator still pulls 500 sources in
+      // 10-by-10 agentic rounds, reranks, and synthesizes — but none
+      // of that trace reaches the chat bubble. The user sees only a
+      // single "pensando" SVG + a concise status line while the run
+      // is in progress, then the polished markdown summary when it's
+      // done. The full event log stays in the server logs.
+      //
+      // Raw `<svg>` is allowed because message-component.tsx pipes
+      // ReactMarkdown through rehypeRaw.
+      const THINKING_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="22" viewBox="10 40 45 50" style="display:inline-block;vertical-align:middle;margin-right:8px;color:currentColor"><rect x="20" y="50" width="4" height="10" fill="currentColor"><animateTransform attributeName="transform" attributeType="xml" type="translate" values="0 0; 0 20; 0 0" begin="0s" dur="0.6s" repeatCount="indefinite"/></rect><rect x="30" y="50" width="4" height="10" fill="currentColor"><animateTransform attributeName="transform" attributeType="xml" type="translate" values="0 0; 0 20; 0 0" begin="0.2s" dur="0.6s" repeatCount="indefinite"/></rect><rect x="40" y="50" width="4" height="10" fill="currentColor"><animateTransform attributeName="transform" attributeType="xml" type="translate" values="0 0; 0 20; 0 0" begin="0.4s" dur="0.6s" repeatCount="indefinite"/></rect></svg>`;
+
+      const renderStatus = (label: string) => `${THINKING_SVG} **${label}**`;
 
       const updateBubble = (content: string) => {
         setCurrentChat(prev => {
@@ -4470,6 +4479,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         });
       };
 
+      // Seed the bubble with the initial animated state right away so
+      // the user sees motion the instant they trigger the search.
+      updateBubble(renderStatus('Iniciando búsqueda profesional…'));
+
+      // Wire the Stop button: composer Stop reads searchAbortControllerRef
+      // and calls abort(), which propagates through the SSE fetch and —
+      // via req.on('close') in search-agentic.js — tears down the
+      // orchestrator mid-run. No wasted provider quota.
+      const controller = new AbortController();
+      searchAbortControllerRef.current = controller;
+
+      let finalSummary = '';
+      let aborted = false;
+
       await agenticSearchService.runStream(
         {
           query: searchQuery,
@@ -4477,30 +4500,58 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           target: 500,
           batchSize: 10,
           topK: 25,
+          signal: controller.signal,
         },
         {
-          onProgressText: (text) => {
-            progressText += text;
-            updateBubble(progressText);
+          onEvent: (evt) => {
+            // Translate the verbose event stream into a single-line
+            // status so the user understands roughly where the search
+            // is without being buried in trace output.
+            switch (evt.type) {
+              case 'start':
+                updateBubble(renderStatus(`Buscando "${evt.query}"…`));
+                break;
+              case 'batch':
+                updateBubble(renderStatus(`Recopilando fuentes · ${evt.totalCollected}/${evt.target}`));
+                break;
+              case 'collection_done':
+                updateBubble(renderStatus(`Recopilación completa · ${evt.totalCollected} fuentes únicas`));
+                break;
+              case 'ranking_start':
+                updateBubble(renderStatus(`Seleccionando las ${evt.topK} mejores de ${evt.pool}…`));
+                break;
+              case 'selected':
+                updateBubble(renderStatus(`Preparando informe con ${evt.topK} fuentes seleccionadas…`));
+                break;
+              case 'aborted':
+                aborted = true;
+                break;
+              default:
+                break;
+            }
           },
           onSummary: (markdown) => {
             finalSummary = markdown;
-            // Replace the live progress with the polished summary so
-            // the user ends up with a clean markdown report instead of
-            // a wall of trace lines.
             updateBubble(markdown);
           },
           onDone: (stats) => {
+            if (aborted) return;
             const tail = `\n\n---\n*Búsqueda agéntica · ${stats.totalCollected} fuentes recopiladas · ${stats.dedupedCount} únicas · ${stats.selectedCount} seleccionadas` +
               (stats.elapsedMs ? ` · ${(stats.elapsedMs / 1000).toFixed(1)}s` : '') + `*`;
-            updateBubble((finalSummary || progressText) + tail);
+            updateBubble((finalSummary || '') + tail);
             setIsWebSearching(false);
+            searchAbortControllerRef.current = null;
             toast.success('Búsqueda agéntica completada');
-            // Re-fetch the chat so the persisted dbMessage replaces the
-            // temporary one (matches the legacy flow's behaviour).
             if (activeChat?.id) selectChat(activeChat.id);
           },
           onError: (error) => {
+            // AbortError is the Stop-button path — cleanup silently.
+            if (controller.signal.aborted || /abort/i.test(error.message || '')) {
+              updateBubble('🛑 Búsqueda detenida por el usuario.');
+              setIsWebSearching(false);
+              searchAbortControllerRef.current = null;
+              return;
+            }
             console.error('Agentic search failed:', error);
             const errorMessage = error.message || 'Agentic search failed';
             if (isMonthlyLimitError(errorMessage)) {
@@ -4508,11 +4559,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               toast.error('Monthly API limit exceeded. Please upgrade to continue.');
               updateBubble('Monthly API limit exceeded. Please upgrade your plan to continue using web search.');
               setIsWebSearching(false);
+              searchAbortControllerRef.current = null;
               return;
             }
             toast.error(errorMessage);
-            updateBubble((progressText || '') + `\n\n❌ **Búsqueda fallida:** ${errorMessage}`);
+            updateBubble(`❌ **Búsqueda fallida:** ${errorMessage}`);
             setIsWebSearching(false);
+            searchAbortControllerRef.current = null;
           },
         },
       );
@@ -4895,14 +4948,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             Primary swaps glyph based on state — never a
                             decorative button. */}
                         <div className="flex shrink-0 items-center gap-1.5">
-                          {!(isLoading || isStreaming || pendingStop || isSending) && (
+                          {!(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (
                             <VoiceControls
                               onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
                               className="flex items-center"
                             />
                           )}
 
-                          {!(isLoading || isStreaming || pendingStop || isSending) && (() => {
+                          {!(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (() => {
                             const hasText = input.trim().length > 0
                             const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
                             // When the user has typed → Send. When idle → open Voice Studio.
@@ -4943,12 +4996,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             )
                           })()}
 
-                          {(isLoading || isStreaming || pendingStop || isSending) && (
+                          {(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (
                             <Button
                               onClick={() => {
                                 if (intentAbortControllerRef.current) {
                                   intentAbortControllerRef.current.abort();
                                   intentAbortControllerRef.current = null;
+                                }
+                                if (searchAbortControllerRef.current) {
+                                  searchAbortControllerRef.current.abort();
+                                  searchAbortControllerRef.current = null;
+                                  setIsWebSearching(false);
                                 }
                                 stopStreaming();
                                 setIsSending(false);
@@ -5253,14 +5311,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               disabled={isLoading || isGeneratingVideo || isGeneratingWord || isGeneratingExcel || isWebSearching}
                             />
                             <div className="flex shrink-0 items-center gap-1.5">
-                              {!(isLoading || isStreaming || pendingStop || isSending) && (
+                              {!(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (
                                 <VoiceControls
                                   onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
                                   className="flex items-center"
                                 />
                               )}
 
-                              {!(isLoading || isStreaming || pendingStop || isSending) && (() => {
+                              {!(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (() => {
                                 const hasText = input.trim().length > 0
                                 const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
                                 const action = hasText
@@ -5300,12 +5358,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 )
                               })()}
 
-                              {(isLoading || isStreaming || pendingStop || isSending) && (
+                              {(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (
                                 <Button
                                   onClick={() => {
                                     if (intentAbortControllerRef.current) {
                                       intentAbortControllerRef.current.abort();
                                       intentAbortControllerRef.current = null;
+                                    }
+                                    if (searchAbortControllerRef.current) {
+                                      searchAbortControllerRef.current.abort();
+                                      searchAbortControllerRef.current = null;
+                                      setIsWebSearching(false);
                                     }
                                     stopStreaming();
                                     setIsSending(false);
