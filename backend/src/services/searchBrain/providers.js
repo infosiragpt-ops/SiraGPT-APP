@@ -60,6 +60,19 @@ function safeInt(n) {
   return Number.isFinite(v) ? v : undefined;
 }
 
+function textValue(v) {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return undefined;
+}
+
+function pageRange(first, last) {
+  const a = textValue(first);
+  const b = textValue(last);
+  if (a && b && a !== b) return `${a}-${b}`;
+  return a || b;
+}
+
 function normaliseAuthors(list) {
   if (!Array.isArray(list)) return [];
   return list
@@ -124,6 +137,9 @@ async function searchOpenAlex(query, opts = {}) {
       authors: normaliseAuthors(Array.isArray(w.authorships) ? w.authorships.map((a) => a.author) : []),
       year: safeInt(w.publication_year),
       journal: w.host_venue?.display_name || w.primary_location?.source?.display_name,
+      volume: textValue(w.biblio?.volume),
+      issue: textValue(w.biblio?.issue),
+      pages: pageRange(w.biblio?.first_page, w.biblio?.last_page),
       doi,
       url: w.id || (doi ? `https://doi.org/${doi}` : ""),
       pdfUrl: w.open_access?.oa_url || w.primary_location?.pdf_url || undefined,
@@ -159,6 +175,8 @@ async function searchSemanticScholar(query, opts = {}) {
       authors: normaliseAuthors(p.authors),
       year: safeInt(p.year),
       journal: p.journal?.name,
+      volume: textValue(p.journal?.volume),
+      pages: textValue(p.journal?.pages),
       doi,
       url: p.url || (doi ? `https://doi.org/${doi}` : ""),
       pdfUrl: p.openAccessPdf?.url || undefined,
@@ -192,6 +210,9 @@ async function searchCrossRef(query, opts = {}) {
       authors: normaliseAuthors(w.author),
       year: safeInt(yearPart),
       journal,
+      volume: textValue(w.volume),
+      issue: textValue(w.issue),
+      pages: textValue(w.page),
       doi,
       url: w.URL || (doi ? `https://doi.org/${doi}` : ""),
       abstract: typeof w.abstract === "string" ? w.abstract.replace(/<[^>]+>/g, "").trim() : undefined,
@@ -251,6 +272,9 @@ async function searchPubMed(query, opts = {}) {
       authors: Array.isArray(row.authors) ? normaliseAuthors(row.authors) : [],
       year: yearMatch ? Number(yearMatch[0]) : undefined,
       journal: row.fulljournalname || row.source,
+      volume: textValue(row.volume),
+      issue: textValue(row.issue),
+      pages: textValue(row.pages),
       doi,
       url: doi ? `https://doi.org/${doi}` : `https://pubmed.ncbi.nlm.nih.gov/${id}/`,
       citationCount: undefined,
@@ -284,6 +308,9 @@ async function searchDOAJ(query, opts = {}) {
       authors,
       year: safeInt(b.year),
       journal: b.journal?.title,
+      volume: textValue(b.journal?.volume),
+      issue: textValue(b.journal?.number || b.journal?.issue),
+      pages: pageRange(b.start_page, b.end_page) || textValue(b.pages),
       doi: doiId,
       url: fullUrl || (doiId ? `https://doi.org/${doiId}` : `https://doaj.org/article/${row.id}`),
       pdfUrl: links.find((l) => /pdf/i.test(l.type || ""))?.url,
@@ -317,6 +344,7 @@ async function searchSciELO(query, opts = {}) {
   url.searchParams.set("select", [
     "DOI", "title", "author", "published-print", "published-online",
     "container-title", "abstract", "URL", "type",
+    "volume", "issue", "page",
     "is-referenced-by-count", "issued", "created",
   ].join(","));
   if (offset > 0) url.searchParams.set("offset", String(offset));
@@ -342,6 +370,9 @@ async function searchSciELO(query, opts = {}) {
       authors: normaliseAuthors(it.author),
       year: safeInt(year),
       journal: venue,
+      volume: textValue(it.volume),
+      issue: textValue(it.issue),
+      pages: textValue(it.page),
       doi,
       url: doi ? `https://doi.org/${doi}` : (it.URL || ""),
       abstract,
@@ -415,6 +446,9 @@ async function searchScopus(query, opts = {}) {
       authors,
       year: safeInt(year),
       journal: entry?.["prism:publicationName"],
+      volume: textValue(entry?.["prism:volume"]),
+      issue: textValue(entry?.["prism:issueIdentifier"]),
+      pages: textValue(entry?.["prism:pageRange"]),
       doi,
       url: scopusLink || (doi ? `https://doi.org/${doi}` : (entry?.["prism:url"] || "")),
       abstract: undefined, // STANDARD view doesn't include abstract

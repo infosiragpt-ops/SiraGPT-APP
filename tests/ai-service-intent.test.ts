@@ -30,6 +30,24 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(intent, "web_search")
   })
 
+  it("keeps article requests without an explicit file format in chat", async () => {
+    const intent = await aiService.classifyIntent(
+      "dame 5 artículos científicos sobre estrategias multisensoriales sin ningún formato",
+    )
+    assert.equal(intent, "web_search")
+  })
+
+  it("routes article requests to the task agent only when Word or Excel is explicit", async () => {
+    const wordIntent = await aiService.classifyIntent(
+      "dame 5 artículos científicos sobre estrategias multisensoriales en Word",
+    )
+    const excelIntent = await aiService.classifyIntent(
+      "dame 5 artículos científicos sobre estrategias multisensoriales en Excel",
+    )
+    assert.equal(wordIntent, "agent_task")
+    assert.equal(excelIntent, "agent_task")
+  })
+
   it("routes statistics and science computation to the math solver", async () => {
     const intent = await aiService.classifyIntent(
       "Calcula el Cronbach's alpha de estas respuestas Likert: [[4,5,3],[5,5,4],[4,4,3]]",

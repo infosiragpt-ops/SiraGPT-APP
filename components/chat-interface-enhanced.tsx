@@ -153,6 +153,57 @@ type SearchActivityState = {
 }
 
 const SEARCH_ACTIVITY_MAX_ENTRIES = 140
+const ACADEMIC_DEFAULT_TOP_K = 10
+
+const SPANISH_SMALL_NUMBERS: Record<string, number> = {
+  un: 1,
+  uno: 1,
+  una: 1,
+  dos: 2,
+  tres: 3,
+  cuatro: 4,
+  cinco: 5,
+  seis: 6,
+  siete: 7,
+  ocho: 8,
+  nueve: 9,
+  diez: 10,
+  once: 11,
+  doce: 12,
+  trece: 13,
+  catorce: 14,
+  quince: 15,
+  veinte: 20,
+}
+
+function inferAcademicSearchCount(query: string) {
+  const normalized = (query || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  const numeric = normalized.match(/\b(?:dame|busca|encuentra|selecciona|incluye|necesito|quiero)?\s*(\d{1,3})\s+(?:articulos?|fuentes|referencias|papers?|estudios|documentos)\b/)
+    || normalized.match(/\b(?:articulos?|fuentes|referencias|papers?|estudios|documentos)\s+(\d{1,3})\b/)
+  if (numeric) {
+    const count = Number(numeric[1])
+    if (Number.isFinite(count)) return Math.min(Math.max(count, 1), 100)
+  }
+
+  const words = Object.keys(SPANISH_SMALL_NUMBERS).join("|")
+  const wordPattern = new RegExp(`\\b(${words})\\s+(?:articulos?|fuentes|referencias|papers?|estudios|documentos)\\b`, "i")
+  const wordMatch = normalized.match(wordPattern)
+  if (wordMatch) return SPANISH_SMALL_NUMBERS[wordMatch[1]] || ACADEMIC_DEFAULT_TOP_K
+
+  return ACADEMIC_DEFAULT_TOP_K
+}
+
+function targetForAcademicSearch(topK: number) {
+  // Keep the search rigorous without collecting 500 records for simple
+  // "dame 5 artículos" prompts. Larger requests still get a broad pool.
+  return Math.min(500, Math.max(50, topK * 20))
+}
 
 function escapeHtml(value: string) {
   return value
@@ -178,9 +229,14 @@ function sourceHref(source: AgenticSource) {
 }
 
 function sourceMeta(source: AgenticSource) {
+  const venue = [
+    source.journal || source.source || null,
+    source.volume ? `${source.volume}${source.issue ? `(${source.issue})` : ""}` : null,
+    source.pages || null,
+  ].filter(Boolean).join(", ")
   return [
     source.year ? String(source.year) : null,
-    source.journal || source.source || null,
+    venue || null,
     source.doi ? `DOI ${source.doi.replace(/^https?:\/\/doi\.org\//i, "")}` : null,
   ].filter(Boolean).join(" · ")
 }
@@ -4836,6 +4892,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
 
     setIsWebSearching(true);
+    const requestedTopK = inferAcademicSearchCount(searchQuery);
+    const searchTarget = targetForAcademicSearch(requestedTopK);
+    const searchBatchSize = Math.min(20, Math.max(5, requestedTopK));
 
     try {
       // Only add user message for new chat (existing chat already has it from handleSend)
@@ -4876,9 +4935,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         [aiMessage.id]: {
           messageId: aiMessage.id,
           query: searchQuery,
-          target: 500,
-          batchSize: 10,
-          topK: 25,
+          target: searchTarget,
+          batchSize: searchBatchSize,
+          topK: requestedTopK,
           providers: [],
           startedAt: Date.now(),
           updatedAt: Date.now(),
@@ -4935,9 +4994,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         {
           query: searchQuery,
           chatId: activeChat.id,
-          target: 500,
-          batchSize: 10,
-          topK: 25,
+          target: searchTarget,
+          batchSize: searchBatchSize,
+          topK: requestedTopK,
           signal: controller.signal,
         },
         {

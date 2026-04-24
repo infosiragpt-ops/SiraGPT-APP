@@ -63,6 +63,9 @@ function compactSource(item) {
     authors: Array.isArray(item.authors) ? item.authors.slice(0, 5) : [],
     year: item.year,
     journal: item.journal,
+    volume: item.volume,
+    issue: item.issue,
+    pages: item.pages,
     doi: item.doi,
     url: item.url,
     pdfUrl: item.pdfUrl,
@@ -75,33 +78,67 @@ function compactSource(item) {
   };
 }
 
+function normaliseDoi(doi) {
+  return String(doi || "").trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+}
+
+function doiUrl(doi) {
+  const clean = normaliseDoi(doi);
+  return clean ? `https://doi.org/${clean}` : "";
+}
+
+function ensureSentence(text) {
+  const s = String(text || "").trim();
+  if (!s) return "";
+  return /[.!?]$/.test(s) ? s : `${s}.`;
+}
+
+function formatAuthors(authors) {
+  const list = Array.isArray(authors) ? authors.map(a => String(a || "").trim()).filter(Boolean) : [];
+  if (list.length === 0) return "Autor desconocido";
+  if (list.length > 6) return `${list.slice(0, 6).join(", ")}, et al.`;
+  if (list.length === 1) return list[0];
+  return `${list.slice(0, -1).join(", ")}, & ${list[list.length - 1]}`;
+}
+
+function formatVenue(source) {
+  const journal = String(source.journal || "").trim();
+  if (!journal) return "";
+  let out = `*${journal}*`;
+  if (source.volume) {
+    out += `, ${source.volume}`;
+    if (source.issue) out += `(${source.issue})`;
+  } else if (source.issue) {
+    out += `, (${source.issue})`;
+  }
+  if (source.pages) out += `, ${source.pages}`;
+  return ensureSentence(out);
+}
+
+function formatArticleCitation(source, index) {
+  const authors = formatAuthors(source.authors);
+  const year = source.year ? `(${source.year}).` : "(s. f.).";
+  const title = ensureSentence(source.title || "Sin título");
+  const venue = formatVenue(source);
+  const link = source.doi ? doiUrl(source.doi) : (source.url || source.pdfUrl || "");
+  const metadata = [authors, year, title, venue].filter(Boolean).join(" ");
+  return `${index + 1}. ${metadata}${link ? `\n${link}` : ""}`;
+}
+
 function buildSummaryMarkdown({ query, totalCollected, dedupedCount, top, providerStats }) {
   const lines = [];
-  lines.push(`## 🔍 Búsqueda agéntica: "${query}"`);
-  lines.push("");
-  lines.push(`**Estadísticas:** ${totalCollected} fuentes recopiladas · ${dedupedCount} únicas tras deduplicación · ${top.length} seleccionadas como las más relevantes.`);
-  lines.push("");
-  lines.push(`**Proveedores consultados:**`);
-  for (const [provider, stats] of Object.entries(providerStats)) {
-    const tag = stats.exhausted ? "✅" : "🟡";
-    lines.push(`- ${tag} **${provider}** — ${stats.contributed} resultados${stats.errors ? ` (${stats.errors} errores)` : ""}`);
-  }
-  lines.push("");
-  lines.push(`### 📚 Top ${top.length} fuentes seleccionadas`);
+  const providersUsed = Object.entries(providerStats || {})
+    .filter(([, stats]) => stats && stats.contributed > 0)
+    .map(([provider]) => provider);
+  lines.push("## Artículos encontrados");
   lines.push("");
   top.forEach((s, i) => {
-    const authors = Array.isArray(s.authors) && s.authors.length > 0 ? s.authors.slice(0, 3).join(", ") : "Autor desconocido";
-    const year = s.year ? ` (${s.year})` : "";
-    const venue = s.journal ? ` · *${s.journal}*` : "";
-    const oa = s.openAccess ? " · 🟢 OA" : "";
-    const cites = typeof s.citationCount === "number" ? ` · 🔖 ${s.citationCount} citas` : "";
-    const score = typeof s.rerankScore === "number" ? ` · 🎯 ${s.rerankScore.toFixed(1)}/10` : "";
-    const link = s.url ? `[${s.title}](${s.url})` : s.title;
-    lines.push(`${i + 1}. **${link}**`);
-    lines.push(`   ${authors}${year}${venue}${oa}${cites}${score}`);
-    if (s.abstract) lines.push(`   > ${s.abstract}`);
+    lines.push(formatArticleCitation(s, i));
     lines.push("");
   });
+  lines.push("---");
+  lines.push(`*Consulta: "${query}". Se recopilaron ${totalCollected} fuentes, ${dedupedCount} únicas, y se seleccionaron ${top.length}.` +
+    (providersUsed.length ? ` Proveedores con resultados: ${providersUsed.join(", ")}.` : "") + "*");
   return lines.join("\n");
 }
 
@@ -142,7 +179,7 @@ function sleep(ms, signal) {
 async function* runAgenticBatch(opts) {
   const target = Math.min(Math.max(Number(opts.target) || DEFAULT_TARGET, 10), 1000);
   const batchSize = Math.min(Math.max(Number(opts.batchSize) || DEFAULT_BATCH_SIZE, 5), 50);
-  const topK = Math.min(Math.max(Number(opts.topK) || DEFAULT_TOP_K, 5), 100);
+  const topK = Math.min(Math.max(Number(opts.topK) || DEFAULT_TOP_K, 1), 100);
   const requestedProviders = Array.isArray(opts.providers) && opts.providers.length > 0
     ? opts.providers.filter((p) => p in REGISTRY)
     : DEFAULT_PROVIDERS.filter((p) => p in REGISTRY);

@@ -29,6 +29,9 @@
  * @property {string[]} authors
  * @property {number} [year]
  * @property {string} [journal]
+ * @property {string} [volume]
+ * @property {string} [issue]
+ * @property {string} [pages]
  * @property {string} [doi]
  * @property {string} url
  * @property {string} [pdfUrl]

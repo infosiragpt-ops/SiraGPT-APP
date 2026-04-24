@@ -11,8 +11,9 @@ type AgenticBatchEvent = {
   totalCollected?: number
 }
 
-const { runAgenticBatch } = cjsRequire("../../backend/src/services/searchBrain/agenticBatch") as {
+const { runAgenticBatch, buildSummaryMarkdown } = cjsRequire("../../backend/src/services/searchBrain/agenticBatch") as {
   runAgenticBatch: (opts: any) => AsyncGenerator<AgenticBatchEvent>
+  buildSummaryMarkdown: (args: any) => string
 }
 
 const providers = cjsRequire("../../backend/src/services/searchBrain/providers") as {
@@ -125,5 +126,37 @@ describe("agentic search batch", () => {
     assert.match(requested.find(url => url.includes("eutils.ncbi.nlm.nih.gov")) || "", /api_key=ncbi-test-key/)
     assert.equal(requestedHeaders.find((headers) => headers["X-ELS-APIKey"])?.["X-ELS-APIKey"], "scopus-test-key")
     assert.equal(requestedHeaders.find((headers) => headers["X-ELS-Insttoken"])?.["X-ELS-Insttoken"], "scopus-inst-token")
+  })
+
+  it("formats direct chat article results as clean citations with DOI links", () => {
+    const markdown = buildSummaryMarkdown({
+      query: "estrategias multisensoriales educación inicial",
+      totalCollected: 53,
+      dedupedCount: 40,
+      providerStats: {
+        scielo: { contributed: 3 },
+        openalex: { contributed: 2 },
+      },
+      top: [
+        {
+          title: "El impacto de las experiencias multisensoriales en el desarrollo cognitivo y socioemocional durante la primera infancia: Estrategias para una educación inicial de calidad",
+          authors: ["Briones Bermello, D. O.", "Buitrón Ortiz, M. R.", "Álava Bravo, B. A.", "Cevallos Mera, E. E."],
+          year: 2025,
+          journal: "RECIMUNDO",
+          volume: "9",
+          issue: "3",
+          pages: "51-59",
+          doi: "10.26820/recimundo/9.(3).sep.2025.51-59",
+        },
+      ],
+    })
+
+    assert.match(
+      markdown,
+      /Briones Bermello, D\. O\., Buitrón Ortiz, M\. R\., Álava Bravo, B\. A\., & Cevallos Mera, E\. E\. \(2025\)\./,
+    )
+    assert.match(markdown, /\*RECIMUNDO\*, 9\(3\), 51-59\./)
+    assert.match(markdown, /https:\/\/doi\.org\/10\.26820\/recimundo\/9\.\(3\)\.sep\.2025\.51-59/)
+    assert.doesNotMatch(markdown, /Top \d+ fuentes|Proveedores consultados|abstract/i)
   })
 })

@@ -8,7 +8,7 @@
  *       chatId?:   string,                    // optional, will persist final markdown
  *       target?:   number,                    // total sources to collect, [10..1000], default 500
  *       batchSize?: number,                   // sources per batch, [5..50], default 10
- *       topK?:     number,                    // best-of selection size, [5..100], default 25
+ *       topK?:     number,                    // best-of selection size, [1..100], default 25
  *       providers?: string[],                 // subset of [scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
  *       language?: string                     // ISO 639-1 (filters Crossref/SciELO)
  *     }
@@ -57,7 +57,7 @@ router.post(
     body("chatId").optional().isString(),
     body("target").optional().isInt({ min: 10, max: 1000 }),
     body("batchSize").optional().isInt({ min: 5, max: 50 }),
-    body("topK").optional().isInt({ min: 5, max: 100 }),
+    body("topK").optional().isInt({ min: 1, max: 100 }),
     body("providers").optional().isArray(),
     body("language").optional().isString().isLength({ min: 2, max: 8 }),
     body("mailto").optional().isString(),

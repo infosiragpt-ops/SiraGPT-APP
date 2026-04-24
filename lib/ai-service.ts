@@ -77,6 +77,7 @@ export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, strin
   ].join('\n'),
   web_search: [
     'Ground the answer in real sources. Prefer recent, authoritative, citable references when the user asks for academic, scientific, legal, market, or current information.',
+    'When the user asks for articles/sources but does not explicitly request Word, Excel, PDF, PPTX, or another file, answer directly in the chat as a clean citation list: Authors. (Year). Title. Journal, volume(issue), pages. DOI URL.',
     'Return concise synthesis with source metadata: title, year/date, venue/publisher, DOI/URL when available, and limitations.',
     'Do not fabricate citations or overstate findings.',
   ].join('\n'),

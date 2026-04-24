@@ -27,6 +27,9 @@ export interface AgenticSource {
   authors?: string[]
   year?: number
   journal?: string
+  volume?: string
+  issue?: string
+  pages?: string
   doi?: string
   url?: string
   pdfUrl?: string
@@ -57,8 +60,8 @@ export interface AgenticRunArgs {
   chatId?: string
   target?: number          // 10..1000, default 500
   batchSize?: number       // 5..50, default 10
-  topK?: number            // 5..100, default 25
-  providers?: string[]     // subset of [openalex, scielo, semantic, crossref, pubmed, doaj]
+  topK?: number            // 1..100, default 25
+  providers?: string[]     // subset of [scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
   language?: string
   signal?: AbortSignal
 }
