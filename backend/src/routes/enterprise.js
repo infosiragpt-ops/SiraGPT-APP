@@ -31,6 +31,9 @@ const { analyzeSql } = require("../services/db/sql-safety");
 const { generateSbom } = require("../services/software-engineering/sbom");
 const { auditSbom } = require("../services/software-engineering/dependency-audit");
 const { reviewCode } = require("../services/software-engineering/code-review");
+const { analyzeDocument } = require("../services/docintel/pdf-structure");
+const { groundClaims } = require("../services/docintel/citation-grounding");
+const { detectContradictions } = require("../services/docintel/contradiction-detector");
 const { validateContract } = require("../services/agents/task-contract-resolver");
 const { runQaBoard } = require("../services/agents/qa-board");
 const { createTracer } = require("../services/observability/spans");
@@ -260,6 +263,74 @@ router.post(
       ok(res, r);
     } catch (err) {
       fail(res, 500, err.message || "code review failed");
+    }
+  }
+);
+
+// ─── Document Intelligence ─────────────────────────────────────────────
+
+router.post(
+  "/docintel/analyze",
+  authenticateToken,
+  [
+    body("text").optional().isString().isLength({ min: 1, max: 1_000_000 }),
+    body("pages").optional().isArray(),
+    body("keepBullets").optional().isBoolean(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const input = req.body.pages || req.body.text || "";
+      const r = analyzeDocument(input, { keepBullets: req.body.keepBullets !== false });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "docintel analyze failed");
+    }
+  }
+);
+
+router.post(
+  "/docintel/ground",
+  authenticateToken,
+  [
+    body("answer").isString().isLength({ min: 1, max: 200_000 }),
+    body("sources").isArray({ min: 1 }),
+    body("thresholds").optional().isObject(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = groundClaims({
+        answer: req.body.answer,
+        sources: req.body.sources,
+        thresholds: req.body.thresholds,
+      });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "docintel ground failed");
+    }
+  }
+);
+
+router.post(
+  "/docintel/contradictions",
+  authenticateToken,
+  [
+    body("claims").isArray({ min: 0 }),
+    body("numeric_tolerance").optional().isFloat({ min: 0, max: 10 }),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = detectContradictions(req.body.claims, {
+        numeric_tolerance: req.body.numeric_tolerance,
+      });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "docintel contradictions failed");
     }
   }
 );
