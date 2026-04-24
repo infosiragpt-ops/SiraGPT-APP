@@ -42,6 +42,10 @@ const {
   buildExecutionProfilePrompt,
   validateFinalize,
 } = require('../services/agents/agentic-execution-profile');
+const {
+  buildUserIntentAlignmentProfile,
+  buildUserIntentAlignmentPrompt,
+} = require('../services/agents/user-intent-alignment');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -173,6 +177,7 @@ router.post(
       ? req.body.files.map(String).filter(Boolean).slice(0, 20)
       : [];
     const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds });
+    const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
     const taskId = crypto.randomUUID();
     const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
     const controller = new AbortController();
@@ -193,6 +198,7 @@ router.post(
       maxRuntimeMs,
       streamState,
       executionProfile,
+      intentAlignmentProfile,
     });
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -244,6 +250,7 @@ router.post(
               displayGoal,
               artifacts,
               executionProfile,
+              intentAlignmentProfile,
               maxSteps,
               maxRuntimeMs,
               updatedAt: task.updatedAt,
@@ -287,6 +294,7 @@ router.post(
       model,
       tools: tools.map(t => t.name),
       executionProfile,
+      intentAlignmentProfile,
     });
 
     // Per-step id counter shared with the tool event bus so the UI
@@ -339,6 +347,7 @@ router.post(
                 displayGoal,
                 artifacts,
                 executionProfile,
+                intentAlignmentProfile,
                 maxSteps,
                 maxRuntimeMs,
                 updatedAt: new Date().toISOString(),
@@ -358,7 +367,7 @@ router.post(
         maxSteps,
         maxRuntimeMs,
         model,
-        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile),
+        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile),
         ctx: toolCtx,
         finalizeGuard: ({ steps }) => validateFinalize(executionProfile, steps),
         onStepStart: (step) => {
@@ -407,6 +416,7 @@ router.post(
                 displayGoal,
                 artifacts,
                 executionProfile,
+                intentAlignmentProfile,
                 stoppedReason: result.stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
@@ -505,10 +515,13 @@ function normalizeSystemContract(text) {
     .slice(0, 4000);
 }
 
-function buildAgentSystemPrompt(systemContract, fileIds, executionProfile) {
+function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (systemContract) {
     parts.push(`Additional execution contract:\n${systemContract}`);
+  }
+  if (intentAlignmentProfile) {
+    parts.push(`User intent alignment:\n${buildUserIntentAlignmentPrompt(intentAlignmentProfile)}`);
   }
   if (executionProfile) {
     parts.push(buildExecutionProfilePrompt(executionProfile));
@@ -519,7 +532,7 @@ function buildAgentSystemPrompt(systemContract, fileIds, executionProfile) {
   return parts.join('\n\n');
 }
 
-function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState, executionProfile = null }) {
+function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState, executionProfile = null, intentAlignmentProfile = null }) {
   pruneOldTasks();
   const now = new Date().toISOString();
   const record = {
@@ -536,6 +549,7 @@ function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controll
     updatedAt: now,
     streamState,
     executionProfile,
+    intentAlignmentProfile,
     events: [],
     assistantMessageId: null,
   };
@@ -578,7 +592,7 @@ function initialAgentState() {
 function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile } };
     case 'step_start':
       return {
         ...state,

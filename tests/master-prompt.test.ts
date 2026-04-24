@@ -14,12 +14,21 @@ type IntentResult = { intent: string; context: string }
 type MasterPrompt = {
   classifyIntent: (msg: string) => IntentResult
   buildUserProfileBlock: (profile: unknown) => string
+  buildUserIntentAlignmentProfile: (opts: { request: string; fileIds?: string[] }) => {
+    taxonomy: string
+    outputMode: string
+    requestedFormat: string | null
+    groundingMode: string
+    hardConstraints: string[]
+    responsePolicy: string[]
+  }
   buildSystemPrompt: (opts: {
     language?: string
     userMessage?: string
     customGpt?: { name: string; instructions?: string }
     userProfile?: { name?: string; locale?: string; preferredTone?: string; customInstructions?: string }
-  }) => { system: string; intent: string; language: string }
+    fileIds?: string[]
+  }) => { system: string; intent: string; language: string; alignmentProfile?: Record<string, unknown> }
   ABSOLUTE_RULES: string
 }
 
@@ -94,6 +103,18 @@ describe("master-prompt · buildSystemPrompt", () => {
     assert.match(built.system, /ARCHITECTURAL \/ FLOOR PLAN PATTERN/)
     assert.match(built.system, /preserveAspectRatio/)
     assert.match(built.system, /viewBox/)
+  })
+
+  it("injects a compact InstructGPT-style intent alignment profile", () => {
+    const withFile = masterPrompt.buildSystemPrompt({
+      language: "es",
+      userMessage: "dame un resumen",
+      fileIds: ["uploaded-docx"],
+    })
+    assert.match(withFile.system, /USER INTENT ALIGNMENT/)
+    assert.match(withFile.system, /private_context_required/)
+    assert.match(withFile.system, /do_not_fabricate_sources_or_claims/)
+    assert.equal(withFile.alignmentProfile?.groundingMode, "private_context_required")
   })
 })
 

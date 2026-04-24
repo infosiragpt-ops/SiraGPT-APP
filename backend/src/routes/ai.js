@@ -580,6 +580,7 @@ router.post(
         customGpt,
         project,
         userProfile,
+        fileIds: processedFiles.map(f => f.id || f.fileId || f.openaiFileId || f.name || 'attachment'),
       });
 
       // Long-term memory recall: pull the top-K durable facts for this

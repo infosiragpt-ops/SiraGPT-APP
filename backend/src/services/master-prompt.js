@@ -16,6 +16,10 @@
 
 const { LANG_NAMES, buildSystemRule } = require('./language-policy');
 const { buildProjectPromptHeader } = require('./project-context');
+const {
+  buildUserIntentAlignmentProfile,
+  buildUserIntentAlignmentPrompt,
+} = require('./agents/user-intent-alignment');
 
 // ────────────────────────────────────────────────────────────────────
 // 10 absolute rules — always present, never removed by downstream code.
@@ -331,11 +335,16 @@ function buildUserProfileBlock(profile) {
  * @param {object} [opts.customGpt] — optional custom GPT wrapper
  * @param {object} [opts.project] — optional Project ({ name, description, instructions, files: [{ originalName, extractedText }] })
  * @param {object} [opts.userProfile] — { name, locale, preferredTone, customInstructions }
+ * @param {string[]} [opts.fileIds] — current-turn attachments, used only for intent alignment
  * @returns {{ system: string, intent: string }}
  */
-function buildSystemPrompt({ language, userMessage, customGpt, project, userProfile }) {
+function buildSystemPrompt({ language, userMessage, customGpt, project, userProfile, fileIds = [] }) {
   const lang = language || 'es';
   const { intent, context: intentContext } = classifyIntent(userMessage || '');
+  const alignmentProfile = buildUserIntentAlignmentProfile({
+    request: userMessage || '',
+    fileIds,
+  });
 
   const header = buildSystemRule(lang);
 
@@ -413,6 +422,8 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
 
   body += intentContext;
 
+  body += `\n\n## USER INTENT ALIGNMENT\n${buildUserIntentAlignmentPrompt(alignmentProfile)}`;
+
   // Math + document-tag contract — kept as trailing reminders so they
   // don't dilute the absolute rules but still stay in the system prompt.
   body += `\n\n## FORMATTING CONTRACT
@@ -424,6 +435,7 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
     system: `${header}\n\n${body}`,
     intent,
     language: lang,
+    alignmentProfile,
   };
 }
 
@@ -431,6 +443,8 @@ module.exports = {
   buildSystemPrompt,
   buildUserProfileBlock,
   classifyIntent,
+  buildUserIntentAlignmentProfile,
+  buildUserIntentAlignmentPrompt,
   ABSOLUTE_RULES,
   LANG_NAMES,
 };

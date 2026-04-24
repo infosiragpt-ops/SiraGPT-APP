@@ -31,6 +31,20 @@ test('agent task route: stores taskId in meta state for reload/resume', () => {
   assert.equal(state.meta.goal, 'Investiga fuentes');
 });
 
+test('agent task route: stores intent alignment profile in meta state', () => {
+  const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
+    type: 'meta',
+    taskId: 'task-intent',
+    goal: 'Dame 5 articulos en el chat',
+    model: 'gpt-4o',
+    tools: ['web_search'],
+    intentAlignmentProfile: { outputMode: 'inline', groundingMode: 'source_verification_required' },
+  });
+
+  assert.equal(state.meta.intentAlignmentProfile.outputMode, 'inline');
+  assert.equal(state.meta.intentAlignmentProfile.groundingMode, 'source_verification_required');
+});
+
 test('agent task route: does not drop tool events emitted without a current step', () => {
   let state = INTERNAL.initialAgentState();
   state = INTERNAL.reduceAgentState(state, {
@@ -78,4 +92,22 @@ test('agent task route: system prompt keeps hidden contract separate from user g
   assert.match(prompt, /Verify every document/);
   assert.match(prompt, /file_1/);
   assert.doesNotMatch(INTERNAL.normalizeDisplayGoal('Haz un resumen'), /execution contract/i);
+});
+
+test('agent task route: system prompt includes intent alignment without echoing the user prompt', () => {
+  const intentAlignmentProfile = {
+    version: 'test-profile',
+    taxonomy: 'generation',
+    outputMode: 'inline',
+    requestedFormat: null,
+    groundingMode: 'source_verification_required',
+    hardConstraints: ['requested_count:5 articulos'],
+    responsePolicy: ['answer_the_actual_request_first', 'do_not_create_file_unless_user_asked'],
+  };
+
+  const prompt = INTERNAL.buildAgentSystemPrompt('', [], null, intentAlignmentProfile);
+
+  assert.match(prompt, /User intent alignment/);
+  assert.match(prompt, /requested_count:5 articulos/);
+  assert.doesNotMatch(prompt, /Dame 5 articulos/);
 });
