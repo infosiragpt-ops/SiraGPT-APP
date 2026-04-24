@@ -28,6 +28,10 @@ const {
 } = require('../services/agents/enterprise-agentic-runtime');
 const { buildToolRuntimePlan } = require('../services/agents/enterprise-tool-gateway');
 const { buildAgenticQaBoardReview } = require('../services/agents/agentic-qa-board');
+const {
+  buildAgenticOperatingCore,
+  buildAgenticOperatingPrompt,
+} = require('../services/agents/agentic-operating-core');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -660,6 +664,7 @@ router.post(
       let enterpriseRuntimeProfile = null;
       let enterpriseToolRuntimePlan = null;
       let enterpriseQaBoardReview = null;
+      let agenticOperatingCore = null;
       let enterpriseExecutionBlock = '';
       try {
         universalTaskContract = buildUniversalTaskContract({
@@ -683,12 +688,19 @@ router.post(
           toolRuntimePlan: enterpriseToolRuntimePlan,
           phase: 'preflight',
         });
+        agenticOperatingCore = buildAgenticOperatingCore({
+          contract: universalTaskContract,
+          graph: enterpriseExecutionGraph,
+          toolRuntimePlan: enterpriseToolRuntimePlan,
+          qaBoardReview: enterpriseQaBoardReview,
+        });
         enterpriseRuntimeProfile = {
           ...buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph),
+          agenticOperatingCore: agenticOperatingCore.summary,
           toolRuntime: enterpriseToolRuntimePlan.summary,
           qaPreflight: enterpriseQaBoardReview.summary,
         };
-        enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}`;
+        enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\n${buildAgenticOperatingPrompt(agenticOperatingCore)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}`;
       } catch (contractErr) {
         console.warn('[ai] universal/enterprise task contract unavailable (continuing without):', contractErr.message || contractErr);
       }

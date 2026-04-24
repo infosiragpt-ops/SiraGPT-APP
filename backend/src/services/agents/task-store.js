@@ -73,6 +73,7 @@ function sanitizeTaskRecord(record = {}) {
     enterpriseRuntimeProfile: record.enterpriseRuntimeProfile || null,
     enterpriseToolRuntimePlan: record.enterpriseToolRuntimePlan || null,
     enterpriseQaBoardReview: record.enterpriseQaBoardReview || null,
+    agenticOperatingCore: record.agenticOperatingCore || null,
     durableExecution: record.durableExecution || null,
     events: trimEvents(record.events, record.eventLimit || DEFAULT_EVENT_LIMIT),
     stats: record.stats || null,

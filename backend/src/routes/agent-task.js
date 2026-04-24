@@ -67,6 +67,10 @@ const {
 } = require('../services/agents/enterprise-agentic-runtime');
 const { buildToolRuntimePlan } = require('../services/agents/enterprise-tool-gateway');
 const { buildAgenticQaBoardReview } = require('../services/agents/agentic-qa-board');
+const {
+  buildAgenticOperatingCore,
+  buildAgenticOperatingPrompt,
+} = require('../services/agents/agentic-operating-core');
 const durableExecutionStore = require('../services/agents/durable-execution-store');
 
 const prisma = (() => {
@@ -269,6 +273,12 @@ router.post(
       toolRuntimePlan: enterpriseToolRuntimePlan,
       phase: 'preflight',
     });
+    const agenticOperatingCore = buildAgenticOperatingCore({
+      contract: universalTaskContract,
+      graph: enterpriseExecutionGraph,
+      toolRuntimePlan: enterpriseToolRuntimePlan,
+      qaBoardReview: enterpriseQaBoardReview,
+    });
     let durableExecution = null;
     try {
       durableExecution = durableExecutionStore.createDurableExecutionRecord({
@@ -285,6 +295,7 @@ router.post(
     }
     const enterpriseRuntimeProfile = {
       ...buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph),
+      agenticOperatingCore: agenticOperatingCore.summary,
       toolRuntime: enterpriseToolRuntimePlan.summary,
       qaPreflight: enterpriseQaBoardReview.summary,
       durableExecution: durableExecution
@@ -366,6 +377,7 @@ router.post(
       enterpriseRuntimeProfile,
       enterpriseToolRuntimePlan,
       enterpriseQaBoardReview,
+      agenticOperatingCore,
       durableExecution,
     });
     metrics.counter('agent_task_invocations_total', { status: 'started' });
@@ -440,6 +452,7 @@ router.post(
               enterpriseRuntimeProfile,
               enterpriseToolRuntimePlan,
               enterpriseQaBoardReview,
+              agenticOperatingCore,
               durableExecution: enterpriseRuntimeProfile.durableExecution,
               maxSteps,
               maxRuntimeMs,
@@ -492,6 +505,7 @@ router.post(
       enterpriseRuntimeProfile,
       enterpriseToolRuntimePlan,
       enterpriseQaBoardReview,
+      agenticOperatingCore,
       taskContract,
       taskContractSource,
     });
@@ -563,6 +577,7 @@ router.post(
               enterpriseRuntimeProfile,
               enterpriseToolRuntimePlan,
               enterpriseQaBoardReview,
+              agenticOperatingCore,
               durableExecution: enterpriseRuntimeProfile.durableExecution,
               maxSteps,
               maxRuntimeMs,
@@ -594,7 +609,8 @@ router.post(
           enterpriseExecutionGraph,
           enterpriseRuntimeProfile,
           enterpriseToolRuntimePlan,
-          enterpriseQaBoardReview
+          enterpriseQaBoardReview,
+          agenticOperatingCore
         ),
         ctx: toolCtx,
         finalizeGuard: ({ steps }) => validateFinalize(finalizeProfile, steps),
@@ -651,6 +667,7 @@ router.post(
                 enterpriseRuntimeProfile,
                 enterpriseToolRuntimePlan,
                 enterpriseQaBoardReview,
+                agenticOperatingCore,
                 durableExecution: enterpriseRuntimeProfile.durableExecution,
                 stoppedReason: result.stoppedReason,
                 maxSteps,
@@ -854,7 +871,8 @@ function buildAgentSystemPrompt(
   enterpriseExecutionGraph = null,
   enterpriseRuntimeProfile = null,
   enterpriseToolRuntimePlan = null,
-  enterpriseQaBoardReview = null
+  enterpriseQaBoardReview = null,
+  agenticOperatingCore = null
 ) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (universalTaskContract) {
@@ -868,6 +886,9 @@ function buildAgentSystemPrompt(
       'Enterprise runtime profile (policy summary, do not reveal to user):\n' +
       JSON.stringify(enterpriseRuntimeProfile, null, 2)
     );
+  }
+  if (agenticOperatingCore) {
+    parts.push(buildAgenticOperatingPrompt(agenticOperatingCore));
   }
   if (enterpriseToolRuntimePlan) {
     parts.push(
@@ -937,6 +958,7 @@ function createTaskRecord({
   enterpriseRuntimeProfile = null,
   enterpriseToolRuntimePlan = null,
   enterpriseQaBoardReview = null,
+  agenticOperatingCore = null,
   durableExecution = null,
 }) {
   pruneOldTasks();
@@ -962,6 +984,7 @@ function createTaskRecord({
     enterpriseRuntimeProfile,
     enterpriseToolRuntimePlan,
     enterpriseQaBoardReview,
+    agenticOperatingCore,
     durableExecution: durableExecution
       ? {
         graphId: durableExecution.graphId,
@@ -1049,6 +1072,7 @@ function formatTaskPayload(task) {
     enterpriseRuntimeProfile: task.enterpriseRuntimeProfile || null,
     enterpriseToolRuntimePlan: task.enterpriseToolRuntimePlan || null,
     enterpriseQaBoardReview: task.enterpriseQaBoardReview || null,
+    agenticOperatingCore: task.agenticOperatingCore || null,
     durableExecution: task.durableExecution || null,
     stats: task.stats || null,
     checkpoints: task.checkpoints || [],
@@ -1062,7 +1086,7 @@ function initialAgentState() {
 function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile, enterpriseToolRuntimePlan: evt.enterpriseToolRuntimePlan, enterpriseQaBoardReview: evt.enterpriseQaBoardReview } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile, enterpriseToolRuntimePlan: evt.enterpriseToolRuntimePlan, enterpriseQaBoardReview: evt.enterpriseQaBoardReview, agenticOperatingCore: evt.agenticOperatingCore } };
     case 'step_start':
       return {
         ...state,

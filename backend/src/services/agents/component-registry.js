@@ -27,6 +27,7 @@ const COMPONENTS = [
     purpose: "ReAct/executor loop, tool dispatch, system prompting, error handling.",
     status: "implemented",
     backing_modules: [
+      "backend/src/services/agents/agentic-operating-core.js",
       "backend/src/services/react-agent.js",
       "backend/src/services/agents/executor.js",
       "backend/src/services/agents/agent-core.js",
@@ -35,6 +36,7 @@ const COMPONENTS = [
     acceptance_criteria: [
       "runs a full task end-to-end with tool calls",
       "emits structured step events consumable by the UI",
+      "compiles contract + graph + tool runtime + QA into an enterprise operating envelope — IMPLEMENTED",
     ],
     risk_level: "low",
   },
@@ -257,8 +259,12 @@ const COMPONENTS = [
       "backend/src/services/agents/metrics.js",
       "backend/src/services/agents/audit-log.js",
       "backend/src/services/agents/agent-events.js",
+      "backend/src/services/observability/spans.js",
+      "backend/src/services/agents/agentic-operating-core.js",
     ],
     acceptance_criteria: [
+      "OTEL-compatible span factory — IMPLEMENTED",
+      "Agentic Operating Core declares trace id, critical events and metrics per task — IMPLEMENTED",
       "OTEL-compatible span emission",
       "cost + token accounting per tool call",
       "trace-id propagation through child tasks",
