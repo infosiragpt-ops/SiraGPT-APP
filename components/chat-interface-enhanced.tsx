@@ -1669,18 +1669,22 @@ const ActiveToolsDisplay = ({
       )}
       {isImageGenerationActive && (
         <>
-          <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
-            <Palette className="h-3 w-3" />
-            <span className="font-medium">Imágenes</span>
-            {isGeneratingImage && <span className="h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
+          <div className="group/image-liquid relative isolate flex min-h-7 items-center gap-1.5 overflow-hidden rounded-full border border-pink-300/70 bg-pink-100/85 px-2.5 py-1 text-xs text-pink-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_28px_-22px_rgba(219,39,119,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.015] hover:border-pink-400/80 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_16px_36px_-22px_rgba(219,39,119,0.9)] dark:border-pink-500/40 dark:bg-pink-900/25 dark:text-pink-200">
+            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,114,182,0.0)_70deg,rgba(244,114,182,0.55)_130deg,rgba(236,72,153,0.22)_190deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/image-liquid:translate-x-[155%] dark:via-white/25" />
+            <span className="pointer-events-none absolute left-7 top-1 h-1.5 w-1.5 rounded-full bg-pink-400/75 shadow-[0_0_12px_rgba(236,72,153,0.75)] motion-safe:animate-pulse" />
+            <span className="pointer-events-none absolute bottom-1 right-9 h-1 w-1 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.9)] motion-safe:animate-bounce" />
+            <Palette className="relative z-10 h-3 w-3 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
+            <span className="relative z-10 font-medium">Imágenes</span>
+            {isGeneratingImage && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
               className={cn(
-                "h-4 w-4 p-0 rounded-full ml-1",
+                "relative z-10 ml-1 h-4 w-4 rounded-full p-0",
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-pink-200 dark:hover:bg-pink-800/30"
+                  : "hover:bg-white/50 dark:hover:bg-pink-800/30"
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
