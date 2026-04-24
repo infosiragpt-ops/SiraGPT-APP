@@ -1,5 +1,5 @@
 /**
- * providers — 5 free academic-search providers.
+ * providers — academic-search providers with optional server-side API keys.
  *
  * Each exported function has the same contract:
  *   async (query, opts) → NormalisedResult[]
@@ -15,17 +15,25 @@
  *     survive, but the provider should not poison the whole call.
  *
  * Policies:
- *   - OpenAlex "polite pool" via `?mailto=` when provided.
+ *   - OpenAlex API key via `api_key`, with `mailto` as a contact hint.
  *   - CrossRef polite pool via User-Agent `mailto=`.
- *   - Semantic Scholar tolerates no key (100 req / 5min / IP).
- *   - PubMed E-utilities with 3 req/s budget.
- *   - DOAJ public.
+ *   - Semantic Scholar optional `x-api-key` header for higher support/limits.
+ *   - PubMed E-utilities optional `api_key`, plus `tool` and `email`.
+ *   - DOAJ public article search; publisher keys are only needed for private CRUD/bulk routes.
  */
 
 const { USER_AGENT } = require("./types");
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_RESULTS = 20;
+
+function firstEnv(...names) {
+  for (const name of names) {
+    const value = process.env[name];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
 
 // ─── Shared helpers ───────────────────────────────────────────────────────
 
@@ -136,8 +144,12 @@ async function searchSemanticScholar(query, opts = {}) {
   const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
   const fields = "title,abstract,authors,year,citationCount,openAccessPdf,externalIds,journal,publicationTypes,url";
   const offset = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
+  const apiKey = opts.apiKey || firstEnv("SEMANTIC_SCHOLAR_API_KEY", "SEMANTIC_API_KEY", "S2_API_KEY");
   const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${Math.min(100, maxResults)}&offset=${offset}&fields=${encodeURIComponent(fields)}`;
-  const body = await fetchJson(url, { timeoutMs: opts.timeoutMs });
+  const body = await fetchJson(url, {
+    timeoutMs: opts.timeoutMs,
+    extraHeaders: apiKey ? { "x-api-key": apiKey } : undefined,
+  });
   if (!body || !Array.isArray(body.data)) return [];
   return body.data.slice(0, maxResults).map((p, i) => {
     const doi = p.externalIds?.DOI || undefined;
@@ -198,14 +210,31 @@ async function searchPubMed(query, opts = {}) {
   const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const offset = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
+  const apiKey = opts.apiKey || firstEnv("NCBI_API_KEY", "PUBMED_API_KEY");
+  const tool = opts.tool || firstEnv("NCBI_TOOL", "PUBMED_TOOL") || "siraGPT";
+  const email = opts.email || opts.mailto || firstEnv("NCBI_EMAIL", "PUBMED_EMAIL", "SEARCH_BRAIN_MAILTO", "OPENALEX_MAILTO");
   // Step 1: esearch → PMIDs.
-  const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmax=${Math.min(50, maxResults)}&retstart=${offset}&retmode=json`;
-  const searchBody = await fetchJson(searchUrl, { timeoutMs });
+  const searchUrl = new URL("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi");
+  searchUrl.searchParams.set("db", "pubmed");
+  searchUrl.searchParams.set("term", query);
+  searchUrl.searchParams.set("retmax", String(Math.min(50, maxResults)));
+  searchUrl.searchParams.set("retstart", String(offset));
+  searchUrl.searchParams.set("retmode", "json");
+  if (apiKey) searchUrl.searchParams.set("api_key", apiKey);
+  if (tool) searchUrl.searchParams.set("tool", tool);
+  if (email) searchUrl.searchParams.set("email", email);
+  const searchBody = await fetchJson(searchUrl.toString(), { timeoutMs, mailto: email });
   const ids = searchBody?.esearchresult?.idlist;
   if (!Array.isArray(ids) || ids.length === 0) return [];
   // Step 2: esummary → metadata.
-  const sumUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.join(",")}&retmode=json`;
-  const sumBody = await fetchJson(sumUrl, { timeoutMs });
+  const sumUrl = new URL("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi");
+  sumUrl.searchParams.set("db", "pubmed");
+  sumUrl.searchParams.set("id", ids.join(","));
+  sumUrl.searchParams.set("retmode", "json");
+  if (apiKey) sumUrl.searchParams.set("api_key", apiKey);
+  if (tool) sumUrl.searchParams.set("tool", tool);
+  if (email) sumUrl.searchParams.set("email", email);
+  const sumBody = await fetchJson(sumUrl.toString(), { timeoutMs, mailto: email });
   const result = sumBody?.result;
   if (!result || typeof result !== "object") return [];
   return ids.slice(0, maxResults).map((id, i) => {
@@ -335,6 +364,7 @@ async function searchScopus(query, opts = {}) {
   const apiKey = opts.apiKey || process.env.SCOPUS_API_KEY;
   if (!apiKey) return [];
   const insttoken = opts.insttoken || process.env.SCOPUS_INSTTOKEN;
+  const authtoken = opts.authtoken || process.env.SCOPUS_AUTHTOKEN;
   const count = Math.min(200, Math.max(1, opts.maxResults ?? DEFAULT_MAX_RESULTS));
   const start = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
 
@@ -355,6 +385,7 @@ async function searchScopus(query, opts = {}) {
       "X-ELS-APIKey": apiKey,
     };
     if (insttoken) headers["X-ELS-Insttoken"] = insttoken;
+    if (authtoken) headers["X-ELS-Authtoken"] = authtoken;
     const res = await fetch(url.toString(), { signal: controller.signal, headers });
     if (!res.ok) return [];
     body = await res.json();
@@ -416,11 +447,11 @@ const REGISTRY = {
  * ignore it and return the same first page (the agentic batcher
  * dedupes anyway).
  */
-async function retrieveFromProvider({ source, query, maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken }) {
+async function retrieveFromProvider({ source, query, maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken, authtoken }) {
   const fn = REGISTRY[source];
   if (!fn) return [];
   try {
-    const out = await fn(query, { maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken });
+    const out = await fn(query, { maxResults, timeoutMs, mailto, offset, language, apiKey, insttoken, authtoken });
     return Array.isArray(out) ? out : [];
   } catch {
     return [];
@@ -438,5 +469,6 @@ module.exports = {
   searchScopus,
   reconstructAbstract,
   normaliseAuthors,
+  firstEnv,
   REGISTRY,
 };

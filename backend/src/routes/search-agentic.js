@@ -9,7 +9,7 @@
  *       target?:   number,                    // total sources to collect, [10..1000], default 500
  *       batchSize?: number,                   // sources per batch, [5..50], default 10
  *       topK?:     number,                    // best-of selection size, [5..100], default 25
- *       providers?: string[],                 // subset of [openalex, scielo, semantic, crossref, pubmed, doaj]
+ *       providers?: string[],                 // subset of [scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
  *       language?: string                     // ISO 639-1 (filters Crossref/SciELO)
  *     }
  *
@@ -36,7 +36,7 @@ const serializer = (() => {
 
 const router = express.Router();
 
-const VALID_PROVIDERS = new Set(["openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"]);
+const VALID_PROVIDERS = new Set(["scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"]);
 
 function pickProviders(raw) {
   if (!Array.isArray(raw)) return undefined;
@@ -169,12 +169,22 @@ router.get("/agentic/providers", (_req, res) => {
   res.json({
     providers: DEFAULT_PROVIDERS,
     descriptions: {
+      scopus:    "Scopus (Elsevier Search API; requiere SCOPUS_API_KEY y entitlement institucional/comercial)",
       openalex:  "OpenAlex (240 M obras académicas, CC0)",
       scielo:    "SciELO (red Open Access de Latinoamérica/España/Portugal vía Crossref miembro 530)",
       semantic:  "Semantic Scholar (alta cobertura en STEM)",
       crossref:  "Crossref (registro autoritativo de DOIs)",
       pubmed:    "PubMed (biomédico, NCBI E-utilities)",
       doaj:      "DOAJ (Directory of Open Access Journals)",
+    },
+    configured: {
+      scopus: Boolean(process.env.SCOPUS_API_KEY),
+      openalex: Boolean(process.env.OPENALEX_API_KEY),
+      semantic: Boolean(process.env.SEMANTIC_SCHOLAR_API_KEY || process.env.SEMANTIC_API_KEY || process.env.S2_API_KEY),
+      pubmed: Boolean(process.env.NCBI_API_KEY || process.env.PUBMED_API_KEY),
+      doaj: true,
+      scielo: true,
+      crossref: true,
     },
   });
 });

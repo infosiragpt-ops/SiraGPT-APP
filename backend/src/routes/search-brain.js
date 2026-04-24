@@ -27,7 +27,7 @@ const router = express.Router();
 const MAX_QUERY_LEN = 500;
 const MAX_RESULTS_CAP = 50;
 
-const VALID_SOURCES = new Set(["openalex", "semantic", "crossref", "pubmed", "doaj"]);
+const VALID_SOURCES = new Set(["scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"]);
 
 function validateQuery(raw) {
   if (typeof raw !== "string") return { valid: false, error: "query is required and must be a string" };
@@ -67,11 +67,69 @@ router.get("/providers", (_req, res) => {
   res.json({
     defaults: [...DEFAULT_ACADEMIC_SOURCES],
     providers: [
-      { id: "openalex", name: "OpenAlex", license: "CC0", requiresKey: false, rateLimitNote: "Polite pool: include mailto." },
-      { id: "semantic", name: "Semantic Scholar", license: "open", requiresKey: false, rateLimitNote: "~100 req / 5 min per IP." },
-      { id: "crossref", name: "CrossRef", license: "open", requiresKey: false, rateLimitNote: "Polite pool: User-Agent with mailto." },
-      { id: "pubmed", name: "PubMed (NCBI E-utilities)", license: "open", requiresKey: false, rateLimitNote: "3 req/sec anonymous." },
-      { id: "doaj", name: "DOAJ", license: "open", requiresKey: false, rateLimitNote: "Public API." },
+      {
+        id: "scopus",
+        name: "Scopus (Elsevier)",
+        license: "requires Elsevier entitlement",
+        requiresKey: true,
+        configured: Boolean(process.env.SCOPUS_API_KEY),
+        env: ["SCOPUS_API_KEY", "SCOPUS_INSTTOKEN", "SCOPUS_AUTHTOKEN"],
+        rateLimitNote: "Scopus Search supports up to 200 results/request; quota depends on API key tier.",
+      },
+      {
+        id: "openalex",
+        name: "OpenAlex",
+        license: "CC0",
+        requiresKey: true,
+        configured: Boolean(process.env.OPENALEX_API_KEY),
+        env: ["OPENALEX_API_KEY", "OPENALEX_MAILTO"],
+        rateLimitNote: "API key required for production-scale use; include mailto/contact.",
+      },
+      {
+        id: "scielo",
+        name: "SciELO via Crossref member 530",
+        license: "open",
+        requiresKey: false,
+        configured: true,
+        env: ["SEARCH_BRAIN_MAILTO"],
+        rateLimitNote: "Uses Crossref polite pool; include mailto.",
+      },
+      {
+        id: "semantic",
+        name: "Semantic Scholar",
+        license: "open",
+        requiresKey: false,
+        configured: Boolean(process.env.SEMANTIC_SCHOLAR_API_KEY || process.env.SEMANTIC_API_KEY || process.env.S2_API_KEY),
+        env: ["SEMANTIC_SCHOLAR_API_KEY"],
+        rateLimitNote: "Public endpoints work without a key; x-api-key is recommended.",
+      },
+      {
+        id: "crossref",
+        name: "Crossref",
+        license: "open",
+        requiresKey: false,
+        configured: true,
+        env: ["SEARCH_BRAIN_MAILTO"],
+        rateLimitNote: "Polite pool: User-Agent/mailto.",
+      },
+      {
+        id: "pubmed",
+        name: "PubMed (NCBI E-utilities)",
+        license: "open",
+        requiresKey: false,
+        configured: Boolean(process.env.NCBI_API_KEY || process.env.PUBMED_API_KEY),
+        env: ["NCBI_API_KEY", "NCBI_TOOL", "NCBI_EMAIL"],
+        rateLimitNote: "3 req/sec anonymous; 10 req/sec with NCBI API key.",
+      },
+      {
+        id: "doaj",
+        name: "DOAJ",
+        license: "open",
+        requiresKey: false,
+        configured: true,
+        env: ["DOAJ_API_KEY"],
+        rateLimitNote: "Public article search does not require a key; publisher/private routes use api_key.",
+      },
     ],
   });
 });

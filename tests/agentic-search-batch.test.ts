@@ -21,6 +21,7 @@ const providers = cjsRequire("../../backend/src/services/searchBrain/providers")
   searchCrossRef: (query: string, opts?: any) => Promise<any[]>
   searchPubMed: (query: string, opts?: any) => Promise<any[]>
   searchDOAJ: (query: string, opts?: any) => Promise<any[]>
+  searchScopus: (query: string, opts?: any) => Promise<any[]>
 }
 
 describe("agentic search batch", () => {
@@ -59,9 +60,23 @@ describe("agentic search batch", () => {
   it("passes offsets to providers that support real pagination", async () => {
     const g = globalThis as typeof globalThis & { fetch: any }
     const originalFetch = g.fetch
+    const originalSemanticKey = process.env.SEMANTIC_SCHOLAR_API_KEY
+    const originalNcbiKey = process.env.NCBI_API_KEY
+    const originalNcbiTool = process.env.NCBI_TOOL
+    const originalNcbiEmail = process.env.NCBI_EMAIL
+    const originalScopusKey = process.env.SCOPUS_API_KEY
+    const originalScopusInsttoken = process.env.SCOPUS_INSTTOKEN
     const requested: string[] = []
-    g.fetch = async (url: string) => {
+    const requestedHeaders: Record<string, any>[] = []
+    process.env.SEMANTIC_SCHOLAR_API_KEY = "semantic-test-key"
+    process.env.NCBI_API_KEY = "ncbi-test-key"
+    process.env.NCBI_TOOL = "siraGPT-tests"
+    process.env.NCBI_EMAIL = "tests@example.com"
+    process.env.SCOPUS_API_KEY = "scopus-test-key"
+    process.env.SCOPUS_INSTTOKEN = "scopus-inst-token"
+    g.fetch = async (url: string, init?: any) => {
       requested.push(String(url))
+      requestedHeaders.push(init?.headers || {})
       return {
         ok: true,
         json: async () => {
@@ -71,6 +86,7 @@ describe("agentic search batch", () => {
           if (u.includes("crossref.org")) return { message: { items: [] } }
           if (u.includes("eutils.ncbi.nlm.nih.gov")) return { esearchresult: { idlist: [] } }
           if (u.includes("doaj.org")) return { results: [] }
+          if (u.includes("elsevier.com")) return { "search-results": { entry: [] } }
           return {}
         },
       }
@@ -82,8 +98,21 @@ describe("agentic search batch", () => {
       await providers.searchCrossRef("q", { maxResults: 10, offset: 30 })
       await providers.searchPubMed("q", { maxResults: 10, offset: 30 })
       await providers.searchDOAJ("q", { maxResults: 10, offset: 30 })
+      await providers.searchScopus("q", { maxResults: 10, offset: 30 })
     } finally {
       g.fetch = originalFetch
+      if (originalSemanticKey === undefined) delete process.env.SEMANTIC_SCHOLAR_API_KEY
+      else process.env.SEMANTIC_SCHOLAR_API_KEY = originalSemanticKey
+      if (originalNcbiKey === undefined) delete process.env.NCBI_API_KEY
+      else process.env.NCBI_API_KEY = originalNcbiKey
+      if (originalNcbiTool === undefined) delete process.env.NCBI_TOOL
+      else process.env.NCBI_TOOL = originalNcbiTool
+      if (originalNcbiEmail === undefined) delete process.env.NCBI_EMAIL
+      else process.env.NCBI_EMAIL = originalNcbiEmail
+      if (originalScopusKey === undefined) delete process.env.SCOPUS_API_KEY
+      else process.env.SCOPUS_API_KEY = originalScopusKey
+      if (originalScopusInsttoken === undefined) delete process.env.SCOPUS_INSTTOKEN
+      else process.env.SCOPUS_INSTTOKEN = originalScopusInsttoken
     }
 
     assert.match(requested.find(url => url.includes("openalex.org")) || "", /page=4/)
@@ -91,5 +120,10 @@ describe("agentic search batch", () => {
     assert.match(requested.find(url => url.includes("crossref.org")) || "", /offset=30/)
     assert.match(requested.find(url => url.includes("eutils.ncbi.nlm.nih.gov")) || "", /retstart=30/)
     assert.match(requested.find(url => url.includes("doaj.org")) || "", /page=4/)
+    assert.match(requested.find(url => url.includes("elsevier.com")) || "", /start=30/)
+    assert.equal(requestedHeaders.find((headers) => headers["x-api-key"])?.["x-api-key"], "semantic-test-key")
+    assert.match(requested.find(url => url.includes("eutils.ncbi.nlm.nih.gov")) || "", /api_key=ncbi-test-key/)
+    assert.equal(requestedHeaders.find((headers) => headers["X-ELS-APIKey"])?.["X-ELS-APIKey"], "scopus-test-key")
+    assert.equal(requestedHeaders.find((headers) => headers["X-ELS-Insttoken"])?.["X-ELS-Insttoken"], "scopus-inst-token")
   })
 })

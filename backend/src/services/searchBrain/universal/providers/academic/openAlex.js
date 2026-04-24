@@ -3,9 +3,9 @@
  *
  * OpenAlex is a free CC0 graph of ~240 M scholarly works. It sits
  * alongside Scopus / SciELO / Redalyc / ProQuest in the academic
- * tier but is the only one with an open bulk API: no per-row fee,
- * no subscription gating, just a mailto-based "polite pool" for
- * nicer rate limits and an optional `api_key` for premium callers.
+ * tier but is the only one with an open bulk snapshot: no per-row fee
+ * and no subscription gating for bulk metadata. REST production usage
+ * should include an OpenAlex API key plus a contact `mailto`.
  *
  * Auth resolution, in priority order:
  *   1. opts.apiKey / opts.mailto — set by the caller at request
@@ -80,8 +80,8 @@ const openAlexProvider = {
   region: "global",
   category: "academic",
   license: "CC0",
-  rateLimit: "100 000 req/día (polite pool con mailto)",
-  requiresKey: false,
+  rateLimit: "100 000 credits/day with free API key; 100 req/sec hard cap",
+  requiresKey: true,
 
   async search(query, opts = {}) {
     if (!query || typeof query !== "string") return [];
