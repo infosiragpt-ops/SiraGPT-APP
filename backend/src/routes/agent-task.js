@@ -37,6 +37,9 @@ const OpenAI = require('openai');
 const { authenticateToken } = require('../middleware/auth');
 const reactAgent = require('../services/react-agent');
 const { buildTaskTools, ARTIFACT_DIR } = require('../services/agents/task-tools');
+const taskStore = require('../services/agents/task-store');
+const auditLog = require('../services/agents/audit-log');
+const metrics = require('../services/agents/metrics');
 const {
   buildExecutionProfile,
   buildExecutionProfilePrompt,
@@ -46,6 +49,10 @@ const {
   buildUserIntentAlignmentProfile,
   buildUserIntentAlignmentPrompt,
 } = require('../services/agents/user-intent-alignment');
+const {
+  buildAgentTaskPlan,
+  buildAgentTaskPlanPrompt,
+} = require('../services/agents/agent-task-plan');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -108,27 +115,31 @@ router.get('/artifact/:id', authenticateToken, (req, res) => {
 // ─── GET /api/agent/task/:taskId ───────────────────────────────────────
 
 router.get('/task/:taskId', authenticateToken, (req, res) => {
-  const task = getTaskForUser(req.params.taskId, req.user?.id);
+  const task = getTaskForUser(req.params.taskId, req.user?.id)
+    || taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
   if (!task) return res.status(404).json({ error: 'task not found' });
 
-  res.json({
-    ok: true,
-    taskId: task.taskId,
-    status: task.status,
-    displayGoal: task.displayGoal,
-    model: task.model,
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-    streamState: task.streamState,
-    events: task.events,
-  });
+  res.json({ ok: true, ...formatTaskPayload(task) });
 });
 
 // ─── POST /api/agent/task/:taskId/cancel ───────────────────────────────
 
 router.post('/task/:taskId/cancel', authenticateToken, (req, res) => {
   const task = getTaskForUser(req.params.taskId, req.user?.id);
-  if (!task) return res.status(404).json({ error: 'task not found' });
+  if (!task) {
+    const snapshot = taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
+    if (!snapshot) return res.status(404).json({ error: 'task not found' });
+    if (snapshot.status === 'running') {
+      taskStore.markTaskStatus(snapshot, 'cancelled', {
+        streamState: {
+          ...(snapshot.streamState || {}),
+          done: true,
+          error: 'Tarea cancelada desde una sesión recuperada.',
+        },
+      });
+    }
+    return res.json({ ok: true, taskId: snapshot.taskId, status: 'cancelled' });
+  }
   if (task.status !== 'running') {
     return res.json({ ok: true, taskId: task.taskId, status: task.status });
   }
@@ -142,6 +153,8 @@ router.post('/task/:taskId/cancel', authenticateToken, (req, res) => {
     done: true,
     error: 'Tarea detenida por el usuario.',
   });
+  taskStore.markTaskStatus(task, 'cancelled', { streamState: task.streamState });
+  metrics.counter('agent_task_cancellations_total', { reason: 'user' });
 
   res.json({ ok: true, taskId: task.taskId, status: task.status });
 });
@@ -178,7 +191,17 @@ router.post(
       : [];
     const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds });
     const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
+    const taskPlan = buildAgentTaskPlan({
+      goal: agentGoal,
+      executionProfile,
+      intentAlignmentProfile,
+      fileIds,
+      maxRuntimeMs: Number.isFinite(Number.parseInt(req.body.maxRuntimeMs, 10))
+        ? Number.parseInt(req.body.maxRuntimeMs, 10)
+        : 2 * 60 * 60 * 1000,
+    });
     const taskId = crypto.randomUUID();
+    const taskStartedAt = Date.now();
     const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
     const controller = new AbortController();
     const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
@@ -199,6 +222,19 @@ router.post(
       streamState,
       executionProfile,
       intentAlignmentProfile,
+      taskPlan,
+    });
+    metrics.counter('agent_task_invocations_total', { status: 'started' });
+    auditLog.audit({
+      event: 'agent_task_started',
+      taskId,
+      userId: req.user?.id || null,
+      chatId,
+      model,
+      maxSteps,
+      maxRuntimeMs,
+      requiredTools: executionProfile.requiredTools,
+      planPhases: taskPlan.phases.map((phase) => phase.id),
     });
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -237,6 +273,7 @@ router.post(
       task.status = status;
       task.updatedAt = new Date().toISOString();
       lastPersistAt = Date.now();
+      taskStore.markTaskStatus(task, status, { streamState });
       try {
         await prisma.message.update({
           where: { id: assistantMessageId },
@@ -251,6 +288,7 @@ router.post(
               artifacts,
               executionProfile,
               intentAlignmentProfile,
+              taskPlan,
               maxSteps,
               maxRuntimeMs,
               updatedAt: task.updatedAt,
@@ -283,6 +321,7 @@ router.post(
     const emit = (obj) => {
       const applied = applyEvent(obj);
       send(applied);
+      metrics.counter('agent_task_events_total', { type: obj.type || 'unknown' });
       schedulePersistTaskState();
       return applied;
     };
@@ -295,6 +334,7 @@ router.post(
       tools: tools.map(t => t.name),
       executionProfile,
       intentAlignmentProfile,
+      taskPlan,
     });
 
     // Per-step id counter shared with the tool event bus so the UI
@@ -348,6 +388,7 @@ router.post(
                 artifacts,
                 executionProfile,
                 intentAlignmentProfile,
+                taskPlan,
                 maxSteps,
                 maxRuntimeMs,
                 updatedAt: new Date().toISOString(),
@@ -367,7 +408,7 @@ router.post(
         maxSteps,
         maxRuntimeMs,
         model,
-        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile),
+        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan),
         ctx: toolCtx,
         finalizeGuard: ({ steps }) => validateFinalize(executionProfile, steps),
         onStepStart: (step) => {
@@ -417,6 +458,7 @@ router.post(
                 artifacts,
                 executionProfile,
                 intentAlignmentProfile,
+                taskPlan,
                 stoppedReason: result.stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
@@ -439,6 +481,30 @@ router.post(
       };
       task.status = result.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
       task.updatedAt = new Date().toISOString();
+      taskStore.markTaskStatus(task, task.status, {
+        streamState,
+        stats: {
+          steps: result.steps.length,
+          artifacts: artifacts.length,
+          durationMs: Date.now() - taskStartedAt,
+          stoppedReason: result.stoppedReason,
+        },
+        artifacts,
+      });
+      metrics.counter('agent_task_invocations_total', { status: task.status });
+      metrics.observe('agent_task_duration_ms', { status: task.status }, Date.now() - taskStartedAt);
+      metrics.counter('agent_task_artifacts_total', { status: task.status }, artifacts.length);
+      auditLog.audit({
+        event: 'agent_task_finished',
+        taskId,
+        userId: req.user?.id || null,
+        chatId,
+        status: task.status,
+        stoppedReason: result.stoppedReason,
+        steps: result.steps.length,
+        artifacts: artifacts.length,
+        durationMs: Date.now() - taskStartedAt,
+      });
       send(outboundDoneEvent);
       clearTimeout(runtimeTimer);
       clearInterval(heartbeat);
@@ -449,6 +515,21 @@ router.post(
       const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
       task.status = controller.signal.aborted ? 'cancelled' : 'error';
       emit({ type: 'error', message });
+      taskStore.markTaskStatus(task, task.status, {
+        streamState,
+        stats: { durationMs: Date.now() - taskStartedAt, error: message },
+      });
+      metrics.counter('agent_task_invocations_total', { status: task.status });
+      metrics.observe('agent_task_duration_ms', { status: task.status }, Date.now() - taskStartedAt);
+      auditLog.audit({
+        event: 'agent_task_failed',
+        taskId,
+        userId: req.user?.id || null,
+        chatId,
+        status: task.status,
+        error: message,
+        durationMs: Date.now() - taskStartedAt,
+      });
       await persistTaskState(task.status);
       clearTimeout(runtimeTimer);
       clearInterval(heartbeat);
@@ -515,13 +596,16 @@ function normalizeSystemContract(text) {
     .slice(0, 4000);
 }
 
-function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile) {
+function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (systemContract) {
     parts.push(`Additional execution contract:\n${systemContract}`);
   }
   if (intentAlignmentProfile) {
     parts.push(`User intent alignment:\n${buildUserIntentAlignmentPrompt(intentAlignmentProfile)}`);
+  }
+  if (taskPlan) {
+    parts.push(`Internal task plan:\n${buildAgentTaskPlanPrompt(taskPlan)}`);
   }
   if (executionProfile) {
     parts.push(buildExecutionProfilePrompt(executionProfile));
@@ -532,7 +616,7 @@ function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, inten
   return parts.join('\n\n');
 }
 
-function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState, executionProfile = null, intentAlignmentProfile = null }) {
+function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState, executionProfile = null, intentAlignmentProfile = null, taskPlan = null }) {
   pruneOldTasks();
   const now = new Date().toISOString();
   const record = {
@@ -550,10 +634,16 @@ function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controll
     streamState,
     executionProfile,
     intentAlignmentProfile,
+    taskPlan,
     events: [],
     assistantMessageId: null,
   };
   ACTIVE_AGENT_TASKS.set(taskId, record);
+  try {
+    taskStore.writeTaskSnapshot(record);
+  } catch (err) {
+    console.warn('[agent-task] durable task write failed:', err.message);
+  }
   return record;
 }
 
@@ -573,6 +663,11 @@ function appendTaskEvent(task, event, streamState) {
   }
   task.streamState = streamState;
   task.updatedAt = new Date().toISOString();
+  try {
+    taskStore.appendTaskEvent(task, event, streamState, { eventLimit: TASK_EVENT_LIMIT });
+  } catch (err) {
+    console.warn('[agent-task] durable event write failed:', err.message);
+  }
 }
 
 function pruneOldTasks() {
@@ -585,6 +680,29 @@ function pruneOldTasks() {
   }
 }
 
+function formatTaskPayload(task) {
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    displayGoal: task.displayGoal,
+    model: task.model,
+    chatId: task.chatId || null,
+    assistantMessageId: task.assistantMessageId || null,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    completedAt: task.completedAt || null,
+    cancelledAt: task.cancelledAt || null,
+    failedAt: task.failedAt || null,
+    streamState: task.streamState,
+    events: task.events || [],
+    executionProfile: task.executionProfile || null,
+    intentAlignmentProfile: task.intentAlignmentProfile || null,
+    taskPlan: task.taskPlan || null,
+    stats: task.stats || null,
+    checkpoints: task.checkpoints || [],
+  };
+}
+
 function initialAgentState() {
   return { steps: [], artifacts: [], finalText: '', done: false };
 }
@@ -592,7 +710,7 @@ function initialAgentState() {
 function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan } };
     case 'step_start':
       return {
         ...state,
@@ -687,6 +805,7 @@ router.INTERNAL = {
   buildAgentSystemPrompt,
   createTaskRecord,
   extractProfessionalContract,
+  formatTaskPayload,
   getTaskForUser,
   initialAgentState,
   normalizeDisplayGoal,

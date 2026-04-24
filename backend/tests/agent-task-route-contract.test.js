@@ -1,8 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const agentTaskRouter = require('../src/routes/agent-task');
 const { INTERNAL } = agentTaskRouter;
+const taskStore = require('../src/services/agents/task-store');
 
 test('agent task route: strips internal execution contracts from visible goals', () => {
   const raw = [
@@ -39,10 +43,12 @@ test('agent task route: stores intent alignment profile in meta state', () => {
     model: 'gpt-4o',
     tools: ['web_search'],
     intentAlignmentProfile: { outputMode: 'inline', groundingMode: 'source_verification_required' },
+    taskPlan: { phases: [{ id: 'source_research' }] },
   });
 
   assert.equal(state.meta.intentAlignmentProfile.outputMode, 'inline');
   assert.equal(state.meta.intentAlignmentProfile.groundingMode, 'source_verification_required');
+  assert.equal(state.meta.taskPlan.phases[0].id, 'source_research');
 });
 
 test('agent task route: does not drop tool events emitted without a current step', () => {
@@ -67,6 +73,7 @@ test('agent task route: does not drop tool events emitted without a current step
 });
 
 test('agent task route: active task lookup is scoped to the owner', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-route-store-'));
   const controller = new AbortController();
   const task = INTERNAL.createTaskRecord({
     taskId: 'task-owned',
@@ -82,6 +89,37 @@ test('agent task route: active task lookup is scoped to the owner', () => {
 
   assert.equal(INTERNAL.getTaskForUser(task.taskId, 'user-a').taskId, task.taskId);
   assert.equal(INTERNAL.getTaskForUser(task.taskId, 'user-b'), null);
+  assert.equal(taskStore.getTaskSnapshotForUser(task.taskId, 'user-a').taskId, task.taskId);
+  assert.equal(taskStore.getTaskSnapshotForUser(task.taskId, 'user-b'), null);
+  INTERNAL.ACTIVE_AGENT_TASKS.delete(task.taskId);
+});
+
+test('agent task route: appendTaskEvent persists reloadable checkpoints', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-route-store-'));
+  const task = INTERNAL.createTaskRecord({
+    taskId: 'task-reloadable',
+    userId: 'user-a',
+    chatId: 'chat-a',
+    displayGoal: 'Trabaja 5 horas',
+    model: 'gpt-4o',
+    controller: new AbortController(),
+    maxSteps: 20,
+    maxRuntimeMs: 7200000,
+    streamState: INTERNAL.initialAgentState(),
+  });
+  const state = INTERNAL.reduceAgentState(task.streamState, {
+    type: 'step_start',
+    id: 's1',
+    label: 'Plan estructurado',
+    icon: 'thought',
+  });
+
+  INTERNAL.appendTaskEvent(task, { type: 'step_start', id: 's1', label: 'Plan estructurado', icon: 'thought' }, state);
+
+  const payload = INTERNAL.formatTaskPayload(taskStore.getTaskSnapshotForUser('task-reloadable', 'user-a'));
+  assert.equal(payload.taskId, 'task-reloadable');
+  assert.equal(payload.streamState.steps.length, 1);
+  assert.equal(payload.checkpoints.length, 1);
   INTERNAL.ACTIVE_AGENT_TASKS.delete(task.taskId);
 });
 
@@ -105,9 +143,19 @@ test('agent task route: system prompt includes intent alignment without echoing 
     responsePolicy: ['answer_the_actual_request_first', 'do_not_create_file_unless_user_asked'],
   };
 
-  const prompt = INTERNAL.buildAgentSystemPrompt('', [], null, intentAlignmentProfile);
+  const prompt = INTERNAL.buildAgentSystemPrompt('', [], null, intentAlignmentProfile, {
+    version: 'test-plan',
+    objective: 'generation:inline',
+    outputMode: 'inline',
+    groundingMode: 'source_verification_required',
+    phases: [{ id: 'source_research', role: 'research', objective: 'Collect verified sources.', checkpoint: 'Enough evidence.' }],
+    successCriteria: ['No fabricated citations.'],
+    risks: ['Premature finalization.'],
+  });
 
   assert.match(prompt, /User intent alignment/);
+  assert.match(prompt, /Internal task plan/);
+  assert.match(prompt, /source_research/);
   assert.match(prompt, /requested_count:5 articulos/);
   assert.doesNotMatch(prompt, /Dame 5 articulos/);
 });

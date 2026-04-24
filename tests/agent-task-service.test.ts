@@ -12,6 +12,7 @@ describe("agent-task-service · reducer", () => {
       model: "gpt-4o",
       tools: ["web_search"],
       intentAlignmentProfile: { groundingMode: "source_verification_required" },
+      taskPlan: { phases: [{ id: "source_research" }] },
     })
     state = reduceEvent(state, {
       type: "step_start",
@@ -35,6 +36,7 @@ describe("agent-task-service · reducer", () => {
 
     assert.equal(state.meta?.taskId, "task-frontend")
     assert.equal(state.meta?.intentAlignmentProfile?.groundingMode, "source_verification_required")
+    assert.equal((state.meta?.taskPlan as any)?.phases[0].id, "source_research")
     assert.equal(state.steps.length, 1)
     assert.equal(state.steps[0].toolCalls.length, 1)
     assert.equal(state.steps[0].toolCalls[0].output?.preview, "25 fuentes")
