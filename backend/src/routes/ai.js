@@ -1295,6 +1295,15 @@ router.post(
   ],
   authenticateToken,
   async (req, res) => {
+    const requestAbortController = new AbortController();
+    let clientDisconnected = false;
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        clientDisconnected = true;
+        requestAbortController.abort();
+      }
+    });
+
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -1406,7 +1415,7 @@ router.post(
             response_format: "b64_json",
             n: 1,
             size: "1024x1024"
-          });
+          }, { signal: requestAbortController.signal });
           response = await Promise.race([imagePromise, timeoutPromise]);
         } else {
           const imagePromise = openai.images.generate({
@@ -1416,7 +1425,7 @@ router.post(
             size: '1024x1024',
             quality: 'standard',
             response_format: 'b64_json',
-          });
+          }, { signal: requestAbortController.signal });
           response = await Promise.race([imagePromise, timeoutPromise]);
         }
         const { b64_json, ...rest } = response.data[0];
@@ -1424,6 +1433,11 @@ router.post(
         response = response.data[0].b64_json;
 
         console.log("📦 Remaining fields in imageData (excluding b64_json):", rest);
+      }
+
+      if (clientDisconnected || requestAbortController.signal.aborted) {
+        console.log('Image generation cancelled by client before persistence.');
+        return;
       }
 
       const { imageUrl, fileId: newFileId } = await saveBase64Image(response, userId, prompt);
@@ -1481,8 +1495,14 @@ router.post(
       });
 
     } catch (error) {
+      if (clientDisconnected || requestAbortController.signal.aborted || error?.name === 'AbortError') {
+        console.log('Image generation request aborted by client.');
+        return;
+      }
       console.error('Image generation error:', error);
-      res.status(500).json({ error: error.message || 'Image generation failed' });
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message || 'Image generation failed' });
+      }
     }
   }
 );

@@ -609,6 +609,12 @@ const ActionsDropdown = ({
   };
 
   const handleImageGenerationToggle = () => {
+    if (isGeneratingImage) {
+      setIsImageGenerationActive(true);
+      setChatType('image');
+      return;
+    }
+
     const newState = !isImageGenerationActive;
 
     if (newState) {
@@ -635,7 +641,8 @@ const ActionsDropdown = ({
   };
 
 
-  const isDisabled = isLoading || isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
+  const isMenuDisabled = isLoading || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
+  const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
 
   const handleDropdownOpenChange = (open: boolean) => {
     setIsOpen(open);
@@ -676,7 +683,7 @@ const ActionsDropdown = ({
                 size="sm"
                 aria-label="Attach files & tools"
                 className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
-                disabled={isDisabled}
+                disabled={isMenuDisabled}
               >
                 <Plus className="h-8 w-8" />
               </Button>
@@ -689,7 +696,7 @@ const ActionsDropdown = ({
         <DropdownMenuContent align="start" sideOffset={10} className="liquid-menu-surface w-64 overflow-visible">
           {/* File Upload - Only for text chats */}
 
-          <DropdownMenuItem className="liquid-menu-item" onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading}>
+          <DropdownMenuItem className="liquid-menu-item" onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading || isGeneratingImage}>
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
                 <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
@@ -714,7 +721,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleWebSearchToggle}
-            disabled={isWebSearching}
+            disabled={isWebSearching || isGeneratingImage}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWebSearchActive
@@ -878,7 +885,7 @@ const ActionsDropdown = ({
                     }
                     setIsOpen(false);
                   }}
-                  disabled={isDisabled}
+                  disabled={isToolSwitchDisabled}
                 >
                   <div className="flex items-center gap-3 w-full">
                     <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
@@ -908,7 +915,7 @@ const ActionsDropdown = ({
                     }
                     setIsOpen(false);
                   }}
-                  disabled={isDisabled}
+                  disabled={isToolSwitchDisabled}
                 >
                   <div className="flex items-center gap-3 w-full">
                     <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
@@ -937,7 +944,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
-            disabled={currentPlan === "FREE" || isDisabled}
+            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
@@ -960,7 +967,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleImageGenerationToggle}
-            disabled={currentPlan === "FREE" || isDisabled}
+            disabled={currentPlan === "FREE"}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
@@ -977,11 +984,11 @@ const ActionsDropdown = ({
                   {isImageGenerationActive ? 'Image Generation Active' : 'Image Generation'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Generate images with DALL-E 3
+                  {isGeneratingImage ? 'Generating now' : 'Generate images with DALL-E 3'}
                 </div>
               </div>
-              {isImageGenerationActive && (
-                <div className="w-2 h-2 bg-pink-500 rounded-full" />
+              {(isImageGenerationActive || isGeneratingImage) && (
+                <div className={cn("w-2 h-2 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
               )}
               {currentPlan === "FREE" && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -993,7 +1000,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleVideoGenerationToggle}
-            disabled={currentPlan === "FREE" || isDisabled}
+            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
@@ -1063,7 +1070,7 @@ const ActionsDropdown = ({
               setChatType('thesis');
               setIsOpen(false);
             }}
-            disabled={currentPlan === "FREE" || isDisabled}
+            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
@@ -1359,6 +1366,7 @@ const ActiveToolsDisplay = ({
   setIsWebSearchActive,
   isImageGenerationActive,
   setIsImageGenerationActive,
+  isGeneratingImage = false,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   isComputerUseActive,
@@ -1391,6 +1399,7 @@ const ActiveToolsDisplay = ({
   setIsWebSearchActive: (value: boolean) => void;
   isImageGenerationActive: boolean;
   setIsImageGenerationActive: (value: boolean) => void;
+  isGeneratingImage?: boolean;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
   isComputerUseActive: boolean;
@@ -1445,6 +1454,7 @@ const ActiveToolsDisplay = ({
   };
 
   const handleImageGenerationClose = () => {
+    if (isGeneratingImage) return;
     setIsImageGenerationActive(false);
     setChatType('text');
   };
@@ -1611,11 +1621,19 @@ const ActiveToolsDisplay = ({
         <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
           <Palette className="h-3 w-3" />
           <span className="font-medium">Image Generation</span>
+          {isGeneratingImage && <span className="h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
           <Button
             variant="ghost"
             size="sm"
-            className="h-4 w-4 p-0 hover:bg-pink-200 dark:hover:bg-pink-800/30 rounded-full ml-1"
+            className={cn(
+              "h-4 w-4 p-0 rounded-full ml-1",
+              isGeneratingImage
+                ? "opacity-45 cursor-not-allowed"
+                : "hover:bg-pink-200 dark:hover:bg-pink-800/30"
+            )}
             onClick={handleImageGenerationClose}
+            disabled={isGeneratingImage}
+            title={isGeneratingImage ? "La herramienta sigue activa durante la generación" : "Cerrar generación de imágenes"}
           >
             <X className="h-3 w-3" />
           </Button>
@@ -2063,6 +2081,8 @@ function ChatInterfaceContent() {
   const [isSearching, setIsSearching] = React.useState(false)
   const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
+  const imageAbortControllerRef = React.useRef<AbortController | null>(null)
+  const isGeneratingImageRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
@@ -2236,6 +2256,43 @@ function ChatInterfaceContent() {
     setComputerUseStatus('idle');
     setComputerUseScreenshot(null);
   }, [closeAllToolsAndConnectors, setChatType, clearReasoning]);
+
+  const markImageGenerationStopped = React.useCallback(() => {
+    setCurrentChat(prevChat => {
+      if (!prevChat) return prevChat;
+      let changed = false;
+      const newMessages = (prevChat.messages || []).map((msg: any) => {
+        if (msg.content === '[GENERATING_IMAGE]') {
+          changed = true;
+          return { ...msg, content: '', error: 'Generación de imagen detenida.' };
+        }
+        return msg;
+      });
+      return changed ? { ...prevChat, messages: newMessages } : prevChat;
+    });
+  }, [setCurrentChat]);
+
+  const stopActiveGeneration = React.useCallback(() => {
+    if (intentAbortControllerRef.current) {
+      intentAbortControllerRef.current.abort();
+      intentAbortControllerRef.current = null;
+    }
+    if (searchAbortControllerRef.current) {
+      searchAbortControllerRef.current.abort();
+      searchAbortControllerRef.current = null;
+      setIsWebSearching(false);
+    }
+    if (imageAbortControllerRef.current) {
+      imageAbortControllerRef.current.abort();
+      imageAbortControllerRef.current = null;
+      isGeneratingImageRef.current = false;
+      setIsGeneratingImage(false);
+      markImageGenerationStopped();
+      toast.info('Generación de imagen detenida');
+    }
+    stopStreaming();
+    setIsSending(false);
+  }, [markImageGenerationStopped, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -2820,9 +2877,15 @@ But first, you need to connect your Spotify account securely using the button be
   // Replace the commented useEffect and add a new one for chat switching
   React.useEffect(() => {
     if (prevChatIdRef.current && prevChatIdRef.current !== currentChat?.id) {
-      // Reset generation modes when switching chats
-      closeAllToolsAndConnectors();
-      setChatType('text'); // Always default to text when switching chats
+      // Reset generation modes when switching chats, except while an image
+      // request is actively using the current composer mode.
+      if (isGeneratingImageRef.current) {
+        setIsImageGenerationActive(true);
+        setChatType('image');
+      } else {
+        closeAllToolsAndConnectors();
+        setChatType('text'); // Always default to text when switching chats
+      }
 
       // Clear Computer Use reasoning when switching chats
       clearReasoning();
@@ -2837,8 +2900,14 @@ But first, you need to connect your Spotify account securely using the button be
     setSplitViewContent(null)
     setSelectedWordText(null);
 
-    // Close all connectors first when switching chats
-    closeAllToolsAndConnectors();
+    // Close all connectors first when switching chats, but keep the image
+    // tool visibly selected while its request is still running.
+    if (isGeneratingImageRef.current) {
+      setIsImageGenerationActive(true);
+      setChatType('image');
+    } else {
+      closeAllToolsAndConnectors();
+    }
 
     // Use a small delay to ensure previous connector UI is fully closed
     const timer = setTimeout(() => {
@@ -4419,45 +4488,85 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   }
 
   const handleImageGeneration = async (prompt: string, files?: string[]) => {
-    setIsGeneratingImage(true)
+    imageAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    imageAbortControllerRef.current = controller;
+    isGeneratingImageRef.current = true;
+    setIsGeneratingImage(true);
+    setIsImageGenerationActive(true);
+    setChatType('image');
+
+    let activeChat = currentChat as any;
+    let activeChatId = activeChat?.id as string | undefined;
     try {
-      if (!currentChat) {
-        // If no chat is active, create a new one with type 'image'
-        const newChat = await createNewChat('image', prompt, files);
+      if (!activeChatId) {
+        const newChat = await createNewChat('image', undefined, undefined, {
+          skipInitialProcessing: true,
+        } as any);
+        activeChat = newChat as any;
+        activeChatId = activeChat?.id;
+      }
 
-      } else {
-        // User message already shown in handleSend, just add AI placeholder
-        const assistantPlaceholder = {
-          id: `msg-assistant-generating-${Date.now()}`,
-          chatId: currentChat.id,
-          role: 'ASSISTANT' as const,
-          content: '[GENERATING_IMAGE]',
-          timestamp: new Date().toISOString(),
-        };
+      if (!activeChatId) {
+        throw new Error('No se pudo crear el chat para generar la imagen.');
+      }
 
-        setCurrentChat(prevChat => {
-          if (!prevChat) return prevChat;
-          const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
-          return { ...prevChat, messages: updatedMessages };
-        });
+      const assistantPlaceholder = {
+        id: `msg-assistant-generating-${Date.now()}`,
+        chatId: activeChatId,
+        role: 'ASSISTANT' as const,
+        content: '[GENERATING_IMAGE]',
+        timestamp: new Date().toISOString(),
+      };
 
-        // Then, generate the image
-        const payload = {
-          prompt,
-          chatId: currentChat?.id,
-          provider: selectProvider,
-          model: selectedModel,
-        };
+      const userMessage = !currentChat ? {
+        id: `msg-user-image-${Date.now()}`,
+        chatId: activeChatId,
+        role: 'USER' as const,
+        content: prompt,
+        timestamp: new Date().toISOString(),
+        files: files || [],
+      } : null;
 
-        if (files && files[0]) {
-          (payload as any).fileId = files[0];
-        }
-        setUploadedFiles([]);
-        const response = await apiClient.generateImage(payload)
-        await selectChat(currentChat?.id ?? "") // Re-select the chat to update messages
-        toast.success('Image generated successfully!')
+      setCurrentChat(prevChat => {
+        const baseChat = prevChat?.id === activeChatId
+          ? prevChat
+          : activeChat
+            ? { ...activeChat, messages: [] }
+            : prevChat;
+
+        if (!baseChat) return prevChat;
+        const existingMessages = baseChat.messages || [];
+        const updatedMessages = userMessage
+          ? [...existingMessages, userMessage, assistantPlaceholder]
+          : [...existingMessages, assistantPlaceholder];
+        return { ...baseChat, messages: updatedMessages };
+      });
+
+      const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string } = {
+        prompt,
+        chatId: activeChatId,
+        provider: selectProvider,
+        model: selectedModel,
+      };
+
+      if (files && files[0]) {
+        payload.fileId = files[0];
+      }
+      setUploadedFiles([]);
+      await apiClient.generateImage(payload, { signal: controller.signal });
+
+      if (!controller.signal.aborted) {
+        await selectChat(activeChatId);
+        toast.success('Imagen generada correctamente');
       }
     } catch (error: any) {
+      const wasAbort = controller.signal.aborted || error?.name === 'AbortError';
+      if (wasAbort) {
+        markImageGenerationStopped();
+        return;
+      }
+
       console.error('Image generation failed:', error)
       const errorMessage = error.message || 'Image generation failed. Please try again.';
       const status = error?.status || error?.statusCode;
@@ -4487,9 +4596,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           return { ...prevChat, messages: newMessages };
         };
 
-        if (currentChat) {
-          setCurrentChat(updateChatWithLimitError);
-        }
+        setCurrentChat(updateChatWithLimitError);
         return;
       }
 
@@ -4507,10 +4614,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return { ...prevChat, messages: newMessages };
       };
 
-      if (currentChat) {
-        setCurrentChat(updateChatWithError);
-      }
+      setCurrentChat(updateChatWithError);
     } finally {
+      if (imageAbortControllerRef.current === controller) {
+        imageAbortControllerRef.current = null;
+      }
+      isGeneratingImageRef.current = false;
       setIsGeneratingImage(false)
     }
   }
@@ -4832,6 +4941,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
+  const isStopButtonVisible = isLoading || isStreaming || pendingStop || isSending || isWebSearching || isGeneratingImage;
 
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -4840,6 +4950,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const activeToolsProps = {
     isWebSearchActive, setIsWebSearchActive,
     isImageGenerationActive, setIsImageGenerationActive,
+    isGeneratingImage,
     isVideoGenerationActive, setIsVideoGenerationActive,
     isComputerUseActive, setIsComputerUseActive,
     computerUseStatus,
@@ -5551,14 +5662,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             Primary swaps glyph based on state — never a
                             decorative button. */}
                         <div className="flex shrink-0 items-center gap-1.5">
-                          {!(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (
+                          {!isStopButtonVisible && (
                             <VoiceControls
                               onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
                               className="flex items-center"
                             />
                           )}
 
-                          {!(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (() => {
+                          {!isStopButtonVisible && (() => {
                             const hasText = input.trim().length > 0
                             const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
                             // When the user has typed → Send. When idle → open Voice Studio.
@@ -5599,21 +5710,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             )
                           })()}
 
-                          {(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (
+                          {isStopButtonVisible && (
                             <Button
-                              onClick={() => {
-                                if (intentAbortControllerRef.current) {
-                                  intentAbortControllerRef.current.abort();
-                                  intentAbortControllerRef.current = null;
-                                }
-                                if (searchAbortControllerRef.current) {
-                                  searchAbortControllerRef.current.abort();
-                                  searchAbortControllerRef.current = null;
-                                  setIsWebSearching(false);
-                                }
-                                stopStreaming();
-                                setIsSending(false);
-                              }}
+                              onClick={stopActiveGeneration}
                               size="icon"
                               aria-label="Detener generación"
                               title="Detener"
@@ -5914,14 +6013,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               disabled={isLoading || isGeneratingVideo || isGeneratingWord || isGeneratingExcel || isWebSearching}
                             />
                             <div className="flex shrink-0 items-center gap-1.5">
-                              {!(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (
+                              {!isStopButtonVisible && (
                                 <VoiceControls
                                   onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
                                   className="flex items-center"
                                 />
                               )}
 
-                              {!(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (() => {
+                              {!isStopButtonVisible && (() => {
                                 const hasText = input.trim().length > 0
                                 const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
                                 const action = hasText
@@ -5961,21 +6060,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 )
                               })()}
 
-                              {(isLoading || isStreaming || pendingStop || isSending || isWebSearching) && (
+                              {isStopButtonVisible && (
                                 <Button
-                                  onClick={() => {
-                                    if (intentAbortControllerRef.current) {
-                                      intentAbortControllerRef.current.abort();
-                                      intentAbortControllerRef.current = null;
-                                    }
-                                    if (searchAbortControllerRef.current) {
-                                      searchAbortControllerRef.current.abort();
-                                      searchAbortControllerRef.current = null;
-                                      setIsWebSearching(false);
-                                    }
-                                    stopStreaming();
-                                    setIsSending(false);
-                                  }}
+                                  onClick={stopActiveGeneration}
                                   size="icon"
                                   aria-label="Detener generación"
                                   title="Detener"

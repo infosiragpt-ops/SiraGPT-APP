@@ -513,10 +513,14 @@ class ApiClient {
     // Fallthrough: loop exited without a successful return.
     if (lastError) onError(lastError);
   }
-  async generateImage(data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string }) {
+  async generateImage(
+    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string },
+    options: { signal?: AbortSignal } = {},
+  ) {
     const response = await this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
 
     return response;
