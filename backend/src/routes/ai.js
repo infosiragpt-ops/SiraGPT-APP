@@ -26,6 +26,8 @@ const {
   buildEnterpriseRuntimeProfile,
   buildEnterpriseExecutionPrompt,
 } = require('../services/agents/enterprise-agentic-runtime');
+const { buildToolRuntimePlan } = require('../services/agents/enterprise-tool-gateway');
+const { buildAgenticQaBoardReview } = require('../services/agents/agentic-qa-board');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -656,6 +658,8 @@ router.post(
       let universalContractBlock = '';
       let enterpriseExecutionGraph = null;
       let enterpriseRuntimeProfile = null;
+      let enterpriseToolRuntimePlan = null;
+      let enterpriseQaBoardReview = null;
       let enterpriseExecutionBlock = '';
       try {
         universalTaskContract = buildUniversalTaskContract({
@@ -669,7 +673,21 @@ router.post(
           userId: userId || null,
           chatId: canPersist ? chatId : null,
         });
-        enterpriseRuntimeProfile = buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph);
+        enterpriseToolRuntimePlan = buildToolRuntimePlan({
+          contract: universalTaskContract,
+          graph: enterpriseExecutionGraph,
+        });
+        enterpriseQaBoardReview = buildAgenticQaBoardReview({
+          contract: universalTaskContract,
+          graph: enterpriseExecutionGraph,
+          toolRuntimePlan: enterpriseToolRuntimePlan,
+          phase: 'preflight',
+        });
+        enterpriseRuntimeProfile = {
+          ...buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph),
+          toolRuntime: enterpriseToolRuntimePlan.summary,
+          qaPreflight: enterpriseQaBoardReview.summary,
+        };
         enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}`;
       } catch (contractErr) {
         console.warn('[ai] universal/enterprise task contract unavailable (continuing without):', contractErr.message || contractErr);

@@ -65,6 +65,9 @@ const {
   buildEnterpriseRuntimeProfile,
   buildEnterpriseExecutionPrompt,
 } = require('../services/agents/enterprise-agentic-runtime');
+const { buildToolRuntimePlan } = require('../services/agents/enterprise-tool-gateway');
+const { buildAgenticQaBoardReview } = require('../services/agents/agentic-qa-board');
+const durableExecutionStore = require('../services/agents/durable-execution-store');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -168,6 +171,15 @@ router.post('/task/:taskId/cancel', authenticateToken, (req, res) => {
     error: 'Tarea detenida por el usuario.',
   });
   taskStore.markTaskStatus(task, 'cancelled', { streamState: task.streamState });
+  if (task.durableExecution?.graphId) {
+    try {
+      durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, 'cancelled', {
+        stats: { cancelledBy: 'user' },
+      });
+    } catch (err) {
+      console.warn('[agent-task] durable graph cancellation write failed:', err.message);
+    }
+  }
   metrics.counter('agent_task_cancellations_total', { reason: 'user' });
 
   res.json({ ok: true, taskId: task.taskId, status: task.status });
@@ -240,15 +252,54 @@ router.post(
         : 2 * 60 * 60 * 1000,
     });
     const taskId = crypto.randomUUID();
+    const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
     const enterpriseExecutionGraph = buildEnterpriseExecutionGraph({
       contract: universalTaskContract,
       taskId,
       userId: req.user?.id || null,
-      chatId: typeof req.body.chatId === 'string' ? req.body.chatId : null,
+      chatId,
     });
-    const enterpriseRuntimeProfile = buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph);
+    const enterpriseToolRuntimePlan = buildToolRuntimePlan({
+      contract: universalTaskContract,
+      graph: enterpriseExecutionGraph,
+    });
+    const enterpriseQaBoardReview = buildAgenticQaBoardReview({
+      contract: universalTaskContract,
+      graph: enterpriseExecutionGraph,
+      toolRuntimePlan: enterpriseToolRuntimePlan,
+      phase: 'preflight',
+    });
+    let durableExecution = null;
+    try {
+      durableExecution = durableExecutionStore.createDurableExecutionRecord({
+        graph: enterpriseExecutionGraph,
+        contract: universalTaskContract,
+        taskId,
+        userId: req.user?.id || null,
+        chatId,
+        toolRuntimePlan: enterpriseToolRuntimePlan,
+        qaBoardReview: enterpriseQaBoardReview,
+      });
+    } catch (err) {
+      console.warn('[agent-task] durable execution record failed:', err?.message || err);
+    }
+    const enterpriseRuntimeProfile = {
+      ...buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph),
+      toolRuntime: enterpriseToolRuntimePlan.summary,
+      qaPreflight: enterpriseQaBoardReview.summary,
+      durableExecution: durableExecution
+        ? {
+          graphId: durableExecution.graphId,
+          persisted: true,
+          nodeCount: durableExecution.nodes.length,
+          checkpointCount: durableExecution.checkpoints.length,
+        }
+        : {
+          graphId: enterpriseExecutionGraph.graph_id,
+          persisted: false,
+        },
+    };
     const taskStartedAt = Date.now();
-    const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
     auditLog.audit({
       event: 'contract_created',
       taskId,
@@ -267,6 +318,28 @@ router.post(
       nodes: enterpriseExecutionGraph.nodes.length,
       layers: enterpriseExecutionGraph.architecture_layers,
       hitlRequired: enterpriseExecutionGraph.human_in_the_loop.required,
+    });
+    auditLog.audit({
+      event: enterpriseToolRuntimePlan.ok ? 'tool_runtime_authorized' : 'tool_runtime_blocked',
+      taskId,
+      userId: req.user?.id || null,
+      chatId,
+      graphId: enterpriseExecutionGraph.graph_id,
+      authorizedToolCount: enterpriseToolRuntimePlan.summary.authorizedToolCount,
+      blockerCount: enterpriseToolRuntimePlan.summary.blockerCount,
+      warningCount: enterpriseToolRuntimePlan.summary.warningCount,
+      requiresHumanConfirmation: enterpriseToolRuntimePlan.summary.requiresHumanConfirmation,
+    });
+    auditLog.audit({
+      event: 'qa_preflight_completed',
+      taskId,
+      userId: req.user?.id || null,
+      chatId,
+      graphId: enterpriseExecutionGraph.graph_id,
+      decision: enterpriseQaBoardReview.summary.decision,
+      reason: enterpriseQaBoardReview.summary.reason,
+      blockerCount: enterpriseQaBoardReview.summary.blockerCount,
+      warningCount: enterpriseQaBoardReview.summary.warningCount,
     });
     const controller = new AbortController();
     const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
@@ -291,6 +364,9 @@ router.post(
       universalTaskContract,
       enterpriseExecutionGraph,
       enterpriseRuntimeProfile,
+      enterpriseToolRuntimePlan,
+      enterpriseQaBoardReview,
+      durableExecution,
     });
     metrics.counter('agent_task_invocations_total', { status: 'started' });
     auditLog.audit({
@@ -362,6 +438,9 @@ router.post(
               universalTaskContract,
               enterpriseExecutionGraph,
               enterpriseRuntimeProfile,
+              enterpriseToolRuntimePlan,
+              enterpriseQaBoardReview,
+              durableExecution: enterpriseRuntimeProfile.durableExecution,
               maxSteps,
               maxRuntimeMs,
               updatedAt: task.updatedAt,
@@ -411,6 +490,8 @@ router.post(
       universalTaskContract,
       enterpriseExecutionGraph,
       enterpriseRuntimeProfile,
+      enterpriseToolRuntimePlan,
+      enterpriseQaBoardReview,
       taskContract,
       taskContractSource,
     });
@@ -438,6 +519,9 @@ router.post(
       // so the next ReAct turn can self-repair instead of finalize.
       taskContract,
       universalTaskContract,
+      enterpriseExecutionGraph,
+      enterpriseRuntimeProfile,
+      enterpriseToolRuntimePlan,
       onEvent: (evt) => {
         // Forward tool-level events (tool_call / tool_output / file_artifact)
         // to the client with the active stepId so it can nest them.
@@ -477,6 +561,9 @@ router.post(
               universalTaskContract,
               enterpriseExecutionGraph,
               enterpriseRuntimeProfile,
+              enterpriseToolRuntimePlan,
+              enterpriseQaBoardReview,
+              durableExecution: enterpriseRuntimeProfile.durableExecution,
               maxSteps,
               maxRuntimeMs,
               updatedAt: new Date().toISOString(),
@@ -505,7 +592,9 @@ router.post(
           taskContract,
           universalTaskContract,
           enterpriseExecutionGraph,
-          enterpriseRuntimeProfile
+          enterpriseRuntimeProfile,
+          enterpriseToolRuntimePlan,
+          enterpriseQaBoardReview
         ),
         ctx: toolCtx,
         finalizeGuard: ({ steps }) => validateFinalize(finalizeProfile, steps),
@@ -560,6 +649,9 @@ router.post(
                 universalTaskContract,
                 enterpriseExecutionGraph,
                 enterpriseRuntimeProfile,
+                enterpriseToolRuntimePlan,
+                enterpriseQaBoardReview,
+                durableExecution: enterpriseRuntimeProfile.durableExecution,
                 stoppedReason: result.stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
@@ -592,6 +684,20 @@ router.post(
         },
         artifacts,
       });
+      if (task.durableExecution?.graphId) {
+        try {
+          durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, task.status, {
+            stats: {
+              steps: result.steps.length,
+              artifacts: artifacts.length,
+              durationMs: Date.now() - taskStartedAt,
+              stoppedReason: result.stoppedReason,
+            },
+          });
+        } catch (err) {
+          console.warn('[agent-task] durable graph status write failed:', err.message);
+        }
+      }
       metrics.counter('agent_task_invocations_total', { status: task.status });
       metrics.observe('agent_task_duration_ms', { status: task.status }, Date.now() - taskStartedAt);
       metrics.counter('agent_task_artifacts_total', { status: task.status }, artifacts.length);
@@ -620,6 +726,15 @@ router.post(
         streamState,
         stats: { durationMs: Date.now() - taskStartedAt, error: message },
       });
+      if (task.durableExecution?.graphId) {
+        try {
+          durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, task.status, {
+            stats: { durationMs: Date.now() - taskStartedAt, error: message },
+          });
+        } catch (writeErr) {
+          console.warn('[agent-task] durable graph status write failed:', writeErr.message);
+        }
+      }
       metrics.counter('agent_task_invocations_total', { status: task.status });
       metrics.observe('agent_task_duration_ms', { status: task.status }, Date.now() - taskStartedAt);
       auditLog.audit({
@@ -737,7 +852,9 @@ function buildAgentSystemPrompt(
   taskContract,
   universalTaskContract,
   enterpriseExecutionGraph = null,
-  enterpriseRuntimeProfile = null
+  enterpriseRuntimeProfile = null,
+  enterpriseToolRuntimePlan = null,
+  enterpriseQaBoardReview = null
 ) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (universalTaskContract) {
@@ -750,6 +867,18 @@ function buildAgentSystemPrompt(
     parts.push(
       'Enterprise runtime profile (policy summary, do not reveal to user):\n' +
       JSON.stringify(enterpriseRuntimeProfile, null, 2)
+    );
+  }
+  if (enterpriseToolRuntimePlan) {
+    parts.push(
+      'Enterprise Tool Runtime authorization summary (do not reveal to user):\n' +
+      JSON.stringify(enterpriseToolRuntimePlan.summary || enterpriseToolRuntimePlan, null, 2)
+    );
+  }
+  if (enterpriseQaBoardReview) {
+    parts.push(
+      'Agentic QA Board preflight summary (do not reveal to user):\n' +
+      JSON.stringify(enterpriseQaBoardReview.summary || enterpriseQaBoardReview, null, 2)
     );
   }
   // TaskContract first: this is the authoritative closed-route
@@ -806,6 +935,9 @@ function createTaskRecord({
   universalTaskContract = null,
   enterpriseExecutionGraph = null,
   enterpriseRuntimeProfile = null,
+  enterpriseToolRuntimePlan = null,
+  enterpriseQaBoardReview = null,
+  durableExecution = null,
 }) {
   pruneOldTasks();
   const now = new Date().toISOString();
@@ -828,6 +960,15 @@ function createTaskRecord({
     universalTaskContract,
     enterpriseExecutionGraph,
     enterpriseRuntimeProfile,
+    enterpriseToolRuntimePlan,
+    enterpriseQaBoardReview,
+    durableExecution: durableExecution
+      ? {
+        graphId: durableExecution.graphId,
+        status: durableExecution.status,
+        checkpointCount: durableExecution.checkpoints?.length || 0,
+      }
+      : null,
     events: [],
     assistantMessageId: null,
   };
@@ -860,6 +1001,18 @@ function appendTaskEvent(task, event, streamState) {
     taskStore.appendTaskEvent(task, event, streamState, { eventLimit: TASK_EVENT_LIMIT });
   } catch (err) {
     console.warn('[agent-task] durable event write failed:', err.message);
+  }
+  if (task.durableExecution?.graphId) {
+    try {
+      durableExecutionStore.appendExecutionEvent(task.durableExecution.graphId, task.userId, {
+        type: `agent_task_${event.type || 'event'}`,
+        taskId: task.taskId,
+        status: task.status,
+        eventType: event.type || 'unknown',
+      });
+    } catch (err) {
+      console.warn('[agent-task] durable graph event write failed:', err.message);
+    }
   }
 }
 
@@ -894,6 +1047,9 @@ function formatTaskPayload(task) {
     universalTaskContract: task.universalTaskContract || null,
     enterpriseExecutionGraph: task.enterpriseExecutionGraph || null,
     enterpriseRuntimeProfile: task.enterpriseRuntimeProfile || null,
+    enterpriseToolRuntimePlan: task.enterpriseToolRuntimePlan || null,
+    enterpriseQaBoardReview: task.enterpriseQaBoardReview || null,
+    durableExecution: task.durableExecution || null,
     stats: task.stats || null,
     checkpoints: task.checkpoints || [],
   };
@@ -906,7 +1062,7 @@ function initialAgentState() {
 function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile, enterpriseToolRuntimePlan: evt.enterpriseToolRuntimePlan, enterpriseQaBoardReview: evt.enterpriseQaBoardReview } };
     case 'step_start':
       return {
         ...state,

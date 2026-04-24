@@ -46,10 +46,12 @@ const COMPONENTS = [
     backing_modules: [
       "backend/src/services/agents/execution-graph.js",
       "backend/src/services/agents/task-store.js",
+      "backend/src/services/agents/durable-execution-store.js",
     ],
     acceptance_criteria: [
       "graph validation + topological sort",
       "resumable node state transitions",
+      "file-backed durable ExecutionGraph checkpoints — IMPLEMENTED",
       "durable queue backing for pause/resume across restarts",
     ],
     risk_level: "medium",
@@ -61,11 +63,13 @@ const COMPONENTS = [
     status: "implemented",
     backing_modules: [
       "backend/src/services/agents/tool-manifest.js",
+      "backend/src/services/agents/enterprise-tool-gateway.js",
       "backend/src/services/agents/task-tools.js",
       "backend/src/skills/",
     ],
     acceptance_criteria: [
       "every built-in tool has a validated manifest",
+      "enterprise + legacy manifests are authorized through a single gateway — IMPLEMENTED",
       "unsigned tools cannot be invoked",
       "scoped permissions enforced at dispatch",
     ],
@@ -222,12 +226,14 @@ const COMPONENTS = [
     status: "implemented",
     backing_modules: [
       "backend/src/services/agents/validation-fabric.js",
+      "backend/src/services/agents/agentic-qa-board.js",
       "backend/src/services/agents/artifact-reviewer.js",
       "backend/src/services/agents/format-sovereignty.js",
       "backend/src/services/agents/failure-report.js",
     ],
     acceptance_criteria: [
       "aggregate() returns deterministic decision",
+      "Agentic QA Board assembles Validation/Security/Factuality/Design/Code/Performance reports — IMPLEMENTED",
       "rejects on any critical finding",
       "never invents a score (pass/fail booleans + severities only)",
     ],
