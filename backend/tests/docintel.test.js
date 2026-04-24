@@ -3,10 +3,43 @@
  * Pure JS, deterministic, no network.
  */
 
+const { describe, test } = require("node:test");
+const assert = require("node:assert/strict");
+
 const { analyzeDocument, detectHeadings, detectTables, detectFigures } = require("../src/services/docintel/pdf-structure");
 const { groundClaims, isFactual, extractNumbers } = require("../src/services/docintel/citation-grounding");
 const { createLedger } = require("../src/services/docintel/evidence-ledger");
 const { detectContradictions, hasNegator } = require("../src/services/docintel/contradiction-detector");
+
+function expect(actual) {
+  return {
+    toEqual(expected) {
+      assert.deepEqual(actual, expected);
+    },
+    toBe(expected) {
+      assert.equal(actual, expected);
+    },
+    toBeGreaterThanOrEqual(expected) {
+      assert.ok(actual >= expected, `${actual} is not >= ${expected}`);
+    },
+    toBeGreaterThan(expected) {
+      assert.ok(actual > expected, `${actual} is not > ${expected}`);
+    },
+    toContain(expected) {
+      assert.ok(actual.includes(expected), `${JSON.stringify(actual)} does not contain ${JSON.stringify(expected)}`);
+    },
+    toBeTruthy() {
+      assert.ok(actual);
+    },
+    toMatch(pattern) {
+      assert.match(actual, pattern);
+    },
+    toThrow(pattern) {
+      assert.equal(typeof actual, "function", "toThrow expects a function");
+      assert.throws(actual, pattern);
+    },
+  };
+}
 
 describe("docintel / pdf-structure", () => {
   test("handles empty input", () => {
