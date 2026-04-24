@@ -92,7 +92,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import MessageComponent from "./message-component"
-import VoiceControls from "./voice-controls"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
@@ -2174,6 +2173,10 @@ function ChatInterfaceContent() {
 
   const [input, setInput] = React.useState("")
   const [isRecording, setIsRecording] = React.useState(false)
+  const inputRef = React.useRef("")
+  const dictationBaseRef = React.useRef("")
+  const dictationFinalRef = React.useRef("")
+  const dictationInterimRef = React.useRef("")
   const [searchActivities, setSearchActivities] = React.useState<Record<string, SearchActivityState>>({})
   const [activeSearchActivityId, setActiveSearchActivityId] = React.useState<string | null>(null)
 
@@ -2793,6 +2796,10 @@ But first, you need to connect your Spotify account securely using the button be
   // No longer need dynamic padding, handled by layout
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
+  React.useEffect(() => {
+    inputRef.current = input;
+  }, [input]);
+
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -2960,6 +2967,18 @@ But first, you need to connect your Spotify account securely using the button be
     }
   };
 
+  const normalizeDictationText = React.useCallback((value: string) => {
+    return value.replace(/\s+/g, " ").trim();
+  }, []);
+
+  const buildDictationDraft = React.useCallback((interimTranscript = "") => {
+    return [
+      dictationBaseRef.current,
+      dictationFinalRef.current,
+      interimTranscript,
+    ].map(normalizeDictationText).filter(Boolean).join(" ");
+  }, [normalizeDictationText]);
+
   React.useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -2968,28 +2987,51 @@ But first, you need to connect your Spotify account securely using the button be
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
-      recognition.lang = 'en-US';
+      const preferredLanguage = navigator.languages?.find(lang => lang.toLowerCase().startsWith("es"))
+        || navigator.language
+        || document.documentElement.lang
+        || "es-ES";
+      recognition.lang = preferredLanguage.toLowerCase().startsWith("en") ? "es-ES" : preferredLanguage;
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let finalTranscript = '';
+        let interimTranscript = '';
         for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const transcript = event.results[i][0].transcript || "";
           if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
+            finalTranscript += ` ${transcript}`;
+          } else {
+            interimTranscript += ` ${transcript}`;
           }
         }
+
         if (finalTranscript) {
-          setInput((prevInput: any) => prevInput.trim() + (prevInput ? ' ' : '') + finalTranscript);
+          dictationFinalRef.current = normalizeDictationText(`${dictationFinalRef.current} ${finalTranscript}`);
         }
+        dictationInterimRef.current = normalizeDictationText(interimTranscript);
+        setInput(buildDictationDraft(dictationInterimRef.current));
       };
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error:", event.error);
-        if (isRecording) {
-          setIsRecording(false);
+        const permissionErrors = new Set(["not-allowed", "service-not-allowed"]);
+        if (permissionErrors.has(event.error)) {
+          toast.error("Permite el micrófono en el navegador para usar dictado.");
+        } else if (event.error !== "no-speech" && event.error !== "aborted") {
+          toast.error("No se pudo iniciar el dictado. Inténtalo de nuevo.");
         }
+        setIsRecording(false);
       };
 
       recognition.onend = () => {
+        const committedDraft = buildDictationDraft(dictationInterimRef.current);
+        if (committedDraft) {
+          setInput(committedDraft);
+          inputRef.current = committedDraft;
+        }
+        dictationBaseRef.current = "";
+        dictationFinalRef.current = "";
+        dictationInterimRef.current = "";
         setIsRecording(false);
       };
 
@@ -3001,19 +3043,68 @@ But first, you need to connect your Spotify account securely using the button be
         recognitionRef.current.stop();
       }
     };
-  }, []);
+  }, [buildDictationDraft, normalizeDictationText]);
 
   const handleMicClick = () => {
     const recognition = recognitionRef.current;
-    if (!recognition) return;
+    if (!recognition) {
+      toast.error("Este navegador no soporta dictado por voz.");
+      return;
+    }
 
     if (isRecording) {
       recognition.stop();
     } else {
-      recognition.start();
-      setIsRecording(true);
+      dictationBaseRef.current = inputRef.current;
+      dictationFinalRef.current = "";
+      dictationInterimRef.current = "";
+      try {
+        recognition.start();
+        setIsRecording(true);
+      } catch (error: any) {
+        if (error?.name !== "InvalidStateError") {
+          toast.error("No se pudo iniciar el dictado. Revisa el permiso del micrófono.");
+          console.error("Speech recognition start error:", error);
+        }
+      }
     }
   };
+
+  const renderDictationButton = () => (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleMicClick}
+          aria-label={isRecording ? "Detener dictado" : "Dictar al chat"}
+          title={isRecording ? "Detener dictado" : "Dictar al chat"}
+          className={cn(
+            "relative h-9 w-9 rounded-full p-0 transition-all duration-200 active:scale-[0.96]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+            isRecording
+              ? "bg-red-500/10 text-red-500 hover:bg-red-500/15 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+              : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+          )}
+        >
+          {isRecording ? (
+            <Square className="h-[14px] w-[14px] fill-current" strokeWidth={0} />
+          ) : (
+            <Mic className="h-[17px] w-[17px]" strokeWidth={1.75} />
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <p>
+          {isRecording
+            ? "Detener dictado"
+            : isSpeechSupported
+              ? "Dictar al chat"
+              : "Dictado no soportado por este navegador"}
+        </p>
+      </TooltipContent>
+    </Tooltip>
+  );
 
   // React.useEffect(() => {
   //   console.log(currentChat);
@@ -5844,10 +5935,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             decorative button. */}
                         <div className="flex shrink-0 items-center gap-1.5">
                           {!isStopButtonVisible && (
-                            <VoiceControls
-                              onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                              className="flex items-center"
-                            />
+                            renderDictationButton()
                           )}
 
                           {!isStopButtonVisible && (() => {
@@ -6195,10 +6283,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             />
                             <div className="flex shrink-0 items-center gap-1.5">
                               {!isStopButtonVisible && (
-                                <VoiceControls
-                                  onTranscription={(text) => setInput(prev => prev + (prev ? ' ' : '') + text)}
-                                  className="flex items-center"
-                                />
+                                renderDictationButton()
                               )}
 
                               {!isStopButtonVisible && (() => {
