@@ -19,7 +19,7 @@ import {
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
     Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
     Sparkles, Eye,
-    ExternalLink, Mail, X
+    ExternalLink, Mail, X, Brush, Maximize2
 } from "lucide-react"
 import {
     Dialog,
@@ -214,6 +214,176 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
                     if (j >= 0) setIdx(j);
                 }}
             />
+        </div>
+    );
+};
+
+const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
+
+const GeneratedImageCard = ({
+    file,
+    src,
+    index,
+    onOpen,
+    onLoad,
+    onError,
+}: {
+    file: any;
+    src: string;
+    index: number;
+    onOpen: (src: string) => void;
+    onLoad?: () => void;
+    onError?: () => void;
+}) => {
+    const frameRef = React.useRef<HTMLDivElement | null>(null);
+    const [editMode, setEditMode] = React.useState(false);
+    const [dragStart, setDragStart] = React.useState<{ x: number; y: number } | null>(null);
+    const [selection, setSelection] = React.useState<{ x: number; y: number; width: number; height: number } | null>(null);
+
+    const pointFromEvent = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+        const rect = frameRef.current?.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+        return {
+            x: clampPercent(((event.clientX - rect.left) / rect.width) * 100),
+            y: clampPercent(((event.clientY - rect.top) / rect.height) * 100),
+        };
+    }, []);
+
+    const updateSelection = React.useCallback((start: { x: number; y: number }, current: { x: number; y: number }) => {
+        const x = Math.min(start.x, current.x);
+        const y = Math.min(start.y, current.y);
+        const width = Math.abs(current.x - start.x);
+        const height = Math.abs(current.y - start.y);
+        setSelection({ x, y, width, height });
+    }, []);
+
+    const beginSelection = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (!editMode) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const point = pointFromEvent(event);
+        if (!point) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDragStart(point);
+        setSelection({ x: point.x, y: point.y, width: 0, height: 0 });
+    };
+
+    const moveSelection = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (!editMode || !dragStart) return;
+        const point = pointFromEvent(event);
+        if (!point) return;
+        updateSelection(dragStart, point);
+    };
+
+    const finishSelection = (event: React.PointerEvent<HTMLDivElement>) => {
+        if (!editMode || !dragStart) return;
+        const point = pointFromEvent(event);
+        setDragStart(null);
+        if (point) updateSelection(dragStart, point);
+
+        const region = point
+            ? {
+                x: Math.min(dragStart.x, point.x),
+                y: Math.min(dragStart.y, point.y),
+                width: Math.abs(point.x - dragStart.x),
+                height: Math.abs(point.y - dragStart.y),
+            }
+            : selection;
+
+        if (!region || region.width < 2 || region.height < 2) {
+            toast.error("Marca un área más grande de la imagen.");
+            return;
+        }
+
+        window.dispatchEvent(new CustomEvent("siragpt:image-region-edit", {
+            detail: {
+                imageUrl: src,
+                fileId: file.fileId || file.id,
+                prompt: file.prompt,
+                aspectRatio: file.aspectRatio,
+                region,
+            },
+        }));
+        setEditMode(false);
+        toast.success("Zona marcada. Escribe qué quieres cambiar y envía el mensaje.");
+    };
+
+    return (
+        <div
+            ref={frameRef}
+            className={cn(
+                "group/image relative inline-block overflow-hidden rounded-xl bg-muted/30 shadow-sm",
+                editMode && "cursor-crosshair ring-2 ring-pink-500/60"
+            )}
+            onPointerDown={beginSelection}
+            onPointerMove={moveSelection}
+            onPointerUp={finishSelection}
+            onPointerCancel={() => setDragStart(null)}
+        >
+            <img
+                src={src}
+                alt={`Generated image ${index + 1}`}
+                className={cn(
+                    "max-w-full h-auto max-h-[250px] sm:max-h-[400px] object-contain transition duration-200",
+                    editMode ? "select-none opacity-90" : "cursor-pointer hover:opacity-90"
+                )}
+                loading="lazy"
+                draggable={false}
+                onLoad={onLoad}
+                onError={onError}
+                onClick={() => {
+                    if (!editMode) onOpen(src);
+                }}
+            />
+
+            {selection && (
+                <div
+                    className="pointer-events-none absolute border-2 border-pink-500 bg-pink-500/20 shadow-[0_0_0_9999px_rgba(15,23,42,0.18)]"
+                    style={{
+                        left: `${selection.x}%`,
+                        top: `${selection.y}%`,
+                        width: `${selection.width}%`,
+                        height: `${selection.height}%`,
+                    }}
+                />
+            )}
+
+            {editMode && (
+                <div className="pointer-events-none absolute left-3 top-3 rounded-full bg-black/70 px-3 py-1 text-[11px] font-semibold text-white backdrop-blur">
+                    Arrastra para marcar la zona
+                </div>
+            )}
+
+            <div className="absolute right-3 top-3 z-20 flex gap-2 opacity-0 transition-all duration-200 group-hover/image:opacity-100">
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onOpen(src);
+                    }}
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-gray-800 shadow-lg transition hover:scale-105 hover:bg-white"
+                    title="Ampliar imagen"
+                    aria-label="Ampliar imagen"
+                >
+                    <Maximize2 className="h-4 w-4" />
+                </button>
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        setEditMode((value) => !value);
+                        setSelection(null);
+                    }}
+                    className={cn(
+                        "flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition hover:scale-105",
+                        editMode ? "bg-pink-600 text-white" : "bg-white/90 text-gray-800 hover:bg-white"
+                    )}
+                    title="Seleccionar zona con pincel"
+                    aria-label="Seleccionar zona con pincel"
+                >
+                    <Brush className="h-4 w-4" />
+                </button>
+            </div>
         </div>
     );
 };
@@ -640,14 +810,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
     // Optimized message content rendering with performance safeguards
     const MessageContent = ({ content }: { content: string }) => {
-        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]' || content === '[THESIS_GENERATING]' || content.startsWith('[THESIS_GENERATING]'))) {
-            return null;
-        }
-        // Don't render markdown for image-only messages to improve performance
-        if (isImageOnlyMessage() || isVideoMessage) {
-            return null;
-        }
-
         // ✅ PERFORMANCE FIX: Use simple rendering for streaming messages
         // if (isStreaming) {
         //     return (
@@ -815,6 +977,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             };
         }, [isStreaming, CodeBlock]);
 
+        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]' || content === '[THESIS_GENERATING]' || content.startsWith('[THESIS_GENERATING]'))) {
+            return null;
+        }
+        // Don't render markdown for image-only messages to improve performance
+        if (isImageOnlyMessage() || isVideoMessage) {
+            return null;
+        }
 
         return (
             // [&_p:last-child]:!mb-0 trims the trailing 1em margin that
@@ -1194,7 +1363,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         // Try to extract actual topic names
                         const topicLines = content.match(/(\w+):\s*\d+\s*sources/g);
                         if (topicLines) {
-                            topics = topicLines.map(line => line.split(':')[0].trim());
+                            topics = topicLines.map((line: string) => line.split(':')[0].trim());
                         }
                     } else {
                         // Look for "for topic: xxx" pattern
@@ -1399,6 +1568,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         const gmailEntry = Array.isArray(parsedFiles)
             ? parsedFiles.find((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
             : null;
+        const initialEmails: any[] = gmailEntry?.emails || [];
+        const [emails, setEmails] = useState<any[]>(initialEmails);
+        const [replyForId, setReplyForId] = useState<string | null>(null);
+        const [replyBody, setReplyBody] = useState<string>("");
+        const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
+
+        // Sync local state when payload changes
+        useEffect(() => {
+            setEmails(initialEmails);
+        }, [gmailEntry, gmailEntry?.emails?.length]);
+
         if (!gmailEntry) return null;
 
         const extractEmailsJsonBlock = (text: string) => {
@@ -1416,17 +1596,6 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             }
             return base.filter((l) => l !== label);
         };
-
-        const initialEmails: any[] = gmailEntry.emails || [];
-        const [emails, setEmails] = useState<any[]>(initialEmails);
-        const [replyForId, setReplyForId] = useState<string | null>(null);
-        const [replyBody, setReplyBody] = useState<string>("");
-        const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
-
-        // Sync local state when payload changes
-        useEffect(() => {
-            setEmails(initialEmails);
-        }, [gmailEntry, gmailEntry?.emails?.length]);
 
         const title = gmailEntry.type === 'gmail_search_results' && gmailEntry.query
             ? `Search: ${gmailEntry.query}`
@@ -1664,7 +1833,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     // File display logic - optimized for images
     const FileDisplay = () => {
         if (message.role === 'ASSISTANT' && message.content === '[GENERATING_IMAGE]') {
-            return <ImageGenerationEffect />;
+            let meta: any = {};
+            try {
+                meta = typeof message.metadata === "string" ? JSON.parse(message.metadata) : (message.metadata || {});
+            } catch {
+                meta = {};
+            }
+            return <ImageGenerationEffect aspectRatio={meta.aspectRatio || "1:1"} count={meta.imageCount || 1} />;
         }
 
         if (message.role === 'ASSISTANT' && (message.content === '[GENERATING_PPT]' || message.content === '[GENERATING_VECTOR_PPT]')) {
@@ -1803,10 +1978,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 {((Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
                     (message.role === "ASSISTANT" && message.content.startsWith('http') &&
                         (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
-                        <div className="space-y-2 mt-4">
+                        <div className="mt-4 flex flex-wrap items-start gap-3">
                             {Array.isArray(parsedFiles) && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => {
                                 const src =
-                                    file.url.startsWith('data:image') || file.url.startsWith('http')
+                                    file.url?.startsWith('data:image') || file.url?.startsWith('http')
                                         ? file.url
                                         : `data:image/jpeg;base64,${file.url}`;
 
@@ -1838,29 +2013,19 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             </div>
                                         ) : (
                                             <>
-                                                <img
+                                                <GeneratedImageCard
+                                                    file={file}
                                                     src={src}
-                                                    alt="Generated image"
-                                                    className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain cursor-pointer hover:opacity-90 transition-opacity"
-                                                    loading="lazy"
-                                                    onClick={() => setSelectedImage(src)}
-                                                    onLoad={(e) => {
-                                                        console.log('onLoad');
+                                                    index={index}
+                                                    onOpen={setSelectedImage}
+                                                    onLoad={() => {
                                                         const imgKey = `file-${index}`;
-                                                        // Only update state if image wasn't already loaded
                                                         if (!imageLoadedRef.current.has(imgKey)) {
                                                             imageLoadedRef.current.add(imgKey);
-                                                            setImageLoading(prev => {
-                                                                // Only update if state actually changed
-                                                                if (prev[imgKey] !== false) {
-                                                                    return { ...prev, [imgKey]: false };
-                                                                }
-                                                                return prev;
-                                                            });
+                                                            setImageLoading(prev => prev[imgKey] !== false ? { ...prev, [imgKey]: false } : prev);
                                                         }
                                                     }}
                                                     onError={() => {
-                                                        console.log('onError');
                                                         const imgKey = `file-${index}`;
                                                         setImageLoading(prev => ({ ...prev, [imgKey]: false }));
                                                         setImageError(prev => ({ ...prev, [imgKey]: true }));
@@ -1874,7 +2039,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                         e.stopPropagation();
                                                         handleDownloadImage();
                                                     }}
-                                                    className="absolute top-3 right-3 z-20 h-9 w-9 rounded-full bg-white/90 text-gray-800 shadow-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 hover:bg-white hover:scale-105"
+                                                    className="absolute bottom-3 right-3 z-20 h-9 w-9 rounded-full bg-white/90 text-gray-800 shadow-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 hover:bg-white hover:scale-105"
                                                     title="Download image"
                                                 >
                                                     <Download className="h-4 w-4" />

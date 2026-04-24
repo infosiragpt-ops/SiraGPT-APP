@@ -46,6 +46,33 @@ const KIMI_K26_OPENROUTER = {
   description: 'Moonshot Kimi K2.6 via OpenRouter: long context, multimodal, coding & agents.',
 };
 
+const OPENROUTER_IMAGE_MODELS = [
+  {
+    name: 'openai/gpt-5.4-image-2',
+    displayName: 'GPT-5.4 Image 2',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    icon: 'OpenRouterLogo',
+    description: 'OpenAI GPT-5.4 Image 2 via OpenRouter for high quality image generation.',
+  },
+  {
+    name: 'google/gemini-3.1-flash-image-preview',
+    displayName: 'Gemini 3.1 Flash Image',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    icon: 'OpenRouterLogo',
+    description: 'Google Gemini 3.1 Flash Image Preview via OpenRouter with fast image generation.',
+  },
+  {
+    name: 'bytedance-seed/seedream-4.5',
+    displayName: 'Seedream 4.5',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    icon: 'OpenRouterLogo',
+    description: 'ByteDance Seedream 4.5 via OpenRouter for professional image generation.',
+  },
+];
+
 // ✅ Get available AI models
 router.get('/models', async (req, res) => {
   try {
@@ -78,6 +105,7 @@ router.get('/models', async (req, res) => {
     // expose Kimi K2.6 anyway so the picker always shows it. Skip when a DB row
     // exists (active or inactive) so admin disable/delete is respected.
     const wantText = !type || type === 'TEXT';
+    const wantImage = !type || type === 'IMAGE';
     if (wantText && String(process.env.OPENROUTER_API_KEY || '').trim()) {
       const alreadyListed = models.some((m) => m.name === KIMI_K26_OPENROUTER.name);
       if (!alreadyListed) {
@@ -94,6 +122,17 @@ router.get('/models', async (req, res) => {
             ...models,
           ];
         }
+      }
+    }
+
+    if (wantImage && String(process.env.OPENROUTER_API_KEY || '').trim()) {
+      const listed = new Set(models.map((m) => m.name));
+      const virtualImageModels = OPENROUTER_IMAGE_MODELS
+        .filter((m) => !listed.has(m.name))
+        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
+
+      if (virtualImageModels.length > 0) {
+        models = [...virtualImageModels, ...models];
       }
     }
 
@@ -1256,9 +1295,101 @@ function normalizeImageAspectRatio(value) {
 
 function imageGenerationSizeFor(provider, aspectRatio) {
   if (provider === "Gemini") return "1024x1024";
+  if (provider === "OpenRouter") return "1024x1024";
   if (aspectRatio === '3:4' || aspectRatio === '9:16') return "1024x1792";
   if (aspectRatio === '4:3' || aspectRatio === '16:9') return "1792x1024";
   return "1024x1024";
+}
+
+function normalizeImageCount(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(2, Math.max(1, parsed));
+}
+
+function openRouterImageModalitiesFor(model) {
+  const modelId = String(model || '').toLowerCase();
+  if (modelId.includes('seedream') || modelId.startsWith('bytedance-seed/')) {
+    return ['image'];
+  }
+  return ['image', 'text'];
+}
+
+function stripImageDataUrl(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const match = trimmed.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
+  return match ? match[1] : trimmed;
+}
+
+function extractOpenRouterImageBase64s(response) {
+  const message = response?.choices?.[0]?.message || {};
+  const candidates = [];
+
+  if (Array.isArray(message.images)) {
+    for (const image of message.images) {
+      candidates.push(
+        image?.image_url?.url ||
+        image?.imageUrl?.url ||
+        image?.url ||
+        image?.data
+      );
+    }
+  }
+
+  if (Array.isArray(message.content)) {
+    for (const part of message.content) {
+      candidates.push(
+        part?.image_url?.url ||
+        part?.imageUrl?.url ||
+        part?.url ||
+        part?.data
+      );
+    }
+  }
+
+  if (typeof message.content === 'string' && message.content.startsWith('data:image/')) {
+    candidates.push(message.content);
+  }
+
+  return candidates.map(stripImageDataUrl).filter(Boolean);
+}
+
+function createOpenRouterClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseURL: 'https://openrouter.ai/api/v1',
+    defaultHeaders: {
+      'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.BASE_URL || 'http://localhost:3000',
+      'X-Title': 'siraGPT',
+    },
+  });
+}
+
+async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, signal }) {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY is required for OpenRouter image generation.');
+  }
+
+  const response = await openrouter.chat.completions.create(
+    {
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      modalities: openRouterImageModalitiesFor(model),
+      image_config: {
+        aspect_ratio: aspectRatio,
+        image_size: '1K',
+      },
+      stream: false,
+    },
+    { signal }
+  );
+
+  const images = extractOpenRouterImageBase64s(response);
+  if (!images.length) {
+    throw new Error('OpenRouter did not return an image.');
+  }
+  return images[0];
 }
 
 function promptWithImageAspectRatio(prompt, aspectRatio) {
@@ -1320,7 +1451,7 @@ async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1') 
   const filepath = path.join(uploadsDir, filename);
 
 
-  const rawImageBuffer = Buffer.from(base64Data, 'base64');
+  const rawImageBuffer = Buffer.from(stripImageDataUrl(base64Data), 'base64');
   const imageBuffer = await cropImageToAspectRatio(rawImageBuffer, aspectRatio);
   await fs.writeFile(filepath, imageBuffer);
 
@@ -1352,6 +1483,7 @@ router.post(
     body('provider').trim().notEmpty().withMessage('Provider is required'),
     body('model').trim().notEmpty().withMessage('Model is required'),
     body('aspectRatio').optional().isIn(Object.keys(IMAGE_ASPECT_RATIOS)).withMessage('Invalid image aspect ratio'),
+    body('imageCount').optional().isInt({ min: 1, max: 2 }).withMessage('Image count must be 1 or 2'),
   ],
   authenticateToken,
   async (req, res) => {
@@ -1369,8 +1501,9 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId, aspectRatio } = req.body;
+      let { prompt, chatId, provider, model, fileId, aspectRatio, imageCount } = req.body;
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
+      imageCount = normalizeImageCount(imageCount);
       const imagePrompt = promptWithImageAspectRatio(prompt, aspectRatio);
       const requestedImageSize = imageGenerationSizeFor(provider, aspectRatio);
       const userId = req.user.id;
@@ -1382,6 +1515,8 @@ router.post(
           apiKey: process.env.GEMINI_API_KEY,
           baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
         });
+      } else if (provider === "OpenRouter") {
+        openai = createOpenRouterClient();
       } else {
         openai = new OpenAI({
           apiKey: process.env.OPENAI_API_KEY
@@ -1462,40 +1597,61 @@ router.post(
         }
       }
 
-      let response;
+      let imageBase64s;
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Image generation timeout')), 200000);
       });
 
-      if (imagePath) { // If there's an image to edit
-        const imagePromise = aiService.generateImageFromImage(imagePath, imagePrompt, provider);
-        response = await Promise.race([imagePromise, timeoutPromise]);
-      } else { // If we are generating a new image from a prompt
+      const generateSingleImage = async () => {
+        if (imagePath) {
+          if (provider === "OpenRouter") {
+            throw new Error('OpenRouter image editing is not enabled yet. Use prompt-only image generation or choose OpenAI/Gemini for editing.');
+          }
+          return aiService.generateImageFromImage(imagePath, imagePrompt, provider);
+        }
+
+        if (provider === "OpenRouter") {
+          return generateOpenRouterImage(openai, {
+            model,
+            prompt: imagePrompt,
+            aspectRatio,
+            signal: requestAbortController.signal,
+          });
+        }
+
         if (provider === "Gemini") {
-          const imagePromise = openai.images.generate({
+          const response = await openai.images.generate({
             model: "imagen-3.0-generate-002",
             prompt: imagePrompt,
             response_format: "b64_json",
             n: 1,
             size: requestedImageSize
           }, { signal: requestAbortController.signal });
-          response = await Promise.race([imagePromise, timeoutPromise]);
-        } else {
-          const imagePromise = openai.images.generate({
-            model: 'dall-e-3',
-            prompt: imagePrompt,
-            n: 1,
-            size: requestedImageSize,
-            quality: 'standard',
-            response_format: 'b64_json',
-          }, { signal: requestAbortController.signal });
-          response = await Promise.race([imagePromise, timeoutPromise]);
+          return response.data?.[0]?.b64_json;
         }
+
+        const response = await openai.images.generate({
+          model: 'dall-e-3',
+          prompt: imagePrompt,
+          n: 1,
+          size: requestedImageSize,
+          quality: 'standard',
+          response_format: 'b64_json',
+        }, { signal: requestAbortController.signal });
         const { b64_json, ...rest } = response.data[0];
 
-        response = response.data[0].b64_json;
-
         console.log("📦 Remaining fields in imageData (excluding b64_json):", rest);
+        return b64_json;
+      };
+
+      imageBase64s = await Promise.race([
+        Promise.all(Array.from({ length: imageCount }, () => generateSingleImage())),
+        timeoutPromise,
+      ]);
+      imageBase64s = imageBase64s.filter(Boolean);
+
+      if (!imageBase64s.length) {
+        throw new Error('Image provider did not return any image data.');
       }
 
       if (clientDisconnected || requestAbortController.signal.aborted) {
@@ -1503,7 +1659,23 @@ router.post(
         return;
       }
 
-      const { imageUrl, fileId: newFileId } = await saveBase64Image(response, userId, prompt, aspectRatio);
+      const generatedFiles = [];
+      for (let index = 0; index < imageBase64s.length; index += 1) {
+        const { imageUrl, fileId: newFileId } = await saveBase64Image(imageBase64s[index], userId, prompt, aspectRatio);
+        generatedFiles.push({
+          type: 'image',
+          url: imageUrl,
+          prompt,
+          fileId: newFileId,
+          aspectRatio,
+          index: index + 1,
+          count: imageBase64s.length,
+          model,
+          provider,
+        });
+      }
+
+      const primaryImageUrl = generatedFiles[0].url;
 
       if (chatId) {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
@@ -1525,9 +1697,9 @@ router.post(
           data: {
             chatId,
             role: 'ASSISTANT',
-            content: imageUrl,
-            tokens: 10000,
-            files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt, fileId: newFileId, aspectRatio }])
+            content: primaryImageUrl,
+            tokens: 1000 * generatedFiles.length,
+            files: JSON.stringify(generatedFiles)
           }
         });
 
@@ -1536,25 +1708,27 @@ router.post(
           data: {
             updatedAt: new Date(),
             title: chat.title === 'New Chat'
-              ? `Image: ${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}`
+              ? `Imagen: ${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}`
               : chat.title
           }
         });
       }
 
       await prisma.apiUsage.create({
-        data: { userId, model, tokens: 10000, cost: 1000 * 0.001 }
+        data: { userId, model, tokens: 1000 * generatedFiles.length, cost: (1000 * generatedFiles.length) * 0.001 }
       });
 
       const updatedUser = await prisma.user.update({
         where: { id: userId },
-        data: { apiUsage: { increment: 1000 } }
+        data: { apiUsage: { increment: 1000 * generatedFiles.length } }
       });
 
       res.json({
-        imageUrl,
+        imageUrl: primaryImageUrl,
+        imageUrls: generatedFiles.map((file) => file.url),
         aspectRatio,
-        tokens: 1000,
+        imageCount: generatedFiles.length,
+        tokens: 1000 * generatedFiles.length,
         usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
       });
 

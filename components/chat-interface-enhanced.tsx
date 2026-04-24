@@ -153,6 +153,7 @@ type SearchActivityState = {
 }
 
 type ImageAspectRatio = "1:1" | "3:4" | "9:16" | "4:3" | "16:9"
+type ImageGenerationCount = 1 | 2
 
 const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string }> = [
   { value: "1:1", label: "Cuadrado", ratio: "1:1" },
@@ -187,6 +188,10 @@ function ImageAspectRatioMark({
       <span className={cn("h-1.5 w-1.5 rounded-full", selected ? "bg-current" : "bg-current/60")} />
     </span>
   )
+}
+
+function clampImageGenerationCount(value: number): ImageGenerationCount {
+  return Math.min(2, Math.max(1, value)) as ImageGenerationCount
 }
 
 const SEARCH_ACTIVITY_MAX_ENTRIES = 140
@@ -1018,10 +1023,10 @@ const ActionsDropdown = ({
               </div>
               <div className="flex-1">
                 <div className="liquid-label font-medium text-sm">
-                  {isImageGenerationActive ? 'Image Generation Active' : 'Image Generation'}
+                  {isImageGenerationActive ? 'Imágenes activas' : 'Imágenes'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {isGeneratingImage ? 'Generating now' : 'Generate images with DALL-E 3'}
+                  {isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
@@ -1406,6 +1411,8 @@ const ActiveToolsDisplay = ({
   isGeneratingImage = false,
   selectedImageAspectRatio,
   setSelectedImageAspectRatio,
+  selectedImageCount,
+  setSelectedImageCount,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   isComputerUseActive,
@@ -1441,6 +1448,8 @@ const ActiveToolsDisplay = ({
   isGeneratingImage?: boolean;
   selectedImageAspectRatio: ImageAspectRatio;
   setSelectedImageAspectRatio: (ratio: ImageAspectRatio) => void;
+  selectedImageCount: ImageGenerationCount;
+  setSelectedImageCount: (count: ImageGenerationCount) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
   isComputerUseActive: boolean;
@@ -1520,7 +1529,7 @@ const ActiveToolsDisplay = ({
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {hasConnectors && (
         <>
           <div className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
@@ -1659,15 +1668,34 @@ const ActiveToolsDisplay = ({
         </>
       )}
       {isImageGenerationActive && (
-        <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
-          <Palette className="h-3 w-3" />
-          <span className="font-medium">Image Generation</span>
+        <>
+          <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
+            <Palette className="h-3 w-3" />
+            <span className="font-medium">Imágenes</span>
+            {isGeneratingImage && <span className="h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "h-4 w-4 p-0 rounded-full ml-1",
+                isGeneratingImage
+                  ? "opacity-45 cursor-not-allowed"
+                  : "hover:bg-pink-200 dark:hover:bg-pink-800/30"
+              )}
+              onClick={handleImageGenerationClose}
+              disabled={isGeneratingImage}
+              title={isGeneratingImage ? "La herramienta sigue activa durante la generación" : "Cerrar imágenes"}
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-5 gap-1 rounded-md px-1.5 py-0 text-[11px] font-medium hover:bg-pink-200/70 dark:hover:bg-pink-800/30"
+                className="h-7 gap-1.5 rounded-lg border border-border/50 bg-muted/45 px-2 py-0 text-xs font-semibold text-foreground/80 hover:bg-muted"
                 title={`Proporción de imagen: ${selectedImageAspectRatio}`}
                 aria-label={`Cambiar proporción de imagen. Actual ${selectedImageAspectRatio}`}
               >
@@ -1697,23 +1725,35 @@ const ActiveToolsDisplay = ({
               })}
             </DropdownMenuContent>
           </DropdownMenu>
-          {isGeneratingImage && <span className="h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              "h-4 w-4 p-0 rounded-full ml-1",
-              isGeneratingImage
-                ? "opacity-45 cursor-not-allowed"
-                : "hover:bg-pink-200 dark:hover:bg-pink-800/30"
-            )}
-            onClick={handleImageGenerationClose}
-            disabled={isGeneratingImage}
-            title={isGeneratingImage ? "La herramienta sigue activa durante la generación" : "Cerrar generación de imágenes"}
+
+          <div
+            className="inline-flex h-7 items-center rounded-lg border border-border/50 bg-muted/45 px-1 text-xs font-semibold text-foreground/80"
+            aria-label="Cantidad de imágenes"
+            title="Cantidad de imágenes, máximo 2"
           >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 w-5 rounded-md p-0 text-xs hover:bg-background/80 disabled:opacity-35"
+              onClick={() => setSelectedImageCount(clampImageGenerationCount(selectedImageCount - 1))}
+              disabled={selectedImageCount <= 1}
+              aria-label="Generar una imagen menos"
+            >
+              -
+            </Button>
+            <span className="min-w-5 text-center tabular-nums">{selectedImageCount}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 w-5 rounded-md p-0 text-xs hover:bg-background/80 disabled:opacity-35"
+              onClick={() => setSelectedImageCount(clampImageGenerationCount(selectedImageCount + 1))}
+              disabled={selectedImageCount >= 2}
+              aria-label="Generar una imagen más"
+            >
+              +
+            </Button>
+          </div>
+        </>
       )}
 
       {isVideoGenerationActive && (
@@ -2158,6 +2198,7 @@ function ChatInterfaceContent() {
   const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
   const [selectedImageAspectRatio, setSelectedImageAspectRatio] = React.useState<ImageAspectRatio>("1:1")
+  const [selectedImageCount, setSelectedImageCount] = React.useState<ImageGenerationCount>(1)
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
   const isGeneratingImageRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
@@ -2171,6 +2212,51 @@ function ChatInterfaceContent() {
   // reading from state directly would capture stale values.
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
+
+  React.useEffect(() => {
+    const onImageRegionEdit = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      if (!detail.fileId || !detail.imageUrl) {
+        toast.error("No se pudo preparar la imagen para edición.");
+        return;
+      }
+
+      const region = detail.region || {};
+      const regionText = [
+        `x ${Math.round(region.x || 0)}%`,
+        `y ${Math.round(region.y || 0)}%`,
+        `ancho ${Math.round(region.width || 0)}%`,
+        `alto ${Math.round(region.height || 0)}%`,
+      ].join(", ");
+
+      setIsImageGenerationActive(true);
+      setChatType("image");
+      if (IMAGE_ASPECT_RATIO_OPTIONS.some(option => option.value === detail.aspectRatio)) {
+        setSelectedImageAspectRatio(detail.aspectRatio);
+      }
+      setSelectedImageCount(1);
+      setUploadedFiles([{
+        id: detail.fileId,
+        fileId: detail.fileId,
+        name: "Zona marcada para editar",
+        originalName: "Zona marcada para editar",
+        type: "image/png",
+        mimeType: "image/png",
+        url: detail.imageUrl,
+        preview: detail.imageUrl,
+        status: "ready",
+        editRegion: detail.region,
+      }]);
+      setInput(prev => {
+        if (prev.trim()) return prev;
+        return `Edita solo la zona marcada (${regionText}): `;
+      });
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    };
+
+    window.addEventListener("siragpt:image-region-edit", onImageRegionEdit);
+    return () => window.removeEventListener("siragpt:image-region-edit", onImageRegionEdit);
+  }, [setUploadedFiles, setChatType]);
 
   // "Reuse-in-prompt" bridge — UnifiedDocumentViewer dispatches a
   // CustomEvent on the window when the user clicks the Reply icon in
@@ -3705,6 +3791,12 @@ REWRITTEN TEXT:`;
       return; // Stop further execution
     }
     const filesToSend = [...uploadedFiles];
+    const buildImageEditPrompt = (rawPrompt: string) => {
+      const editFile = filesToSend.find((file: any) => file?.editRegion);
+      if (!editFile?.editRegion) return rawPrompt;
+      const region = editFile.editRegion;
+      return `${rawPrompt}\n\nImage edit target: modify only the marked region of the attached image. Region in percentages from the image top-left: x=${Math.round(region.x || 0)}%, y=${Math.round(region.y || 0)}%, width=${Math.round(region.width || 0)}%, height=${Math.round(region.height || 0)}%. Keep the rest of the image visually unchanged.`;
+    };
     setInput("");
     setUploadedFiles([]);
 
@@ -4009,7 +4101,7 @@ REWRITTEN TEXT:`;
         return;
       }
       if (isImageGenerationActive || chatType === 'image') {
-        await handleImageGeneration(msg, filesToSend.map(f => f.id));
+        await handleImageGeneration(buildImageEditPrompt(msg), filesToSend.map(f => f.id));
         return;
       }
       if (isVideoGenerationActive || chatType === 'video') {
@@ -4178,7 +4270,7 @@ REWRITTEN TEXT:`;
 
       switch (intent) {
         case 'image':
-          await handleImageGeneration(msg, filesToSend.map(f => f.id));
+          await handleImageGeneration(buildImageEditPrompt(msg), filesToSend.map(f => f.id));
           break;
         case 'video':
           await handleVideoGeneration(msg);
@@ -4594,6 +4686,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         role: 'ASSISTANT' as const,
         content: '[GENERATING_IMAGE]',
         timestamp: new Date().toISOString(),
+        metadata: JSON.stringify({
+          aspectRatio: selectedImageAspectRatio,
+          imageCount: selectedImageCount,
+        }),
       };
 
       const userMessage = !currentChat ? {
@@ -4620,12 +4716,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return { ...baseChat, messages: updatedMessages };
       });
 
-      const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: ImageAspectRatio } = {
+      const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: ImageAspectRatio; imageCount?: ImageGenerationCount } = {
         prompt,
         chatId: activeChatId,
         provider: selectProvider,
         model: selectedModel,
         aspectRatio: selectedImageAspectRatio,
+        imageCount: selectedImageCount,
       };
 
       if (files && files[0]) {
@@ -5030,6 +5127,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isImageGenerationActive, setIsImageGenerationActive,
     isGeneratingImage,
     selectedImageAspectRatio, setSelectedImageAspectRatio,
+    selectedImageCount, setSelectedImageCount,
     isVideoGenerationActive, setIsVideoGenerationActive,
     isComputerUseActive, setIsComputerUseActive,
     computerUseStatus,
