@@ -34,6 +34,30 @@ const triggerUpgradeModal = (errorMessage: string, errorData?: any) => {
   }
 };
 
+const resolveAttachmentId = (file: any): string | null => {
+  if (!file) return null;
+  if (typeof file === 'string') return file;
+  return file.id || file.fileId || file.attachmentId || null;
+};
+
+const normalizeMessageAttachment = (file: any) => {
+  if (!file || typeof file === 'string') return file;
+  const name = file.originalName || file.name || file.filename || 'archivo';
+  const mimeType = file.mimeType || file.type || file.contentType || null;
+  return {
+    id: resolveAttachmentId(file),
+    name,
+    originalName: file.originalName || name,
+    mimeType,
+    type: typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : (file.type || mimeType),
+    size: file.size ?? null,
+    url: file.url || file.imageUrl || null,
+    path: file.path || null,
+    extractedText: file.extractedText || null,
+    openaiFileId: file.openaiFileId || null,
+  };
+};
+
 interface Message {
   id: string
   chatId: string
@@ -111,7 +135,7 @@ interface ChatContextType {
   createNewChat: (
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     initialContent?: string,
-    initialFiles?: string[],
+    initialFiles?: any[],
     options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; initialIntent?: ChatIntent }
   ) => Promise<any>
   selectChat: (chatId: string) => void
@@ -389,10 +413,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !token) return;
-      const displayFiles = Array.isArray(fileIds) ? fileIds.filter(Boolean) : [];
+      const displayFiles = Array.isArray(fileIds)
+        ? fileIds.filter(Boolean).map(normalizeMessageAttachment)
+        : [];
       const normalizedFileIds = displayFiles
-        .map((file: any) => (typeof file === 'string' ? file : file?.id))
-        .filter(Boolean);
+        .map(resolveAttachmentId)
+        .filter((id): id is string => Boolean(id));
 
       // STEP 1: User ka message UI mein dikhayein (agar already nahi dikhaya gaya)
       if (!skipUserMessage) {
@@ -444,7 +470,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         console.log('intent', intent);
 
         if (intent === 'chart') {
-          const fileId = uploadedFiles.length > 0 ? uploadedFiles[0].id : undefined;
+          const fileId = normalizedFileIds.length > 0 ? normalizedFileIds[0] : undefined;
           const chartResponse = await apiClient.generateChart({
             prompt: professionalPrompt,
             displayPrompt: content,
@@ -1075,13 +1101,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [currentChat, user, token, selectedModel, uploadedFiles]
   );
   const handleNewChatWithPlaceholder = useCallback(async (newChat: Chat, initialContent: string, placeholderContent: string, uploadedFiles: any[]) => {
+    const displayFiles = Array.isArray(uploadedFiles)
+      ? uploadedFiles.filter(Boolean).map(normalizeMessageAttachment)
+      : [];
     const userMessage = {
       id: `msg-user-${Date.now()}`,
       chatId: newChat.id,
       role: 'USER' as const,
       content: initialContent,
       timestamp: new Date().toISOString(),
-      files: uploadedFiles,
+      files: displayFiles,
     };
 
     const assistantPlaceholder = {
@@ -1102,7 +1131,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const createNewChat = useCallback(async (
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
-    initialFiles?: string[],
+    initialFiles?: any[],
     options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; initialIntent?: ChatIntent }
   ) => {
     if (!user || !token || !selectedModel) return;
@@ -1135,7 +1164,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 model: selectedModel,
               };
               if (initialFiles && initialFiles.length > 0) {
-                (imageGenerationPayload as any).fileId = initialFiles[0];
+                (imageGenerationPayload as any).fileId = resolveAttachmentId(initialFiles[0]);
               }
               await apiClient.generateImage(imageGenerationPayload);
               break;

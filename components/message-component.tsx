@@ -75,6 +75,65 @@ const truncateUrl = (url: string, maxLength: number = 30) => {
     return `${domain}/${truncatedPath}`;
 };
 
+const NON_IMAGE_EXTENSIONS = new Set([
+    'doc', 'docx', 'pdf', 'xls', 'xlsx', 'csv', 'ppt', 'pptx', 'txt', 'md', 'rtf',
+]);
+
+const IMAGE_EXTENSIONS = new Set([
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'heic', 'heif',
+]);
+
+const getAttachmentName = (file: any) =>
+    String(file?.originalName || file?.name || file?.filename || '').trim();
+
+const getAttachmentExtension = (file: any) => {
+    const name = getAttachmentName(file).toLowerCase();
+    return name.includes('.') ? name.split('.').pop() || '' : '';
+};
+
+const getAttachmentMime = (file: any) =>
+    String(file?.mimeType || file?.contentType || '').toLowerCase();
+
+const isRenderableImageAttachment = (file: any) => {
+    const mimeType = getAttachmentMime(file);
+    const extension = getAttachmentExtension(file);
+
+    if (NON_IMAGE_EXTENSIONS.has(extension)) return false;
+    if (mimeType.startsWith('image/')) return true;
+    if (IMAGE_EXTENSIONS.has(extension)) return true;
+
+    // Generated assistant images often use type="image" without a MIME.
+    return file?.type === 'image' && !!(file?.url || file?.base64 || file?.path || file?.imageUrl);
+};
+
+const isDocumentLikeAttachment = (file: any) => {
+    if (!file) return false;
+    if (isRenderableImageAttachment(file)) return false;
+    if (['gmail_emails', 'gmail_search_results', 'chart'].includes(file?.type)) return false;
+    return !!(getAttachmentName(file) || file?.id || file?.attachmentId);
+};
+
+const getDocumentChipIcon = (name: string) => {
+    const extension = name.split('.').pop()?.toLowerCase();
+    if (extension === 'doc' || extension === 'docx') {
+        return <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+    }
+    if (extension === 'xls' || extension === 'xlsx' || extension === 'csv') {
+        return <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+    }
+    if (extension === 'ppt' || extension === 'pptx') {
+        return <img src="/icons/Bigger P powerpoint.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+    }
+    if (extension === 'pdf') {
+        return <img src="/icons/pdf.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+    }
+    return (
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            <FileText className="h-4 w-4" />
+        </span>
+    );
+};
+
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], fullResponse?: any[], onImageClick?: (imageUrl: string) => void }) => {
     const chartFile = files.find(f => f.type === 'chart');
@@ -168,12 +227,7 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
     const [idx, setIdx] = React.useState<number | null>(null);
     const chips = React.useMemo(() => {
         if (!Array.isArray(parsedFiles)) return [];
-        return parsedFiles.filter((f: any) => {
-            const mt = (f?.mimeType || f?.type || '').toLowerCase();
-            if (mt.startsWith('image/')) return false;
-            if (['gmail_emails', 'gmail_search_results', 'chart'].includes(f?.type)) return false;
-            return !!(f?.name || f?.originalName);
-        });
+        return parsedFiles.filter(isDocumentLikeAttachment);
     }, [parsedFiles]);
 
     const attachments: AttachmentLike[] = React.useMemo(() => chips.map(f => ({
@@ -195,13 +249,16 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
                     key={att.id || i}
                     type="button"
                     onClick={() => setIdx(i)}
-                    className="group/chip inline-flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5 text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-foreground/30 hover:shadow-sm transition-all max-w-[260px]"
+                    className="group/chip inline-flex max-w-[320px] items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-left text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-foreground/40 hover:shadow-sm dark:border-border/60"
                     aria-label={`Abrir ${att.name}`}
                 >
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80 shrink-0">
-                        {(att.name.split('.').pop() || '?').slice(0, 4)}
+                    {getDocumentChipIcon(att.name)}
+                    <span className="flex min-w-0 flex-col">
+                        <span className="truncate text-[13px] font-medium leading-tight">{att.name}</span>
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                            {(att.name.split('.').pop() || 'file').slice(0, 4)}
+                        </span>
                     </span>
-                    <span className="truncate text-[12.5px] font-medium">{att.name}</span>
                 </button>
             ))}
             <UnifiedDocumentViewer
@@ -1975,15 +2032,16 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         }
                     </div>
                 )}
-                {((Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image')) ||
+                {((Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some(isRenderableImageAttachment)) ||
                     (message.role === "ASSISTANT" && message.content.startsWith('http') &&
                         (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
                         <div className="mt-4 flex flex-wrap items-start gap-3">
-                            {Array.isArray(parsedFiles) && parsedFiles.filter((f: any) => f.type === 'image').map((file: any, index: number) => {
+                            {Array.isArray(parsedFiles) && parsedFiles.filter(isRenderableImageAttachment).map((file: any, index: number) => {
+                                const rawImageUrl = String(file.imageUrl || file.url || file.base64 || '');
                                 const src =
-                                    file.url?.startsWith('data:image') || file.url?.startsWith('http')
-                                        ? file.url
-                                        : `data:image/jpeg;base64,${file.url}`;
+                                    rawImageUrl.startsWith('data:image') || rawImageUrl.startsWith('http') || rawImageUrl.startsWith('/api/images/')
+                                        ? rawImageUrl
+                                        : `data:image/jpeg;base64,${rawImageUrl}`;
 
                                 const handleDownloadImage = () => {
                                     try {
@@ -2110,9 +2168,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     <div className="flex flex-col items-end gap-2">
                         <div className="flex flex-wrap justify-end gap-2">
                             {parsedFiles
-                                .filter((file: any) => file.type?.startsWith("image/") || file.mimeType?.startsWith("image/"))
+                                .filter(isRenderableImageAttachment)
                                 .map((file: any, index: number) => {
-                                    let imageUrl = file.url || file.base64;
+                                    let imageUrl = file.imageUrl || file.url || file.base64;
                                     if (!imageUrl && file.path) {
                                         const normalizedPath = file.path.replace(/\\/g, '/');
                                         const relativePath = normalizedPath.split('uploads/')[1];

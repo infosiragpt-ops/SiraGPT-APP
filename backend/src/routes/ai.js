@@ -243,6 +243,44 @@ async function countMonthlyApiCalls(userId) {
   return count;
 }
 
+function resolveFileId(fileRef) {
+  if (!fileRef) return null;
+  if (typeof fileRef === 'string') return fileRef;
+  if (typeof fileRef === 'object') {
+    return fileRef.id || fileRef.fileId || fileRef.attachmentId || null;
+  }
+  return null;
+}
+
+function isImageMime(mimeType) {
+  return typeof mimeType === 'string' && mimeType.toLowerCase().startsWith('image/');
+}
+
+function toProcessedFile(file) {
+  if (!file) return null;
+  const attachmentKind = isImageMime(file.mimeType) ? 'image' : 'document';
+  return {
+    id: file.id,
+    name: file.originalName,
+    originalName: file.originalName,
+    extractedText: file.extractedText,
+    mimeType: file.mimeType,
+    type: attachmentKind,
+    attachmentKind,
+    openaiFileId: file.openaiFileId,
+    path: file.path
+  };
+}
+
+async function loadUserFile(fileRef, userId) {
+  const id = resolveFileId(fileRef);
+  if (!id || !userId) return null;
+  const file = await prisma.file.findFirst({
+    where: { id, userId }
+  });
+  return toProcessedFile(file);
+}
+
 async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false) {
   try {
     console.log("Background task: Saving to database...", { assistantFiles });
@@ -434,25 +472,12 @@ router.post(
       let openaiFiles = [];
       if (isAuth && files && files.length > 0) {
         processedFiles = await Promise.all(
-          files.map(async (fileId) => {
-
-            const file = await prisma.file.findFirst({
-              where: { id: fileId.id, userId }
-            });
-            if (file) {
-              if (file.openaiFileId) {
-                openaiFiles.push(file.openaiFileId);
-              }
-              return {
-                id: file.id,
-                name: file.originalName,
-                extractedText: file.extractedText,
-                mimeType: file.mimeType,
-                openaiFileId: file.openaiFileId,
-                path: file.path
-              };
+          files.map(async (fileRef) => {
+            const processedFile = await loadUserFile(fileRef, userId);
+            if (processedFile?.openaiFileId) {
+              openaiFiles.push(processedFile.openaiFileId);
             }
-            return null;
+            return processedFile;
           })
         ).then(results => results.filter(Boolean));
       }
@@ -580,6 +605,7 @@ router.post(
         });
       }
 
+      const currentTurnHasNonImageFiles = processedFiles.some(f => !isImageMime(f.mimeType));
       const messages = [systemInstruction];
       if (historyMessages.length) {
         for (const m of historyMessages) {
@@ -599,15 +625,17 @@ router.post(
             }
           }
 
-          // ✅ Check if message contains images
-          const imageFiles = parsedFiles.filter(f =>
-            f.mimeType && f.mimeType.startsWith('image/') ||
-            f.type && f.type.startsWith('image/')
+          // ✅ Check if message contains images. When the current turn
+          // carries a document/spreadsheet/PDF, historical images are
+          // intentionally omitted so a "dame un resumen" request cannot
+          // drift into a previous weather/image-generation context.
+          const historicalImageFiles = parsedFiles.filter(f =>
+            isImageMime(f.mimeType) || isImageMime(f.type) || f?.type === 'image'
           );
+          const imageFiles = currentTurnHasNonImageFiles ? [] : historicalImageFiles;
 
           const nonImageFiles = parsedFiles.filter(f =>
-            !(f.mimeType && f.mimeType.startsWith('image/')) &&
-            !(f.type && f.type.startsWith('image/'))
+            !(isImageMime(f.mimeType) || isImageMime(f.type) || f?.type === 'image')
           );
 
           if (imageFiles.length > 0) {
@@ -668,6 +696,10 @@ router.post(
             // ✅ Regular text message (no images)
             let messageContent = m.content;
 
+            if (currentTurnHasNonImageFiles && historicalImageFiles.length > 0) {
+              messageContent += `\n\n[${historicalImageFiles.length} previous image attachment(s) omitted because the current user turn has document attachments. Do not use those previous visuals unless explicitly requested.]`;
+            }
+
             // Add context for non-image files
             if (nonImageFiles.length > 0) {
               const fileContext = nonImageFiles.map(f => {
@@ -723,7 +755,17 @@ router.post(
             '\n- Matrix: $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$';
         }
 
-        finalPrompt = `${prompt}${mathInstructions}\n\nAttached files:\n${truncatedFileContext}`;
+        const documentTurnGuard = currentTurnHasNonImageFiles
+          ? [
+            'CURRENT TURN DOCUMENT LOCK:',
+            '- The attached document/spreadsheet/PDF files below are the active source for this user request.',
+            '- If the user asks for a summary, resumen, analysis, extraction, or explanation, answer from these current files first.',
+            '- Do not answer from prior images, weather cards, generated visuals, or unrelated chat history unless the user explicitly asks for that older context.',
+            '- Preserve file identity: refer to each attachment by filename and never reinterpret a document as an image.'
+          ].join('\n')
+          : '';
+
+        finalPrompt = `${documentTurnGuard ? `${documentTurnGuard}\n\n` : ''}${prompt}${mathInstructions}\n\nAttached files:\n${truncatedFileContext}`;
       }
 
 
@@ -2414,21 +2456,7 @@ router.post(
       let processedFiles = [];
       if (files && files.length > 0) {
         processedFiles = await Promise.all(
-          files.map(async (fileId) => {
-            const file = await prisma.file.findFirst({
-              where: { id: fileId, userId }
-            });
-            if (file) {
-              return {
-                id: file.id,
-                name: file.originalName,
-                extractedText: file.extractedText,
-                mimeType: file.mimeType,
-                path: file.path
-              };
-            }
-            return null;
-          })
+          files.map((fileRef) => loadUserFile(fileRef, userId))
         ).then(results => results.filter(Boolean));
 
         if (processedFiles.length > 0) {
@@ -2572,21 +2600,7 @@ router.post(
       let processedFiles = [];
       if (files && files.length > 0) {
         processedFiles = await Promise.all(
-          files.map(async (fileId) => {
-            const file = await prisma.file.findFirst({
-              where: { id: fileId, userId }
-            });
-            if (file) {
-              return {
-                id: file.id,
-                name: file.originalName,
-                extractedText: file.extractedText,
-                mimeType: file.mimeType,
-                path: file.path
-              };
-            }
-            return null;
-          })
+          files.map((fileRef) => loadUserFile(fileRef, userId))
         ).then(results => results.filter(Boolean));
 
         if (processedFiles.length > 0) {
@@ -3252,18 +3266,7 @@ router.post(
       let processedFiles = [];
       if (files && files.length > 0) {
         processedFiles = await Promise.all(
-          files.map(async (fileId) => {
-            const file = await prisma.file.findFirst({
-              where: { id: fileId, userId }
-            });
-            return file ? {
-              id: file.id,
-              name: file.originalName,
-              extractedText: file.extractedText,
-              mimeType: file.mimeType,
-              path: file.path
-            } : null;
-          })
+          files.map((fileRef) => loadUserFile(fileRef, userId))
         ).then(results => results.filter(Boolean));
       }
 
@@ -3928,18 +3931,7 @@ router.post(
       let processedFiles = [];
       if (files && files.length > 0) {
         processedFiles = await Promise.all(
-          files.map(async (fileId) => {
-            const file = await prisma.file.findFirst({
-              where: { id: fileId, userId }
-            });
-            return file ? {
-              id: file.id,
-              name: file.originalName,
-              extractedText: file.extractedText,
-              mimeType: file.mimeType,
-              path: file.path
-            } : null;
-          })
+          files.map((fileRef) => loadUserFile(fileRef, userId))
         ).then(results => results.filter(Boolean));
       }
 
