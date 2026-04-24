@@ -263,6 +263,20 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
     });
     if (!file) return res.status(404).json({ error: 'File not found' });
 
+    const isPdf = file.mimeType === 'application/pdf' || /\.pdf$/i.test(file.originalName || '');
+    if (isPdf) {
+      if (!fsSync.existsSync(file.path)) {
+        return res.status(404).json({ error: 'File not found on disk' });
+      }
+      const baseName = path.basename(file.originalName, path.extname(file.originalName));
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${baseName}.pdf"`);
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.setHeader('X-Render-Engine', 'native-pdf');
+      res.setHeader('X-Render-From-Cache', 'true');
+      return fsSync.createReadStream(file.path).pipe(res);
+    }
+
     if (!documentRenderer.isConvertible(file.mimeType, file.originalName)) {
       return res.status(415).json({
         error: 'Format not convertible',

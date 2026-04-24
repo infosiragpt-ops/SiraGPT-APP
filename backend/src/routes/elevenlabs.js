@@ -403,7 +403,20 @@ router.get('/user/subscription', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'ElevenLabs API key not configured' });
     }
 
-    const subscription = await elevenlabs.user.subscription();
+    const subscriptionResponse = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
+      headers: {
+        'xi-api-key': ELEVENLABS_API_KEY,
+        accept: 'application/json',
+      },
+    });
+
+    const subscription = await subscriptionResponse.json().catch(() => ({}));
+    if (!subscriptionResponse.ok) {
+      return res.status(subscriptionResponse.status).json({
+        error: subscription?.detail || subscription?.message || 'Failed to fetch ElevenLabs subscription',
+      });
+    }
+
     res.json(subscription);
   } catch (error) {
     console.error('Error fetching subscription:', error);

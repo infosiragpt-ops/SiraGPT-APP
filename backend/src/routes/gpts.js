@@ -102,6 +102,35 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/gpts/categories - Get available categories
+// Keep this before /:id so "categories" is not treated as a GPT id.
+router.get('/categories', async (req, res) => {
+  try {
+    const categories = await prisma.customGpt.findMany({
+      where: {
+        category: {
+          not: null
+        },
+        visibility: 'PUBLIC'
+      },
+      select: {
+        category: true
+      },
+      distinct: ['category']
+    });
+
+    const categoryList = categories
+      .map(c => c.category)
+      .filter(Boolean)
+      .sort();
+
+    res.json({ categories: categoryList });
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({ error: 'Failed to fetch categories' });
+  }
+});
+
 // GET /api/gpts/:id - Get specific GPT
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
@@ -356,35 +385,6 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to delete GPT' });
   }
 });
-
-// GET /api/gpts/categories - Get available categories
-router.get('/categories', async (req, res) => {
-  try {
-    const categories = await prisma.customGpt.findMany({
-      where: {
-        category: {
-          not: null
-        },
-        visibility: 'PUBLIC'
-      },
-      select: {
-        category: true
-      },
-      distinct: ['category']
-    });
-
-    const categoryList = categories
-      .map(c => c.category)
-      .filter(Boolean)
-      .sort();
-
-    res.json({ categories: categoryList });
-  } catch (error) {
-    console.error('Error fetching categories:', error);
-    res.status(500).json({ error: 'Failed to fetch categories' });
-  }
-});
-
 
 // POST /api/gpts/:id/chat - Start a new chat with a GPT
 router.post('/:id/chat', authenticateToken, async (req, res) => {
