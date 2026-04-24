@@ -29,6 +29,9 @@ function getFallbackChain() {
         if (process.env.OPENROUTER_API_KEY) {
             defaults.push('moonshotai/kimi-k2.6');
         }
+        if (process.env.DEEPSEEK_API_KEY) {
+            defaults.push('deepseek-v4-flash');
+        }
         if (process.env.GEMINI_API_KEY) {
             defaults.push('gemini-2.5-flash');
         }
@@ -45,6 +48,7 @@ function getFallbackChain() {
  */
 function providerForModel(model) {
     if (!model) return 'OpenAI';
+    if (/^deepseek-(v\d|chat|reasoner)/i.test(String(model).trim())) return 'DeepSeek';
     if (/^(x-ai|openrouter|anthropic|meta-llama|deepseek|mistralai|qwen|nvidia|microsoft|cohere|moonshotai)\//i.test(model)) return 'OpenRouter';
     if (/^\/?(gpt-oss|zephyr)/i.test(model)) return 'OpenRouter';
     if (/^(gemini|imagen)/i.test(model)) return 'Gemini';
@@ -112,6 +116,13 @@ class AIService {
             return new OpenAI({
                 apiKey: process.env.OPENROUTER_API_KEY,
                 baseURL: "https://openrouter.ai/api/v1",
+            });
+        }
+
+        if (provider === "DeepSeek") {
+            return new OpenAI({
+                apiKey: process.env.DEEPSEEK_API_KEY,
+                baseURL: "https://api.deepseek.com",
             });
         }
 
@@ -327,7 +338,13 @@ class AIService {
                         );
 
                         for await (const chunk of stream) {
-                            const contentChunk = chunk.choices[0]?.delta?.content || '';
+                            const delta = chunk.choices[0]?.delta || {};
+                            const reasoningChunk = delta.reasoning_content || '';
+                            const contentChunk = delta.content || '';
+                            if (reasoningChunk && !firstByteSeen) {
+                                firstByteSeen = true;
+                                clearTimeout(firstByteTimer);
+                            }
                             if (contentChunk) {
                                 if (!firstByteSeen) { firstByteSeen = true; clearTimeout(firstByteTimer); }
                                 fullResponseContent += contentChunk;

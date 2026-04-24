@@ -6,7 +6,8 @@ class ModelSyncService {
     this.cache = {
       openai: { data: null, lastFetch: 0, ttl: 3600000 }, // 1 hour cache
       gemini: { data: null, lastFetch: 0, ttl: 3600000 },
-      openrouter: { data: null, lastFetch: 0, ttl: 3600000 }
+      openrouter: { data: null, lastFetch: 0, ttl: 3600000 },
+      deepseek: { data: null, lastFetch: 0, ttl: 3600000 }
     };
   }
 
@@ -143,6 +144,77 @@ class ModelSyncService {
   }
 
   /**
+   * Fetch currently available models from DeepSeek direct API.
+   *
+   * DeepSeek's public OpenAI-compatible API exposes stable V4
+   * identifiers for this account. We preserve the official API IDs
+   * for requests and use polished names in the product picker.
+   */
+  async fetchDeepSeekModels() {
+    try {
+      const now = Date.now();
+      const cache = this.cache.deepseek;
+
+      if (cache.data && (now - cache.lastFetch) < cache.ttl) {
+        console.log('📦 Using cached DeepSeek models');
+        return cache.data;
+      }
+
+      const apiKey = process.env.DEEPSEEK_API_KEY;
+      if (!apiKey) {
+        console.warn('⚠️ DeepSeek API key not found');
+        return [];
+      }
+
+      console.log('🔄 Fetching DeepSeek models...');
+      const response = await axios.get('https://api.deepseek.com/models', {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      });
+
+      const displayNames = {
+        'deepseek-v4-flash': 'DeepSeek V4 Flash',
+        'deepseek-v4-pro': 'DeepSeek V4 Pro',
+        'deepseek-chat': 'DeepSeek Chat',
+        'deepseek-reasoner': 'DeepSeek Reasoner'
+      };
+
+      const descriptions = {
+        'deepseek-v4-flash': 'DeepSeek direct API fast V4 model.',
+        'deepseek-v4-pro': 'DeepSeek direct API V4 Pro model for complex tasks.',
+        'deepseek-chat': 'DeepSeek direct API fast non-reasoning chat model.',
+        'deepseek-reasoner': 'DeepSeek direct API reasoning model for complex tasks.'
+      };
+
+      const models = (response.data.data || [])
+        .filter(model => ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'].includes(model.id))
+        .map(model => ({
+          id: model.id,
+          name: model.id,
+          displayName: displayNames[model.id] || this.formatModelName(model.id),
+          provider: 'DeepSeek',
+          type: 'TEXT',
+          description: descriptions[model.id] || this.generateModelDescription(model.id, 'DeepSeek'),
+          contextLength: 128000,
+          isActive: true,
+          apiData: model
+        }));
+
+      cache.data = models;
+      cache.lastFetch = now;
+
+      console.log(`✅ Fetched ${models.length} DeepSeek models`);
+      return models;
+    } catch (error) {
+      console.error('❌ Error fetching DeepSeek models:', error.message);
+      return this.cache.deepseek.data || [];
+    }
+  }
+
+  /**
    * Fetch all available models from OpenRouter
    */
   async fetchOpenRouterModels() {
@@ -201,10 +273,11 @@ class ModelSyncService {
   async fetchAllModels() {
     console.log('🚀 Starting to fetch models from all providers...');
 
-    const [openaiModels, geminiModels, openrouterModels] = await Promise.allSettled([
+    const [openaiModels, geminiModels, openrouterModels, deepseekModels] = await Promise.allSettled([
       this.fetchOpenAIModels(),
       this.fetchGeminiModels(),
-      this.fetchOpenRouterModels()
+      this.fetchOpenRouterModels(),
+      this.fetchDeepSeekModels()
     ]);
 
     const allModels = [];
@@ -219,6 +292,10 @@ class ModelSyncService {
 
     if (openrouterModels.status === 'fulfilled') {
       allModels.push(...openrouterModels.value);
+    }
+
+    if (deepseekModels.status === 'fulfilled') {
+      allModels.push(...deepseekModels.value);
     }
 
     console.log(`🎯 Total models fetched: ${allModels.length}`);
@@ -356,6 +433,7 @@ class ModelSyncService {
     if (modelId.includes('llama')) return 'Meta Llama model via OpenRouter';
     if (modelId.includes('kimi')) return 'Moonshot Kimi model via OpenRouter';
     if (modelId.includes('gemini')) return 'Google Gemini model';
+    if (modelId.includes('deepseek')) return 'DeepSeek direct API model';
     if (modelId.includes('dall-e')) return 'OpenAI image generation model';
 
     return `${provider} model for AI tasks`;
@@ -396,7 +474,8 @@ class ModelSyncService {
       anthropic: 'ClaudeLogo',
       'x-ai': 'GrokLogo',
       xai: 'GrokLogo',
-      openrouter: 'OpenRouterLogo'
+      openrouter: 'OpenRouterLogo',
+      deepseek: 'DeepseekLogo'
     };
     return icons[normalized] || 'Bot';
   }
@@ -448,6 +527,7 @@ class ModelSyncService {
     if (modelId.includes('claude')) tags.push('claude', 'anthropic');
     if (modelId.includes('llama')) tags.push('llama', 'meta', 'open-source');
     if (modelId.includes('gemini')) tags.push('gemini', 'google');
+    if (modelId.includes('deepseek')) tags.push('deepseek');
     if (modelId.includes('dall-e')) tags.push('dall-e', 'image-generation');
     if (modelId.includes('pro')) tags.push('professional');
     if (modelId.includes('mini') || modelId.includes('small')) tags.push('lightweight');

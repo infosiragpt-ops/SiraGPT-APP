@@ -184,7 +184,8 @@ router.post(
     const hasAnyKey = !!(
       process.env.OPENAI_API_KEY ||
       process.env.OPENROUTER_API_KEY ||
-      process.env.GEMINI_API_KEY
+      process.env.GEMINI_API_KEY ||
+      process.env.DEEPSEEK_API_KEY
     );
     if (!hasAnyKey) {
       return res.status(500).json({ error: 'No AI provider key configured' });

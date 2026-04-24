@@ -417,6 +417,7 @@ export default function ModelsPage() {
     const matchesProvider = selectedProvider === 'ALL PROVIDERS' || 
                            (selectedProvider === 'OPENAI' && model.provider === 'OpenAI') ||
                            (selectedProvider === 'GEMINI' && model.provider === 'Gemini') ||
+                           (selectedProvider === 'DEEPSEEK' && model.provider === 'DeepSeek') ||
                            (selectedProvider === 'OPENROUTER' && model.provider === 'OpenRouter')
     const matchesType = selectedType === 'ALL TYPES' || model.type === selectedType
     
@@ -746,6 +747,7 @@ export default function ModelsPage() {
                   <SelectItem value="ALL PROVIDERS">ALL PROVIDERS</SelectItem>
                   <SelectItem value="OPENAI">OPENAI</SelectItem>
                   <SelectItem value="GEMINI">GEMINI</SelectItem>
+                  <SelectItem value="DEEPSEEK">DEEPSEEK</SelectItem>
                   <SelectItem value="OPENROUTER">OPENROUTER</SelectItem>
                 </SelectContent>
               </Select>

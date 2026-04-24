@@ -52,6 +52,10 @@ const MODEL_CONTEXT_LIMITS = {
   'meta-llama/llama-3.3-70b-instruct': 131000,
   'deepseek/deepseek-chat': 65000,
   'deepseek/deepseek-r1': 65000,
+  'deepseek-v4-flash': 128000,
+  'deepseek-v4-pro': 128000,
+  'deepseek-chat': 128000,
+  'deepseek-reasoner': 128000,
   'x-ai/grok-2': 131000,
   'x-ai/grok-beta': 131000,
   // Moonshot / Kimi (OpenRouter slug)

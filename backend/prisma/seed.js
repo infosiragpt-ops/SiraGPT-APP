@@ -34,6 +34,10 @@ const modelsToSeed = [
     { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: 'Gemini', type: 'TEXT', icon: 'GeminiLogo', description: 'Google ka sabse capable Gemini model.', isActive: true },
     { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'Gemini', type: 'TEXT', icon: 'GeminiLogo', description: 'Google ka tez aur efficient Gemini model.', isActive: true },
 
+    // --- DeepSeek Models (via Direct API) ---
+    { name: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', provider: 'DeepSeek', type: 'TEXT', icon: 'DeepseekLogo', description: 'DeepSeek direct API fast V4 model. Official API id: deepseek-v4-flash.', isActive: true },
+    { name: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'DeepSeek', type: 'TEXT', icon: 'DeepseekLogo', description: 'DeepSeek direct API V4 Pro model for complex tasks. Official API id: deepseek-v4-pro.', isActive: true },
+
     // ================================== //
     // ====== IMAGE GENERATION MODELS ====== //
     // ================================== //

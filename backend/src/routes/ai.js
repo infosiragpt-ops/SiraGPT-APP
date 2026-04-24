@@ -46,6 +46,25 @@ const KIMI_K26_OPENROUTER = {
   description: 'Moonshot Kimi K2.6 via OpenRouter: long context, multimodal, coding & agents.',
 };
 
+const DEEPSEEK_TEXT_MODELS = [
+  {
+    name: 'deepseek-v4-flash',
+    displayName: 'DeepSeek V4 Flash',
+    provider: 'DeepSeek',
+    type: 'TEXT',
+    icon: 'DeepseekLogo',
+    description: 'DeepSeek direct API fast V4 model. Uses the official deepseek-v4-flash API identifier.',
+  },
+  {
+    name: 'deepseek-v4-pro',
+    displayName: 'DeepSeek V4 Pro',
+    provider: 'DeepSeek',
+    type: 'TEXT',
+    icon: 'DeepseekLogo',
+    description: 'DeepSeek direct API V4 Pro model for complex tasks. Uses the official deepseek-v4-pro API identifier.',
+  },
+];
+
 const OPENROUTER_IMAGE_MODELS = [
   {
     name: 'openai/gpt-5.4-image-2',
@@ -81,6 +100,41 @@ const OPENROUTER_IMAGE_MODELS = [
   },
 ];
 
+function hasEnv(name) {
+  return String(process.env[name] || '').trim().length > 0;
+}
+
+function createProviderClient(provider) {
+  if (provider === "Gemini") {
+    return new OpenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    });
+  }
+
+  if (provider === "OpenRouter") {
+    return new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: "https://openrouter.ai/api/v1",
+    });
+  }
+
+  if (provider === "DeepSeek") {
+    return new OpenAI({
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseURL: "https://api.deepseek.com",
+    });
+  }
+
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
+  });
+}
+
+function isDirectDeepSeekModel(modelName) {
+  return /^deepseek-(v\d|chat|reasoner)/i.test(String(modelName || '').trim());
+}
+
 // ✅ Get available AI models
 router.get('/models', async (req, res) => {
   try {
@@ -114,7 +168,24 @@ router.get('/models', async (req, res) => {
     // exists (active or inactive) so admin disable/delete is respected.
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
-    if (wantText && String(process.env.OPENROUTER_API_KEY || '').trim()) {
+    if (wantText && hasEnv('DEEPSEEK_API_KEY')) {
+      const listed = new Set(models.map((m) => m.name));
+      const deepseekNames = DEEPSEEK_TEXT_MODELS.map((m) => m.name);
+      const existingRows = await prisma.aiModel.findMany({
+        where: { name: { in: deepseekNames } },
+        select: { name: true },
+      });
+      const rowsInDb = new Set(existingRows.map((m) => m.name));
+      const virtualDeepSeekModels = DEEPSEEK_TEXT_MODELS
+        .filter((m) => !listed.has(m.name) && !rowsInDb.has(m.name))
+        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
+
+      if (virtualDeepSeekModels.length > 0) {
+        models = [...virtualDeepSeekModels, ...models];
+      }
+    }
+
+    if (wantText && hasEnv('OPENROUTER_API_KEY')) {
       const alreadyListed = models.some((m) => m.name === KIMI_K26_OPENROUTER.name);
       if (!alreadyListed) {
         const kimiRow = await prisma.aiModel.findFirst({
@@ -133,7 +204,7 @@ router.get('/models', async (req, res) => {
       }
     }
 
-    if (wantImage && String(process.env.OPENROUTER_API_KEY || '').trim()) {
+    if (wantImage && hasEnv('OPENROUTER_API_KEY')) {
       const listed = new Set(models.map((m) => m.name));
       const virtualImageModels = OPENROUTER_IMAGE_MODELS
         .filter((m) => !listed.has(m.name))
@@ -325,24 +396,8 @@ router.post(
           .catch(() => { /* non-fatal — rule still in this turn's prompt */ });
       }
 
-      let openai;
       let actualProvider = provider; // ✅ NEW: track actual provider
-
-      if (provider === "Gemini") {
-        openai = new OpenAI({
-          apiKey: process.env.GEMINI_API_KEY,
-          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-        });
-      } else if (provider === "OpenRouter") {
-        openai = new OpenAI({
-          apiKey: process.env.OPENROUTER_API_KEY,
-          baseURL: "https://openrouter.ai/api/v1",
-        });
-      } else {
-        openai = new OpenAI({
-          apiKey: process.env.OPENAI_API_KEY
-        });
-      }
+      let openai = createProviderClient(provider);
 
       // ✅ Check monthly limit
       if (isAuth) {
@@ -449,7 +504,9 @@ router.post(
           actualTemperature = customGpt.temperature || 0.7;
 
           // ✅ Provider detection logic merged here
-          if (actualModel.includes('x-ai/') || actualModel.includes('openrouter/') || actualModel.includes('anthropic/') || actualModel.includes('meta-llama/') || actualModel.includes("deepseek/") ||
+          if (isDirectDeepSeekModel(actualModel)) {
+            actualProvider = 'DeepSeek';
+          } else if (actualModel.includes('x-ai/') || actualModel.includes('openrouter/') || actualModel.includes('anthropic/') || actualModel.includes('meta-llama/') || actualModel.includes("deepseek/") ||
             actualModel.includes("meta-llama/") || actualModel.includes("/gpt-oss") || actualModel.includes("moonshotai/")
           ) {
             actualProvider = 'OpenRouter';
@@ -464,21 +521,7 @@ router.post(
       }
 
       // ✅ Re-initialize OpenAI client with actualProvider
-      if (actualProvider === "Gemini") {
-        openai = new OpenAI({
-          apiKey: process.env.GEMINI_API_KEY,
-          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-        });
-      } else if (actualProvider === "OpenRouter") {
-        openai = new OpenAI({
-          apiKey: process.env.OPENROUTER_API_KEY,
-          baseURL: "https://openrouter.ai/api/v1",
-        });
-      } else {
-        openai = new OpenAI({
-          apiKey: process.env.OPENAI_API_KEY
-        });
-      }
+      openai = createProviderClient(actualProvider);
 
       // ✅ Load per-user personalization so every turn carries the
       // user's name, preferred tone, and any custom instructions they
@@ -1086,20 +1129,7 @@ router.post(
 
       console.log("provider", provider);
 
-      let openai;
-      if (provider === "Gemini") {
-        openai = new OpenAI({
-          apiKey: process.env.GEMINI_API_KEY,
-          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-
-        });
-
-      }
-      else {
-        openai = new OpenAI({
-          apiKey: process.env.OPENAI_API_KEY
-        });
-      }
+      const openai = createProviderClient(provider);
 
       // ✅ Check monthly limit
       if (req.user.apiUsage >= req.user.monthlyLimit) {
@@ -1517,19 +1547,9 @@ router.post(
       const userId = req.user.id;
       console.log('userId', userId);
 
-      let openai;
-      if (provider === "Gemini") {
-        openai = new OpenAI({
-          apiKey: process.env.GEMINI_API_KEY,
-          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-        });
-      } else if (provider === "OpenRouter") {
-        openai = createOpenRouterClient();
-      } else {
-        openai = new OpenAI({
-          apiKey: process.env.OPENAI_API_KEY
-        });
-      }
+      const openai = provider === "OpenRouter"
+        ? createOpenRouterClient()
+        : createProviderClient(provider);
 
       if (req.user.apiUsage >= req.user.monthlyLimit) {
         return res.status(429).json({
@@ -4014,22 +4034,7 @@ Generate the workbook based on the user's request.`;
       messages.push({ role: 'user', content: prompt });
 
       // Initialize OpenAI client based on provider
-      let openai;
-      if (provider === "Gemini") {
-        openai = new OpenAI({
-          apiKey: process.env.GEMINI_API_KEY,
-          baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-        });
-      } else if (provider === "OpenRouter") {
-        openai = new OpenAI({
-          apiKey: process.env.OPENROUTER_API_KEY,
-          baseURL: "https://openrouter.ai/api/v1",
-        });
-      } else {
-        openai = new OpenAI({
-          apiKey: process.env.OPENAI_API_KEY
-        });
-      }
+      const openai = createProviderClient(provider);
 
       // Generate response without streaming
       const completion = await openai.chat.completions.create({

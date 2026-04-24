@@ -251,7 +251,8 @@ const modelSyncScheduler = new ModelSyncScheduler();
 if (process.env.NODE_ENV === 'production') {
   const hasApiKeys = process.env.OPENAI_API_KEY || 
                      process.env.GEMINI_API_KEY || 
-                     process.env.OPENROUTER_API_KEY;
+                     process.env.OPENROUTER_API_KEY ||
+                     process.env.DEEPSEEK_API_KEY;
   
   if (hasApiKeys) {
     // Wait a bit for the app to start up

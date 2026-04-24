@@ -130,7 +130,8 @@ router.get('/models/fetch', async (req, res) => {
       providers: {
         openai: models.filter(m => m.provider === 'OpenAI').length,
         gemini: models.filter(m => m.provider === 'Gemini').length,
-        openrouter: models.filter(m => m.provider === 'OpenRouter').length
+        openrouter: models.filter(m => m.provider === 'OpenRouter').length,
+        deepseek: models.filter(m => m.provider === 'DeepSeek').length
       }
     });
   } catch (error) {
@@ -788,4 +789,3 @@ router.get('/users/export/csv', async (req, res) => {
     res.status(500).json({ error: 'Failed to export users' });
   }
 });
-

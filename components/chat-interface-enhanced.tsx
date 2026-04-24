@@ -1971,7 +1971,7 @@ const NavbarModelSelector = ({
   };
 
   // Stable provider order. Unknown providers fall to the end alphabetically.
-  const providerOrder = ["OpenAI", "Anthropic", "Google", "Gemini", "xAI", "Groq", "OpenRouter"];
+  const providerOrder = ["OpenAI", "Anthropic", "Google", "Gemini", "DeepSeek", "xAI", "Groq", "OpenRouter"];
   const groupByProvider = (models: any[]): Array<[string, any[]]> => {
     const groups: Record<string, any[]> = {};
     for (const m of models) {

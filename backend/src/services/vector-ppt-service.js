@@ -50,6 +50,12 @@ class VectorPPTService {
                 baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
             });
         }
+        if (provider === "DeepSeek") {
+            return new OpenAI({
+                apiKey: process.env.DEEPSEEK_API_KEY,
+                baseURL: "https://api.deepseek.com",
+            });
+        }
         return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     }
 

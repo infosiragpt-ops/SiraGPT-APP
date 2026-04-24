@@ -67,6 +67,15 @@ function effortConfig(effort) {
 function clientForModel(modelName) {
   if (!modelName) return null;
   const m = String(modelName);
+  if (/^deepseek-(v\d|chat|reasoner)/i.test(m.trim())) {
+    return {
+      provider: 'DeepSeek',
+      client: new OpenAI({
+        apiKey: process.env.DEEPSEEK_API_KEY,
+        baseURL: 'https://api.deepseek.com',
+      }),
+    };
+  }
   // OpenRouter catches everything that looks like a namespaced slug
   // (anthropic/..., x-ai/..., openrouter/..., meta-llama/..., etc.).
   if (/^(anthropic|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|google|moonshotai)\//i.test(m)

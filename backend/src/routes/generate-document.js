@@ -270,6 +270,11 @@ ${prompt}
                     apiKey: process.env.OPENROUTER_API_KEY,
                     baseURL: "https://openrouter.ai/api/v1",
                 });
+            } else if (provider === "DeepSeek") {
+                openai = new OpenAI({
+                    apiKey: process.env.DEEPSEEK_API_KEY,
+                    baseURL: "https://api.deepseek.com",
+                });
             } else {
                 openai = new OpenAI({
                     apiKey: process.env.OPENAI_API_KEY

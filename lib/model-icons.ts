@@ -33,6 +33,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (provider.includes("openai")) return "ChatGPTLogo"
   if (provider.includes("gemini") || provider.includes("google")) return "GeminiLogo"
   if (provider.includes("anthropic")) return "ClaudeLogo"
+  if (provider.includes("deepseek")) return "DeepseekLogo"
   if (provider.includes("xai") || provider.includes("x-ai")) return "GrokLogo"
   if (provider.includes("openrouter")) return "OpenRouterLogo"
 

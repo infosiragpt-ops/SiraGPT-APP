@@ -273,6 +273,7 @@ enum ProviderType {
   OpenAI
   Gemini
   OpenRouter
+  DeepSeek
   Groq
   Custom // Mustaqbil ke liye
 }
