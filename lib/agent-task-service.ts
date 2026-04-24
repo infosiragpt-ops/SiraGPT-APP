@@ -24,7 +24,7 @@ export interface AgentArtifact {
 }
 
 export type AgentTaskEvent =
-  | { type: "meta"; goal: string; model: string; tools: string[] }
+  | { type: "meta"; taskId?: string; goal: string; model: string; tools: string[] }
   | { type: "step_start"; id: string; label: string; icon?: AgenticIcon }
   | { type: "tool_call"; stepId: string; tool: string; preview: string; language?: string; codePreview?: string }
   | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview: string; partial?: boolean }
@@ -36,6 +36,9 @@ export type AgentTaskEvent =
 
 export interface AgentTaskRunArgs {
   goal: string
+  displayGoal?: string
+  systemContract?: string
+  files?: string[]
   chatId?: string
   model?: string
   maxSteps?: number
@@ -94,7 +97,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
 }
 
 export interface AgentTaskState {
-  meta?: { goal: string; model: string; tools: string[] }
+  meta?: { taskId?: string; goal: string; model: string; tools: string[] }
   steps: Array<{
     id: string
     label: string
@@ -118,7 +121,7 @@ export interface AgentTaskState {
 export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTaskState {
   switch (evt.type) {
     case "meta":
-      return { ...state, meta: { goal: evt.goal, model: evt.model, tools: evt.tools } }
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools } }
     case "step_start":
       return {
         ...state,
@@ -235,4 +238,22 @@ export async function runStream(args: AgentTaskRunArgs, cbs: RunStreamCallbacks 
   }
 }
 
-export const agentTaskService = { runIterator, runStream, reduceEvent, initialAgentState }
+export async function cancelTask(taskId: string): Promise<{ ok: boolean; taskId?: string; status?: string; error?: string }> {
+  const resp = await fetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+  })
+  let payload: any = null
+  try {
+    payload = await resp.json()
+  } catch {
+    payload = null
+  }
+  if (!resp.ok) {
+    return { ok: false, error: payload?.error || `HTTP ${resp.status}` }
+  }
+  return { ok: true, taskId: payload?.taskId, status: payload?.status }
+}
+
+export const agentTaskService = { runIterator, runStream, reduceEvent, initialAgentState, cancelTask }

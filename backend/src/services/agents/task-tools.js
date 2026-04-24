@@ -173,12 +173,14 @@ const pythonExec = {
       source,
       timeoutMs: timeoutMs || 10000,
       stdin: stdin || '',
+      signal: ctx.signal,
     });
     const payload = {
       ok: r.ok,
       exitCode: r.exitCode,
       durationMs: r.durationMs,
       timedOut: r.timedOut,
+      aborted: r.aborted,
       stdout: previewText(r.stdout || '', 4000),
       stderr: previewText(r.stderr || '', 2000),
     };
@@ -210,9 +212,9 @@ const bashExec = {
   },
   async execute({ source, timeoutMs }, ctx = {}) {
     ctx.onEvent?.({ type: 'tool_call', tool: 'bash_exec', preview: previewText(source, 400), language: 'javascript' });
-    const r = await sandbox.run({ language: 'javascript', source, timeoutMs: timeoutMs || 8000 });
+    const r = await sandbox.run({ language: 'javascript', source, timeoutMs: timeoutMs || 8000, signal: ctx.signal });
     const payload = {
-      ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, timedOut: r.timedOut,
+      ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, timedOut: r.timedOut, aborted: r.aborted,
       stdout: previewText(r.stdout || '', 4000), stderr: previewText(r.stderr || '', 2000),
     };
     ctx.onEvent?.({ type: 'tool_output', tool: 'bash_exec', ok: r.ok, preview: payload.ok ? previewText(r.stdout || '', 600) : previewText(r.stderr || '', 600) });
@@ -336,6 +338,7 @@ const createDocument = {
       language: 'python',
       source: wrapped,
       timeoutMs: timeoutMs || 30000,
+      signal: ctx.signal,
     });
 
     if (!r.ok || !fs.existsSync(tmpOut)) {
@@ -603,7 +606,7 @@ except Exception as e:
     result = {"ok": False, "error": str(e), "ext": ext, "sizeBytes": os.path.getsize(path)}
 print(json.dumps(result))
 `;
-    const r = await sandbox.run({ language: 'python', source: py, timeoutMs: 12000 });
+    const r = await sandbox.run({ language: 'python', source: py, timeoutMs: 12000, signal: ctx.signal });
     let summary;
     try {
       summary = JSON.parse((r.stdout || '').trim().split('\n').filter(Boolean).pop() || '{}');
@@ -680,6 +683,7 @@ const runTests = {
       source,
       testSource,
       timeoutMs: timeoutMs || 10000,
+      signal: ctx.signal,
     });
     const summary = `${r.passed}✓ / ${r.failed}✗${r.timedOut ? ' (timeout)' : ''}`;
     ctx.onEvent?.({

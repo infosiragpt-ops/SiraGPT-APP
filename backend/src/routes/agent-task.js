@@ -30,6 +30,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const OpenAI = require('openai');
 
@@ -42,6 +43,9 @@ const prisma = (() => {
 })();
 
 const router = express.Router();
+const ACTIVE_AGENT_TASKS = new Map();
+const TASK_RETENTION_MS = 6 * 60 * 60 * 1000;
+const TASK_EVENT_LIMIT = 600;
 
 const TASK_SYSTEM_PROMPT = `You are siraGPT's task agent. You work like Claude Code: plan briefly, then call tools to reach a deliverable answer.
 
@@ -92,12 +96,57 @@ router.get('/artifact/:id', authenticateToken, (req, res) => {
   res.sendFile(full);
 });
 
+// ─── GET /api/agent/task/:taskId ───────────────────────────────────────
+
+router.get('/task/:taskId', authenticateToken, (req, res) => {
+  const task = getTaskForUser(req.params.taskId, req.user?.id);
+  if (!task) return res.status(404).json({ error: 'task not found' });
+
+  res.json({
+    ok: true,
+    taskId: task.taskId,
+    status: task.status,
+    displayGoal: task.displayGoal,
+    model: task.model,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    streamState: task.streamState,
+    events: task.events,
+  });
+});
+
+// ─── POST /api/agent/task/:taskId/cancel ───────────────────────────────
+
+router.post('/task/:taskId/cancel', authenticateToken, (req, res) => {
+  const task = getTaskForUser(req.params.taskId, req.user?.id);
+  if (!task) return res.status(404).json({ error: 'task not found' });
+  if (task.status !== 'running') {
+    return res.json({ ok: true, taskId: task.taskId, status: task.status });
+  }
+
+  task.status = 'cancelled';
+  task.cancelledAt = new Date().toISOString();
+  task.updatedAt = task.cancelledAt;
+  task.controller.abort();
+  appendTaskEvent(task, { type: 'error', message: 'Tarea detenida por el usuario.' }, {
+    ...task.streamState,
+    done: true,
+    error: 'Tarea detenida por el usuario.',
+  });
+
+  res.json({ ok: true, taskId: task.taskId, status: task.status });
+});
+
 // ─── POST /api/agent/task ───────────────────────────────────────────────
 
 router.post(
   '/task',
   [
     body('goal').isString().trim().isLength({ min: 3, max: 4000 }).withMessage('goal must be 3-4000 chars'),
+    body('displayGoal').optional().isString().trim().isLength({ min: 3, max: 4000 }),
+    body('systemContract').optional().isString().trim().isLength({ max: 4000 }),
+    body('files').optional().isArray({ max: 20 }),
+    body('files.*').optional().isString().trim().isLength({ min: 1, max: 200 }),
     body('chatId').optional().isString(),
     body('model').optional().isString(),
     body('maxSteps').optional().isInt({ min: 2, max: 120 }),
@@ -109,19 +158,47 @@ router.post(
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
 
+    const rawGoal = String(req.body.goal || '');
+    const displayGoal = normalizeDisplayGoal(req.body.displayGoal || rawGoal);
+    const agentGoal = normalizeDisplayGoal(rawGoal);
+    const systemContract = normalizeSystemContract(
+      req.body.systemContract || extractProfessionalContract(rawGoal)
+    );
+    const fileIds = Array.isArray(req.body.files)
+      ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+      : [];
+    const taskId = crypto.randomUUID();
+    const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
+    const controller = new AbortController();
+    const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
+    const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
+    const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
+    const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
+    const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
+    let streamState = initialAgentState();
+    const task = createTaskRecord({
+      taskId,
+      userId: req.user?.id,
+      chatId,
+      displayGoal,
+      model,
+      controller,
+      maxSteps,
+      maxRuntimeMs,
+      streamState,
+    });
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
+    let clientConnected = true;
     const send = (obj) => {
+      if (!clientConnected || res.writableEnded) return;
       try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ }
     };
-
-    const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
-    const controller = new AbortController();
-    let clientConnected = true;
     req.on('close', () => {
       clientConnected = false;
       // If the task belongs to a chat, keep it running and persist the
@@ -137,25 +214,68 @@ router.post(
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const tools = buildTaskTools();
-    const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
-    const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
-    const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
-    const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
-    const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
     const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
 
-    let streamState = initialAgentState();
+    let assistantMessageId = null;
+    let persistTimer = null;
+    let lastPersistAt = 0;
+    const persistTaskState = async (status = 'running') => {
+      if (!assistantMessageId || !prisma) return;
+      task.status = status;
+      task.updatedAt = new Date().toISOString();
+      lastPersistAt = Date.now();
+      try {
+        await prisma.message.update({
+          where: { id: assistantMessageId },
+          data: {
+            content: serializeAgentState(streamState),
+            tokens: Math.ceil(serializeAgentState(streamState).length / 4),
+            metadata: {
+              source: 'agent-task',
+              taskId,
+              status,
+              displayGoal,
+              artifacts,
+              maxSteps,
+              maxRuntimeMs,
+              updatedAt: task.updatedAt,
+            },
+          },
+        });
+      } catch (e) { /* non-fatal */ }
+    };
+    const schedulePersistTaskState = (status = 'running') => {
+      if (!assistantMessageId || !prisma) return;
+      const elapsed = Date.now() - lastPersistAt;
+      const delay = elapsed >= 1500 ? 0 : 1500 - elapsed;
+      if (delay === 0) {
+        void persistTaskState(status);
+        return;
+      }
+      if (!persistTimer) {
+        persistTimer = setTimeout(() => {
+          persistTimer = null;
+          void persistTaskState(status);
+        }, delay);
+      }
+    };
+
     const applyEvent = (obj) => {
       streamState = reduceAgentState(streamState, obj);
+      appendTaskEvent(task, obj, streamState);
       return obj;
     };
     const emit = (obj) => {
-      send(applyEvent(obj));
+      const applied = applyEvent(obj);
+      send(applied);
+      schedulePersistTaskState();
+      return applied;
     };
 
     emit({
       type: 'meta',
-      goal: req.body.goal,
+      taskId,
+      goal: displayGoal,
       model,
       tools: tools.map(t => t.name),
     });
@@ -173,6 +293,9 @@ router.post(
       openai,
       signal: controller.signal,
       chatId,
+      taskId,
+      fileIds,
+      displayGoal,
       onEvent: (evt) => {
         // Forward tool-level events (tool_call / tool_output / file_artifact)
         // to the client with the active stepId so it can nest them.
@@ -184,26 +307,48 @@ router.post(
       },
     };
 
-    // Persist the user turn up front so a chat reload shows the prompt.
+    // Persist the user turn and a live assistant placeholder up front so a chat
+    // reload shows progress instead of losing the trace while the agent keeps
+    // working in the background.
     if (chatId && prisma) {
       try {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: req.user.id } });
         if (chat) {
           await prisma.message.create({
-            data: { chatId, role: 'USER', content: req.body.goal, timestamp: new Date() },
+            data: { chatId, role: 'USER', content: displayGoal, timestamp: new Date() },
           });
+          const assistant = await prisma.message.create({
+            data: {
+              chatId,
+              role: 'ASSISTANT',
+              content: serializeAgentState(streamState),
+              timestamp: new Date(),
+              metadata: {
+                source: 'agent-task',
+                taskId,
+                status: 'running',
+                displayGoal,
+                artifacts,
+                maxSteps,
+                maxRuntimeMs,
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          });
+          assistantMessageId = assistant.id;
+          task.assistantMessageId = assistant.id;
         }
       } catch (e) { /* non-fatal */ }
     }
 
     try {
       const result = await reactAgent.run(openai, {
-        query: req.body.goal,
+        query: agentGoal,
         tools,
         maxSteps,
         maxRuntimeMs,
         model,
-        extraSystem: TASK_SYSTEM_PROMPT,
+        extraSystem: buildAgentSystemPrompt(systemContract, fileIds),
         ctx: toolCtx,
         onStepStart: (step) => {
           // react-agent gives us THE assistant turn (thought + tool
@@ -241,37 +386,51 @@ router.post(
       let dbMessage = null;
       if (chatId && prisma && (result.finalAnswer || streamState.steps.length || artifacts.length)) {
         try {
-          dbMessage = await prisma.message.create({
-            data: {
-              chatId,
-              role: 'ASSISTANT',
+          const data = {
               content: serializeAgentState(streamState),
               tokens: Math.ceil((result.finalAnswer || serializeAgentState(streamState)).length / 4),
-              timestamp: new Date(),
               metadata: {
                 source: 'agent-task',
+                taskId,
+                status: result.stoppedReason === 'aborted' ? 'cancelled' : 'completed',
+                displayGoal,
                 artifacts,
                 stoppedReason: result.stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
+                updatedAt: new Date().toISOString(),
               },
-            },
-          });
+            };
+          if (assistantMessageId) {
+            dbMessage = await prisma.message.update({ where: { id: assistantMessageId }, data });
+          } else {
+            dbMessage = await prisma.message.create({
+              data: { chatId, role: 'ASSISTANT', timestamp: new Date(), ...data },
+            });
+          }
         } catch (e) { /* non-fatal */ }
       }
 
-      send({
+      const outboundDoneEvent = {
         ...doneEvent,
         dbMessageId: dbMessage?.id || null,
-      });
+      };
+      task.status = result.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+      task.updatedAt = new Date().toISOString();
+      send(outboundDoneEvent);
       clearTimeout(runtimeTimer);
       clearInterval(heartbeat);
+      if (persistTimer) clearTimeout(persistTimer);
       try { res.end(); } catch { /* already closed */ }
     } catch (err) {
       console.error('[agent-task] fatal:', err);
-      emit({ type: 'error', message: err.message || 'agent task failed' });
+      const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
+      task.status = controller.signal.aborted ? 'cancelled' : 'error';
+      emit({ type: 'error', message });
+      await persistTaskState(task.status);
       clearTimeout(runtimeTimer);
       clearInterval(heartbeat);
+      if (persistTimer) clearTimeout(persistTimer);
       try { res.end(); } catch { /* already closed */ }
     }
   }
@@ -308,6 +467,94 @@ function readArtifactMetadata(id) {
   }
 }
 
+function extractProfessionalContract(text) {
+  const raw = String(text || '');
+  const match = raw.match(/---\s*\nsiraGPT professional execution contract for [\s\S]*?\n---\s*$/i);
+  if (!match) return '';
+  return match[0]
+    .replace(/^---\s*\n/i, '')
+    .replace(/\n---\s*$/i, '')
+    .trim();
+}
+
+function normalizeDisplayGoal(text) {
+  const raw = String(text || '');
+  const withoutContract = raw
+    .replace(/\n?---\s*\nsiraGPT professional execution contract for [\s\S]*?\n---\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (withoutContract || raw.replace(/\s+/g, ' ').trim()).slice(0, 4000);
+}
+
+function normalizeSystemContract(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 4000);
+}
+
+function buildAgentSystemPrompt(systemContract, fileIds) {
+  const parts = [TASK_SYSTEM_PROMPT];
+  if (systemContract) {
+    parts.push(`Additional execution contract:\n${systemContract}`);
+  }
+  if (fileIds.length) {
+    parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering.`);
+  }
+  return parts.join('\n\n');
+}
+
+function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState }) {
+  pruneOldTasks();
+  const now = new Date().toISOString();
+  const record = {
+    taskId,
+    userId: String(userId || ''),
+    chatId,
+    displayGoal,
+    model,
+    controller,
+    maxSteps,
+    maxRuntimeMs,
+    status: 'running',
+    createdAt: now,
+    updatedAt: now,
+    streamState,
+    events: [],
+    assistantMessageId: null,
+  };
+  ACTIVE_AGENT_TASKS.set(taskId, record);
+  return record;
+}
+
+function getTaskForUser(taskId, userId) {
+  pruneOldTasks();
+  const cleanId = String(taskId || '');
+  const task = ACTIVE_AGENT_TASKS.get(cleanId);
+  if (!task || String(task.userId) !== String(userId || '')) return null;
+  return task;
+}
+
+function appendTaskEvent(task, event, streamState) {
+  if (!task) return;
+  task.events.push({ ...event, ts: new Date().toISOString() });
+  if (task.events.length > TASK_EVENT_LIMIT) {
+    task.events.splice(0, task.events.length - TASK_EVENT_LIMIT);
+  }
+  task.streamState = streamState;
+  task.updatedAt = new Date().toISOString();
+}
+
+function pruneOldTasks() {
+  const cutoff = Date.now() - TASK_RETENTION_MS;
+  for (const [id, task] of ACTIVE_AGENT_TASKS.entries()) {
+    const updated = Date.parse(task.updatedAt || task.createdAt || 0);
+    if (Number.isFinite(updated) && updated < cutoff && task.status !== 'running') {
+      ACTIVE_AGENT_TASKS.delete(id);
+    }
+  }
+}
+
 function initialAgentState() {
   return { steps: [], artifacts: [], finalText: '', done: false };
 }
@@ -315,7 +562,7 @@ function initialAgentState() {
 function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'meta':
-      return { ...state, meta: { goal: evt.goal, model: evt.model, tools: evt.tools } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools } };
     case 'step_start':
       return {
         ...state,
@@ -327,30 +574,57 @@ function reduceAgentState(state, evt) {
           toolCalls: [],
         }],
       };
-    case 'tool_call':
+    case 'tool_call': {
+      const stepId = evt.stepId || `tool-${state.steps.length + 1}`;
+      const steps = state.steps.some(step => step.id === stepId)
+        ? state.steps
+        : [...state.steps, {
+          id: stepId,
+          label: evt.tool,
+          icon: 'thought',
+          status: 'running',
+          toolCalls: [],
+        }];
       return {
         ...state,
-        steps: state.steps.map(step =>
-          step.id === evt.stepId
+        steps: steps.map(step =>
+          step.id === stepId
             ? { ...step, toolCalls: [...step.toolCalls, { tool: evt.tool, preview: evt.preview, language: evt.language, codePreview: evt.codePreview }] }
             : step
         ),
       };
-    case 'tool_output':
+    }
+    case 'tool_output': {
+      const stepId = evt.stepId || `tool-${state.steps.length + 1}`;
+      const steps = state.steps.some(step => step.id === stepId)
+        ? state.steps
+        : [...state.steps, {
+          id: stepId,
+          label: evt.tool,
+          icon: 'thought',
+          status: 'running',
+          toolCalls: [{ tool: evt.tool, preview: '' }],
+        }];
       return {
         ...state,
-        steps: state.steps.map(step => {
-          if (step.id !== evt.stepId) return step;
+        steps: steps.map(step => {
+          if (step.id !== stepId) return step;
           const toolCalls = [...step.toolCalls];
+          let attached = false;
           for (let i = toolCalls.length - 1; i >= 0; i--) {
             if (toolCalls[i].tool === evt.tool && !toolCalls[i].output) {
               toolCalls[i] = { ...toolCalls[i], output: { ok: evt.ok, preview: evt.preview } };
+              attached = true;
               break;
             }
+          }
+          if (!attached) {
+            toolCalls.push({ tool: evt.tool, preview: '', output: { ok: evt.ok, preview: evt.preview } });
           }
           return { ...step, toolCalls };
         }),
       };
+    }
     case 'step_done':
       return {
         ...state,
@@ -375,5 +649,20 @@ function serializeAgentState(state) {
   const fenced = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
   return state.finalText ? `${fenced}\n\n${state.finalText}` : fenced;
 }
+
+router.INTERNAL = {
+  ACTIVE_AGENT_TASKS,
+  TASK_EVENT_LIMIT,
+  appendTaskEvent,
+  buildAgentSystemPrompt,
+  createTaskRecord,
+  extractProfessionalContract,
+  getTaskForUser,
+  initialAgentState,
+  normalizeDisplayGoal,
+  normalizeSystemContract,
+  reduceAgentState,
+  serializeAgentState,
+};
 
 module.exports = router;

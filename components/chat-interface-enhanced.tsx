@@ -61,7 +61,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
-import { aiService, buildProfessionalCapabilityPrompt, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, PROFESSIONAL_CAPABILITY_CONTRACTS, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -2339,6 +2339,7 @@ function ChatInterfaceContent() {
   // SSE stream without clobbering other in-flight requests (intent
   // classification, chat streaming) that live under intentAbortController.
   const searchAbortControllerRef = React.useRef<AbortController | null>(null);
+  const currentAgentTaskIdRef = React.useRef<string | null>(null);
 
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
@@ -2455,6 +2456,13 @@ function ChatInterfaceContent() {
     if (intentAbortControllerRef.current) {
       intentAbortControllerRef.current.abort();
       intentAbortControllerRef.current = null;
+    }
+    if (currentAgentTaskIdRef.current) {
+      const taskId = currentAgentTaskIdRef.current;
+      currentAgentTaskIdRef.current = null;
+      void agentTaskService.cancelTask(taskId).catch((err) => {
+        console.warn('Failed to cancel agent task:', err);
+      });
     }
     if (searchAbortControllerRef.current) {
       searchAbortControllerRef.current.abort();
@@ -4603,7 +4611,7 @@ REWRITTEN TEXT:`;
         case 'agent_task':
           // Compound multi-step task — research + code + deliverable
           // file. Routes to the Claude-style step-card runner.
-          await handleAgentTask(msg);
+          await handleAgentTask(msg, filesToSend);
           break;
         default:
           await runContextPipeline(intent);
@@ -5666,12 +5674,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // This way step cards live INSIDE the regular message bubble — no
   // parallel surface to maintain — and the persisted message survives
   // a chat reload (the JSON is the source of truth for replay).
-  const handleAgentTask = async (goalText: string) => {
+  const handleAgentTask = async (goalText: string, filesToSend: any[] = []) => {
     if (!goalText) {
       toast.error('Please enter a task');
       return;
     }
-    const professionalGoal = buildProfessionalCapabilityPrompt('agent_task', goalText);
+    const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     let activeChat = currentChat;
     const isNewChat = !activeChat;
 
@@ -5727,22 +5735,31 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const controller = new AbortController();
       searchAbortControllerRef.current = controller;
+      currentAgentTaskIdRef.current = null;
 
       let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [] };
+      let taskWasAborted = false;
       try {
         for await (const evt of agentTaskService.runIterator({
-          goal: professionalGoal,
+          goal: goalText,
+          displayGoal: goalText,
+          systemContract,
+          files: filesToSend.map((file: any) => file?.id).filter(Boolean),
           chatId: activeChat.id,
           model: selectedModel,
           maxSteps: 80,
           maxRuntimeMs: 2 * 60 * 60 * 1000,
           signal: controller.signal,
         })) {
+          if (evt.type === 'meta' && evt.taskId) {
+            currentAgentTaskIdRef.current = evt.taskId;
+          }
           state = reduceEvent(state, evt);
           updateBubble(state);
         }
       } catch (err: any) {
         if (controller.signal.aborted || /abort/i.test(err?.message || '')) {
+          taskWasAborted = true;
           state = { ...state, done: true, error: 'aborted' };
           updateBubble(state);
         } else {
@@ -5752,13 +5769,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       setIsWebSearching(false);
       searchAbortControllerRef.current = null;
-      toast.success('Tarea completada');
+      currentAgentTaskIdRef.current = null;
+      if (taskWasAborted || state.error === 'aborted') {
+        toast.info('Tarea detenida');
+      } else {
+        toast.success('Tarea completada');
+      }
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
       console.error('Agent task failed:', err);
       toast.error(err?.message || 'Agent task failed');
       setIsWebSearching(false);
       searchAbortControllerRef.current = null;
+      currentAgentTaskIdRef.current = null;
     }
   };
 

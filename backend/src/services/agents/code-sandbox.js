@@ -97,6 +97,7 @@ function truncate(buf, max) {
  * @param {string} [opts.stdin]         — optional stdin content
  * @param {object<string,string>} [opts.files] — extra files to drop in the
  *                                               run dir (filename → content)
+ * @param {AbortSignal} [opts.signal]   — cancels the child process immediately
  *
  * @returns {Promise<{
  *   ok: boolean,
@@ -117,6 +118,7 @@ async function run({
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
   stdin = '',
   files = {},
+  signal,
 }) {
   const cfg = LANGUAGE_CONFIG[String(language || '').toLowerCase()];
   if (!cfg) {
@@ -133,6 +135,15 @@ async function run({
       stdout: '', stderr: 'empty source',
       durationMs: 0, timedOut: false, truncated: false,
       language,
+    };
+  }
+  if (signal?.aborted) {
+    return {
+      ok: false, exitCode: null, signal: 'SIGABRT',
+      stdout: '', stderr: 'aborted',
+      durationMs: 0, timedOut: false, truncated: false,
+      language,
+      aborted: true,
     };
   }
 
@@ -159,6 +170,12 @@ async function run({
   let stdoutBuf = Buffer.alloc(0);
   let stderrBuf = Buffer.alloc(0);
   let sizeLimitHit = false;
+  let aborted = false;
+  const abortHandler = () => {
+    aborted = true;
+    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+  };
+  if (signal) signal.addEventListener('abort', abortHandler, { once: true });
   const append = (which, chunk) => {
     if (sizeLimitHit) return;
     if (which === 'stdout') {
@@ -191,11 +208,12 @@ async function run({
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
   }, timeoutMs);
 
-  const { exitCode, signal } = await new Promise(resolve => {
-    child.on('close', (code, sig) => resolve({ exitCode: code, signal: sig }));
-    child.on('error', err => resolve({ exitCode: null, signal: null, _err: err }));
+  const { exitCode, childSignal } = await new Promise(resolve => {
+    child.on('close', (code, sig) => resolve({ exitCode: code, childSignal: sig }));
+    child.on('error', err => resolve({ exitCode: null, childSignal: null, _err: err }));
   });
   clearTimeout(timer);
+  if (signal) signal.removeEventListener('abort', abortHandler);
 
   // Best-effort cleanup. We swallow errors — leaving a temp dir isn't
   // a correctness problem, and fs.rm on a dir with open handles will
@@ -207,13 +225,14 @@ async function run({
   const out = truncate(stdoutBuf, maxOutputBytes);
   const err = truncate(stderrBuf, maxOutputBytes);
   return {
-    ok: !timedOut && exitCode === 0 && !sizeLimitHit,
+    ok: !aborted && !timedOut && exitCode === 0 && !sizeLimitHit,
     exitCode,
-    signal,
+    signal: childSignal,
     stdout: out.text,
-    stderr: err.text,
+    stderr: aborted ? (err.text || 'aborted') : err.text,
     durationMs: Date.now() - start,
     timedOut,
+    aborted,
     truncated: out.truncated || err.truncated || sizeLimitHit,
     language,
   };
@@ -231,6 +250,7 @@ async function runTests({
   testSource,
   entry = 'solution',
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  signal,
 }) {
   const lang = String(language || '').toLowerCase();
   if (lang === 'python') {
@@ -255,7 +275,7 @@ async function runTests({
       `for name, detail in _FAILURES:\n` +
       `    flat = str(detail).replace('\\r', ' ').replace('\\n', ' | ')\n` +
       `    print(f'FAIL {name}: {flat}')\n`;
-    const r = await run({ language: 'python', source: harness, timeoutMs });
+    const r = await run({ language: 'python', source: harness, timeoutMs, signal });
     return parseHarness(r);
   }
   if (lang === 'javascript' || lang === 'node') {
@@ -279,13 +299,14 @@ async function runTests({
       `  const flat = String(detail).replace(/\\r/g, ' ').replace(/\\n/g, ' | ');\n` +
       `  console.log('FAIL ' + name + ': ' + flat);\n` +
       `}\n`;
-    const r = await run({ language: 'javascript', source: harness, timeoutMs });
+    const r = await run({ language: 'javascript', source: harness, timeoutMs, signal });
     return parseHarness(r);
   }
   return {
     ok: false, passed: 0, failed: 0,
     stdout: '', stderr: `unsupported test language: ${language}`,
     timedOut: false, failures: [],
+    aborted: false,
   };
 }
 
@@ -305,6 +326,7 @@ function parseHarness(r) {
     stdout: r.stdout,
     stderr: r.stderr,
     timedOut: r.timedOut,
+    aborted: r.aborted,
     exitCode: r.exitCode,
     durationMs: r.durationMs,
     failures,

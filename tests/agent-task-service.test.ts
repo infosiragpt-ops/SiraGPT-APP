@@ -6,6 +6,13 @@ import { initialAgentState, reduceEvent } from "../lib/agent-task-service"
 describe("agent-task-service · reducer", () => {
   it("keeps tool events under their matching step", () => {
     let state = reduceEvent(initialAgentState, {
+      type: "meta",
+      taskId: "task-frontend",
+      goal: "Busca fuentes",
+      model: "gpt-4o",
+      tools: ["web_search"],
+    })
+    state = reduceEvent(state, {
       type: "step_start",
       id: "s1",
       label: "Buscar fuentes",
@@ -25,6 +32,7 @@ describe("agent-task-service · reducer", () => {
       preview: "25 fuentes",
     })
 
+    assert.equal(state.meta?.taskId, "task-frontend")
     assert.equal(state.steps.length, 1)
     assert.equal(state.steps[0].toolCalls.length, 1)
     assert.equal(state.steps[0].toolCalls[0].output?.preview, "25 fuentes")
