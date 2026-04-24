@@ -6,10 +6,13 @@ const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
+const fs = require('fs');
+const path = require('path');
 const passport = require('./src/config/passport');
 const { bigintSerializerMiddleware } = require('./src/utils/bigint-serializer');
 require('dotenv').config();
 
+const prisma = require('./src/config/database');
 const authRoutes = require('./src/routes/auth');
 const chatRoutes = require('./src/routes/chats');
 const fileRoutes = require('./src/routes/files');
@@ -126,8 +129,38 @@ if (process.env.NODE_ENV !== 'production') {
     app.use(morgan('dev'));
 }
 
-// Static files
-app.use('/uploads', express.static('uploads'));
+// Static files + hardened presentation downloads
+const uploadsDir = path.join(__dirname, 'uploads');
+const presentationsDir = path.join(uploadsDir, 'presentations');
+
+app.get('/uploads/presentations/:filename/download', async (req, res) => {
+    const filename = path.basename(req.params.filename || '');
+    if (!filename || /[\\/]/.test(filename) || !/\.pptx$/i.test(filename)) {
+        return res.status(400).json({ error: 'Invalid presentation filename' });
+    }
+
+    const filePath = path.join(presentationsDir, filename);
+    if (!filePath.startsWith(presentationsDir + path.sep)) {
+        return res.status(400).json({ error: 'Invalid presentation path' });
+    }
+
+    try {
+        await fs.promises.access(filePath, fs.constants.R_OK);
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+        res.download(filePath, filename);
+    } catch {
+        res.status(404).json({ error: 'Presentation not found' });
+    }
+});
+
+app.use('/uploads', express.static(uploadsDir, {
+    setHeaders: (res, filePath) => {
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+        if (/\.pptx$/i.test(filePath)) {
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+        }
+    }
+}));
 
 
 // Health check
@@ -207,6 +240,7 @@ app.use('*', (req, res) => {
 });
 
 // Start server
+prisma.connectDatabase();
 const server = app.listen(PORT, () => {
     console.log(`🚀 Backend server running on port ${PORT}`);
     console.log(`📊 Environment: ${process.env.NODE_ENV}`);

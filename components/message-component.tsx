@@ -65,6 +65,7 @@ import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
 import MessageActionRail from "./MessageActionRail"
 import ComputerUseReasoning from "./ComputerUseReasoning"
+import type { DocumentPreviewTarget } from "./document-preview"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
 const truncateUrl = (url: string, maxLength: number = 30) => {
@@ -133,6 +134,119 @@ const getDocumentChipIcon = (name: string) => {
         </span>
     );
 };
+
+function escapePreviewHtml(value: unknown) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function cleanPresentationFilename(value: unknown) {
+    const raw = String(value || "").trim();
+    if (!raw) return "presentation.pptx";
+    try {
+        const parsed = new URL(raw);
+        return decodeURIComponent(parsed.pathname.split("/").pop() || "presentation.pptx");
+    } catch {
+        return decodeURIComponent(raw.split(/[\\/]/).pop() || "presentation.pptx");
+    }
+}
+
+function backendUrl(pathOrUrl: string) {
+    if (/^(https?:|data:|blob:)/i.test(pathOrUrl)) return pathOrUrl;
+    const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || "http://localhost:5000";
+    return `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+}
+
+function textLines(value: unknown): string[] {
+    if (Array.isArray(value)) {
+        return value.flatMap(textLines).filter(Boolean);
+    }
+    if (value && typeof value === "object") {
+        const obj = value as Record<string, unknown>;
+        return textLines(obj.text || obj.body || obj.content || obj.title || JSON.stringify(obj));
+    }
+    return String(value ?? "")
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+}
+
+function buildPresentationPreviewHtml(entry: any, filename: string) {
+    const slides = Array.isArray(entry?.structure?.slides) ? entry.structure.slides : [];
+    const title = entry?.title || entry?.structure?.title || "Presentación";
+    const category = entry?.category || "business";
+    const palette = entry?.colorScheme || entry?.style || "professional";
+    const safeTitle = escapePreviewHtml(title);
+    const safeFilename = escapePreviewHtml(filename);
+    const slideHtml = slides.map((slide: any, index: number) => {
+        const slideTitle = escapePreviewHtml(slide?.title || `Slide ${index + 1}`);
+        const lines = textLines(slide?.content || slide?.bullets || slide?.body);
+        const bullets = lines.length
+            ? `<ul>${lines.slice(0, 8).map((line) => `<li>${escapePreviewHtml(line)}</li>`).join("")}</ul>`
+            : `<p class="muted">Sin contenido textual. Descarga el PPTX para ver todos los elementos vectoriales.</p>`;
+        return `
+          <section class="slide-card">
+            <div class="slide-number">${String(index + 1).padStart(2, "0")}</div>
+            <div>
+              <h2>${slideTitle}</h2>
+              ${bullets}
+            </div>
+          </section>`;
+    }).join("");
+
+    return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${safeTitle}</title>
+  <style>
+    :root { color-scheme: light; --ink:#0f172a; --muted:#64748b; --line:rgba(15,23,42,.10); --accent:#2563eb; --cyan:#06b6d4; --pink:#ec4899; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--ink); background:
+      radial-gradient(circle at 18% 8%, rgba(37,99,235,.18), transparent 32%),
+      radial-gradient(circle at 88% 20%, rgba(236,72,153,.14), transparent 28%),
+      linear-gradient(135deg, #f8fbff 0%, #eef4ff 45%, #ffffff 100%); }
+    .wrap { max-width:1180px; margin:0 auto; padding:34px 26px 48px; }
+    .hero { position:relative; overflow:hidden; border:1px solid rgba(255,255,255,.7); border-radius:28px; padding:30px; background:rgba(255,255,255,.72); box-shadow:0 30px 90px rgba(15,23,42,.12); backdrop-filter: blur(24px); }
+    .hero:after { content:""; position:absolute; inset:-60% -10% auto; height:180px; background:linear-gradient(90deg, transparent, rgba(255,255,255,.85), transparent); transform:rotate(-8deg); animation:sheen 4.8s ease-in-out infinite; }
+    @keyframes sheen { 0%, 45% { translate:-70% 0; opacity:0; } 55% { opacity:.9; } 100% { translate:70% 0; opacity:0; } }
+    .kicker { display:inline-flex; align-items:center; gap:8px; margin-bottom:16px; border:1px solid rgba(37,99,235,.18); border-radius:999px; padding:7px 12px; color:#1d4ed8; background:rgba(219,234,254,.72); font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+    h1 { max-width:920px; margin:0; font-size:clamp(32px,5vw,64px); line-height:.98; letter-spacing:-.055em; }
+    .meta { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; color:var(--muted); font-size:13px; }
+    .pill { border:1px solid var(--line); border-radius:999px; padding:8px 12px; background:rgba(255,255,255,.75); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:18px; margin-top:24px; }
+    .slide-card { position:relative; min-height:250px; display:flex; flex-direction:column; justify-content:space-between; gap:22px; overflow:hidden; border:1px solid rgba(15,23,42,.08); border-radius:26px; padding:24px; background:linear-gradient(145deg,rgba(255,255,255,.86),rgba(248,250,252,.68)); box-shadow:0 24px 70px rgba(15,23,42,.10); }
+    .slide-card:before { content:""; position:absolute; width:180px; height:180px; right:-70px; top:-70px; border-radius:999px; background:radial-gradient(circle, rgba(6,182,212,.25), transparent 70%); }
+    .slide-number { width:max-content; border-radius:14px; padding:8px 10px; background:#0f172a; color:white; font-weight:900; letter-spacing:.08em; font-size:12px; }
+    h2 { margin:0 0 14px; font-size:24px; line-height:1.05; letter-spacing:-.035em; }
+    ul { margin:0; padding-left:18px; color:#334155; line-height:1.55; }
+    li { margin:7px 0; }
+    .muted { color:var(--muted); line-height:1.55; }
+    @media (max-width: 720px) { .wrap { padding:18px 12px 32px; } .hero { padding:22px; border-radius:22px; } .slide-card { min-height:auto; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <div class="kicker">siraGPT deck preview</div>
+      <h1>${safeTitle}</h1>
+      <div class="meta">
+        <span class="pill">${slides.length} slides</span>
+        <span class="pill">Archivo: ${safeFilename}</span>
+        <span class="pill">Estilo: ${escapePreviewHtml(palette)}</span>
+        <span class="pill">Categoría: ${escapePreviewHtml(category)}</span>
+      </div>
+    </section>
+    <section class="grid">${slideHtml || `<section class="slide-card"><h2>No hay slides para mostrar</h2><p class="muted">Descarga el archivo para abrirlo en PowerPoint.</p></section>`}</section>
+  </main>
+</body>
+</html>`;
+}
 
 // Chart Display Component
 const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], fullResponse?: any[], onImageClick?: (imageUrl: string) => void }) => {
@@ -453,7 +567,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     isStreaming?: boolean;
     onToggleSplitView?: (content: any) => void;
     isGeneratingImage?: boolean;
-    onDocumentPreview?: (url: string) => void;
+    onDocumentPreview?: (target: DocumentPreviewTarget) => void;
     children?: React.ReactNode;
 }) => {
     // Performance monitoring disabled to prevent overhead
@@ -1456,36 +1570,67 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     const PPTDisplay = () => {
         if (!isPPTMessage) return null;
 
+        const filename = cleanPresentationFilename(pptEntry.filename || pptEntry.path || pptEntry.downloadUrl);
         const presentationData = {
             title: pptEntry.title || 'AI Presentation',
             slides: pptEntry.structure?.slides || [],
-            filename: pptEntry.filename || pptEntry.path,
+            filename,
         };
 
         const getPPTUrl = () => {
-            const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
-            return `${baseUrl}/uploads/presentations/${presentationData.filename}`;
+            if (pptEntry.downloadUrl) return backendUrl(String(pptEntry.downloadUrl));
+            return backendUrl(`/uploads/presentations/${encodeURIComponent(presentationData.filename)}`);
+        };
+
+        const getPPTDownloadUrl = () => {
+            return backendUrl(`/uploads/presentations/${encodeURIComponent(presentationData.filename)}/download`);
+        };
+
+        const previewPPT = () => {
+            if (!onDocumentPreview) return;
+            const html = buildPresentationPreviewHtml(pptEntry, presentationData.filename);
+            onDocumentPreview({
+                url: `data:text/html;charset=utf-8,${encodeURIComponent(html)}`,
+                downloadUrl: getPPTDownloadUrl(),
+                filename: presentationData.filename,
+            });
         };
 
         const downloadPPT = async () => {
             try {
-                const url = getPPTUrl();
+                const url = getPPTDownloadUrl();
+                const response = await fetch(url, { credentials: 'include' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const blob = await response.blob();
+                const objectUrl = URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
+                a.href = objectUrl;
                 a.download = presentationData.filename;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-                toast.success('Presentation downloaded successfully!');
+                setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+                toast.success('Descarga iniciada');
             } catch (error) {
                 console.error('Download failed:', error);
-                toast.error('Failed to download presentation');
+                try {
+                    const a = document.createElement('a');
+                    a.href = getPPTUrl();
+                    a.download = presentationData.filename;
+                    a.target = '_blank';
+                    a.rel = 'noopener';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                } catch {
+                    toast.error('No se pudo descargar la presentación');
+                }
             }
         };
 
         return (
             <div className="flex gap-2 mt-4">
-                <Button size="sm" variant="default" onClick={() => onDocumentPreview && onDocumentPreview(getPPTUrl())} className="bg-blue-600 hover:bg-blue-700">
+                <Button size="sm" variant="default" onClick={previewPPT} className="bg-blue-600 hover:bg-blue-700">
                     <Eye className="h-4 w-4 mr-2" />
                     Preview
                 </Button>

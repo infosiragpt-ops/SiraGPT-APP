@@ -111,7 +111,7 @@ import {
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
-import { DocumentPreview } from "./document-preview"
+import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
 import ComputerUseInterface from "./ComputerUseInterface"
@@ -2760,7 +2760,7 @@ But first, you need to connect your Spotify account securely using the button be
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
-  const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<string | null>(null);
+  const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
   const activeSearchActivity = activeSearchActivityId ? searchActivities[activeSearchActivityId] : null;
   const searchActivityPanelOpen = Boolean(activeSearchActivity);
 
@@ -2951,7 +2951,7 @@ But first, you need to connect your Spotify account securely using the button be
     setSplitViewContent(content)
   }
 
-  const handleDocumentPreview = (url: string) => {
+  const handleDocumentPreview = (url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
     setDocumentPreviewUrl(url);
   };

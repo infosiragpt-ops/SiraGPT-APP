@@ -11,18 +11,27 @@ import { Button } from "@/components/ui/button"
  * generated files and after chat reloads when the data URL is persisted
  * in the message payload.
  */
+export type DocumentPreviewTarget =
+  | string
+  | {
+      url: string
+      downloadUrl?: string
+      filename?: string
+    }
+
 interface DocumentPreviewProps {
-  url: string
+  url: DocumentPreviewTarget
   onClose: () => void
 }
 
-type PreviewFormat = "pdf" | "docx" | "doc" | "xlsx" | "csv" | "svg" | "pptx" | "unknown"
+type PreviewFormat = "pdf" | "docx" | "doc" | "xlsx" | "csv" | "svg" | "pptx" | "html" | "unknown"
 
 type State =
   | { kind: "loading" }
   | { kind: "pdf" }
   | { kind: "svg" }
   | { kind: "html"; html: string; warnings: string[] }
+  | { kind: "iframeHtml"; html: string }
   | { kind: "unsupported"; message: string }
   | { kind: "error"; message: string }
 
@@ -34,6 +43,7 @@ const FORMAT_EXTENSION: Record<PreviewFormat, string> = {
   csv: "csv",
   svg: "svg",
   pptx: "pptx",
+  html: "html",
   unknown: "bin",
 }
 
@@ -47,6 +57,7 @@ function inferFormat(url: string): PreviewFormat {
     if (mime.includes("spreadsheetml.sheet")) return "xlsx"
     if (mime.includes("presentationml.presentation")) return "pptx"
     if (mime.includes("svg")) return "svg"
+    if (mime.includes("html")) return "html"
     if (mime.includes("csv") || mime.includes("plain")) return "csv"
     return "unknown"
   }
@@ -59,6 +70,7 @@ function inferFormat(url: string): PreviewFormat {
   if (clean.endsWith(".csv")) return "csv"
   if (clean.endsWith(".svg")) return "svg"
   if (clean.endsWith(".pptx")) return "pptx"
+  if (clean.endsWith(".html") || clean.endsWith(".htm")) return "html"
   return "unknown"
 }
 
@@ -187,22 +199,45 @@ async function renderXlsx(buffer: ArrayBuffer) {
 
 export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [state, setState] = React.useState<State>({ kind: "loading" })
-  const format = React.useMemo(() => inferFormat(url), [url])
-  const filename = React.useMemo(() => inferFilename(url, format), [url, format])
+  const previewUrl = React.useMemo(() => typeof url === "string" ? url : url.url, [url])
+  const downloadUrl = React.useMemo(() => typeof url === "string" ? previewUrl : (url.downloadUrl || url.url), [previewUrl, url])
+  const format = React.useMemo(() => inferFormat(previewUrl), [previewUrl])
+  const filename = React.useMemo(() => {
+    if (typeof url !== "string" && url.filename) return url.filename
+    return inferFilename(downloadUrl, format)
+  }, [downloadUrl, format, url])
 
-  const download = React.useCallback(() => {
+  const clickDownload = React.useCallback((href: string, name: string) => {
     const a = document.createElement("a")
-    a.href = url
-    a.download = filename
+    a.href = href
+    a.download = name
     a.target = "_blank"
     a.rel = "noopener"
     document.body.appendChild(a)
     a.click()
     a.remove()
-  }, [filename, url])
+  }, [])
+
+  const download = React.useCallback(async () => {
+    if (/^(data|blob):/i.test(downloadUrl)) {
+      clickDownload(downloadUrl, filename)
+      return
+    }
+
+    try {
+      const resp = await fetch(downloadUrl, { credentials: "include" })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const blob = await resp.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      clickDownload(objectUrl, filename)
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1500)
+    } catch {
+      clickDownload(downloadUrl, filename)
+    }
+  }, [clickDownload, downloadUrl, filename])
 
   React.useEffect(() => {
-    if (!url) return
+    if (!previewUrl) return
 
     if (format === "pdf") {
       setState({ kind: "pdf" })
@@ -212,6 +247,27 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     if (format === "svg") {
       setState({ kind: "svg" })
       return
+    }
+
+    if (format === "html") {
+      let cancelled = false
+      setState({ kind: "loading" })
+      ;(async () => {
+        try {
+          const resp = await fetch(previewUrl, { credentials: "include" })
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const html = await resp.text()
+          if (cancelled) return
+          setState({ kind: "iframeHtml", html })
+        } catch (err: unknown) {
+          if (cancelled) return
+          const message = err instanceof Error ? err.message : "No se pudo abrir la vista previa."
+          setState({ kind: "error", message })
+        }
+      })()
+      return () => {
+        cancelled = true
+      }
     }
 
     if (format === "pptx") {
@@ -232,7 +288,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
     ;(async () => {
       try {
-        const resp = await fetch(url, { credentials: "include" })
+        const resp = await fetch(previewUrl, { credentials: "include" })
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
 
         if (format === "csv") {
@@ -284,7 +340,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return () => {
       cancelled = true
     }
-  }, [filename, format, url])
+  }, [filename, format, previewUrl])
 
   return (
     <div className="relative flex h-full w-full flex-col bg-background">
@@ -328,13 +384,22 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         )}
 
         {state.kind === "pdf" && (
-          <iframe src={url} className="h-full w-full bg-white" title={`Vista previa ${filename}`} />
+          <iframe src={previewUrl} className="h-full w-full bg-white" title={`Vista previa ${filename}`} />
         )}
 
         {state.kind === "svg" && (
           <div className="flex min-h-full items-center justify-center p-6">
-            <img src={url} alt={filename} className="max-h-full max-w-full rounded-xl bg-white shadow-sm" />
+            <img src={previewUrl} alt={filename} className="max-h-full max-w-full rounded-xl bg-white shadow-sm" />
           </div>
+        )}
+
+        {state.kind === "iframeHtml" && (
+          <iframe
+            srcDoc={state.html}
+            className="h-full w-full border-0 bg-white"
+            title={`Vista previa ${filename}`}
+            sandbox=""
+          />
         )}
 
         {state.kind === "html" && (
