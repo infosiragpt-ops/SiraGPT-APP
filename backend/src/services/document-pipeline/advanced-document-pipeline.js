@@ -1333,11 +1333,28 @@ async function* streamAdvancedDocumentPipeline(opts = {}) {
   try {
     const result = await runAdvancedDocumentPipeline(opts);
     for (const [pct, label] of stages.slice(4)) yield { type: 'stage', pct, label };
+    const checks = result.validation.checks || {};
+    const checkEntries = Object.entries(checks);
+    const techPassed = checkEntries.filter(([, v]) => v === true).length;
+    const techTotal = checkEntries.length;
+    const failedChecks = checkEntries.filter(([, v]) => v === false).map(([k]) => k);
+    // never_fake_scores: report binary check counts, not a fabricated
+    // numeric quality score. The technicalScore / qualityScore fields
+    // remain on `result.validation` for telemetry, but they are NOT
+    // surfaced to the user as "100/100" because that reads like a
+    // quality grade we did not earn.
+    const explanationParts = [
+      `Documento generado por pipeline multiagente.`,
+      `${techPassed}/${techTotal} verificaciones técnicas pasadas`,
+    ];
+    if (failedChecks.length > 0) {
+      explanationParts.push(`Pendientes: ${failedChecks.join(', ')}.`);
+    }
     const file = {
       type: 'doc',
       format: result.plan.format,
       title: result.plan.title,
-      explanation: `Documento generado por pipeline multiagente. Score técnico ${result.validation.technicalScore}/100, calidad ${result.validation.qualityScore}/100.`,
+      explanation: explanationParts.join(' '),
       filename: result.artifact.filename,
       dataUrl: result.dataUrl,
       mime: result.artifact.mime,
@@ -1346,9 +1363,12 @@ async function* streamAdvancedDocumentPipeline(opts = {}) {
       taskId: result.taskId,
       telemetryPath: result.telemetryPath,
     };
+    const checksLine = failedChecks.length === 0
+      ? `Verificaciones técnicas: ${techPassed}/${techTotal} ✓`
+      : `Verificaciones técnicas: ${techPassed}/${techTotal} (pendientes: ${failedChecks.join(', ')})`;
     yield {
       type: 'final',
-      content: `**${result.plan.title}**\n\nDocumento generado y validado por el pipeline multiagente de siraGPT.\n\nScore técnico: **${result.validation.technicalScore}/100** · Score de calidad: **${result.validation.qualityScore}/100** · Intentos: **${result.attempts.length}**`,
+      content: `**${result.plan.title}**\n\nDocumento generado por la pipeline multiagente de siraGPT.\n\n${checksLine} · Intentos: **${result.attempts.length}**`,
       file,
       format: result.plan.format,
       metrics: result.validation,

@@ -1682,13 +1682,21 @@ function PptxRenderer({ a }: { a: AttachmentLike }) {
  */
 function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boolean }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null)
-  const [mode, setMode] = React.useState<"loading" | "native" | "fallback" | "error">("loading")
+  const [mode, setMode] = React.useState<"loading" | "native" | "fallback" | "extracted" | "error">("loading")
   const [fallbackHtml, setFallbackHtml] = React.useState<string>("")
   const [err, setErr] = React.useState<string | null>(null)
 
   React.useEffect(() => {
     let cancelled = false
     ;(async () => {
+      // Fast path: when the binary source is missing (chat reload, no
+      // file URL persisted) but we already have extracted markdown
+      // text from server-side parsing, render that instead of failing.
+      if (!a.url && !a.file && a.extractedText) {
+        setFallbackHtml(extractedTextToHtml(a.extractedText, a.name))
+        setMode("extracted")
+        return
+      }
       try {
         const buf = await readAsArrayBuffer(a)
         // Try docx-preview first (high fidelity). Imported lazily so the
@@ -1737,10 +1745,17 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
           setMode("fallback")
         }
       } catch (e: any) {
-        if (!cancelled) {
-          setErr(e?.message || "Error")
-          setMode("error")
+        if (cancelled) return
+        // Last-resort: if the binary read failed but the message
+        // carries extractedText (server-side parse), still show the
+        // user something readable instead of "No source available".
+        if (a.extractedText) {
+          setFallbackHtml(extractedTextToHtml(a.extractedText, a.name))
+          setMode("extracted")
+          return
         }
+        setErr(e?.message || "Error")
+        setMode("error")
       }
     })()
     return () => { cancelled = true }
@@ -1780,8 +1795,76 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
           dangerouslySetInnerHTML={{ __html: fallbackHtml }}
         />
       )}
+
+      {/* extractedText fallback — original docx not available locally
+          but the server-side parser stored its text. Shown so the user
+          can at least read the content of an old chat without re-upload. */}
+      {mode === "extracted" && (
+        <div className="mx-auto max-w-3xl px-6 py-6">
+          <div className="mb-4 rounded-md border border-amber-300/40 bg-amber-50/60 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-700/40 dark:bg-amber-950/30 dark:text-amber-200">
+            Mostrando el texto extraído. El archivo binario original no está disponible (chat antiguo). Para una vista exacta, vuelve a adjuntar el .docx.
+          </div>
+          <div
+            className={cn(
+              "prose prose-sm dark:prose-invert max-w-none",
+              "[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_th]:border [&_td]:border-border/50 [&_th]:border-border/50",
+              "[&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1",
+            )}
+            dangerouslySetInnerHTML={{ __html: fallbackHtml }}
+          />
+        </div>
+      )}
     </div>
   )
+}
+
+/**
+ * Convert the server-side extractedText (a markdown-ish dump) to safe
+ * HTML so the viewer can show it when the binary source is unavailable.
+ * Falls back to a `<pre>` block if marked is not available.
+ */
+function extractedTextToHtml(extractedText: string, name?: string | null): string {
+  const stripped = extractedText.replace(
+    /^\s*Word document\s*—.*?\n---\n/u,
+    ""
+  )
+  const escaped = stripped
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+  const title = name ? `<h1>${escaped ? "" : ""}${name.replace(/[<>&]/g, "")}</h1>` : ""
+  // Inline minimal markdown rendering: headings (#, ##), paragraphs.
+  const lines = stripped.split(/\r?\n/)
+  const out: string[] = [title]
+  let para: string[] = []
+  const flushPara = () => {
+    if (para.length === 0) return
+    const text = escapeHtml(para.join(" ")).replace(/\s+/g, " ")
+    if (text.trim()) out.push(`<p>${text}</p>`)
+    para = []
+  }
+  for (const line of lines) {
+    const m1 = /^#\s+(.+)$/.exec(line)
+    const m2 = /^##\s+(.+)$/.exec(line)
+    const m3 = /^###\s+(.+)$/.exec(line)
+    const bullet = /^\s*[-•*]\s+(.+)$/.exec(line)
+    if (m1) { flushPara(); out.push(`<h2>${escapeHtml(m1[1])}</h2>`); continue }
+    if (m2) { flushPara(); out.push(`<h3>${escapeHtml(m2[1])}</h3>`); continue }
+    if (m3) { flushPara(); out.push(`<h4>${escapeHtml(m3[1])}</h4>`); continue }
+    if (bullet) { flushPara(); out.push(`<ul><li>${escapeHtml(bullet[1])}</li></ul>`); continue }
+    if (line.trim() === "") { flushPara(); continue }
+    para.push(line)
+  }
+  flushPara()
+  return out.join("\n")
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
 }
 
 // ─── Fallback ────────────────────────────────────────────────────────
