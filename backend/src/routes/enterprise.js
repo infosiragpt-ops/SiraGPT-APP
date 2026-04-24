@@ -34,6 +34,9 @@ const { reviewCode } = require("../services/software-engineering/code-review");
 const { analyzeDocument } = require("../services/docintel/pdf-structure");
 const { groundClaims } = require("../services/docintel/citation-grounding");
 const { detectContradictions } = require("../services/docintel/contradiction-detector");
+const { validateSeo } = require("../services/software-engineering/seo-validator");
+const { checkWcag, contrastRatio } = require("../services/software-engineering/wcag-checker");
+const { analyzeBudget } = require("../services/software-engineering/cwv-budget");
 const { validateContract } = require("../services/agents/task-contract-resolver");
 const { runQaBoard } = require("../services/agents/qa-board");
 const { createTracer } = require("../services/observability/spans");
@@ -331,6 +334,80 @@ router.post(
       ok(res, r);
     } catch (err) {
       fail(res, 500, err.message || "docintel contradictions failed");
+    }
+  }
+);
+
+// ─── Web Builder validators (SEO / WCAG / CWV) ─────────────────────────
+
+router.post(
+  "/web-builder/seo/validate",
+  authenticateToken,
+  [
+    body("html").isString().isLength({ min: 1, max: 2_000_000 }),
+    body("options").optional().isObject(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      ok(res, validateSeo({ html: req.body.html, options: req.body.options }));
+    } catch (err) {
+      fail(res, 500, err.message || "seo validate failed");
+    }
+  }
+);
+
+router.post(
+  "/web-builder/wcag/check",
+  authenticateToken,
+  [body("html").isString().isLength({ min: 1, max: 2_000_000 })],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      ok(res, checkWcag({ html: req.body.html }));
+    } catch (err) {
+      fail(res, 500, err.message || "wcag check failed");
+    }
+  }
+);
+
+router.post(
+  "/web-builder/wcag/contrast",
+  authenticateToken,
+  [
+    body("fg").isString().isLength({ min: 2, max: 40 }),
+    body("bg").isString().isLength({ min: 2, max: 40 }),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    ok(res, contrastRatio(req.body.fg, req.body.bg));
+  }
+);
+
+router.post(
+  "/web-builder/cwv/analyze",
+  authenticateToken,
+  [
+    body("html").isString().isLength({ min: 1, max: 2_000_000 }),
+    body("siteOrigin").optional().isString().isLength({ min: 1, max: 200 }),
+    body("assetSizes").optional().isObject(),
+    body("budgets").optional().isObject(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      ok(res, analyzeBudget({
+        html: req.body.html,
+        siteOrigin: req.body.siteOrigin,
+        assetSizes: req.body.assetSizes,
+        budgets: req.body.budgets,
+      }));
+    } catch (err) {
+      fail(res, 500, err.message || "cwv analyze failed");
     }
   }
 );
