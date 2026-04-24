@@ -39,6 +39,7 @@ process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'fake-key';
 
 const tools = require('../src/services/agents/agent-tools');
 const rag = require('../src/services/rag-service');
+const tripleGraph = require('../src/services/triple-graph');
 
 // ─── static_checks (deterministic) ─────────────────────────────────────────
 
@@ -177,6 +178,97 @@ test('search_docs: returns ranked snippets', async () => {
   const out = await tools.search_docs.handler({ query: 'pricing' }, { userId: uid, collection: col });
   assert.ok(out.hits.length >= 1);
   assert.ok(out.hits[0].snippet.includes('pricing'));
+});
+
+function scriptedGearOpenAI() {
+  let reasonCalls = 0;
+  return {
+    embeddings: {
+      create: async ({ input }) => ({
+        data: input.map(text => ({ embedding: Array.from(fakeVectorFor(text)) })),
+      }),
+    },
+    chat: {
+      completions: {
+        create: async ({ messages }) => {
+          const sys = messages.find(m => m.role === 'system')?.content || '';
+          const usr = messages.find(m => m.role === 'user')?.content || '';
+
+          if (sys.includes('find facts') || usr.includes('find facts that help answer')) {
+            return {
+              choices: [{
+                message: {
+                  content: JSON.stringify({
+                    triples: [
+                      { subject: 'Stephen Curry', predicate: 'father is', object: 'Dell Curry' },
+                      { subject: 'Dell Curry', predicate: 'joined in', object: '1985' },
+                    ],
+                  }),
+                },
+              }],
+            };
+          }
+
+          if (usr.includes('Answerable: Yes')) {
+            reasonCalls++;
+            return {
+              choices: [{
+                message: {
+                  content: reasonCalls === 1
+                    ? 'Answerable: Yes\nAnswer: 1985'
+                    : 'Answerable: No\nWhy: missing fact',
+                },
+              }],
+            };
+          }
+
+          return { choices: [{ message: { content: 'Next Question: When did Dell Curry join?' } }] };
+        },
+      },
+    },
+  };
+}
+
+test('search_graph: uses full GEAR agent loop when openai is available', async () => {
+  const uid = `at-${Math.random()}`;
+  const col = 'at-gear';
+  await rag.clear(uid, col);
+  await rag.ingest(uid, col, [
+    { text: 'Stephen Curry is the son of Dell Curry.', source: 'curry.md' },
+    { text: 'Dell Curry joined the Cleveland Cavaliers in 1985.', source: 'dell.md' },
+  ]);
+  await tripleGraph.addTriples(uid, col, [
+    { subject: 'Stephen Curry', predicate: 'father is', object: 'Dell Curry', source: 'curry.md' },
+    { subject: 'Dell Curry', predicate: 'joined in', object: '1985', source: 'dell.md' },
+  ], { embedder: null });
+
+  const out = await tools.search_graph.handler(
+    { query: 'When did Stephen Curry father join the Cavaliers?', k: 5 },
+    { userId: uid, collection: col, openai: scriptedGearOpenAI() },
+  );
+
+  assert.equal(out.mode, 'gear_agent');
+  assert.equal(out.answer, '1985');
+  assert.equal(out.iterations, 1);
+  assert.ok(out.hits.length >= 1);
+  assert.ok(out.gist.length >= 1);
+});
+
+test('search_graph: falls back to SyncGE without openai', async () => {
+  const uid = `at-${Math.random()}`;
+  const col = 'at-syncge';
+  await rag.clear(uid, col);
+  await rag.ingest(uid, col, [
+    { text: 'Graph retrieval fallback passage about indexed documents.', source: 'fallback.md' },
+  ]);
+
+  const out = await tools.search_graph.handler(
+    { query: 'indexed documents', k: 3 },
+    { userId: uid, collection: col },
+  );
+
+  assert.equal(out.mode, 'syncge');
+  assert.ok(out.hits.length >= 1);
 });
 
 test('pick(): returns named tools in order', () => {

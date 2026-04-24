@@ -31,6 +31,7 @@
 const rag = require('../rag-service');
 const bm25 = require('../bm25');
 const codeChunker = require('../code-chunker');
+const gearAgent = require('../gear-agent');
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -170,17 +171,68 @@ const search_code = {
 const search_graph = {
   name: 'search_graph',
   description: 'Multi-hop GEAR retrieval — best for questions that need chaining facts across multiple sources.',
-  schema: { query: 'string (required)', k: 'number (optional, default 5)' },
+  schema: {
+    query: 'string (required)',
+    k: 'number (optional, default 5)',
+    max_iters: 'number (optional, default 3, max 4)',
+    beam_size: 'number (optional, default 4, max 8)',
+    path_length: 'number (optional, default 3, max 5)',
+  },
   async handler(args, ctx) {
     ensureCollection(ctx);
     if (!args?.query) return { error: 'missing "query"' };
     const k = Math.max(1, Math.min(Number(args.k) || 5, 15));
-    // Single-hop SyncGE: cheaper than the full agent loop, good enough
-    // for nested questions like "what team did X's father join".
+    const maxIters = Math.max(1, Math.min(Number(args.max_iters) || 3, 4));
+    const beamSize = Math.max(2, Math.min(Number(args.beam_size) || 4, 8));
+    const pathLength = Math.max(2, Math.min(Number(args.path_length) || 3, 5));
+
+    // Full GEAR (§5): use the agent loop when an LLM client is available.
+    // This lets the tool chain facts across hops instead of stopping at
+    // the cheaper single-step graph expansion.
+    if (ctx.openai && maxIters > 1) {
+      try {
+        const result = await gearAgent.agentLoop({
+          userId: ctx.userId,
+          collection: ctx.collection,
+          query: args.query,
+          openai: ctx.openai,
+          k,
+          maxIters,
+          sessionId: ctx.sessionId || ctx.chatId || null,
+          retrieveOpts: {
+            useHybrid: true,
+            useExpansion: true,
+            useMMR: true,
+            graphBeamSize: beamSize,
+            graphLength: pathLength,
+          },
+        });
+
+        return {
+          mode: 'gear_agent',
+          answer: result.answer || null,
+          iterations: result.iterations,
+          history: result.history,
+          gist: result.gist.slice(0, 20),
+          hits: result.passages.map(h => ({
+            source: h.source,
+            title: h.title,
+            score: h.score,
+            snippet: (h.text || '').slice(0, 400),
+          })),
+        };
+      } catch (err) {
+        console.warn('[agent-tools] search_graph GEAR loop failed; falling back to SyncGE:', err.message);
+      }
+    }
+
+    // Single-hop SyncGE fallback: cheaper, deterministic, and still uses
+    // graph expansion when the full agent loop is unavailable.
     const hits = await rag.retrieve(ctx.userId, ctx.collection, args.query, k, {
       useHybrid: true, useGraph: true, graphOpenAI: ctx.openai || null,
     });
     return {
+      mode: 'syncge',
       hits: hits.map(h => ({
         source: h.source, title: h.title, score: h.score,
         snippet: (h.text || '').slice(0, 400),
