@@ -203,14 +203,28 @@ class UsageMonitorService {
 
       if (!user) throw new Error('User not found');
 
+      // Decimal/BigInt-safe coercion: Prisma surfaces money/usage
+      // columns as Decimal.js or BigInt depending on the driver, and
+      // either one throws "Cannot mix BigInt and other types" the
+      // moment it touches a plain Number 0. Funnel everything through
+      // Number() before arithmetic.
+      const asNumber = (v) => {
+        if (v == null) return 0;
+        if (typeof v === 'number') return v;
+        if (typeof v === 'bigint') return Number(v);
+        if (typeof v.toNumber === 'function') return v.toNumber();
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
+
       const usageByDay = {};
       user.apiUsages.forEach(usage => {
         const day = usage.timestamp.toISOString().split('T')[0];
         if (!usageByDay[day]) {
           usageByDay[day] = { tokens: 0, cost: 0, calls: 0 };
         }
-        usageByDay[day].tokens += usage.tokens;
-        usageByDay[day].cost += usage.cost;
+        usageByDay[day].tokens += asNumber(usage.tokens);
+        usageByDay[day].cost += asNumber(usage.cost);
         usageByDay[day].calls += 1;
       });
 
@@ -233,22 +247,29 @@ class UsageMonitorService {
   }
 
   calculateProjectedUsage(user) {
+    // user.apiUsage / user.monthlyLimit can be BigInt depending on the
+    // schema; coerce to plain Number before arithmetic so the math
+    // doesn't blow up with "Cannot mix BigInt and other types".
+    const apiUsage = Number(user.apiUsage || 0);
+    const monthlyLimit = Number(user.monthlyLimit || 0);
     const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
     const daysPassed = new Date().getDate();
-    const dailyAverage = user.apiUsage / daysPassed;
+    const dailyAverage = apiUsage / daysPassed;
     const projectedMonthly = dailyAverage * daysInMonth;
 
     return {
       projectedTotal: Math.round(projectedMonthly),
       dailyAverage: Math.round(dailyAverage),
-      willExceedLimit: projectedMonthly > user.monthlyLimit,
-      exceedBy: projectedMonthly > user.monthlyLimit ? Math.round(projectedMonthly - user.monthlyLimit) : 0
+      willExceedLimit: projectedMonthly > monthlyLimit,
+      exceedBy: projectedMonthly > monthlyLimit ? Math.round(projectedMonthly - monthlyLimit) : 0
     };
   }
 
   getUsageRecommendations(user) {
     const recommendations = [];
-    const usagePercentage = user.apiUsage / user.monthlyLimit;
+    const apiUsage = Number(user.apiUsage || 0);
+    const monthlyLimit = Number(user.monthlyLimit || 0);
+    const usagePercentage = monthlyLimit > 0 ? apiUsage / monthlyLimit : 0;
 
     if (usagePercentage > 0.8 && user.plan === 'FREE') {
       recommendations.push({

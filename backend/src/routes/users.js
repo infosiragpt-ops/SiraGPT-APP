@@ -171,14 +171,29 @@ router.get('/usage', authenticateToken, async (req, res) => {
       })
     ]);
 
+    // Prisma Decimal columns surface as Decimal.js / BigInt depending
+    // on the runtime; in either case adding them to a plain Number 0
+    // throws "Cannot mix BigInt and other types". Coerce every cost
+    // value through Number() before any arithmetic so the reduces
+    // stay in Number-space end-to-end.
+    const asNumber = (v) => {
+      if (v == null) return 0;
+      if (typeof v === 'number') return v;
+      if (typeof v === 'bigint') return Number(v);
+      // Decimal.js exposes .toNumber(); otherwise fall back to Number().
+      if (typeof v.toNumber === 'function') return v.toNumber();
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+
     // Group usage by day
     const usageByDay = apiUsage.reduce((acc, usage) => {
       const day = usage.timestamp.toISOString().slice(0, 10);
       if (!acc[day]) {
         acc[day] = { tokens: 0, cost: 0, calls: 0 };
       }
-      acc[day].tokens += Number(usage.tokens || 0);
-      acc[day].cost += usage.cost;
+      acc[day].tokens += asNumber(usage.tokens);
+      acc[day].cost += asNumber(usage.cost);
       acc[day].calls += 1;
       return acc;
     }, {});
@@ -188,16 +203,16 @@ router.get('/usage', authenticateToken, async (req, res) => {
       if (!acc[usage.model]) {
         acc[usage.model] = { tokens: 0, cost: 0, calls: 0 };
       }
-      acc[usage.model].tokens += Number(usage.tokens || 0);
-      acc[usage.model].cost += usage.cost;
+      acc[usage.model].tokens += asNumber(usage.tokens);
+      acc[usage.model].cost += asNumber(usage.cost);
       acc[usage.model].calls += 1;
       return acc;
     }, {});
 
     res.json({
       summary: {
-        totalTokens: apiUsage.reduce((sum, usage) => sum + Number(usage.tokens || 0), 0),
-        totalCost: totalCost._sum.cost || 0,
+        totalTokens: apiUsage.reduce((sum, usage) => sum + asNumber(usage.tokens), 0),
+        totalCost: asNumber(totalCost._sum.cost),
         totalCalls: apiUsage.length,
         messageCount,
         currentUsage,
