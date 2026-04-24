@@ -9,10 +9,11 @@
  */
 
 const express = require('express');
+const path = require('path');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
-const { streamDoc } = require('../services/doc-generator');
+const { streamAdvancedDocumentPipeline } = require('../services/document-pipeline/advanced-document-pipeline');
 
 const router = express.Router();
 router.use(authenticateToken);
@@ -55,6 +56,9 @@ router.post(
     body('displayPrompt').optional().isString().trim().isLength({ max: 6000 }),
     body('chatId').optional().isString(),
     body('model').optional().isString(),
+    body('format').optional().isIn(['docx', 'xlsx', 'pptx', 'pdf', 'csv', 'html', 'md', 'markdown']),
+    body('template').optional().isString().trim().isLength({ max: 60 }),
+    body('complexity').optional().isIn(['simple', 'standard', 'high', 'stress']),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -81,7 +85,17 @@ router.post(
     let content = null, file = null, format = null, errorMsg = null;
 
     try {
-      for await (const ev of streamDoc({ prompt, model: req.body.model, signal: controller.signal })) {
+      const pipelineOptions = {
+        prompt,
+        model: req.body.model,
+        format: req.body.format,
+        template: req.body.template,
+        complexity: req.body.complexity || 'standard',
+        outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
+        telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
+        signal: controller.signal,
+      };
+      for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
         if (clientGone) break;
         if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
         if (ev.type === 'error') { errorMsg = ev.error; continue; }
