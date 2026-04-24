@@ -26,8 +26,6 @@ interface Props {
 }
 
 export function EditorToolbar({ editor }: Props) {
-  if (!editor) return null
-
   // Small wrapper so the "is-active" state renders without copy-
   // pasting `editor.isActive(...)` on every button.
   const Btn = ({
@@ -56,6 +54,7 @@ export function EditorToolbar({ editor }: Props) {
   )
 
   const setLink = React.useCallback(() => {
+    if (!editor) return
     const prev = editor.getAttributes("link").href as string | undefined
     const url = window.prompt("URL", prev || "https://")
     if (url === null) return // cancelled
@@ -67,8 +66,11 @@ export function EditorToolbar({ editor }: Props) {
   }, [editor])
 
   const insertTable = React.useCallback(() => {
+    if (!editor) return
     editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
   }, [editor])
+
+  if (!editor) return null
 
   return (
     <div className="sticky top-0 z-10 flex flex-wrap items-center gap-0.5 border-b border-border/60 bg-background/95 backdrop-blur px-2 py-1.5">

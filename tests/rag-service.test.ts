@@ -7,7 +7,7 @@ const cjsRequire = createRequire(__filename)
 type Rag = {
   chunk: (text: string, opts?: { size?: number; overlap?: number }) => string[]
   cosine: (a: Float32Array | number[], b: Float32Array | number[]) => number
-  stats: (userId: string, collection: string) => { chunks: number; dim: number }
+  stats: (userId: string, collection: string) => Promise<{ chunks: number; dim: number }>
   EMBED_DIM: number
 }
 
@@ -83,8 +83,8 @@ describe("rag-service · cosine", () => {
 })
 
 describe("rag-service · stats", () => {
-  it("reports zero chunks for an empty collection", () => {
-    const s = rag.stats("user-unknown", "empty-collection")
+  it("reports zero chunks for an empty collection", async () => {
+    const s = await rag.stats("user-unknown", "empty-collection")
     assert.equal(s.chunks, 0)
     assert.equal(s.dim, rag.EMBED_DIM)
   })

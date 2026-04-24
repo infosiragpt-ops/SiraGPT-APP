@@ -36,36 +36,6 @@ const LATENCY_RANK = Object.freeze({ fast: 1, normal: 2, slow_ok: 3 });
  */
 const CATALOG = [
   {
-    id: "claude-opus-4.7", provider: "anthropic", family: "claude-4",
-    capabilities: { reasoning: 0.95, code: 0.93, tools: 0.95, vision: 0.92, long_context: 0.95 },
-    cost_tier: "high", latency_tier: "normal",
-    context_window: 1_000_000, max_output: 64_000,
-    supports_structured_outputs: true, supports_streaming: true,
-    supports_caching: true,
-    languages: ["en", "es", "fr", "de", "pt", "it", "ja", "zh", "ko"],
-    plans: ["PRO", "ENTERPRISE"],
-  },
-  {
-    id: "claude-sonnet-4.6", provider: "anthropic", family: "claude-4",
-    capabilities: { reasoning: 0.88, code: 0.9, tools: 0.92, vision: 0.9, long_context: 0.9 },
-    cost_tier: "medium", latency_tier: "fast",
-    context_window: 200_000, max_output: 32_000,
-    supports_structured_outputs: true, supports_streaming: true,
-    supports_caching: true,
-    languages: ["en", "es", "fr", "de", "pt", "it", "ja", "zh"],
-    plans: ["FREE", "PRO", "ENTERPRISE"],
-  },
-  {
-    id: "claude-haiku-4.5", provider: "anthropic", family: "claude-4",
-    capabilities: { reasoning: 0.78, code: 0.78, tools: 0.85, vision: 0.82, long_context: 0.85 },
-    cost_tier: "low", latency_tier: "fast",
-    context_window: 200_000, max_output: 16_000,
-    supports_structured_outputs: true, supports_streaming: true,
-    supports_caching: true,
-    languages: ["en", "es", "fr", "de", "pt", "it"],
-    plans: ["FREE", "PRO", "ENTERPRISE"],
-  },
-  {
     id: "gpt-5", provider: "openai", family: "gpt-5",
     capabilities: { reasoning: 0.96, code: 0.94, tools: 0.95, vision: 0.94, long_context: 0.92 },
     cost_tier: "high", latency_tier: "normal",

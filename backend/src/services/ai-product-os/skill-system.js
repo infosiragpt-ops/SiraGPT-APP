@@ -200,6 +200,26 @@ const SKILLS = [
     risk_level: "low",
   },
   {
+    id: "visual_artifact",
+    name: "Visual Artifact Builder",
+    description: "Genera SVG/HTML visuales renderizables con soberanía estricta de formato y validación de accesibilidad.",
+    intents: ["design_system"],
+    required_tools: ["design.tokens.build", "wcag.contrast.check", "create_document", "verify_artifact"],
+    required_agents: ["intent-compiler", "constraint-extractor", "planner", "design-director", "qa-regression", "release-manager", "telemetry"],
+    output_formats: ["svg", "html", "image"],
+    quality_rules: [
+      "format_sovereignty",
+      "svg_parseable",
+      "renderable_visual",
+      "wcag_aa_pass",
+      "preserve_user_intent",
+      "no_wrong_format",
+    ],
+    model_profile: { complexity: "medium", requires_tools: true, requires_vision: true, max_cost: "medium" },
+    min_plan: "FREE",
+    risk_level: "low",
+  },
+  {
     id: "image_prompt_engineer",
     name: "Image Prompt Engineer",
     description: "Convierte la idea del usuario en un prompt de imagen óptimo y dispara la generación.",
@@ -290,6 +310,7 @@ const SKILLS = [
 const SKILLS_BY_ID = Object.freeze(
   SKILLS.reduce((m, s) => { m[s.id] = s; return m; }, {})
 );
+const GENERIC_ARTIFACT_TOOLS = new Set(["create_document", "verify_artifact"]);
 
 function listSkills({ minPlan } = {}) {
   if (!minPlan) return SKILLS.map(s => deepClone(s));
@@ -347,27 +368,39 @@ function resolveSkillsForDecision(decision, { userPlan = "ENTERPRISE", maxSkills
     .map(skill => {
       let score = 0;
       const reasons = [];
+      let hasPrimaryFit = false;
+      let hasOutputFit = false;
 
       if (skill.intents.includes(decision.intent_primary)) {
         score += 12;
         reasons.push('primary_intent');
+        hasPrimaryFit = true;
       }
 
-      const overlap = skill.required_tools.filter(t => requestTools.has(t)).length;
-      if (overlap > 0) {
-        score += overlap * 3;
-        reasons.push(`tool_overlap:${overlap}`);
+      const significantOverlap = skill.required_tools
+        .filter(t => requestTools.has(t) && !GENERIC_ARTIFACT_TOOLS.has(t)).length;
+      if (significantOverlap > 0) {
+        score += significantOverlap * 3;
+        reasons.push(`tool_overlap:${significantOverlap}`);
       }
 
       if (matchesOutputFormat(skill, finalOutput)) {
         score += 4;
         reasons.push('output_format');
+        hasOutputFit = true;
       }
 
       const secondaryScore = scoreSecondaryFit(skill, secondary);
       if (secondaryScore > 0) {
         score += secondaryScore;
         reasons.push(`secondary_fit:${secondaryScore}`);
+      }
+
+      const genericOverlap = skill.required_tools
+        .filter(t => requestTools.has(t) && GENERIC_ARTIFACT_TOOLS.has(t)).length;
+      if (genericOverlap > 0 && (hasPrimaryFit || hasOutputFit || secondaryScore > 0)) {
+        score += genericOverlap;
+        reasons.push(`generic_artifact_tool_overlap:${genericOverlap}`);
       }
 
       return { skill, score, reasons };

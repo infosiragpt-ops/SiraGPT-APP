@@ -32,6 +32,7 @@ const {
   buildAgenticOperatingCore,
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
+const { buildSemanticIntentAnalysis } = require('../services/agents/semantic-intent-router');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -237,6 +238,98 @@ router.get('/models', async (req, res) => {
   } catch (error) {
     console.error('Get AI models error:', error);
     res.status(500).json({ error: 'Failed to fetch AI models' });
+  }
+});
+
+router.post('/intent/semantic', optionalAuth, async (req, res) => {
+  try {
+    const rawUserRequest = String(req.body?.prompt || req.body?.message || '').trim();
+    if (!rawUserRequest) {
+      return res.status(400).json({ ok: false, error: 'prompt is required' });
+    }
+
+    const analysis = buildSemanticIntentAnalysis({
+      rawUserRequest,
+      conversationHistory: Array.isArray(req.body?.conversationHistory) ? req.body.conversationHistory : [],
+      files: Array.isArray(req.body?.files) ? req.body.files : [],
+      userId: req.user?.id || null,
+      chatId: typeof req.body?.chatId === 'string' ? req.body.chatId : null,
+    });
+
+    return res.json({
+      ok: true,
+      intent: analysis.intent,
+      confidence: analysis.confidence,
+      needsClarification: analysis.needs_clarification,
+      finalOutput: analysis.final_output,
+      contract: {
+        version: analysis.contract.version,
+        pipeline: analysis.contract.pipeline,
+        primary_intent: analysis.contract.primary_intent,
+        secondary_intents: analysis.contract.secondary_intents,
+        artifact_required: analysis.contract.artifact_required,
+        artifact_type: analysis.contract.artifact_type,
+        required_extension: analysis.contract.required_extension,
+        mime_type: analysis.contract.mime_type,
+        required_tools: analysis.contract.required_tools,
+        grounding_required: analysis.contract.grounding_required,
+        citations_required: analysis.contract.citations_required,
+        ambiguity_score: analysis.contract.ambiguity_score,
+        risk_level: analysis.contract.risk_level,
+        validation_plan: analysis.contract.validation_plan,
+        multi_intent_dag: analysis.contract.multi_intent_dag,
+      },
+      executionGraph: {
+        graph_id: analysis.execution_graph.graph_id,
+        pipeline: analysis.execution_graph.pipeline,
+        node_count: analysis.routing.graph_node_count,
+        edge_count: analysis.routing.graph_edge_count,
+        validation_gate_count: analysis.routing.validation_gate_count,
+      },
+      structuredIntent: {
+        intent_primary: analysis.structured_intent.intent_primary,
+        intent_secondary: analysis.structured_intent.intent_secondary,
+        required_agents: analysis.structured_intent.required_agents,
+        required_tools: analysis.structured_intent.required_tools,
+        confidence: analysis.structured_intent.confidence,
+        needs_clarification: analysis.structured_intent.needs_clarification,
+        final_output: analysis.structured_intent.final_output,
+        skill_ids: analysis.structured_intent.skill_ids,
+      },
+      skillPlan: {
+        version: analysis.skill_plan.version,
+        primary_skill_id: analysis.skill_plan.primary_skill_id,
+        selected_skills: analysis.skill_plan.selected_skills,
+        required_agents: analysis.skill_plan.required_agents,
+        required_tools: analysis.skill_plan.required_tools,
+        output_formats: analysis.skill_plan.output_formats,
+        quality_rules: analysis.skill_plan.quality_rules,
+        release_policy: analysis.skill_plan.release_policy,
+      },
+      modelRouting: {
+        selected_model: analysis.model_routing.selection?.model?.id || null,
+        selected_provider: analysis.model_routing.selection?.model?.provider || null,
+        score: analysis.model_routing.selection?.score || 0,
+        alternatives: analysis.model_routing.selection?.alternatives || [],
+        request: analysis.model_routing.request,
+      },
+      productOsPlan: {
+        graph_id: analysis.product_os_plan.graph_id,
+        node_count: analysis.product_os_plan.nodes.length,
+        release_gate: analysis.product_os_plan.release_gate,
+        validation: analysis.product_os_plan_validation,
+      },
+      routing: analysis.routing,
+      qa: analysis.qa_board.summary,
+      traceId: analysis.trace_id,
+    });
+  } catch (error) {
+    console.error('[ai] semantic intent router failed:', error);
+    return res.status(500).json({
+      ok: false,
+      error: 'semantic_intent_router_failed',
+      detail: process.env.NODE_ENV === 'production' ? undefined : (error.message || String(error)),
+    });
   }
 });
 // ...existing imports...
@@ -665,6 +758,7 @@ router.post(
       let enterpriseToolRuntimePlan = null;
       let enterpriseQaBoardReview = null;
       let agenticOperatingCore = null;
+      let semanticIntentAnalysis = null;
       let enterpriseExecutionBlock = '';
       try {
         universalTaskContract = buildUniversalTaskContract({
@@ -694,11 +788,48 @@ router.post(
           toolRuntimePlan: enterpriseToolRuntimePlan,
           qaBoardReview: enterpriseQaBoardReview,
         });
+        semanticIntentAnalysis = buildSemanticIntentAnalysis({
+          rawUserRequest: prompt,
+          files: processedFiles,
+          userId: userId || null,
+          chatId: canPersist ? chatId : null,
+        });
+        const aiProductOsProfile = semanticIntentAnalysis ? {
+          structuredIntent: {
+            intent_primary: semanticIntentAnalysis.structured_intent.intent_primary,
+            intent_secondary: semanticIntentAnalysis.structured_intent.intent_secondary,
+            final_output: semanticIntentAnalysis.structured_intent.final_output,
+            confidence: semanticIntentAnalysis.structured_intent.confidence,
+            skill_ids: semanticIntentAnalysis.structured_intent.skill_ids,
+            required_agents: semanticIntentAnalysis.structured_intent.required_agents,
+            required_tools: semanticIntentAnalysis.structured_intent.required_tools,
+          },
+          modelRouter: {
+            selected_model: semanticIntentAnalysis.model_routing.selection?.model?.id || null,
+            provider: semanticIntentAnalysis.model_routing.selection?.model?.provider || null,
+            score: semanticIntentAnalysis.model_routing.selection?.score || 0,
+            request: semanticIntentAnalysis.model_routing.request,
+          },
+          skillPlan: {
+            primary_skill_id: semanticIntentAnalysis.skill_plan.primary_skill_id,
+            selected_skills: semanticIntentAnalysis.skill_plan.selected_skills.map(skill => skill.id),
+            output_formats: semanticIntentAnalysis.skill_plan.output_formats,
+            quality_rules: semanticIntentAnalysis.skill_plan.quality_rules,
+            release_policy: semanticIntentAnalysis.skill_plan.release_policy,
+          },
+          graphRuntime: {
+            graph_id: semanticIntentAnalysis.product_os_plan.graph_id,
+            node_count: semanticIntentAnalysis.product_os_plan.nodes.length,
+            validation_ok: semanticIntentAnalysis.product_os_plan_validation.ok,
+            release_gate: semanticIntentAnalysis.product_os_plan.release_gate,
+          },
+        } : null;
         enterpriseRuntimeProfile = {
           ...buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph),
           agenticOperatingCore: agenticOperatingCore.summary,
           toolRuntime: enterpriseToolRuntimePlan.summary,
           qaPreflight: enterpriseQaBoardReview.summary,
+          aiProductOs: aiProductOsProfile,
         };
         enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\n${buildAgenticOperatingPrompt(agenticOperatingCore)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}`;
       } catch (contractErr) {

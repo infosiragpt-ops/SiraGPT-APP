@@ -66,6 +66,17 @@ test('research plus multiple deliverables creates a MultiIntent DAG', () => {
   assert.ok(contract.multi_intent_dag.edges.some((edge) => edge.from === 'research_1'));
 });
 
+test('web product requests compile to the code pipeline before UI routing', () => {
+  const contract = buildUniversalTaskContract({
+    rawUserRequest: 'crea una web de una empresa de carros',
+  });
+
+  assert.equal(contract.pipeline, 'CodePipeline');
+  assert.equal(contract.primary_intent, 'code_generation');
+  assert.equal(contract.required_extension, '.html');
+  assert.ok(contract.required_tools.includes('run_tests'));
+});
+
 test('legacy TaskContract adapter cannot override UniversalTaskContract format sovereignty', () => {
   const universal = buildUniversalTaskContract({ rawUserRequest: 'Créame un SVG de una casa' });
   const wrongLegacy = {

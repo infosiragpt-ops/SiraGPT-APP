@@ -559,6 +559,9 @@ function inferExplicitExtension(raw) {
 
 function inferCodeExtension(raw) {
   const n = normalize(raw);
+  if (/\b(web|website|pagina web|sitio web|landing|web app|saas|ecommerce|e-commerce|tienda online)\b/.test(n)) {
+    return { ext: '.html', mime: 'text/html' };
+  }
   for (const [keyword, [ext, mime]] of Object.entries(CODE_EXTENSIONS)) {
     if (new RegExp(`\\b${keyword}\\b`, 'i').test(n)) return { ext, mime };
   }
@@ -617,6 +620,10 @@ function inferIntentAndPipeline({ raw, fileIds = [] }) {
   const editImage = matchAny(raw, [/\b(edita|editar|modifica|retoca|inpaint|pincel|mascara|mask)\b/i]) && matchAny(raw, [/\b(imagen|foto|png|jpg|jpeg|webp)\b/i]);
   const image = !editImage && matchAny(raw, [/\b(genera una imagen|crear imagen|imagen de|foto de|png|jpg|jpeg|webp)\b/i]);
   const code = matchAny(raw, [/\b(codigo|código|programa|script|funcion|función|api|backend|frontend|react|next\.?js|python|javascript|typescript|debug|bug|test|lint|build)\b/i]);
+  const webBuild = matchAny(raw, [
+    /\b(crea|crear|creame|créame|haz|hazme|genera|generar|desarrolla|programa|construye|implementa|diseña|disena)\b.*\b(web|website|pagina web|página web|sitio web|landing|web app|frontend|react|next\.?js|saas|ecommerce|e-commerce|tienda online)\b/i,
+    /\b(web|website|pagina web|página web|sitio web|landing|web app|frontend|react|next\.?js|saas|ecommerce|e-commerce|tienda online)\b.*\b(crea|crear|haz|hazme|genera|generar|desarrolla|programa|construye|implementa|diseña|disena)\b/i,
+  ]);
   const summarize = matchAny(raw, [/\b(resume|resumen|resumir|sintetiza|summarize)\b/i]);
   const translate = matchAny(raw, [/\b(traduce|traducir|translate)\b/i]);
   const privateFile = hasFiles || matchAny(raw, [/\b(este archivo|este documento|adjunto|cargado|pdf|docx|xlsx|pptx|segun mis archivos|según mis archivos)\b/i]);
@@ -629,6 +636,7 @@ function inferIntentAndPipeline({ raw, fileIds = [] }) {
   if (explicitExt === '.html' || explicitExt === '.md' || explicitExt === '.json') return { primary_intent: code ? 'code_generation' : 'document_generation', pipeline: code ? 'CodePipeline' : 'DocumentPipeline' };
   if (editImage) return { primary_intent: 'image_editing', pipeline: 'ImagePipeline' };
   if (image) return { primary_intent: 'image_generation', pipeline: 'ImagePipeline' };
+  if (webBuild) return { primary_intent: 'code_generation', pipeline: 'CodePipeline' };
   if (privateFile && (summarize || includesAny(n, ['analiza', 'extrae', 'segun', 'según', 'dame']))) return { primary_intent: summarize ? 'summarization' : 'document_understanding', pipeline: 'RAGDocumentUnderstandingPipeline' };
   if (research) return { primary_intent: 'research_grounding', pipeline: 'ResearchGroundingPipeline' };
   if (action) return { primary_intent: 'external_action', pipeline: 'ActionExecutionPipeline' };

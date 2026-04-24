@@ -59,11 +59,9 @@ export default async function RootLayout({
         // Mirror Geist's native variables onto our app-wide alias so
         // globals.css + Tailwind can reference a single --font-sans /
         // --font-mono regardless of which typeface is active.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ["--font-sans" as any]: "var(--font-geist-sans)",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ["--font-mono" as any]: "var(--font-geist-mono)",
-      }}
+        "--font-sans": "var(--font-geist-sans)",
+        "--font-mono": "var(--font-geist-mono)",
+      } as React.CSSProperties}
     >
       <head>
         {/* Fallback CDN if local CSS fails */}

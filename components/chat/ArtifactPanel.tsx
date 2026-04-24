@@ -35,10 +35,7 @@ function toFullDocument(code: string, language: string): string {
 export function ArtifactPanel() {
   const { active, close, setView } = useArtifactPanel()
   const [generation, setGeneration] = useState(0)
-
-  if (!active) return null
-
-  const { code, language, title, view } = active
+  const { code = "", language = "", title = "", view = "preview" } = active || {}
   const lang = (language || "").toLowerCase()
   const isMermaid = lang === "mermaid"
 
@@ -46,6 +43,8 @@ export function ArtifactPanel() {
     if (isMermaid) return ""
     return toFullDocument(code, lang)
   }, [code, lang, isMermaid])
+
+  if (!active) return null
 
   const fileName = sanitizeFilename(title || "artefacto") + (isMermaid ? ".svg" : ".html")
 

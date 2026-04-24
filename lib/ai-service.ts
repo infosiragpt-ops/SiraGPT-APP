@@ -44,6 +44,25 @@ export const VALID_CHAT_INTENTS: ChatIntent[] = [
   'text',
 ]
 
+interface SemanticIntentResponse {
+  ok?: boolean
+  intent?: ChatIntent
+  confidence?: number
+  needsClarification?: boolean
+  finalOutput?: string
+  contract?: {
+    pipeline?: string
+    required_extension?: string | null
+    required_tools?: string[]
+    ambiguity_score?: number
+  }
+  routing?: {
+    source?: string
+    required_tools?: string[]
+    release_decision?: string
+  }
+}
+
 export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, string>> = {
   math: [
     'Render all formulas with LaTeX using $...$ inline and $$...$$ display blocks.',
@@ -196,11 +215,62 @@ export class AIService {
     return classifyIntentFastPath(prompt) || 'text'
   }
 
+  private async classifyIntentViaSemanticRouter(
+    prompt: string,
+    conversationHistory: any[] = [],
+    signal?: AbortSignal
+  ): Promise<ChatIntent | null> {
+    if (typeof window === 'undefined') return null
+    if (!prompt?.trim()) return 'text'
+
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort('semantic-router-timeout'), 1200)
+    const forwardAbort = () => controller.abort(signal?.reason || 'caller-aborted')
+    signal?.addEventListener('abort', forwardAbort, { once: true })
+
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/ai/intent/semantic`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            conversationHistory: Array.isArray(conversationHistory) ? conversationHistory.slice(-8) : [],
+          }),
+          signal: controller.signal,
+        }
+      )
+
+      if (!response.ok) return null
+      const data = await response.json() as SemanticIntentResponse
+      if (
+        data?.ok
+        && data.intent
+        && VALID_CHAT_INTENTS.includes(data.intent)
+        && typeof data.confidence === 'number'
+        && data.confidence >= 0.55
+      ) {
+        return data.intent
+      }
+      return null
+    } catch (error: any) {
+      if (signal?.aborted) throw error
+      return null
+    } finally {
+      window.clearTimeout(timeout)
+      signal?.removeEventListener('abort', forwardAbort)
+    }
+  }
+
   async classifyIntent(
     prompt: string,
     conversationHistory: any[] = [],
     signal?: AbortSignal
   ): Promise<ChatIntent> {
+
+    const semanticIntent = await this.classifyIntentViaSemanticRouter(prompt, conversationHistory, signal);
+    if (semanticIntent) return semanticIntent;
 
     const deterministicIntent = classifyIntentFastPath(prompt);
     if (deterministicIntent) return deterministicIntent;

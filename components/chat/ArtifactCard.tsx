@@ -79,6 +79,17 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
   const artifactTitle = title || deriveTitle(code) || (isMermaid ? "Diagrama" : "Artefacto")
   const fileName = useMemo(() => sanitizeFilename(artifactTitle) + (isMermaid ? ".svg" : ".html"), [artifactTitle, isMermaid])
 
+  // Build the srcDoc once per code change. If the model emitted a
+  // raw fragment we wrap it in a minimal HTML shell; full documents
+  // with <!DOCTYPE or <html> pass through untouched. useMemo keeps
+  // the iframe key stable across re-renders that don't change code.
+  const sanitizedSrcDoc = useMemo(() => {
+    const trimmed = (code || "").trim()
+    if (lang === "svg") return toFullDocument(trimmed, "svg")
+    if (trimmed.startsWith("<!DOCTYPE") || /^<html[\s>]/i.test(trimmed)) return trimmed
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0">${trimmed}</body></html>`
+  }, [code, lang])
+
   // ── Safety guard ───────────────────────────────────────────
   // If the block is too short or doesn't look like a self-contained
   // artifact (e.g. a partial fragment arrived via streaming before
@@ -99,17 +110,6 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
       return <InlineSource code={code || ""} language={lang || "markup"} />
     }
   }
-
-  // Build the srcDoc once per code change. If the model emitted a
-  // raw fragment we wrap it in a minimal HTML shell; full documents
-  // with <!DOCTYPE or <html> pass through untouched. useMemo keeps
-  // the iframe key stable across re-renders that don't change code.
-  const sanitizedSrcDoc = useMemo(() => {
-    const trimmed = (code || "").trim()
-    if (lang === "svg") return toFullDocument(trimmed, "svg")
-    if (trimmed.startsWith("<!DOCTYPE") || /^<html[\s>]/i.test(trimmed)) return trimmed
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0">${trimmed}</body></html>`
-  }, [code, lang])
 
   // ── Reset / reload ─────────────────────────────────────────
   const onReset = () => setGeneration((g) => g + 1)

@@ -520,8 +520,26 @@ router.post(
         // regex tier. Caller can pass `preferRegex: true` to lock that
         // explicitly.
       });
-      const { plan, validation } = planner.buildAndValidate(decision);
-      ok(res, { decision, plan, validation });
+      const skillPlan = skillSystem.buildSkillExecutionPlan(decision, { userPlan: "ENTERPRISE" });
+      const enrichedDecision = skillSystem.mergeDecisionWithSkillPlan(decision, skillPlan);
+      const modelRequest = {
+        ...modelRouter.reqFromDecision(enrichedDecision, {
+          max_cost: skillPlan.model_profile.max_cost || "medium",
+          latency: skillPlan.model_profile.latency || "normal",
+          language: "es",
+          user_plan: "ENTERPRISE",
+        }),
+        complexity: skillPlan.model_profile.complexity || "medium",
+        requires_reasoning: Boolean(skillPlan.model_profile.requires_reasoning || enrichedDecision.intent_primary !== "small_talk"),
+        requires_tools: Boolean(skillPlan.model_profile.requires_tools || enrichedDecision.required_tools.length > 0),
+        requires_long_context: Boolean(skillPlan.model_profile.requires_long_context),
+        requires_vision: Boolean(skillPlan.model_profile.requires_vision),
+        requires_code: Boolean(skillPlan.model_profile.requires_code),
+        requires_structured_outputs: true,
+      };
+      const modelRouting = modelRouter.select(modelRequest);
+      const { plan, validation } = planner.buildAndValidate(enrichedDecision);
+      ok(res, { decision: enrichedDecision, skillPlan, modelRouting, plan, validation });
     } catch (err) {
       fail(res, 500, err.message || "intent route failed");
     }
