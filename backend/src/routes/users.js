@@ -145,6 +145,8 @@ router.get('/usage', authenticateToken, async (req, res) => {
     const { period = '30' } = req.query;
     const days = parseInt(period);
     const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const currentUsage = Number(req.user.apiUsage || 0);
+    const monthlyLimit = Number(req.user.monthlyLimit || 0);
 
     const [apiUsage, totalCost, messageCount] = await Promise.all([
       prisma.apiUsage.findMany({
@@ -175,7 +177,7 @@ router.get('/usage', authenticateToken, async (req, res) => {
       if (!acc[day]) {
         acc[day] = { tokens: 0, cost: 0, calls: 0 };
       }
-      acc[day].tokens += usage.tokens;
+      acc[day].tokens += Number(usage.tokens || 0);
       acc[day].cost += usage.cost;
       acc[day].calls += 1;
       return acc;
@@ -186,7 +188,7 @@ router.get('/usage', authenticateToken, async (req, res) => {
       if (!acc[usage.model]) {
         acc[usage.model] = { tokens: 0, cost: 0, calls: 0 };
       }
-      acc[usage.model].tokens += usage.tokens;
+      acc[usage.model].tokens += Number(usage.tokens || 0);
       acc[usage.model].cost += usage.cost;
       acc[usage.model].calls += 1;
       return acc;
@@ -194,13 +196,13 @@ router.get('/usage', authenticateToken, async (req, res) => {
 
     res.json({
       summary: {
-        totalTokens: apiUsage.reduce((sum, usage) => sum + usage.tokens, 0),
+        totalTokens: apiUsage.reduce((sum, usage) => sum + Number(usage.tokens || 0), 0),
         totalCost: totalCost._sum.cost || 0,
         totalCalls: apiUsage.length,
         messageCount,
-        currentUsage: req.user.apiUsage,
-        monthlyLimit: req.user.monthlyLimit,
-        usagePercentage: (req.user.apiUsage / req.user.monthlyLimit) * 100
+        currentUsage,
+        monthlyLimit,
+        usagePercentage: monthlyLimit > 0 ? (currentUsage / monthlyLimit) * 100 : 0
       },
       usageByDay,
       usageByModel,

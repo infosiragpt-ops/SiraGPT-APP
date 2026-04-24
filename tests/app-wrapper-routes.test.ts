@@ -16,6 +16,10 @@ describe("needsChatContext", () => {
     assert.equal(needsChatContext("/thesis"), true)
   })
 
+  it("enables chat context on document editor routes", () => {
+    assert.equal(needsChatContext("/documents/editor"), true)
+  })
+
   it("disables chat context on the landing page", () => {
     assert.equal(needsChatContext("/"), false)
   })
