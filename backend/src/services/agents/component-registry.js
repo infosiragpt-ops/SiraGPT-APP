@@ -37,6 +37,7 @@ const COMPONENTS = [
       "runs a full task end-to-end with tool calls",
       "emits structured step events consumable by the UI",
       "compiles contract + graph + tool runtime + QA into an enterprise operating envelope — IMPLEMENTED",
+      "AI Product Studio Blueprint compiles domain playbooks, evidence gates, production controls and release contracts — IMPLEMENTED",
     ],
     risk_level: "low",
   },
@@ -275,6 +276,7 @@ const COMPONENTS = [
     acceptance_criteria: [
       "OTEL-compatible span factory — IMPLEMENTED",
       "Agentic Operating Core declares trace id, critical events and metrics per task — IMPLEMENTED",
+      "AI Product Studio Blueprint binds trace/replay/redaction policy to every active playbook — IMPLEMENTED",
       "OTEL-compatible span emission",
       "cost + token accounting per tool call",
       "trace-id propagation through child tasks",

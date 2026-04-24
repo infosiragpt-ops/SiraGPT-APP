@@ -182,6 +182,17 @@ function buildAgenticOperatingCore({
   const observability = buildObservabilityPlan({ graph, traceId, domains });
   const regression = buildRegressionPlan({ contract, domains });
   const riskRegister = buildRiskRegister({ contract, graph, toolRuntimePlan, qaBoardReview, domains });
+  const productStudio = buildProductStudioBlueprint({
+    contract,
+    graph,
+    domains,
+    toolGovernance,
+    validation,
+    selfRepair,
+    release,
+    observability,
+    regression,
+  });
 
   const core = {
     version: OPERATING_CORE_VERSION,
@@ -211,6 +222,7 @@ function buildAgenticOperatingCore({
     release,
     observability,
     regression,
+    product_studio: productStudio,
     risk_register: riskRegister,
     component_inventory: summarizeComponentRegistry(componentRegistry, domains),
     summary: {
@@ -480,6 +492,294 @@ function buildRiskRegister({ contract, graph, toolRuntimePlan, qaBoardReview, do
   return risks;
 }
 
+function buildProductStudioBlueprint({
+  contract,
+  graph,
+  domains,
+  toolGovernance,
+  validation,
+  selfRepair,
+  release,
+  observability,
+  regression,
+}) {
+  const activePlaybooks = domains.map((domain) => buildDomainPlaybook({ domain, contract, graph }));
+  const reportSet = new Set(validation.reports_required || []);
+  for (const playbook of activePlaybooks) {
+    for (const report of playbook.required_reports || []) reportSet.add(report);
+  }
+
+  return {
+    version: 'ai-product-studio-blueprint-2026-04',
+    mission: 'Plan, execute, validate, audit, repair and release digital products strictly from the UniversalTaskContract.',
+    execution_model: {
+      contract_first: true,
+      dag_runtime: true,
+      durable_execution: true,
+      idempotency_key: graph.idempotency_key || null,
+      checkpoint_policy: graph.durable_execution?.checkpoint_policy || null,
+      resume_strategy: graph.durable_execution?.resume_strategy || null,
+      replay_policy: graph.durable_execution?.replay_policy || null,
+      release_gate: graph.gates?.release_gate || [],
+    },
+    operating_layers: [
+      'Agentic Operating Core',
+      'Workflow Orchestrator',
+      'Tool Runtime',
+      'Validation Fabric',
+      'Security Governance Layer',
+      'Observability Plane',
+      'Human-in-the-Loop Control Center',
+    ],
+    active_playbooks: activePlaybooks,
+    tool_runtime_contract: {
+      gateway_version: toolGovernance.catalog_version,
+      declared_tools_only: true,
+      registered_tool_count: toolGovernance.registered_tool_count,
+      authorized_tools: toolGovernance.authorized_tools,
+      blocked_tools: toolGovernance.blockers,
+      side_effect_summary: toolGovernance.side_effect_summary,
+      manifest_requirements: [
+        'JSON Schema inputs and outputs',
+        'permissions and OAuth/OIDC scopes',
+        'preconditions and postconditions',
+        'expected errors and recovery policy',
+        'side_effect_level and requires_confirmation',
+        'sandbox_required and audit_policy',
+      ],
+    },
+    evidence_contract: buildEvidenceContract({ contract, activePlaybooks, reportSet }),
+    quality_system: {
+      reports_required: Array.from(reportSet),
+      deterministic_checks: validation.deterministic_checks,
+      minimum_release_rule: 'ReleaseController can approve only when all required reports exist and no blocker remains.',
+      self_repair: {
+        required: selfRepair.required,
+        max_attempts: selfRepair.max_attempts,
+        failure_report_schema: selfRepair.failure_report_schema,
+        tests_reexecuted_required: true,
+      },
+      regression: regression.generated_acceptance_tests,
+    },
+    production_controls: {
+      clean_architecture_required: activePlaybooks.some((p) => p.id === 'software-engineering-pipeline' || p.id === 'full-stack-web-builder'),
+      read_only_database_default: activePlaybooks.some((p) => p.id === 'database-connector-layer'),
+      compliant_web_collection_only: activePlaybooks.some((p) => p.id === 'web-automation-scraping-layer'),
+      source_grounding_required: release.block_on_unverified_sources,
+      human_confirmation_required: release.requires_human_confirmation,
+      no_destructive_git_without_confirmation: true,
+      no_secret_or_sensitive_data_logging: true,
+      no_false_success_claims: true,
+    },
+    observability_contract: {
+      trace_id: observability.trace_id,
+      events: observability.events,
+      metrics: observability.metrics,
+      replayable: true,
+      pii_redaction_required: true,
+    },
+    release_contract: {
+      release_controller_required: release.release_controller_required,
+      block_on_failed_validation: release.block_on_failed_validation,
+      block_on_format_mismatch: release.block_on_format_mismatch,
+      block_on_unverified_sources: release.block_on_unverified_sources,
+      requires_human_confirmation: release.requires_human_confirmation,
+      final_delivery_rules: release.final_delivery_rules,
+    },
+  };
+}
+
+function buildDomainPlaybook({ domain, contract, graph }) {
+  const base = {
+    id: domain.id,
+    layer: domain.layer,
+    purpose: domain.purpose,
+    node_ids: domain.node_ids || [],
+    required_reports: domain.requiredReports || ['ValidationReport'],
+    acceptance_gates: domain.acceptanceGates || [],
+    veto_blockers: domain.blockers || [],
+    graph_tools: toolsForDomain(domain, graph),
+  };
+
+  const playbook = DOMAIN_PLAYBOOKS[domain.id];
+  if (!playbook) {
+    return {
+      ...base,
+      agents: ['PlannerAgent', 'ArtifactBuilder', 'SemanticReviewer', 'ReleaseController'],
+      deliverables: ['validated_capability_output'],
+      evidence_required: ['execution_trace', 'validation_report', 'release_decision'],
+      validation_checks: ['contract_alignment', 'no_false_success_claim'],
+      rollback_strategy: 'discard output, replay from checkpoint and rerun validation',
+    };
+  }
+
+  const contextualChecks = [];
+  if (contract.required_extension) contextualChecks.push(`format:${contract.required_extension}`);
+  if (contract.grounding_required || contract.source_requirements?.required) contextualChecks.push('evidence_ledger_present');
+
+  return {
+    ...base,
+    ...playbook,
+    validation_checks: Array.from(new Set([...(playbook.validation_checks || []), ...contextualChecks])),
+  };
+}
+
+const DOMAIN_PLAYBOOKS = Object.freeze({
+  'agentic-operating-core': {
+    agents: ['IntentAnalyst', 'ConstraintExtractor', 'AmbiguityJudge', 'PlannerAgent', 'ReleaseController'],
+    deliverables: ['UniversalTaskContract', 'ExecutionGraph', 'release_policy'],
+    evidence_required: ['contract_schema_validation', 'ambiguity_score', 'format_sovereignty_decision'],
+    validation_checks: ['contract_validated', 'ambiguity_resolved_or_asked_once', 'format_sovereignty_enforced'],
+    rollback_strategy: 'rebuild contract from raw request and block downstream nodes until schema validates',
+  },
+  'workflow-orchestrator': {
+    agents: ['WorkflowOrchestrator', 'PlannerAgent', 'RetryCoordinator', 'CheckpointManager'],
+    deliverables: ['durable_execution_graph', 'checkpoint_ledger', 'resume_plan'],
+    evidence_required: ['dag_acyclic_check', 'node_dependency_map', 'checkpoint_policy', 'idempotency_key'],
+    validation_checks: ['dag_is_acyclic', 'all_dependencies_declared', 'checkpoint_policy_present'],
+    rollback_strategy: 'resume from last succeeded checkpoint; write/external nodes require approval before replay',
+  },
+  'tool-runtime': {
+    agents: ['ToolRouter', 'MCPGateway', 'PermissionGuard', 'AuditLogger'],
+    deliverables: ['authorized_tool_manifest_set', 'tool_audit_policy'],
+    evidence_required: ['manifest_validation', 'permission_scope_check', 'side_effect_summary'],
+    validation_checks: ['tool_declared', 'permission_scope_checked', 'side_effect_policy_applied'],
+    rollback_strategy: 'block undeclared tool and re-plan with an authorized manifest',
+  },
+  'code-execution-sandbox': {
+    agents: ['SandboxRunner', 'TimeoutGuard', 'TestRunner', 'SecurityScanner'],
+    deliverables: ['sandbox_execution_result', 'test_output', 'security_scan_summary'],
+    evidence_required: ['isolated_runtime', 'timeout_policy', 'stripped_environment', 'test_log'],
+    validation_checks: ['sandbox_required', 'timeout_policy_present', 'tests_executed', 'secrets_absent'],
+    rollback_strategy: 'kill sandbox process, discard temp directory and replay from clean workspace',
+  },
+  'software-engineering-pipeline': {
+    agents: [
+      'ProjectScaffolder',
+      'ArchitecturePlanner',
+      'CodeGenerator',
+      'ASTAnalyzer',
+      'DependencyResolver',
+      'TestGenerator',
+      'BuildRunner',
+      'SecurityScanner',
+      'RefactorAgent',
+      'CodeReviewer',
+      'GitAgent',
+      'DeploymentAgent',
+    ],
+    deliverables: ['project_file_tree', 'architecture_notes', 'tests', 'build_log', 'security_report', 'code_review'],
+    evidence_required: ['diff_scope', 'lint_or_typecheck_log', 'unit_or_integration_test_log', 'build_log', 'secret_scan_result'],
+    validation_checks: ['architecture_plan_present', 'tests_or_build_executed', 'secret_scan_executed', 'release_diff_scoped'],
+    rollback_strategy: 'do not revert user work; repair only owned files and preserve unrelated dirty changes',
+  },
+  'full-stack-web-builder': {
+    agents: ['ProductArchitect', 'FrontendBuilder', 'BackendBuilder', 'A11yReviewer', 'SeoReviewer', 'PerformanceReviewer'],
+    deliverables: ['web_app_artifact', 'api_contracts', 'responsive_layout_report', 'seo_metadata', 'e2e_test_log'],
+    evidence_required: ['route_manifest', 'form_validation_policy', 'wcag_review', 'core_web_vitals_budget', 'cross_browser_plan'],
+    validation_checks: ['responsive_breakpoints_checked', 'seo_metadata_present', 'wcag_gate_present', 'build_executed'],
+    rollback_strategy: 'rollback generated web artifact to last passing build and rerun app route checks',
+  },
+  'database-connector-layer': {
+    agents: ['DatabaseIntrospector', 'SqlSafetyGuard', 'QueryPlanner', 'DataGovernanceReviewer'],
+    deliverables: ['schema_introspection', 'parameterized_query_plan', 'query_audit', 'data_masking_policy'],
+    evidence_required: ['read_only_default', 'prepared_statement_plan', 'query_budget', 'explain_plan_when_available'],
+    validation_checks: ['prepared_statements_only', 'read_only_default', 'writes_require_confirmation', 'sql_injection_scan'],
+    rollback_strategy: 'reject mutations by default; require explicit confirmation and transaction rollback reference for writes',
+  },
+  'web-automation-scraping-layer': {
+    agents: ['CrawlerPlanner', 'RobotsPolicyGuard', 'PlaywrightExtractor', 'DataNormalizer', 'ComplianceReviewer'],
+    deliverables: ['crawl_plan', 'dom_snapshot_policy', 'structured_extracts', 'provenance_ledger'],
+    evidence_required: ['robots_txt_result', 'rate_limit_policy', 'transparent_user_agent', 'canonical_url_map', 'html_snapshot_reference'],
+    validation_checks: ['robots_txt_respected', 'rate_limit_present', 'no_captcha_paywall_bypass', 'provenance_recorded'],
+    rollback_strategy: 'stop crawler on policy denial, persist FailureReport and do not bypass site controls',
+  },
+  'document-intelligence-engine': {
+    agents: ['DocumentParser', 'OcrPolicyAgent', 'TableExtractor', 'ChunkingAgent', 'CitationGrounder'],
+    deliverables: ['layout_chunks', 'table_index', 'figure_index', 'evidence_ledger', 'document_summary'],
+    evidence_required: ['file_ownership_check', 'page_or_section_provenance', 'chunk_strategy', 'table_extraction_report'],
+    validation_checks: ['file_ownership_verified', 'layout_or_structural_chunks', 'evidence_ledger_present'],
+    rollback_strategy: 're-parse with safer mode, preserve original file reference and label unsupported sections',
+  },
+  'research-market-intelligence-engine': {
+    agents: ['SourceVerifier', 'ResearchSynthesizer', 'MarketAnalyst', 'CitationReviewer', 'GapDetector'],
+    deliverables: ['verified_sources', 'evidence_ledger', 'market_findings', 'citation_report', 'gap_report'],
+    evidence_required: ['source_url_or_doi', 'retrieval_timestamp', 'relevance_reason', 'source_gap_label'],
+    validation_checks: ['real_sources_verified', 'source_gaps_labeled', 'citation_rules_applied', 'no_fabricated_doi'],
+    rollback_strategy: 'remove unverifiable sources, rerun provider search and disclose gaps if coverage is insufficient',
+  },
+  'business-intelligence-studio': {
+    agents: ['SemanticModeler', 'KpiDesigner', 'DashboardPlanner', 'ScenarioAnalyst', 'BIValidator'],
+    deliverables: ['star_schema', 'fact_dimension_map', 'kpi_dictionary', 'dashboard_spec', 'export_plan'],
+    evidence_required: ['metric_formula', 'data_source_map', 'dashboard_validation_report', 'export_validation'],
+    validation_checks: ['facts_dimensions_defined', 'kpis_have_formula', 'dataset_validated', 'exports_validated'],
+    rollback_strategy: 'drop invalid measures, revalidate semantic model and block export until formulas resolve',
+  },
+  'design-intelligence-layer': {
+    agents: ['BrandSystemDesigner', 'TokenGenerator', 'ComponentDesigner', 'A11yDesignReviewer', 'VisualQA'],
+    deliverables: ['design_tokens', 'component_specs', 'visual_hierarchy_report', 'contrast_report'],
+    evidence_required: ['contrast_pairs', 'spacing_scale', 'responsive_breakpoints', 'component_state_matrix'],
+    validation_checks: ['contrast_reviewed', 'visual_hierarchy_checked', 'responsive_breakpoints_checked'],
+    rollback_strategy: 'adjust token palette/layout density and rerun contrast plus responsive checks',
+  },
+  'security-governance-layer': {
+    agents: ['SecurityReviewer', 'AsvsEvaluator', 'SecretScanner', 'PolicyGuard', 'AuditReviewer'],
+    deliverables: ['SecurityReport', 'asvs_control_map', 'secret_scan_result', 'permission_audit'],
+    evidence_required: ['owasp_asvs_hooks', 'secret_scan_log', 'input_validation_policy', 'path_traversal_policy'],
+    validation_checks: ['owasp_asvs_hooks_present', 'secret_scan_executed', 'input_validation_declared'],
+    rollback_strategy: 'block release on critical findings and repair before retrying validation',
+  },
+  'validation-fabric': {
+    agents: ['ValidationFabric', 'FormatValidator', 'SemanticReviewer', 'FactualityReviewer', 'ReleaseController'],
+    deliverables: ['ValidationReport', 'SecurityReport', 'FactualityReport', 'DesignReview', 'CodeReview', 'PerformanceReport'],
+    evidence_required: ['deterministic_check_results', 'scoreless_pass_fail_gates', 'release_decision'],
+    validation_checks: ['release_decision_present', 'failed_gate_blocks_release', 'repair_plan_exists'],
+    rollback_strategy: 'produce FailureReport, trigger RepairAgent and rerun failed gates only',
+  },
+  'observability-plane': {
+    agents: ['TelemetryAgent', 'TracePropagator', 'CostMeter', 'ReplayRecorder'],
+    deliverables: ['otel_trace', 'metrics_snapshot', 'audit_events', 'replay_metadata'],
+    evidence_required: ['trace_id', 'node_span_map', 'cost_latency_metrics', 'redaction_policy'],
+    validation_checks: ['trace_id_present', 'critical_events_declared', 'cost_latency_budget_recorded'],
+    rollback_strategy: 'keep audit events immutable and replay from checkpoint with same idempotency key',
+  },
+  'human-in-the-loop-control-center': {
+    agents: ['ApprovalCoordinator', 'RiskExplainer', 'ReleaseController'],
+    deliverables: ['approval_request', 'confirmation_state', 'side_effect_hold'],
+    evidence_required: ['action_target', 'risk_mechanism', 'rollback_summary', 'explicit_approval_token'],
+    validation_checks: ['confirmation_required_for_side_effects', 'approval_state_recorded', 'one_question_clarification'],
+    rollback_strategy: 'pause before side effect; reject or timeout without mutating external systems',
+  },
+});
+
+function toolsForDomain(domain, graph) {
+  const nodeIds = new Set(domain.node_ids || []);
+  const tools = new Set();
+  for (const node of graph.nodes || []) {
+    if (!nodeIds.has(node.id)) continue;
+    for (const tool of node.tools || []) tools.add(tool);
+  }
+  return Array.from(tools);
+}
+
+function buildEvidenceContract({ contract, activePlaybooks, reportSet }) {
+  const evidence = new Set(['execution_trace', 'release_decision']);
+  for (const playbook of activePlaybooks) {
+    for (const item of playbook.evidence_required || []) evidence.add(item);
+  }
+  if (contract.required_extension) evidence.add(`artifact_integrity:${contract.required_extension}`);
+  if (contract.grounding_required || contract.source_requirements?.required) evidence.add('source_evidence_ledger');
+  if (reportSet.has('CodeReview')) evidence.add('code_review_or_build_log');
+  if (reportSet.has('SecurityReport')) evidence.add('security_report');
+  if (reportSet.has('DesignReview')) evidence.add('design_review');
+  return {
+    required_evidence: Array.from(evidence),
+    provenance_required: Boolean(contract.grounding_required || contract.source_requirements?.required),
+    artifact_validation_required: Boolean(contract.artifact_required || contract.required_extension),
+    no_unverifiable_claims: true,
+  };
+}
+
 function summarizeComponentRegistry(componentRegistry, domains) {
   if (!Array.isArray(componentRegistry)) return null;
   const needed = new Set(domains.map((domain) => domain.id));
@@ -511,6 +811,16 @@ function validateAgenticOperatingCore(core) {
   if (!Array.isArray(core.observability?.events) || !core.observability.events.includes('final_delivery_approved')) {
     errors.push('observability final_delivery_approved event is required');
   }
+  if (!core.product_studio?.execution_model?.contract_first) errors.push('product_studio.execution_model.contract_first is required');
+  if (!Array.isArray(core.product_studio?.active_playbooks) || core.product_studio.active_playbooks.length < 5) {
+    errors.push('product_studio.active_playbooks must cover active domains');
+  }
+  if (!core.product_studio?.tool_runtime_contract?.declared_tools_only) {
+    errors.push('product_studio must enforce declared tools only');
+  }
+  if (!core.product_studio?.quality_system?.self_repair?.required) {
+    errors.push('product_studio quality system must require self repair');
+  }
   return { ok: errors.length === 0, errors };
 }
 
@@ -541,6 +851,22 @@ function buildAgenticOperatingPrompt(core) {
         metrics: core.observability.metrics,
       },
       regression: core.regression,
+      product_studio: {
+        mission: core.product_studio.mission,
+        execution_model: core.product_studio.execution_model,
+        active_playbooks: core.product_studio.active_playbooks.map((playbook) => ({
+          id: playbook.id,
+          agents: playbook.agents,
+          deliverables: playbook.deliverables,
+          evidence_required: playbook.evidence_required,
+          validation_checks: playbook.validation_checks,
+          rollback_strategy: playbook.rollback_strategy,
+        })),
+        tool_runtime_contract: core.product_studio.tool_runtime_contract,
+        evidence_contract: core.product_studio.evidence_contract,
+        production_controls: core.product_studio.production_controls,
+        release_contract: core.product_studio.release_contract,
+      },
       risk_register: core.risk_register,
       summary: core.summary,
     }, null, 2),
@@ -548,6 +874,7 @@ function buildAgenticOperatingPrompt(core) {
     '- Execute exactly the UniversalTaskContract through this core; do not substitute format, tool, source policy or delivery mode.',
     '- Use typed tools only when authorized by Tool Runtime; never invent tools.',
     '- For software work, scaffold/analyze/test/build/scan/review before claiming completion.',
+    '- For AI Product Studio work, follow the active playbooks: required agents, evidence, validation checks and rollback strategy are binding.',
     '- For databases, default to read-only parameterized queries and require confirmation for writes.',
     '- For web automation, respect robots/rate limits and never bypass login, CAPTCHA, paywalls or anti-abuse controls.',
     '- For factual research, attach an evidence ledger; if source requirements cannot be met, label the gap instead of fabricating.',
