@@ -123,9 +123,12 @@ const COMPONENTS = [
     id: "database-connector-layer",
     name: "Database Connector Layer",
     purpose: "Typed introspection of external DBs, read-only-by-default, parameterised queries.",
-    status: "planned",
-    backing_modules: [],
+    status: "partial",
+    backing_modules: [
+      "backend/src/services/db/sql-safety.js",
+    ],
     acceptance_criteria: [
+      "SQL static safety analyser (read-only default, DDL rejection, interpolation detection, SQLi signatures) — IMPLEMENTED",
       "Postgres/MySQL/SQLite drivers with schema introspection",
       "prepared statements, connection pooling, query budget",
       "RBAC / row-level security hooks",
@@ -194,10 +197,14 @@ const COMPONENTS = [
     id: "security-governance-layer",
     name: "Security Governance Layer",
     purpose: "OWASP ASVS controls, secrets scanning, SAST/DAST, policy engine.",
-    status: "planned",
-    backing_modules: [],
+    status: "partial",
+    backing_modules: [
+      "backend/src/services/security/secret-scanner.js",
+      "backend/src/services/security/owasp-asvs.js",
+    ],
     acceptance_criteria: [
-      "secret scanner on every artifact",
+      "secret scanner (15 patterns: AWS, GitHub, Slack, Stripe, OpenAI, Anthropic, PEM, JWT, generic) — IMPLEMENTED",
+      "OWASP ASVS v4.0.3 Level-1 catalogue with evaluator hooks — IMPLEMENTED",
       "dependency audit integrated in CI",
       "OPA/Rego policy hooks",
       "cryptography helper wrappers (mTLS, JWT rotation)",
