@@ -13,7 +13,10 @@
  */
 
 const PROVIDER_PRETTY = {
+  wos: "Web of Science",
+  scopus: "Scopus",
   openalex: "OpenAlex",
+  scielo: "SciELO",
   semantic: "Semantic Scholar",
   crossref: "CrossRef",
   pubmed: "PubMed",

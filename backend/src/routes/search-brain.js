@@ -27,7 +27,7 @@ const router = express.Router();
 const MAX_QUERY_LEN = 500;
 const MAX_RESULTS_CAP = 50;
 
-const VALID_SOURCES = new Set(["scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"]);
+const VALID_SOURCES = new Set(["wos", "scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"]);
 
 function validateQuery(raw) {
   if (typeof raw !== "string") return { valid: false, error: "query is required and must be a string" };
@@ -63,10 +63,26 @@ function extractMailto(req) {
   return process.env.SEARCH_BRAIN_MAILTO || undefined;
 }
 
+function hasUsableEnvKey(...names) {
+  return names.some((name) => {
+    const value = process.env[name];
+    return typeof value === "string" && value.trim() && !/^https?:\/\//i.test(value.trim());
+  });
+}
+
 router.get("/providers", (_req, res) => {
   res.json({
     defaults: [...DEFAULT_ACADEMIC_SOURCES],
     providers: [
+      {
+        id: "wos",
+        name: "Web of Science (Clarivate)",
+        license: "requires Clarivate entitlement",
+        requiresKey: true,
+        configured: hasUsableEnvKey("WOS_API_KEY", "WEB_OF_SCIENCE_API_KEY"),
+        env: ["WOS_API_KEY", "WOS_BASE_URL", "WOS_DATABASE_ID", "WOS_OPTION_VIEW"],
+        rateLimitNote: "Expanded API uses X-ApiKey; quota and record access depend on institutional plan.",
+      },
       {
         id: "scopus",
         name: "Scopus (Elsevier)",

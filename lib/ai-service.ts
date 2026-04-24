@@ -130,7 +130,7 @@ const normalizePrompt = (prompt: string) =>
 const ROUTING_PATTERNS = {
   gmail: /\b(gmail|e-?mail|correo(s)?|mail|inbox|bandeja de entrada|redacta(r)? (un )?correo|envia(r)? (un )?correo|responde(r)? (un )?correo|lee(r)? (mis )?correos)\b/i,
   googleServices: /\b(google (calendar|calendario|drive)|calendar|calendario|evento|event|meeting|reunion|agenda|drive|carpeta|folder)\b/i,
-  externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus)\b/i,
+  externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
   deliverableFile: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|informe|reporte|presentacion|diapositivas|slides|hoja de calculo|spreadsheet|archivo|documento|matriz narrativa|matriz de consistencia|base de datos)\b/i,
   dataWork: /\b(calcula(r)?|analiza(r)?|procesa(r)?|limpia(r)?|extrae(r)?|clasifica(r)?|regresion|estadistica|csv|datos|dataset|cronbach|spearman|anova|correlacion|likert)\b/i,
   codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|debug|bug|corrige(r)?|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
@@ -207,7 +207,7 @@ export class AIService {
 
 - 'gmail': Sending, reading, or managing emails. Examples: "send an email to hamza", "read my last 5 emails", "enviar un correo electrónico".
 - 'google_services': Interacting with Google Calendar or Drive. Examples: "show my meetings for tomorrow", "find my marketing presentation on Drive", "mostrar mis eventos del calendario".
-- 'web_search': Any request that needs REAL external sources — academic papers, news, facts that could be out of the LLM's training cutoff, or anything where the user explicitly asks for references/citations. Triggers the multi-provider agentic pipeline (Scopus, OpenAlex, SciELO, Semantic Scholar, Crossref, PubMed, DOAJ). Examples:
+- 'web_search': Any request that needs REAL external sources — academic papers, news, facts that could be out of the LLM's training cutoff, or anything where the user explicitly asks for references/citations. Triggers the multi-provider agentic pipeline (Web of Science, Scopus, OpenAlex, SciELO, Semantic Scholar, Crossref, PubMed, DOAJ). Examples:
   * "busca 10 artículos sobre embarazo adolescente" / "dame 20 fuentes sobre alfa de Cronbach"
   * "find papers on gene editing crispr 2024" / "give me sources for systematic review on SMED"
   * "¿quién es el presidente de Francia?" / "who is the president of France?"

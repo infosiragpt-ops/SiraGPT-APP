@@ -170,7 +170,7 @@ const bashExec = {
 
 const webSearch = {
   name: 'web_search',
-  description: 'Run the agentic multi-provider search (Scopus + OpenAlex + SciELO + Semantic Scholar + Crossref + PubMed + DOAJ). Returns a compact list of top sources with title, authors, year, journal, doi, url. Use when the user asks for real citations, fresh data, or academic references.',
+  description: 'Run the agentic multi-provider search (Web of Science + Scopus + OpenAlex + SciELO + Semantic Scholar + Crossref + PubMed + DOAJ). Returns a compact list of top sources with title, authors, year, journal, doi, url. Use when the user asks for real citations, fresh data, or academic references.',
   parameters: {
     type: 'object',
     properties: {

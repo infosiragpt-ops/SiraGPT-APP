@@ -61,7 +61,7 @@ export interface AgenticRunArgs {
   target?: number          // 10..1000, default 500
   batchSize?: number       // 5..50, default 10
   topK?: number            // 1..100, default 25
-  providers?: string[]     // subset of [scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
+  providers?: string[]     // subset of [wos, scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
   language?: string
   signal?: AbortSignal
 }

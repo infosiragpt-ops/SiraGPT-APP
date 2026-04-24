@@ -4,7 +4,7 @@
  * (server/services/searchBrain/ in Carrerajorge/Iliagpt.io) with
  * scope trimmed to the essentials per the user's request:
  *
- *   - providers (Scopus, OpenAlex, SciELO, Semantic Scholar, CrossRef, PubMed, DOAJ)
+ *   - providers (Web of Science, Scopus, OpenAlex, SciELO, Semantic Scholar, CrossRef, PubMed, DOAJ)
  *   - orchestrator (3-phase WebGLM: decompose → retrieve → rerank)
  *   - chat adapter (normalised results → citation-ready payload)
  *
@@ -12,7 +12,7 @@
  *   - Frontend SearchBrainPanel
  *   - pgvector cache table (Prisma migration)
  *   - Redis fast-path
- *   - Redalyc scraping, arXiv Atom XML, WoS Puppeteer
+ *   - Redalyc scraping, arXiv Atom XML, WoS Puppeteer fallback
  *   - Content extractor (pdf-parse + readability)
  *   - docs/SEARCH_BRAIN.md
  *
@@ -21,7 +21,7 @@
  */
 
 /**
- * @typedef {"scopus" | "openalex" | "scielo" | "semantic" | "crossref" | "pubmed" | "doaj"} SearchBrainSource
+ * @typedef {"wos" | "scopus" | "openalex" | "scielo" | "semantic" | "crossref" | "pubmed" | "doaj"} SearchBrainSource
  *
  * @typedef {object} NormalisedResult
  * @property {SearchBrainSource} source
@@ -71,7 +71,7 @@
  * @property {{ decompositionMs: number, retrievalMs: number, rerankingMs: number, totalMs: number }} timings
  */
 
-const DEFAULT_ACADEMIC_SOURCES = ["scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"];
+const DEFAULT_ACADEMIC_SOURCES = ["wos", "scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"];
 
 const DEFAULT_WEIGHTS = Object.freeze({
   rerank: 1.0,

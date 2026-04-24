@@ -20,6 +20,7 @@
  *   - Semantic Scholar optional `x-api-key` header for higher support/limits.
  *   - PubMed E-utilities optional `api_key`, plus `tool` and `email`.
  *   - DOAJ public article search; publisher keys are only needed for private CRUD/bulk routes.
+ *   - Web of Science Expanded API via `X-ApiKey` header, gated by Clarivate entitlement.
  */
 
 const { USER_AGENT } = require("./types");
@@ -88,6 +89,60 @@ function normaliseAuthors(list) {
       return null;
     })
     .filter(Boolean);
+}
+
+function asArray(value) {
+  if (Array.isArray(value)) return value;
+  if (value === undefined || value === null) return [];
+  return [value];
+}
+
+function objectText(value) {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (!value || typeof value !== "object") return undefined;
+  return textValue(value.content)
+    || textValue(value.value)
+    || textValue(value._)
+    || textValue(value["#text"])
+    || textValue(value.text);
+}
+
+function deepFindByKey(root, predicate) {
+  const stack = [root];
+  const seen = new Set();
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object" || seen.has(node)) continue;
+    seen.add(node);
+    for (const [key, value] of Object.entries(node)) {
+      if (predicate(key, value, node)) return value;
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return undefined;
+}
+
+function findIdentifier(root, wantedType) {
+  const wanted = String(wantedType || "").toLowerCase();
+  const stack = [root];
+  const seen = new Set();
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object" || seen.has(node)) continue;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const item of node) stack.push(item);
+      continue;
+    }
+    const type = String(node.type || node["@type"] || node.id_type || node.identifier_type || "").toLowerCase();
+    const value = objectText(node.value) || objectText(node.content) || objectText(node.id) || objectText(node.uid);
+    if (type === wanted && value) return value.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+    for (const value of Object.values(node)) {
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return undefined;
 }
 
 // ─── OpenAlex ────────────────────────────────────────────────────────────
@@ -322,6 +377,116 @@ async function searchDOAJ(query, opts = {}) {
   });
 }
 
+// ─── Web of Science (Clarivate) ──────────────────────────────────────────
+// https://developer.clarivate.com/apis/wos
+//
+// Requires Web of Science Expanded API entitlement. The official
+// Expanded API search endpoint accepts:
+//   GET /api/wos?databaseId=WOS&usrQuery=TS=(... )&count=N&firstRecord=1
+// with header:
+//   X-ApiKey: <WOS_API_KEY>
+//
+// `WOS_BASE_URL` is configurable because Clarivate examples use both
+// `https://wos-api.clarivate.com/api/wos` and
+// `https://api.clarivate.com/api/wos` depending on plan/gateway.
+
+function buildWosUsrQuery(query) {
+  const q = String(query || "").replace(/\s+/g, " ").trim();
+  if (!q) return "";
+  if (/\b[A-Z]{2,4}\s*=\s*/i.test(q)) return q;
+  const safe = q.replace(/[()]/g, " ").replace(/\s+/g, " ").trim();
+  return `TS=(${safe})`;
+}
+
+function wosRecordTitle(rec, type) {
+  const titles = asArray(rec?.static_data?.summary?.titles?.title);
+  const wanted = String(type || "").toLowerCase();
+  const hit = titles.find((t) => String(t?.type || t?.["@type"] || "").toLowerCase() === wanted);
+  return objectText(hit) || undefined;
+}
+
+function wosRecordAuthors(rec) {
+  const names = asArray(rec?.static_data?.summary?.names?.name);
+  const authors = names
+    .filter((n) => {
+      const role = String(n?.role || n?.["@role"] || "").toLowerCase();
+      return !role || role === "author" || role === "bookauthor";
+    })
+    .map((n) => objectText(n?.display_name) || objectText(n?.full_name) || objectText(n?.wos_standard) || objectText(n))
+    .filter(Boolean);
+  return normaliseAuthors(authors);
+}
+
+function wosRecordCitationCount(rec) {
+  const tc = rec?.dynamic_data?.citation_related?.tc_list?.silo_tc;
+  const counts = asArray(tc)
+    .map((x) => safeInt(x?.local_count ?? x?.count ?? x?.tc))
+    .filter((n) => typeof n === "number");
+  if (counts.length > 0) return Math.max(...counts);
+  return safeInt(deepFindByKey(rec, (key) => /times.?cited|citation.?count|local_count/i.test(key)));
+}
+
+function normaliseWosRecords(body, { start = 0 } = {}) {
+  const records = asArray(body?.Data?.Records?.records?.REC)
+    .concat(asArray(body?.data?.records))
+    .concat(asArray(body?.records))
+    .filter(Boolean);
+
+  return records.map((rec, i) => {
+    const uid = objectText(rec?.UID) || objectText(rec?.uid) || objectText(rec?.UT) || objectText(rec?.ut);
+    const pubInfo = rec?.static_data?.summary?.pub_info || {};
+    const doi = findIdentifier(rec, "doi");
+    const title = wosRecordTitle(rec, "item")
+      || wosRecordTitle(rec, "title")
+      || objectText(rec?.title)
+      || "Untitled";
+    const journal = wosRecordTitle(rec, "source") || objectText(rec?.journal);
+    const year = safeInt(pubInfo.pubyear || pubInfo.pub_year || rec?.year);
+    const webOfScienceUrl = uid ? `https://www.webofscience.com/wos/woscc/full-record/${encodeURIComponent(uid)}` : "";
+
+    return {
+      source: "wos",
+      title,
+      authors: wosRecordAuthors(rec),
+      year,
+      journal,
+      volume: textValue(pubInfo.vol || pubInfo.volume),
+      issue: textValue(pubInfo.issue),
+      pages: pageRange(pubInfo.begin, pubInfo.end) || textValue(pubInfo.page || pubInfo.page_range),
+      doi,
+      url: doi ? `https://doi.org/${doi}` : webOfScienceUrl,
+      abstract: objectText(deepFindByKey(rec, (key) => /^abstract_text$|^abstract$/i.test(key))),
+      citationCount: wosRecordCitationCount(rec),
+      openAccess: Boolean(deepFindByKey(rec, (key, value) => /open.?access|oa_status/i.test(key) && Boolean(value))),
+      providerRank: i + start,
+      raw: rec,
+    };
+  });
+}
+
+async function searchWebOfScience(query, opts = {}) {
+  const apiKey = opts.apiKey || firstEnv("WOS_API_KEY", "WEB_OF_SCIENCE_API_KEY");
+  if (!apiKey || /^https?:\/\//i.test(apiKey)) return [];
+
+  const count = Math.min(100, Math.max(1, opts.maxResults ?? DEFAULT_MAX_RESULTS));
+  const start = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
+  const firstRecord = start + 1; // WoS uses 1-based pagination.
+  const baseUrl = opts.baseUrl || firstEnv("WOS_BASE_URL", "WEB_OF_SCIENCE_BASE_URL") || "https://wos-api.clarivate.com/api/wos";
+  const url = new URL(baseUrl);
+  url.searchParams.set("databaseId", opts.databaseId || process.env.WOS_DATABASE_ID || "WOS");
+  url.searchParams.set("usrQuery", buildWosUsrQuery(query));
+  url.searchParams.set("count", String(count));
+  url.searchParams.set("firstRecord", String(firstRecord));
+  url.searchParams.set("optionView", opts.optionView || process.env.WOS_OPTION_VIEW || "SR");
+
+  const body = await fetchJson(url.toString(), {
+    timeoutMs: opts.timeoutMs,
+    extraHeaders: { "X-ApiKey": apiKey },
+  });
+  if (!body) return [];
+  return normaliseWosRecords(body, { start }).slice(0, count);
+}
+
 // ─── SciELO ──────────────────────────────────────────────────────────────
 // SciELO doesn't expose a public free-text API. Crossref's `member:530`
 // filter returns SciELO-published articles only (FapUNIFESP/SciELO),
@@ -463,6 +628,7 @@ async function searchScopus(query, opts = {}) {
 // ─── Registry + dispatcher ───────────────────────────────────────────────
 
 const REGISTRY = {
+  wos: searchWebOfScience,
   openalex: searchOpenAlex,
   semantic: searchSemanticScholar,
   crossref: searchCrossRef,
@@ -501,8 +667,11 @@ module.exports = {
   searchDOAJ,
   searchSciELO,
   searchScopus,
+  searchWebOfScience,
   reconstructAbstract,
   normaliseAuthors,
+  buildWosUsrQuery,
   firstEnv,
   REGISTRY,
+  INTERNAL: { normaliseWosRecords, findIdentifier, objectText },
 };

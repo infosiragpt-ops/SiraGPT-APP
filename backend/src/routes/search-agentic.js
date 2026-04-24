@@ -9,7 +9,7 @@
  *       target?:   number,                    // total sources to collect, [10..1000], default 500
  *       batchSize?: number,                   // sources per batch, [5..50], default 10
  *       topK?:     number,                    // best-of selection size, [1..100], default 25
- *       providers?: string[],                 // subset of [scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
+ *       providers?: string[],                 // subset of [wos, scopus, openalex, scielo, semantic, crossref, pubmed, doaj]
  *       language?: string                     // ISO 639-1 (filters Crossref/SciELO)
  *     }
  *
@@ -36,7 +36,7 @@ const serializer = (() => {
 
 const router = express.Router();
 
-const VALID_PROVIDERS = new Set(["scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"]);
+const VALID_PROVIDERS = new Set(["wos", "scopus", "openalex", "scielo", "semantic", "crossref", "pubmed", "doaj"]);
 
 function pickProviders(raw) {
   if (!Array.isArray(raw)) return undefined;
@@ -48,6 +48,13 @@ function pickMailto(req) {
   if (typeof req.body?.mailto === "string" && /@/.test(req.body.mailto)) return req.body.mailto.slice(0, 120);
   if (req.user?.email) return req.user.email;
   return process.env.SEARCH_BRAIN_MAILTO || process.env.OPENALEX_MAILTO || undefined;
+}
+
+function hasUsableEnvKey(...names) {
+  return names.some((name) => {
+    const value = process.env[name];
+    return typeof value === "string" && value.trim() && !/^https?:\/\//i.test(value.trim());
+  });
 }
 
 router.post(
@@ -169,6 +176,7 @@ router.get("/agentic/providers", (_req, res) => {
   res.json({
     providers: DEFAULT_PROVIDERS,
     descriptions: {
+      wos:       "Web of Science (Clarivate Expanded API; requiere WOS_API_KEY y entitlement institucional)",
       scopus:    "Scopus (Elsevier Search API; requiere SCOPUS_API_KEY y entitlement institucional/comercial)",
       openalex:  "OpenAlex (240 M obras académicas, CC0)",
       scielo:    "SciELO (red Open Access de Latinoamérica/España/Portugal vía Crossref miembro 530)",
@@ -178,6 +186,7 @@ router.get("/agentic/providers", (_req, res) => {
       doaj:      "DOAJ (Directory of Open Access Journals)",
     },
     configured: {
+      wos: hasUsableEnvKey("WOS_API_KEY", "WEB_OF_SCIENCE_API_KEY"),
       scopus: Boolean(process.env.SCOPUS_API_KEY),
       openalex: Boolean(process.env.OPENALEX_API_KEY),
       semantic: Boolean(process.env.SEMANTIC_SCHOLAR_API_KEY || process.env.SEMANTIC_API_KEY || process.env.S2_API_KEY),
