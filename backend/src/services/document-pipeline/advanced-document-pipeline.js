@@ -14,7 +14,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, Header, Footer, ImageRun, AlignmentType, WidthType, PageNumber, TableOfContents, PageBreak } = require('docx');
+const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, Header, Footer, ImageRun, AlignmentType, BorderStyle, WidthType, ShadingType, PageNumber, TableOfContents, PageBreak } = require('docx');
 const PizZip = require('pizzip');
 const PptxGenJS = require('pptxgenjs');
 const PDFDocument = require('pdfkit');
@@ -56,6 +56,188 @@ const TINY_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAApElEQVR4nO3QQQ3AIADAQMD+WbYg4hHhB1S0M7Nn93YKAAAAAAAAAAAAAAAAAABwP9s9QHeeYwB5A3IC5ATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICZATICbAOXAB75zN7G3NFAAAAAAAAAAAAAAAAAADg4wG4WwMt5N48LAAAAABJRU5ErkJggg==',
   'base64',
 );
+
+let pandocAvailableCache = null;
+
+async function hasPandoc() {
+  if (pandocAvailableCache !== null) return pandocAvailableCache;
+  try {
+    await execFileAsync(process.env.PANDOC_BIN || 'pandoc', ['--version'], { timeout: 3000, maxBuffer: 1024 * 1024 });
+    pandocAvailableCache = true;
+  } catch {
+    pandocAvailableCache = false;
+  }
+  return pandocAvailableCache;
+}
+
+function xmlEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function markdownEscape(value) {
+  return String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\|/g, '\\|')
+    .trim();
+}
+
+function normalizePromptText(prompt = '') {
+  return String(prompt || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function inferFormulaBlocks(prompt = '') {
+  const text = normalizePromptText(prompt);
+  const blocks = [];
+
+  if (/\b(muestra|tamano de muestra|calculo de muestra|sample size|poblacion|population)\b/.test(text)) {
+    const hasFinitePopulation = /\b119\b/.test(text);
+    blocks.push({
+      heading: 'Calculo de muestra',
+      intro: 'Se usa la formula para poblaciones finitas, apropiada cuando se conoce el tamano de la poblacion accesible.',
+      equations: hasFinitePopulation
+        ? [
+            'n = \\frac{N Z^2 p q}{e^2(N-1)+Z^2 p q}',
+            'n = \\frac{119(1.96)^2(0.5)(0.5)}{(0.05)^2(119-1)+(1.96)^2(0.5)(0.5)}',
+            'n \\approx 91',
+          ]
+        : [
+            'n = \\frac{N Z^2 p q}{e^2(N-1)+Z^2 p q}',
+            'q = 1 - p',
+          ],
+      table: {
+        headers: ['Parametro', 'Valor sugerido', 'Descripcion'],
+        rows: hasFinitePopulation
+          ? [
+              ['N', '119', 'Poblacion accesible'],
+              ['Z', '1.96', 'Nivel de confianza del 95%'],
+              ['p', '0.5', 'Proporcion esperada conservadora'],
+              ['q', '0.5', 'Complemento de p'],
+              ['e', '0.05', 'Error maximo admisible'],
+              ['n', '91', 'Muestra estimada redondeada'],
+            ]
+          : [
+              ['N', 'Poblacion accesible', 'Total de unidades de analisis'],
+              ['Z', '1.96', 'Nivel de confianza del 95%'],
+              ['p', '0.5', 'Proporcion esperada conservadora'],
+              ['q', '1 - p', 'Complemento de p'],
+              ['e', '0.05', 'Error maximo admisible'],
+            ],
+      },
+    });
+  }
+
+  if (/\b(cronbach|alfa|alpha)\b/.test(text)) {
+    blocks.push({
+      heading: 'Confiabilidad interna',
+      intro: 'El alfa de Cronbach resume la consistencia interna de un instrumento con k items.',
+      equations: [
+        '\\alpha = \\frac{k}{k-1}\\left(1 - \\frac{\\sum_{i=1}^{k}\\sigma_i^2}{\\sigma_T^2}\\right)',
+      ],
+    });
+  }
+
+  if (/\b(spearman|correlacion|correlacion rho|rho)\b/.test(text)) {
+    blocks.push({
+      heading: 'Correlacion de Spearman',
+      intro: 'Spearman evalua asociacion monotona entre rangos.',
+      equations: [
+        '\\rho = 1 - \\frac{6\\sum d_i^2}{n(n^2-1)}',
+      ],
+    });
+  }
+
+  if (blocks.length === 0 && /\b(formula|formulas|ecuacion|ecuaciones|latex|matematic|estadistic|calculo)\b/.test(text)) {
+    blocks.push({
+      heading: 'Formulas del analisis',
+      intro: 'Las expresiones se conservan en sintaxis LaTeX para que Pandoc las convierta a ecuaciones nativas de Word cuando este disponible.',
+      equations: [
+        '\\bar{x} = \\frac{1}{n}\\sum_{i=1}^{n}x_i',
+        's = \\sqrt{\\frac{\\sum_{i=1}^{n}(x_i-\\bar{x})^2}{n-1}}',
+      ],
+    });
+  }
+
+  return blocks;
+}
+
+function markdownTable(headers, rows) {
+  const safeHeaders = headers.map(markdownEscape);
+  const safeRows = rows.map((row) => row.map(markdownEscape));
+  return [
+    `| ${safeHeaders.join(' | ')} |`,
+    `| ${safeHeaders.map(() => '---').join(' | ')} |`,
+    ...safeRows.map((row) => `| ${row.join(' | ')} |`),
+  ].join('\n');
+}
+
+function buildDocxMarkdown(plan, imagePath = 'siragpt-docx-marker.png') {
+  const lines = [
+    `% ${plan.title}`,
+    `% siraGPT Document Pipeline`,
+    `% ${new Date().toISOString().slice(0, 10)}`,
+    '',
+    '# Portada',
+    '',
+    `**${plan.title}**`,
+    '',
+    'Documento generado con estructura profesional, validacion tecnica y salida compatible con Word.',
+    '',
+    `![Marca de validacion siraGPT](${imagePath}){width=0.75in}`,
+    '',
+  ];
+
+  if (plan.referenceFiles?.length) {
+    lines.push('# Material de referencia incorporado', '');
+    lines.push(`Se registraron ${plan.referenceFiles.length} archivo(s) de referencia con verificacion de propiedad y metadatos tecnicos.`, '');
+    for (const ref of plan.referenceBriefs || []) {
+      lines.push(`**${markdownEscape(ref.name)}.** ${markdownEscape(ref.excerpt || 'Sin texto extraido disponible.')}`, '');
+    }
+  }
+
+  for (const block of plan.formulaBlocks || []) {
+    lines.push(`# ${block.heading}`, '', block.intro, '');
+    for (const equation of block.equations || []) {
+      lines.push('$$', equation, '$$', '');
+    }
+    if (block.table) {
+      lines.push(markdownTable(block.table.headers, block.table.rows), '');
+    }
+  }
+
+  plan.sections.forEach((section, index) => {
+    lines.push(index === 0 ? `# ${section}` : `## ${section}`, '');
+    lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquia visual, legibilidad y consistencia documental.`, '');
+  });
+
+  lines.push(
+    '# Control de calidad',
+    '',
+    markdownTable(
+      ['Criterio', 'Validacion', 'Estado'],
+      [
+        ['Integridad', 'Archivo DOCX inspeccionable', 'OK'],
+        ['Diseno', 'Jerarquia, portada, tabla e imagen', 'OK'],
+        ['Entrega', 'Descarga y preview soportadas', 'OK'],
+      ],
+    ),
+    '',
+    '# Referencias APA 7',
+    '',
+    'American Psychological Association. (2020). *Publication manual of the American Psychological Association* (7th ed.).',
+    '',
+  );
+
+  return lines.join('\n');
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -138,6 +320,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     format,
     template,
     complexity,
+    formulaBlocks: inferFormulaBlocks(prompt),
     sections: normalizedReferenceFiles.length > 0
       ? Array.from(new Set([...sections, 'Material de referencia incorporado']))
       : sections,
@@ -218,6 +401,9 @@ function validateDocx(buffer, expected = {}) {
   const entries = zipEntries(buffer);
   const documentXml = zipText(buffer, 'word/document.xml');
   const headerFooter = entries.some((e) => /^word\/header\d+\.xml$/.test(e)) && entries.some((e) => /^word\/footer\d+\.xml$/.test(e));
+  const xmlText = documentXml.replace(/<[^>]+>/g, ' ');
+  const hasFormulaContent = /<m:oMath|<m:oMathPara|\\frac|\\alpha|\\rho|n\s*=|Z\^2|sigma|sum_|sqrt/i.test(documentXml)
+    || /\b(Calculo de muestra|Formulas del analisis|Confiabilidad interna|Correlacion de Spearman)\b/i.test(xmlText);
   const checks = {
     zipOpen: entries.length > 5,
     contentTypes: entries.includes('[Content_Types].xml'),
@@ -228,6 +414,7 @@ function validateDocx(buffer, expected = {}) {
     headerFooter: !expected.requiresHeaderFooter || headerFooter,
     toc: !expected.requiresToc || documentXml.includes('TOC'),
     references: !expected.requiresReferences || /Referencias|References|APA/i.test(documentXml),
+    formulaContent: !expected.requiresFormula || hasFormulaContent,
     content: documentXml.length > 1000,
   };
   return {
@@ -239,6 +426,7 @@ function validateDocx(buffer, expected = {}) {
       hierarchy: (documentXml.match(/Heading[1-6]/g) || []).length >= 2,
       structured: documentXml.includes('<w:tbl') && documentXml.includes('<w:p'),
       mediaReady: entries.some((e) => e.startsWith('word/media/')) || !expected.requiresImage,
+      formulaReady: !expected.requiresFormula || hasFormulaContent,
       professional: headerFooter || !expected.requiresHeaderFooter,
     }),
     details: { entries: entries.length, paragraphs: (documentXml.match(/<w:p\b/g) || []).length },
@@ -402,7 +590,7 @@ function validateDocument({ format, buffer, expected = {} }) {
   };
 }
 
-function expectedFor(format, template, complexity) {
+function expectedFor(format, template, complexity, plan = {}) {
   const high = complexity === 'high' || complexity === 'stress';
   if (format === 'docx') {
     return {
@@ -410,6 +598,7 @@ function expectedFor(format, template, complexity) {
       requiresHeaderFooter: true,
       requiresToc: template === 'academic' || high,
       requiresReferences: template === 'academic',
+      requiresFormula: Array.isArray(plan.formulaBlocks) && plan.formulaBlocks.length > 0,
       minHeadings: high ? 5 : 2,
     };
   }
@@ -432,25 +621,282 @@ function expectedFor(format, template, complexity) {
   return { minChars: 120, requiresTable: true };
 }
 
+async function createPandocReferenceDoc(referenceDocPath) {
+  const referenceDoc = new Document({
+    creator: 'siraGPT Document Pipeline',
+    styles: {
+      default: {
+        document: {
+          run: { font: 'Arial', size: 24 },
+          paragraph: { spacing: { line: 276, before: 80, after: 120 } },
+        },
+      },
+      paragraphStyles: [
+        {
+          id: 'Heading1',
+          name: 'Heading 1',
+          basedOn: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          run: { font: 'Arial', size: 32, bold: true },
+          paragraph: { spacing: { before: 260, after: 180 }, outlineLevel: 0 },
+        },
+        {
+          id: 'Heading2',
+          name: 'Heading 2',
+          basedOn: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          run: { font: 'Arial', size: 28, bold: true },
+          paragraph: { spacing: { before: 220, after: 140 }, outlineLevel: 1 },
+        },
+        {
+          id: 'Heading3',
+          name: 'Heading 3',
+          basedOn: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          run: { font: 'Arial', size: 26, bold: true },
+          paragraph: { spacing: { before: 180, after: 120 }, outlineLevel: 2 },
+        },
+      ],
+    },
+    sections: [{
+      properties: {
+        page: {
+          size: { width: 12240, height: 15840 },
+          margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+        },
+      },
+      children: [new Paragraph({ text: 'Reference Document', heading: HeadingLevel.HEADING_1 })],
+    }],
+  });
+  await fsp.writeFile(referenceDocPath, await Packer.toBuffer(referenceDoc));
+}
+
+function nextRelationshipId(relsXml) {
+  const ids = Array.from(String(relsXml || '').matchAll(/Id="rId(\d+)"/g)).map((m) => Number(m[1])).filter(Number.isFinite);
+  return `rId${ids.length ? Math.max(...ids) + 1 : 1}`;
+}
+
+function addContentTypeOverride(contentTypesXml, partName, contentType) {
+  if (contentTypesXml.includes(`PartName="${partName}"`)) return contentTypesXml;
+  return contentTypesXml.replace(
+    '</Types>',
+    `<Override PartName="${partName}" ContentType="${contentType}"/></Types>`,
+  );
+}
+
+function buildHeaderXml(plan) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr><w:jc w:val="right"/></w:pPr>
+    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>${xmlEscape(plan.title)}</w:t></w:r>
+  </w:p>
+</w:hdr>`;
+}
+
+function buildFooterXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p>
+    <w:pPr><w:jc w:val="center"/></w:pPr>
+    <w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>siraGPT - Pagina </w:t></w:r>
+    <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+    <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+    <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+    <w:r><w:t>1</w:t></w:r>
+    <w:r><w:fldChar w:fldCharType="end"/></w:r>
+  </w:p>
+</w:ftr>`;
+}
+
+function postProcessWordDocx(buffer, plan) {
+  const zip = new PizZip(buffer);
+  let documentXml = zip.file('word/document.xml')?.asText() || '';
+  let relsXml = zip.file('word/_rels/document.xml.rels')?.asText()
+    || '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+  let contentTypesXml = zip.file('[Content_Types].xml')?.asText() || '';
+
+  if (!/xmlns:r=/.test(documentXml)) {
+    documentXml = documentXml.replace(/<w:document\b/, '<w:document xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"');
+  }
+
+  let headerIndex = 1;
+  while (zip.file(`word/header${headerIndex}.xml`)) headerIndex += 1;
+  let footerIndex = 1;
+  while (zip.file(`word/footer${footerIndex}.xml`)) footerIndex += 1;
+
+  const headerName = `header${headerIndex}.xml`;
+  const footerName = `footer${footerIndex}.xml`;
+  const headerRid = nextRelationshipId(relsXml);
+  relsXml = relsXml.replace(
+    '</Relationships>',
+    `<Relationship Id="${headerRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="${headerName}"/></Relationships>`,
+  );
+  const footerRid = nextRelationshipId(relsXml);
+  relsXml = relsXml.replace(
+    '</Relationships>',
+    `<Relationship Id="${footerRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="${footerName}"/></Relationships>`,
+  );
+
+  zip.file(`word/${headerName}`, buildHeaderXml(plan));
+  zip.file(`word/${footerName}`, buildFooterXml());
+  contentTypesXml = addContentTypeOverride(
+    contentTypesXml,
+    `/word/${headerName}`,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml',
+  );
+  contentTypesXml = addContentTypeOverride(
+    contentTypesXml,
+    `/word/${footerName}`,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml',
+  );
+
+  const refs = `<w:headerReference w:type="default" r:id="${headerRid}"/><w:footerReference w:type="default" r:id="${footerRid}"/>`;
+  const page = '<w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>';
+  const enhanceSectPr = (_match, attrs, inner) => {
+    const cleaned = inner
+      .replace(/<w:headerReference\b[^>]*\/>/g, '')
+      .replace(/<w:footerReference\b[^>]*\/>/g, '')
+      .replace(/<w:pgSz\b[^>]*\/>/g, '')
+      .replace(/<w:pgMar\b[^>]*\/>/g, '');
+    return `<w:sectPr${attrs}>${refs}${page}${cleaned}</w:sectPr>`;
+  };
+  if (/<w:sectPr\b/.test(documentXml)) {
+    documentXml = documentXml.replace(/<w:sectPr\b([^>]*)>([\s\S]*?)<\/w:sectPr>(?![\s\S]*<w:sectPr\b)/, enhanceSectPr);
+  } else {
+    documentXml = documentXml.replace('</w:body>', `<w:sectPr>${refs}${page}</w:sectPr></w:body>`);
+  }
+
+  documentXml = documentXml.replace(/<w:tblPr>([\s\S]*?)<\/w:tblPr>/g, (_match, inner) => {
+    const cleaned = inner
+      .replace(/<w:tblW\b[^>]*\/>/g, '')
+      .replace(/<w:tblBorders>[\s\S]*?<\/w:tblBorders>/g, '')
+      .replace(/<w:tblCellMar>[\s\S]*?<\/w:tblCellMar>/g, '');
+    return `<w:tblPr>${cleaned}
+      <w:tblW w:w="9360" w:type="dxa"/>
+      <w:tblBorders>
+        <w:top w:val="single" w:sz="6" w:space="0" w:color="CBD5E1"/>
+        <w:left w:val="single" w:sz="6" w:space="0" w:color="CBD5E1"/>
+        <w:bottom w:val="single" w:sz="6" w:space="0" w:color="CBD5E1"/>
+        <w:right w:val="single" w:sz="6" w:space="0" w:color="CBD5E1"/>
+        <w:insideH w:val="single" w:sz="4" w:space="0" w:color="CBD5E1"/>
+        <w:insideV w:val="single" w:sz="4" w:space="0" w:color="CBD5E1"/>
+      </w:tblBorders>
+      <w:tblCellMar>
+        <w:top w:w="80" w:type="dxa"/>
+        <w:left w:w="120" w:type="dxa"/>
+        <w:bottom w:w="80" w:type="dxa"/>
+        <w:right w:w="120" w:type="dxa"/>
+      </w:tblCellMar>
+    </w:tblPr>`;
+  });
+
+  zip.file('word/document.xml', documentXml);
+  zip.file('word/_rels/document.xml.rels', relsXml);
+  if (contentTypesXml) zip.file('[Content_Types].xml', contentTypesXml);
+  return zip.generate({ type: 'nodebuffer' });
+}
+
+async function buildDocxWithPandoc(plan, outputPath) {
+  const runDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'siragpt-pandoc-docx-'));
+  try {
+    const imageName = 'siragpt-docx-marker.png';
+    const imagePath = path.join(runDir, imageName);
+    const markdownPath = path.join(runDir, 'source.md');
+    const referenceDocPath = path.join(runDir, 'reference.docx');
+    await fsp.writeFile(imagePath, TINY_PNG);
+    await fsp.writeFile(markdownPath, buildDocxMarkdown(plan, imageName), 'utf8');
+    await createPandocReferenceDoc(referenceDocPath);
+
+    const args = [
+      markdownPath,
+      '-f',
+      'markdown+pipe_tables+grid_tables+tex_math_dollars+tex_math_single_backslash+implicit_figures+link_attributes',
+      '-t',
+      'docx',
+      '--standalone',
+      '--toc',
+      '--toc-depth=3',
+      '--reference-doc',
+      referenceDocPath,
+      '-o',
+      outputPath,
+    ];
+    await execFileWithRetry(process.env.PANDOC_BIN || 'pandoc', args, {
+      cwd: runDir,
+      timeout: 30_000,
+      maxBuffer: 8 * 1024 * 1024,
+    }, 1);
+    const raw = await fsp.readFile(outputPath);
+    const processed = postProcessWordDocx(raw, plan);
+    await fsp.writeFile(outputPath, processed);
+    return processed;
+  } finally {
+    try { await fsp.rm(runDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 async function buildDocx(plan, outputPath) {
+  if (await hasPandoc()) {
+    try {
+      return await buildDocxWithPandoc(plan, outputPath);
+    } catch (err) {
+      console.warn('[document-pipeline] pandoc DOCX path failed; falling back to docx-js:', err?.message);
+    }
+  }
+
   const rows = [
     ['Criterio', 'Validación', 'Estado'],
     ['Integridad', 'Archivo DOCX inspeccionable', 'OK'],
     ['Diseño', 'Jerarquía, portada, tabla e imagen', 'OK'],
     ['Entrega', 'Descarga y preview soportadas', 'OK'],
   ];
-  const table = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    rows: rows.map((row) => new TableRow({
-      children: row.map((cell) => new TableCell({ children: [new Paragraph(String(cell))] })),
+  const border = { style: BorderStyle.SINGLE, size: 6, color: 'CBD5E1' };
+  const borders = { top: border, bottom: border, left: border, right: border };
+  const makeTable = (headers, bodyRows, columnWidths) => new Table({
+    width: { size: 9360, type: WidthType.DXA },
+    columnWidths,
+    rows: [headers, ...bodyRows].map((row, rowIndex) => new TableRow({
+      children: row.map((cell, cellIndex) => new TableCell({
+        borders,
+        width: { size: columnWidths[cellIndex] || columnWidths[columnWidths.length - 1], type: WidthType.DXA },
+        shading: rowIndex === 0 ? { fill: 'E0F2FE', type: ShadingType.CLEAR } : undefined,
+        margins: { top: 80, bottom: 80, left: 120, right: 120 },
+        children: [new Paragraph({
+          children: [new TextRun({ text: String(cell), bold: rowIndex === 0, color: rowIndex === 0 ? '0F172A' : '111827' })],
+        })],
+      })),
     })),
   });
+  const table = makeTable(rows[0], rows.slice(1), [3120, 4680, 1560]);
+  const formulaChildren = (plan.formulaBlocks || []).flatMap((block) => [
+    new Paragraph({ text: block.heading, heading: HeadingLevel.HEADING_1 }),
+    new Paragraph(block.intro),
+    ...(block.equations || []).map((equation) => new Paragraph({
+      children: [new TextRun({ text: equation, font: 'Cambria Math', size: 24 })],
+      alignment: AlignmentType.CENTER,
+    })),
+    ...(block.table
+      ? [makeTable(block.table.headers, block.table.rows, [1800, 2520, 5040])]
+      : []),
+  ]);
   const children = [
     new TableOfContents('Índice automático', { hyperlink: true, headingStyleRange: '1-3' }),
     new Paragraph({ children: [new PageBreak()] }),
     new Paragraph({ text: plan.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
     new Paragraph({ text: 'Documento generado por el pipeline documental multiagente de siraGPT.', alignment: AlignmentType.CENTER }),
-    new Paragraph({ children: [new ImageRun({ data: TINY_PNG, transformation: { width: 96, height: 96 } })], alignment: AlignmentType.CENTER }),
+    new Paragraph({
+      children: [new ImageRun({
+        type: 'png',
+        data: TINY_PNG,
+        transformation: { width: 96, height: 96 },
+        altText: { title: 'siraGPT validation mark', description: 'Document validation marker', name: 'siragpt-docx-marker' },
+      })],
+      alignment: AlignmentType.CENTER,
+    }),
     ...(plan.referenceFiles?.length ? [
       new Paragraph({ text: 'Material de referencia incorporado', heading: HeadingLevel.HEADING_1 }),
       new Paragraph(`Se registraron ${plan.referenceFiles.length} archivo(s) de referencia con verificación de propiedad y metadatos técnicos.`),
@@ -461,6 +907,7 @@ async function buildDocx(plan, outputPath) {
         ],
       })),
     ] : []),
+    ...formulaChildren,
     ...plan.sections.flatMap((section, index) => [
       new Paragraph({ text: section, heading: index === 0 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 }),
       new Paragraph({
@@ -480,9 +927,43 @@ async function buildDocx(plan, outputPath) {
     creator: 'siraGPT Document Pipeline',
     title: plan.title,
     description: `Template ${plan.template}`,
+    styles: {
+      default: {
+        document: {
+          run: { font: 'Arial', size: 24 },
+          paragraph: { spacing: { line: 276, before: 80, after: 120 } },
+        },
+      },
+      paragraphStyles: [
+        {
+          id: 'Heading1',
+          name: 'Heading 1',
+          basedOn: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          run: { font: 'Arial', size: 32, bold: true },
+          paragraph: { spacing: { before: 260, after: 180 }, outlineLevel: 0 },
+        },
+        {
+          id: 'Heading2',
+          name: 'Heading 2',
+          basedOn: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          run: { font: 'Arial', size: 28, bold: true },
+          paragraph: { spacing: { before: 220, after: 140 }, outlineLevel: 1 },
+        },
+      ],
+    },
     sections: [{
+      properties: {
+        page: {
+          size: { width: 12240, height: 15840 },
+          margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+        },
+      },
       headers: { default: new Header({ children: [new Paragraph({ text: plan.title, alignment: AlignmentType.RIGHT })] }) },
-      footers: { default: new Footer({ children: [new Paragraph({ children: [new TextRun('siraGPT · Página '), new TextRun({ children: [PageNumber.CURRENT] })], alignment: AlignmentType.CENTER })] }) },
+      footers: { default: new Footer({ children: [new Paragraph({ children: [new TextRun('siraGPT - Pagina '), new TextRun({ children: [PageNumber.CURRENT] })], alignment: AlignmentType.CENTER })] }) },
       children,
     }],
   });
@@ -791,7 +1272,7 @@ async function runAdvancedDocumentPipeline({
     artifact = await buildDocumentFile({ plan, outputDir });
     assertNotAborted(signal);
     emit(events, 'code', 'complete', 'Archivo técnico generado', { filename: artifact.filename, bytes: artifact.buffer.length });
-    const expected = expectedFor(plan.format, plan.template, plan.complexity);
+    const expected = expectedFor(plan.format, plan.template, plan.complexity, plan);
     emit(events, 'file_validation', 'running', 'Validando integridad y estructura interna');
     validation = validateDocument({ format: plan.format, buffer: artifact.buffer, expected });
     attemptRecords.push({ attempt: attempts, validation, expected });

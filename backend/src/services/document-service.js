@@ -303,6 +303,12 @@ async function createDocx(filePath, content) {
     // --- Step 4: Create reference doc for Calibri font and nice base styles ---
     const referenceDoc = new Document({
         sections: [{
+            properties: {
+                page: {
+                    size: { width: 12240, height: 15840 },
+                    margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+                },
+            },
             children: [new Paragraph({ text: "Reference Document", heading: HeadingLevel.HEADING_1 })]
         }],
         styles: {
@@ -319,8 +325,11 @@ async function createDocx(filePath, content) {
     const referenceBuffer = await Packer.toBuffer(referenceDoc);
     await fs.writeFile(referenceDocPath, referenceBuffer);
 
-    // --- Step 5: Pandoc Convert (with grid_tables and image extraction enabled) ---
-    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown+pipe_tables+grid_tables -t docx --extract-media="${tempDir}" --mathjax --reference-doc="${referenceDocPath}" -o "${filePath}"`;
+    // --- Step 5: Pandoc Convert ---
+    // For DOCX, Pandoc converts LaTeX math to native Word OMML.
+    // Do not pass --mathjax here: that option targets HTML output and
+    // makes the intent ambiguous for Word documents.
+    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown+pipe_tables+grid_tables+tex_math_dollars+tex_math_single_backslash -t docx --standalone --extract-media="${tempDir}" --reference-doc="${referenceDocPath}" -o "${filePath}"`;
     console.log(`Executing Pandoc command: ${pandocCommand}`);
 
     // Image-handling was commented out above (see Step 2), so there are
