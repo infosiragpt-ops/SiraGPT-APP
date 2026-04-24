@@ -13,6 +13,7 @@ function buildAgentTaskPlan({
   goal = '',
   executionProfile = null,
   intentAlignmentProfile = null,
+  universalTaskContract = null,
   fileIds = [],
   maxRuntimeMs = null,
 } = {}) {
@@ -30,6 +31,16 @@ function buildAgentTaskPlan({
     requiredTools: [],
     checkpoint: 'Intent, format, evidence mode and deliverable criteria are explicit.',
   });
+
+  if (universalTaskContract) {
+    phases.push({
+      id: 'request_intelligence_contract',
+      role: 'request_intelligence',
+      objective: `Execute the validated UniversalTaskContract route ${universalTaskContract.pipeline}.`,
+      requiredTools: [],
+      checkpoint: `Format sovereignty locked: ${universalTaskContract.required_extension || 'inline'} / ${universalTaskContract.mime_type || 'no mime'}.`,
+    });
+  }
 
   if (capabilities.needsPrivateContext || requiredTools.includes('rag_retrieve') || fileIds.length) {
     phases.push({
@@ -99,6 +110,9 @@ function buildAgentTaskPlan({
   return {
     version: PLAN_VERSION,
     objective: summarizeObjective(goal, intentAlignmentProfile),
+    contractPipeline: universalTaskContract?.pipeline || null,
+    contractRequiredExtension: universalTaskContract?.required_extension || null,
+    contractRiskLevel: universalTaskContract?.risk_level || null,
     runtimeBudgetMs: maxRuntimeMs || null,
     outputMode: intentAlignmentProfile?.outputMode || 'unknown',
     requestedFormat: intentAlignmentProfile?.requestedFormat || null,
@@ -168,6 +182,7 @@ function buildAgentTaskPlanPrompt(plan) {
   return [
     `Task plan: ${plan.version}`,
     `Objective: ${plan.objective}`,
+    `Contract route: ${plan.contractPipeline || 'none'}${plan.contractRequiredExtension ? ` (${plan.contractRequiredExtension})` : ''}`,
     `Output mode: ${plan.outputMode}${plan.requestedFormat ? ` (${plan.requestedFormat})` : ''}`,
     `Grounding mode: ${plan.groundingMode}`,
     'Phases:',

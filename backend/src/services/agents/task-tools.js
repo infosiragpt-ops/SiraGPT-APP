@@ -388,6 +388,74 @@ const createDocument = {
       });
       return payload;
     }
+    // TaskContract review: every produced artifact is tested against
+    // the contract's deterministic success_tests. If any fail the
+    // tool_result carries the failure list so the agent repairs before
+    // finalize. Contract-failing files are NOT registered as downloadable
+    // artifacts; this is the Format Sovereignty release gate.
+    let contractReview = null;
+    if (hasContract) {
+      try {
+        const { reviewArtifact } = require('./artifact-reviewer');
+        contractReview = reviewArtifact({
+          contract: ctx.taskContract,
+          artifact: {
+            filename: cleanName,
+            buffer: raw,
+          },
+        });
+        if (!contractReview.passed) {
+          ctx.onEvent?.({
+            type: 'contract_review',
+            stepId: ctx.currentStepId,
+            artifactId: null,
+            passed: false,
+            testsPassed: contractReview.testsPassed,
+            testsTotal: contractReview.testsTotal,
+            failedTests: contractReview.failedTests,
+          });
+        }
+      } catch (revErr) {
+        console.warn('[create_document] reviewer threw:', revErr?.message);
+      }
+    }
+
+    if (contractReview && !contractReview.passed) {
+      try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
+      const repairHint = `Contract tests FAILED (${contractReview.failedTests.length}): ${contractReview.failedTests.map(f => `${f.id}: ${f.detail}`).join(' | ')}. Regenerate with a corrected script that satisfies every failed test before calling finalize.`;
+      ctx.onEvent?.({
+        type: 'tool_output',
+        tool: 'create_document',
+        ok: false,
+        preview: `Archivo bloqueado por contrato ${contractReview.testsPassed}/${contractReview.testsTotal} ✗`,
+      });
+      return {
+        ok: false,
+        error: 'artifact blocked by Format Sovereignty Engine',
+        validation,
+        contractReview: {
+          passed: false,
+          testsTotal: contractReview.testsTotal,
+          testsPassed: contractReview.testsPassed,
+          failedTests: contractReview.failedTests,
+          extDetected: contractReview.ext,
+          mimeSniffed: contractReview.mimeSniffed,
+        },
+        failureReport: {
+          failed_stage: 'format_validation',
+          expected_output: ctx.taskContract?.required_extension ? `.${ctx.taskContract.required_extension}` : 'contract-compliant artifact',
+          actual_output: `.${ext || 'unknown'}`,
+          root_cause: contractReview.failedTests.map(f => `${f.id}: ${f.detail}`).join(' | '),
+          repair_strategy: 'Regenerate the artifact with the exact required extension, MIME and structure from the contract.',
+          retry_count: 0,
+          tests_reexecuted: contractReview.tests.map(t => t.id),
+          release_decision: 'blocked',
+        },
+        repairHint,
+        stdout: previewText(r.stdout || '', 1200),
+      };
+    }
+
     const b64 = raw.toString('base64');
     const artifact = saveArtifact({
       filename: cleanName,
@@ -395,9 +463,21 @@ const createDocument = {
       mime: EXTENSION_TO_MIME[ext],
       ownerUserId: ctx.userId,
       chatId: ctx.chatId,
-      validation,
+      validation: contractReview ? { ...validation, contractReview } : validation,
     });
     try { fs.unlinkSync(tmpOut); } catch { /* may have been moved */ }
+
+    if (contractReview) {
+      ctx.onEvent?.({
+        type: 'contract_review',
+        stepId: ctx.currentStepId,
+        artifactId: artifact.id,
+        passed: contractReview.passed,
+        testsPassed: contractReview.testsPassed,
+        testsTotal: contractReview.testsTotal,
+        failedTests: contractReview.failedTests,
+      });
+    }
 
     ctx.onEvent?.({
       type: 'file_artifact',
@@ -409,35 +489,6 @@ const createDocument = {
         downloadUrl: artifact.downloadUrl,
       },
     });
-
-    // TaskContract review: every produced artifact is tested against
-    // the contract's deterministic success_tests. If any fail the
-    // tool_result carries the failure list so the agent repairs
-    // before finalize instead of shipping a wrong-format file.
-    let contractReview = null;
-    if (hasContract) {
-      try {
-        const { reviewArtifact } = require('./artifact-reviewer');
-        contractReview = reviewArtifact({
-          contract: ctx.taskContract,
-          artifact: {
-            filename: artifact.filename,
-            buffer: raw,
-          },
-        });
-        ctx.onEvent?.({
-          type: 'contract_review',
-          stepId: ctx.currentStepId,
-          artifactId: artifact.id,
-          passed: contractReview.passed,
-          testsPassed: contractReview.testsPassed,
-          testsTotal: contractReview.testsTotal,
-          failedTests: contractReview.failedTests,
-        });
-      } catch (revErr) {
-        console.warn('[create_document] reviewer threw:', revErr?.message);
-      }
-    }
 
     const previewMsg = contractReview
       ? `Archivo ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB) · contrato ${contractReview.testsPassed}/${contractReview.testsTotal}${contractReview.passed ? ' ✓' : ' ✗'}`

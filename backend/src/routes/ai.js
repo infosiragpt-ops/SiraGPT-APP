@@ -17,6 +17,10 @@ const artifactGenerator = require('../services/artifacts/artifact-generator');
 const rag = require('../services/rag-service');
 const operationalRag = require('../services/rag/operational-runtime');
 const feedbackLedger = require('../services/agents/feedback-ledger');
+const {
+  buildUniversalTaskContract,
+  buildUniversalContractPrompt,
+} = require('../services/agents/universal-task-contract');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -643,8 +647,19 @@ router.post(
       const evidenceBlock = operationalRagContext?.contextBlock
         ? `\n\n${operationalRagContext.contextBlock}`
         : '';
-      const systemInstruction = { role: 'system', content: promptBundle.system + memoryBlock + feedbackBlock + evidenceBlock };
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'}`);
+      let universalTaskContract = null;
+      let universalContractBlock = '';
+      try {
+        universalTaskContract = buildUniversalTaskContract({
+          rawUserRequest: prompt,
+          fileIds: processedFiles.map(f => f.id || f.fileId || f.openaiFileId || f.name || 'attachment'),
+        });
+        universalContractBlock = `\n\n${buildUniversalContractPrompt(universalTaskContract)}`;
+      } catch (contractErr) {
+        console.warn('[ai] universal task contract unavailable (continuing without):', contractErr.message || contractErr);
+      }
+      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + memoryBlock + feedbackBlock + evidenceBlock };
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];

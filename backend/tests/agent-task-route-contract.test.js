@@ -51,6 +51,55 @@ test('agent task route: stores intent alignment profile in meta state', () => {
   assert.equal(state.meta.taskPlan.phases[0].id, 'source_research');
 });
 
+test('agent task route: stores UniversalTaskContract in meta state', () => {
+  const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
+    type: 'meta',
+    taskId: 'task-contract',
+    goal: 'Creame un SVG de una casa',
+    model: 'gpt-4o',
+    tools: ['create_document', 'verify_artifact'],
+    universalTaskContract: {
+      pipeline: 'VisualArtifactPipeline',
+      required_extension: '.svg',
+      mime_type: 'image/svg+xml',
+      artifact_type: 'svg',
+    },
+  });
+
+  assert.equal(state.meta.universalTaskContract.pipeline, 'VisualArtifactPipeline');
+  assert.equal(state.meta.universalTaskContract.required_extension, '.svg');
+});
+
+test('agent task route: system prompt includes UniversalTaskContract sovereignty rules', () => {
+  const prompt = INTERNAL.buildAgentSystemPrompt('', [], null, null, null, null, {
+    version: 'universal-task-contract-2026-04',
+    primary_intent: 'visual_artifact',
+    secondary_intents: [],
+    pipeline: 'VisualArtifactPipeline',
+    artifact_required: true,
+    artifact_type: 'svg',
+    required_extension: '.svg',
+    mime_type: 'image/svg+xml',
+    delivery_mode: 'downloadable-file',
+    required_tools: ['create_document', 'verify_artifact', 'finalize'],
+    source_requirements: { required: false, providers: [], verification_policy: 'none', recency_range: null, exclusions: [] },
+    grounding_required: false,
+    citations_required: false,
+    user_constraints: ['required_extension:.svg'],
+    implicit_constraints: ['format_sovereignty:.svg'],
+    ambiguity_score: 0.1,
+    risk_level: 'medium',
+    validation_plan: [{ id: 'svg_parseable', stage: 'format_validation', check: 'parses_as_svg', expected: 'pass' }],
+    final_delivery_rules: ['The final deliverable must be exactly .svg; no substitute format is allowed.'],
+    multi_intent_dag: { enabled: false, nodes: [], edges: [] },
+  });
+
+  assert.match(prompt, /UNIVERSAL TASK CONTRACT/);
+  assert.match(prompt, /required_extension/);
+  assert.match(prompt, /\.svg/);
+  assert.match(prompt, /Never substitute formats/);
+});
+
 test('agent task route: does not drop tool events emitted without a current step', () => {
   let state = INTERNAL.initialAgentState();
   state = INTERNAL.reduceAgentState(state, {

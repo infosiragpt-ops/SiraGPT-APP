@@ -53,7 +53,13 @@ const {
   buildAgentTaskPlan,
   buildAgentTaskPlanPrompt,
 } = require('../services/agents/agent-task-plan');
-const { resolveTaskContract, makeEmptyContract } = require('../services/agents/task-contract-resolver');
+const { resolveTaskContract } = require('../services/agents/task-contract-resolver');
+const {
+  buildUniversalTaskContract,
+  deriveLegacyTaskContract,
+  enforceLegacyTaskContract,
+  buildUniversalContractPrompt,
+} = require('../services/agents/universal-task-contract');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -194,11 +200,16 @@ router.post(
       : [];
     const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds });
     const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
-    // TaskContract resolution is best-effort: on LLM/network failure
-    // we synthesise a minimal contract so the rest of the pipeline
-    // still has something to validate against. The resolver itself
-    // handles retries + schema validation — see task-contract-resolver.js.
-    let taskContract = makeEmptyContract(agentGoal);
+    const universalTaskContract = buildUniversalTaskContract({
+      rawUserRequest: agentGoal,
+      fileIds,
+    });
+    const finalizeProfile = buildFinalizeProfile(executionProfile, universalTaskContract);
+    // The UniversalTaskContract is now the source of truth. The
+    // legacy TaskContract is only the ArtifactReviewer adapter. LLM
+    // resolution may add tests, but it cannot override extension/MIME
+    // sovereignty.
+    let taskContract = deriveLegacyTaskContract(universalTaskContract);
     let taskContractSource = 'fallback';
     try {
       const bootOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -206,8 +217,9 @@ router.post(
         goal: agentGoal,
         openai: bootOpenAI,
         fileIds,
+        fallback: () => deriveLegacyTaskContract(universalTaskContract),
       });
-      taskContract = resolved.contract || taskContract;
+      taskContract = enforceLegacyTaskContract(resolved.contract || taskContract, universalTaskContract);
       taskContractSource = resolved.source || taskContractSource;
     } catch (err) {
       console.warn('[agent-task] task-contract resolver failed, using fallback:', err?.message);
@@ -216,6 +228,7 @@ router.post(
       goal: agentGoal,
       executionProfile,
       intentAlignmentProfile,
+      universalTaskContract,
       fileIds,
       maxRuntimeMs: Number.isFinite(Number.parseInt(req.body.maxRuntimeMs, 10))
         ? Number.parseInt(req.body.maxRuntimeMs, 10)
@@ -224,6 +237,15 @@ router.post(
     const taskId = crypto.randomUUID();
     const taskStartedAt = Date.now();
     const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
+    auditLog.audit({
+      event: 'contract_created',
+      taskId,
+      userId: req.user?.id || null,
+      chatId,
+      pipeline: universalTaskContract.pipeline,
+      requiredExtension: universalTaskContract.required_extension,
+      riskLevel: universalTaskContract.risk_level,
+    });
     const controller = new AbortController();
     const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
     const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
@@ -244,6 +266,7 @@ router.post(
       executionProfile,
       intentAlignmentProfile,
       taskPlan,
+      universalTaskContract,
     });
     metrics.counter('agent_task_invocations_total', { status: 'started' });
     auditLog.audit({
@@ -256,6 +279,8 @@ router.post(
       maxRuntimeMs,
       requiredTools: executionProfile.requiredTools,
       planPhases: taskPlan.phases.map((phase) => phase.id),
+      contractPipeline: universalTaskContract.pipeline,
+      contractRequiredExtension: universalTaskContract.required_extension,
     });
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -310,6 +335,7 @@ router.post(
               executionProfile,
               intentAlignmentProfile,
               taskPlan,
+              universalTaskContract,
               maxSteps,
               maxRuntimeMs,
               updatedAt: task.updatedAt,
@@ -356,6 +382,7 @@ router.post(
       executionProfile,
       intentAlignmentProfile,
       taskPlan,
+      universalTaskContract,
       taskContract,
       taskContractSource,
     });
@@ -382,6 +409,7 @@ router.post(
       // failed tests back to the agent as part of their tool_result,
       // so the next ReAct turn can self-repair instead of finalize.
       taskContract,
+      universalTaskContract,
       onEvent: (evt) => {
         // Forward tool-level events (tool_call / tool_output / file_artifact)
         // to the client with the active stepId so it can nest them.
@@ -418,6 +446,7 @@ router.post(
                 executionProfile,
                 intentAlignmentProfile,
                 taskPlan,
+                universalTaskContract,
                 maxSteps,
                 maxRuntimeMs,
                 updatedAt: new Date().toISOString(),
@@ -437,9 +466,9 @@ router.post(
         maxSteps,
         maxRuntimeMs,
         model,
-        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan, taskContract),
+        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan, taskContract, universalTaskContract),
         ctx: toolCtx,
-        finalizeGuard: ({ steps }) => validateFinalize(executionProfile, steps),
+        finalizeGuard: ({ steps }) => validateFinalize(finalizeProfile, steps),
         onStepStart: (step) => {
           // react-agent gives us THE assistant turn (thought + tool
           // invocations). We turn the `thought` line into a
@@ -488,6 +517,7 @@ router.post(
                 executionProfile,
                 intentAlignmentProfile,
                 taskPlan,
+                universalTaskContract,
                 stoppedReason: result.stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
@@ -590,6 +620,36 @@ function inferIconFor(toolName) {
   }
 }
 
+function buildFinalizeProfile(executionProfile, universalTaskContract) {
+  const executableContractTools = new Set(
+    (universalTaskContract?.required_tools || [])
+      .filter((tool) => tool !== 'finalize')
+      .filter((tool) => [
+        'web_search',
+        'create_document',
+        'verify_artifact',
+        'rag_retrieve',
+        'self_rag_answer',
+        'python_exec',
+        'run_tests',
+      ].includes(tool))
+  );
+  const requiredTools = Array.from(new Set([
+    ...(executionProfile?.requiredTools || []),
+    ...executableContractTools,
+  ]));
+  return {
+    ...(executionProfile || {}),
+    requiredTools,
+    minimumToolCalls: {
+      ...(executionProfile?.minimumToolCalls || {}),
+      ...(universalTaskContract?.source_requirements?.verification_policy === 'strict' && executableContractTools.has('web_search')
+        ? { web_search: Math.max(2, executionProfile?.minimumToolCalls?.web_search || 0) }
+        : {}),
+    },
+  };
+}
+
 function readArtifactMetadata(id) {
   const metadataPath = path.join(ARTIFACT_DIR, `${id}.json`);
   try {
@@ -626,8 +686,11 @@ function normalizeSystemContract(text) {
     .slice(0, 4000);
 }
 
-function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan, taskContract) {
+function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan, taskContract, universalTaskContract) {
   const parts = [TASK_SYSTEM_PROMPT];
+  if (universalTaskContract) {
+    parts.push(buildUniversalContractPrompt(universalTaskContract));
+  }
   // TaskContract first: this is the authoritative closed-route
   // contract the deterministic ArtifactReviewer enforces. The agent
   // must match it exactly or the tool_result for create_document
@@ -666,7 +729,7 @@ function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, inten
   return parts.join('\n\n');
 }
 
-function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState, executionProfile = null, intentAlignmentProfile = null, taskPlan = null }) {
+function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState, executionProfile = null, intentAlignmentProfile = null, taskPlan = null, universalTaskContract = null }) {
   pruneOldTasks();
   const now = new Date().toISOString();
   const record = {
@@ -685,6 +748,7 @@ function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controll
     executionProfile,
     intentAlignmentProfile,
     taskPlan,
+    universalTaskContract,
     events: [],
     assistantMessageId: null,
   };
@@ -748,6 +812,7 @@ function formatTaskPayload(task) {
     executionProfile: task.executionProfile || null,
     intentAlignmentProfile: task.intentAlignmentProfile || null,
     taskPlan: task.taskPlan || null,
+    universalTaskContract: task.universalTaskContract || null,
     stats: task.stats || null,
     checkpoints: task.checkpoints || [],
   };
@@ -760,7 +825,7 @@ function initialAgentState() {
 function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract } };
     case 'step_start':
       return {
         ...state,
