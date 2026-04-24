@@ -170,10 +170,12 @@ const COMPONENTS = [
     id: "business-intelligence-studio",
     name: "Business Intelligence Studio",
     purpose: "Power BI-style dashboards with star schema, DAX-like measures, RLS.",
-    status: "planned",
-    backing_modules: [],
+    status: "partial",
+    backing_modules: [
+      "backend/src/services/bi/semantic-model.js",
+    ],
     acceptance_criteria: [
-      "semantic model builder (facts, dimensions, measures)",
+      "semantic model builder (facts, dimensions, measures) — IMPLEMENTED (star-schema validator, DAX-like compiler, KPI card derivation)",
       "chart renderer with exports to pdf/pptx/xlsx",
       "row-level security + RBAC",
     ],
@@ -183,10 +185,12 @@ const COMPONENTS = [
     id: "full-stack-web-builder",
     name: "Full-Stack Web Builder",
     purpose: "Next.js/React/TS scaffolder with SSR/ISR, auth, a11y, SEO.",
-    status: "planned",
-    backing_modules: [],
+    status: "partial",
+    backing_modules: [
+      "backend/src/services/software-engineering/project-scaffolder.js",
+    ],
     acceptance_criteria: [
-      "project scaffolder with App Router, Server Components",
+      "project scaffolder with App Router (nextjs) + FastAPI templates — IMPLEMENTED (file-tree descriptor, Playwright E2E wired, Docker, CI/CD workflow)",
       "SEO metadata + schema.org + sitemap",
       "WCAG AA validator + Core Web Vitals check",
       "test suite wiring (Playwright/Vitest)",
@@ -250,9 +254,12 @@ const COMPONENTS = [
     id: "hitl-control-center",
     name: "Human-in-the-Loop Control Center",
     purpose: "UI for approving destructive / high-risk actions; clarification capture.",
-    status: "planned",
-    backing_modules: [],
+    status: "partial",
+    backing_modules: [
+      "backend/src/services/hitl/approval-queue.js",
+    ],
     acceptance_criteria: [
+      "approval queue data layer with state machine (pending → approved/rejected/timed_out/cancelled), RBAC allowlist, timeout reap — IMPLEMENTED",
       "approval queue UI surfacing release_gate.requires_human nodes",
       "one-click clarifying-question reply flow",
       "audit trail of approvals",
