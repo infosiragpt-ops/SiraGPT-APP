@@ -124,6 +124,63 @@ test('buildRuntimeContext stays inactive for prompts unrelated to files when doc
   assert.equal(rag.calls.ingest.length, 0);
 });
 
+test('buildRuntimeContext uses custom GPT knowledge for non-greeting prompts', async () => {
+  const rag = fakeRag();
+  const out = await runtime.buildRuntimeContext({
+    rag,
+    userId: 'u1',
+    chatId: 'chat1',
+    prompt: 'Que debo priorizar ahora?',
+    customGpt: {
+      id: 'gpt1',
+      knowledgeFiles: [
+        {
+          id: 'kg1',
+          originalName: 'Manual GPT.pdf',
+          mimeType: 'application/pdf',
+          extractedText: 'Custom GPT knowledge about priorities, workflow and quality rules. '.repeat(20),
+        },
+      ],
+    },
+  });
+
+  assert.equal(out.active, true);
+  assert.equal(out.collection, 'gpt:gpt1');
+  assert.equal(rag.calls.ingest.length, 1);
+  assert.equal(rag.calls.retrieve.length, 1);
+  assert.match(out.contextBlock, /custom GPT knowledge documents/);
+});
+
+test('buildRuntimeContext ignores pure greetings even with custom GPT knowledge', async () => {
+  const rag = fakeRag();
+  const out = await runtime.buildRuntimeContext({
+    rag,
+    userId: 'u1',
+    chatId: 'chat1',
+    prompt: 'hola',
+    customGpt: {
+      id: 'gpt1',
+      knowledgeFiles: [
+        {
+          id: 'kg1',
+          originalName: 'Manual GPT.pdf',
+          mimeType: 'application/pdf',
+          extractedText: 'Custom GPT knowledge '.repeat(80),
+        },
+      ],
+    },
+  });
+
+  assert.equal(out.active, false);
+  assert.equal(rag.calls.ingest.length, 0);
+});
+
+test('collectionFor prioritizes project, then custom GPT, then chat', () => {
+  assert.equal(runtime.collectionFor({ project: { id: 'p1' }, customGpt: { id: 'g1' }, chatId: 'c1' }), 'project:p1');
+  assert.equal(runtime.collectionFor({ customGpt: { id: 'g1' }, chatId: 'c1' }), 'gpt:g1');
+  assert.equal(runtime.collectionFor({ chatId: 'c1' }), 'chat:c1');
+});
+
 test('buildRuntimeContext ignores pure greetings even with a long project document', async () => {
   const rag = fakeRag();
   const out = await runtime.buildRuntimeContext({

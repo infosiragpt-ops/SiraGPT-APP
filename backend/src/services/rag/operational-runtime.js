@@ -51,8 +51,9 @@ function titleForFile(file) {
   return file?.originalName || file?.name || file?.filename || 'Untitled file';
 }
 
-function collectionFor({ project, chatId, fallbackSeed }) {
+function collectionFor({ project, customGpt, chatId, fallbackSeed }) {
   if (project?.id) return `project:${project.id}`;
+  if (customGpt?.id) return `gpt:${customGpt.id}`;
   if (chatId) return `chat:${chatId}`;
   if (fallbackSeed) return `turn:${hashShort(fallbackSeed)}`;
   return DEFAULT_COLLECTION;
@@ -297,7 +298,7 @@ function buildEvidenceBlock({ query, collection, docs, hits, graphAnswer = null,
     docList ? `Documents indexed:\n${docList}` : '',
     '',
     'Grounding contract:',
-    '- Use the evidence snippets below as the authoritative source for claims about uploaded/project documents.',
+    '- Use the evidence snippets below as the authoritative source for claims about uploaded, project, and custom GPT knowledge documents.',
     '- Cite document-grounded claims with [S1], [S2], etc. using only the snippets that support the claim.',
     '- For global or sensemaking requests, use GraphRAG synthesis as corpus-level guidance and keep concrete claims tied to retrieved evidence where possible.',
     '- If the snippets do not support a requested claim, say that the available evidence is insufficient instead of inferring it.',
@@ -309,14 +310,22 @@ function buildEvidenceBlock({ query, collection, docs, hits, graphAnswer = null,
   ].filter(Boolean).join('\n');
 }
 
+function isPureGreetingPrompt(prompt) {
+  return /^\s*(hola|hello|hi|hey|buenas|gracias|thanks|ok|vale)\s*[.!?]*\s*$/i.test(String(prompt || '').toLowerCase());
+}
+
 function shouldRunForPrompt(prompt, docs) {
   if (!Array.isArray(docs) || docs.length === 0) return false;
   const p = String(prompt || '').toLowerCase();
-  if (/^\s*(hola|hello|hi|hey|buenas|gracias|thanks|ok|vale)\s*[.!?]*\s*$/i.test(p)) {
-    return false;
-  }
+  if (isPureGreetingPrompt(p)) return false;
   if (docs.some(d => d.chars >= LONG_DOC_CHAR_THRESHOLD)) return true;
   return /\b(documento|documentos|archivo|archivos|pdf|fuente|fuentes|seg[uú]n|adjunto|adjuntos|uploaded|file|files|source|sources|resumen|resume|analiza|analisis|analysis|extract|extrae|cita|citas)\b/i.test(p);
+}
+
+function shouldForceCustomGptKnowledge(prompt, customGptDocs) {
+  return Array.isArray(customGptDocs)
+    && customGptDocs.length > 0
+    && !isPureGreetingPrompt(prompt);
 }
 
 function isGlobalSensemakingQuery(prompt) {
@@ -499,19 +508,23 @@ async function buildRuntimeContext({
   prompt,
   processedFiles = [],
   project = null,
+  customGpt = null,
   openai = null,
   k = DEFAULT_RETRIEVAL_K,
   logger = console,
 } = {}) {
   const currentDocs = normaliseDocs(processedFiles);
   const projectDocs = normaliseDocs(project?.files || []);
-  const docs = dedupeDocs([...currentDocs, ...projectDocs]);
-  if (!userId || !shouldRunForPrompt(prompt, docs)) {
+  const customGptDocs = normaliseDocs(customGpt?.knowledgeFiles || []);
+  const docs = dedupeDocs([...currentDocs, ...projectDocs, ...customGptDocs]);
+  const mustUseCustomGptKnowledge = shouldForceCustomGptKnowledge(prompt, customGptDocs);
+  if (!userId || (!shouldRunForPrompt(prompt, docs) && !mustUseCustomGptKnowledge)) {
     return { active: false, reason: 'not needed', docs: [], hits: [], contextBlock: '' };
   }
 
   const collection = collectionFor({
     project,
+    customGpt,
     chatId,
     fallbackSeed: docs.map(d => d.source).join('|'),
   });
@@ -616,6 +629,8 @@ module.exports = {
   shouldUseGraphRagForPrompt,
   buildEvidenceBlock,
   buildRuntimeContext,
+  shouldForceCustomGptKnowledge,
+  isPureGreetingPrompt,
   passagesForAudit,
   compactCritique,
   compactRagas,

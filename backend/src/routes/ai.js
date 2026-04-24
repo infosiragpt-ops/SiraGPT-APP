@@ -632,6 +632,7 @@ router.post(
             prompt,
             processedFiles,
             project,
+            customGpt,
             openai: rag.getOpenAI(),
           });
         } catch (ragErr) {

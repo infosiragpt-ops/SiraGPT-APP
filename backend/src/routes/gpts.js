@@ -12,56 +12,45 @@ router.get('/', authenticateToken, async (req, res) => {
     const userId = req.user?.id;
     const { category, search, featured, visibility = 'all' } = req.query;
 
-    // Build base visibility clause
-    const baseVisibilityClause = {
-      OR: [
-        { visibility: 'PUBLIC' },
-        ...(userId ? [{ creatorId: userId }] : [])
-      ]
-    };
+    const andClauses = [];
 
-    let whereClause = { ...baseVisibilityClause };
-
-    // Add category filter
-    if (category && category !== 'All') {
-      whereClause.category = category;
+    if (visibility === 'mine' && userId) {
+      andClauses.push({ creatorId: userId });
+    } else if (visibility === 'public') {
+      andClauses.push({ visibility: 'PUBLIC' });
+    } else {
+      andClauses.push({
+        OR: [
+          { visibility: 'PUBLIC' },
+          ...(userId ? [{ creatorId: userId }] : [])
+        ]
+      });
     }
 
-    // Add search filter - fix circular reference
+    if (category && category !== 'All') {
+      andClauses.push({ category });
+    }
+
     if (search && search.trim()) {
       const searchTerm = search.trim();
-      whereClause = {
-        AND: [
-          baseVisibilityClause, // Use the base clause instead of the modified one
-          {
-            OR: [
-              { name: { contains: searchTerm, mode: 'insensitive' } },
-              { description: { contains: searchTerm, mode: 'insensitive' } }
-            ]
-          }
+      andClauses.push({
+        OR: [
+          { name: { contains: searchTerm, mode: 'insensitive' } },
+          { description: { contains: searchTerm, mode: 'insensitive' } },
+          { instructions: { contains: searchTerm, mode: 'insensitive' } }
         ]
-      };
+      });
     }
 
-    // Add featured filter
     if (featured === 'true') {
-      if (whereClause.AND) {
-        whereClause.AND.push({ isFeatured: true });
-      } else {
-        whereClause.isFeatured = true;
-      }
+      andClauses.push({ isFeatured: true });
     }
 
-    // Handle visibility filter
-    if (visibility !== 'all' && userId) {
-      if (visibility === 'mine') {
-        whereClause = { creatorId: userId };
-      } else if (visibility === 'public') {
-        whereClause = { visibility: 'PUBLIC' };
-      }
-    }
+    const whereClause = andClauses.length > 1 ? { AND: andClauses } : andClauses[0] || {};
 
-    console.log('GPT Query WHERE clause:', JSON.stringify(whereClause, null, 2));
+    if (process.env.NODE_ENV !== 'production' && process.env.SIRAGPT_DEBUG_GPTS === '1') {
+      console.log('GPT Query WHERE clause:', JSON.stringify(whereClause, null, 2));
+    }
 
     const gpts = await prisma.customGpt.findMany({
       where: whereClause,

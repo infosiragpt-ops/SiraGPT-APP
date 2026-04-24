@@ -26,6 +26,7 @@ export interface CustomGPT {
   _count?: {
     conversations?: number
     likes?: number
+    files?: number
   }
   isLiked?: boolean
 }
