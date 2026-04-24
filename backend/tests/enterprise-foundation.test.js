@@ -165,8 +165,13 @@ const cases = [
   () => {
     const list = listComponents();
     assert.ok(list.every(c => c.id && c.name && c.status));
-    const planned = list.filter(c => c.status === "planned");
-    assert.ok(planned.length >= 1, "at least one component should be honestly marked planned");
+    // Anti-vaporware contract: at least one component should be
+    // honestly marked as "not yet implemented" (partial OR planned).
+    // Once the registry reaches all-implemented we'll retire this
+    // gate, but today the Workflow Orchestrator + Document
+    // Intelligence Engine are partial by design.
+    const notImplemented = list.filter(c => c.status !== "implemented");
+    assert.ok(notImplemented.length >= 1, "at least one component should honestly not claim fully implemented");
   },
 
   // ── ToolManifest v1.1 ──────────────────────────────────────────────
