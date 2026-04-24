@@ -2173,10 +2173,17 @@ function ChatInterfaceContent() {
 
   const [input, setInput] = React.useState("")
   const [isRecording, setIsRecording] = React.useState(false)
+  const [isDictationTranscribing, setIsDictationTranscribing] = React.useState(false)
   const inputRef = React.useRef("")
   const dictationBaseRef = React.useRef("")
   const dictationFinalRef = React.useRef("")
   const dictationInterimRef = React.useRef("")
+  const dictationAudioChunksRef = React.useRef<Blob[]>([])
+  const dictationMediaRecorderRef = React.useRef<MediaRecorder | null>(null)
+  const dictationModeRef = React.useRef<"idle" | "native" | "recorder">("idle")
+  const dictationPermissionReadyRef = React.useRef(false)
+  const dictationNativeFallbackStartedRef = React.useRef(false)
+  const dictationShouldTranscribeRecordingRef = React.useRef(false)
   const [searchActivities, setSearchActivities] = React.useState<Record<string, SearchActivityState>>({})
   const [activeSearchActivityId, setActiveSearchActivityId] = React.useState<string | null>(null)
 
@@ -2979,6 +2986,147 @@ But first, you need to connect your Spotify account securely using the button be
     ].map(normalizeDictationText).filter(Boolean).join(" ");
   }, [normalizeDictationText]);
 
+  const appendDictationText = React.useCallback((text: string) => {
+    const normalizedText = normalizeDictationText(text);
+    if (!normalizedText) return;
+
+    setInput(prev => {
+      const nextInput = normalizeDictationText(`${prev} ${normalizedText}`);
+      inputRef.current = nextInput;
+      return nextInput;
+    });
+  }, [normalizeDictationText]);
+
+  const resetDictationTranscript = React.useCallback(() => {
+    dictationBaseRef.current = "";
+    dictationFinalRef.current = "";
+    dictationInterimRef.current = "";
+  }, []);
+
+  const showMicrophonePermissionError = React.useCallback((error?: any) => {
+    const errorName = String(error?.name || error?.message || "");
+    const isDenied = /denied|notallowed|not-allowed|permission/i.test(errorName);
+    toast.error(
+      isDenied
+        ? "El micrófono está bloqueado. Actívalo en los permisos del navegador y vuelve a intentarlo."
+        : "No se pudo acceder al micrófono. Revisa que esté conectado y permitido.",
+    );
+  }, []);
+
+  const ensureMicrophonePermission = React.useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("getUserMedia unsupported");
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    stream.getTracks().forEach(track => track.stop());
+    dictationPermissionReadyRef.current = true;
+  }, []);
+
+  const transcribeRecordedDictation = React.useCallback(async (audioBlob: Blob) => {
+    if (!audioBlob.size) {
+      setIsRecording(false);
+      return;
+    }
+
+    setIsRecording(false);
+    setIsDictationTranscribing(true);
+
+    try {
+      const audioFile = new globalThis.File([audioBlob], "dictation.webm", {
+        type: audioBlob.type || "audio/webm",
+      });
+      const response: any = await apiClient.speechToText(audioFile, "scribe_v1");
+
+      if (response?.fallback) {
+        toast.error("La transcripción del backend no está disponible con la configuración actual.");
+        return;
+      }
+
+      if (response?.text) {
+        appendDictationText(response.text);
+        toast.success("Dictado insertado en el chat.");
+      } else {
+        toast.error("No se detectó texto en el audio grabado.");
+      }
+    } catch (error: any) {
+      console.error("Dictation transcription error:", error);
+      toast.error(error?.message || "No se pudo transcribir el dictado.");
+    } finally {
+      setIsDictationTranscribing(false);
+      dictationModeRef.current = "idle";
+      dictationMediaRecorderRef.current = null;
+      dictationAudioChunksRef.current = [];
+    }
+  }, [appendDictationText]);
+
+  const startRecorderDictation = React.useCallback(async () => {
+    if (!window.MediaRecorder) {
+      toast.error("Este navegador no soporta grabación de audio para dictado.");
+      setIsRecording(false);
+      dictationModeRef.current = "idle";
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      const supportedMimeType = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ].find(type => MediaRecorder.isTypeSupported(type));
+      const mediaRecorder = supportedMimeType
+        ? new MediaRecorder(stream, { mimeType: supportedMimeType })
+        : new MediaRecorder(stream);
+
+      dictationAudioChunksRef.current = [];
+      dictationMediaRecorderRef.current = mediaRecorder;
+      dictationModeRef.current = "recorder";
+      dictationShouldTranscribeRecordingRef.current = true;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          dictationAudioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(dictationAudioChunksRef.current, {
+          type: mediaRecorder.mimeType || "audio/webm",
+        });
+        stream.getTracks().forEach(track => track.stop());
+        if (!dictationShouldTranscribeRecordingRef.current) {
+          setIsRecording(false);
+          dictationModeRef.current = "idle";
+          dictationAudioChunksRef.current = [];
+          return;
+        }
+        void transcribeRecordedDictation(audioBlob);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      toast.info("Dictado activado. Habla y pulsa detener para insertar el texto.");
+    } catch (error) {
+      console.error("Recorder dictation start error:", error);
+      dictationModeRef.current = "idle";
+      setIsRecording(false);
+      showMicrophonePermissionError(error);
+    }
+  }, [showMicrophonePermissionError, transcribeRecordedDictation]);
+
   React.useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -3015,23 +3163,36 @@ But first, you need to connect your Spotify account securely using the button be
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error:", event.error);
         const permissionErrors = new Set(["not-allowed", "service-not-allowed"]);
+        if (
+          permissionErrors.has(event.error)
+          && dictationPermissionReadyRef.current
+          && !dictationNativeFallbackStartedRef.current
+        ) {
+          dictationNativeFallbackStartedRef.current = true;
+          toast.info("El dictado nativo no se activó. Usaré grabación y transcripción al detener.");
+          void startRecorderDictation();
+          return;
+        }
+
         if (permissionErrors.has(event.error)) {
-          toast.error("Permite el micrófono en el navegador para usar dictado.");
+          toast.error("El micrófono está bloqueado. Actívalo en los permisos del navegador y vuelve a intentarlo.");
         } else if (event.error !== "no-speech" && event.error !== "aborted") {
           toast.error("No se pudo iniciar el dictado. Inténtalo de nuevo.");
         }
+        dictationModeRef.current = "idle";
         setIsRecording(false);
       };
 
       recognition.onend = () => {
+        if (dictationModeRef.current === "recorder") return;
+
         const committedDraft = buildDictationDraft(dictationInterimRef.current);
         if (committedDraft) {
           setInput(committedDraft);
           inputRef.current = committedDraft;
         }
-        dictationBaseRef.current = "";
-        dictationFinalRef.current = "";
-        dictationInterimRef.current = "";
+        resetDictationTranscript();
+        dictationModeRef.current = "idle";
         setIsRecording(false);
       };
 
@@ -3042,31 +3203,59 @@ But first, you need to connect your Spotify account securely using the button be
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
+      if (dictationMediaRecorderRef.current?.state === "recording") {
+        dictationShouldTranscribeRecordingRef.current = false;
+        dictationMediaRecorderRef.current.stop();
+      }
     };
-  }, [buildDictationDraft, normalizeDictationText]);
+  }, [buildDictationDraft, normalizeDictationText, resetDictationTranscript, startRecorderDictation]);
 
-  const handleMicClick = () => {
+  const handleMicClick = async () => {
     const recognition = recognitionRef.current;
-    if (!recognition) {
-      toast.error("Este navegador no soporta dictado por voz.");
+
+    if (isDictationTranscribing) return;
+
+    if (isRecording) {
+      if (dictationModeRef.current === "recorder") {
+        dictationShouldTranscribeRecordingRef.current = true;
+        dictationMediaRecorderRef.current?.stop();
+      } else {
+        recognition?.stop();
+      }
       return;
     }
 
-    if (isRecording) {
-      recognition.stop();
-    } else {
-      dictationBaseRef.current = inputRef.current;
-      dictationFinalRef.current = "";
-      dictationInterimRef.current = "";
-      try {
-        recognition.start();
+    dictationBaseRef.current = inputRef.current;
+    dictationFinalRef.current = "";
+    dictationInterimRef.current = "";
+    dictationPermissionReadyRef.current = false;
+    dictationNativeFallbackStartedRef.current = false;
+
+    try {
+      await ensureMicrophonePermission();
+    } catch (error) {
+      showMicrophonePermissionError(error);
+      return;
+    }
+
+    if (!recognition) {
+      void startRecorderDictation();
+      return;
+    }
+
+    try {
+      dictationModeRef.current = "native";
+      recognition.start();
+      setIsRecording(true);
+    } catch (error: any) {
+      if (error?.name === "InvalidStateError") {
         setIsRecording(true);
-      } catch (error: any) {
-        if (error?.name !== "InvalidStateError") {
-          toast.error("No se pudo iniciar el dictado. Revisa el permiso del micrófono.");
-          console.error("Speech recognition start error:", error);
-        }
+        return;
       }
+
+      console.error("Speech recognition start error:", error);
+      toast.info("El dictado nativo no inició. Usaré grabación y transcripción al detener.");
+      void startRecorderDictation();
     }
   };
 
@@ -3077,8 +3266,9 @@ But first, you need to connect your Spotify account securely using the button be
           variant="ghost"
           size="icon"
           onClick={handleMicClick}
-          aria-label={isRecording ? "Detener dictado" : "Dictar al chat"}
-          title={isRecording ? "Detener dictado" : "Dictar al chat"}
+          disabled={isDictationTranscribing}
+          aria-label={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
+          title={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
           className={cn(
             "relative h-9 w-9 rounded-full p-0 transition-all duration-200 active:scale-[0.96]",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
@@ -3087,7 +3277,9 @@ But first, you need to connect your Spotify account securely using the button be
               : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
           )}
         >
-          {isRecording ? (
+          {isDictationTranscribing ? (
+            <Loader2 className="h-[17px] w-[17px] animate-spin" strokeWidth={1.75} />
+          ) : isRecording ? (
             <Square className="h-[14px] w-[14px] fill-current" strokeWidth={0} />
           ) : (
             <Mic className="h-[17px] w-[17px]" strokeWidth={1.75} />
@@ -3096,7 +3288,9 @@ But first, you need to connect your Spotify account securely using the button be
       </TooltipTrigger>
       <TooltipContent side="top">
         <p>
-          {isRecording
+          {isDictationTranscribing
+            ? "Transcribiendo dictado"
+            : isRecording
             ? "Detener dictado"
             : isSpeechSupported
               ? "Dictar al chat"
