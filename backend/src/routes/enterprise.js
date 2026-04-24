@@ -37,6 +37,9 @@ const { detectContradictions } = require("../services/docintel/contradiction-det
 const { validateSeo } = require("../services/software-engineering/seo-validator");
 const { checkWcag, contrastRatio } = require("../services/software-engineering/wcag-checker");
 const { analyzeBudget } = require("../services/software-engineering/cwv-budget");
+const productOs = require("../services/ai-product-os/product-os");
+const { listLaws, enforceConstitution } = require("../services/ai-product-os/constitution");
+const { listAgents: listProductOsAgents, computeHandoffGraph } = require("../services/ai-product-os/agentic-kernel");
 const { validateContract } = require("../services/agents/task-contract-resolver");
 const { runQaBoard } = require("../services/agents/qa-board");
 const { createTracer } = require("../services/observability/spans");
@@ -408,6 +411,75 @@ router.post(
       }));
     } catch (err) {
       fail(res, 500, err.message || "cwv analyze failed");
+    }
+  }
+);
+
+// ─── AI Product Operating System (runtime kernel) ──────────────────────
+
+router.get("/product-os/status", authenticateToken, (_req, res) => {
+  ok(res, productOs.status());
+});
+
+router.get("/product-os/laws", authenticateToken, (_req, res) => {
+  ok(res, { laws: listLaws() });
+});
+
+router.get("/product-os/agents", authenticateToken, (_req, res) => {
+  ok(res, { agents: listProductOsAgents(), handoff_graph: computeHandoffGraph() });
+});
+
+router.post(
+  "/product-os/constitution/enforce",
+  authenticateToken,
+  [body("ctx").optional().isObject()],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    ok(res, enforceConstitution(req.body.ctx || {}));
+  }
+);
+
+router.post(
+  "/product-os/compile",
+  authenticateToken,
+  [
+    body("objective").isString().isLength({ min: 4, max: 4000 }),
+    body("deliverables").optional().isArray(),
+    body("constraints").optional().isArray(),
+    body("quality_bar").optional().isObject(),
+    body("stakeholders").optional().isArray(),
+    body("correlation_id").optional().isString(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      ok(res, productOs.compile(req.body));
+    } catch (err) {
+      fail(res, 500, err.message || "compile failed");
+    }
+  }
+);
+
+router.post(
+  "/product-os/execute/dry-run",
+  authenticateToken,
+  [
+    body("contract").isObject().withMessage("contract (object) required"),
+    body("graph").isObject().withMessage("graph (object) required"),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = await productOs.execute(
+        { contract: req.body.contract, graph: req.body.graph },
+        { activityRunner: async ({ activity, node_id }) => ({ activity, node_id, dry_run: true, ts: new Date().toISOString() }) }
+      );
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "execute failed");
     }
   }
 );

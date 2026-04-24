@@ -22,6 +22,32 @@ const RISK = Object.freeze(["low", "medium", "high", "critical"]);
 
 const COMPONENTS = [
   {
+    id: "ai-product-operating-system",
+    name: "AI Product Operating System (Runtime Kernel)",
+    purpose: "Top-level kernel that compiles every request to a UniversalTaskContract + ExecutionGraph DAG and runs it under the 14-law constitution, the 17-agent kernel, the MCP gateway, the canonical event envelope, and the temporal-compatible durable workflow adapter.",
+    status: "implemented",
+    backing_modules: [
+      "backend/src/services/ai-product-os/constitution.js",
+      "backend/src/services/ai-product-os/agentic-kernel.js",
+      "backend/src/services/ai-product-os/mcp-gateway.js",
+      "backend/src/services/ai-product-os/event-envelope.js",
+      "backend/src/services/ai-product-os/durable-workflow.js",
+      "backend/src/services/ai-product-os/product-os.js",
+    ],
+    acceptance_criteria: [
+      "14-law constitution enforced at pre-compile / pre-execute / per-node / per-output / pre-release / release gates — IMPLEMENTED",
+      "17 specialised agents (intent compiler → telemetry) registered with typed manifests, guardrails, handoff targets — IMPLEMENTED",
+      "MCP gateway: tools / resources / prompts registry with JSON-RPC 2.0 dispatch, scope-based authorization, audit trail — IMPLEMENTED",
+      "Canonical event envelope (correlation/causation/trace/span ids, OTel-compatible) with serialize / deserialize / validate / chain — IMPLEMENTED",
+      "Temporal-compatible durable workflow adapter with retry, timeout, compensation, rollback, AbortSignal, in-memory store, resume from checkpoint — IMPLEMENTED",
+      "compile(request) → contract + graph; execute(plan, runner) → release decision under constitution — IMPLEMENTED",
+      "Bind to a real Temporal cluster (production)",
+      "Bind to a real LangGraph runtime for stateful graph agents",
+      "Bind to a real OpenAI Agents SDK runtime",
+    ],
+    risk_level: "high",
+  },
+  {
     id: "agentic-operating-core",
     name: "Agentic Operating Core",
     purpose: "ReAct/executor loop, tool dispatch, system prompting, error handling.",
