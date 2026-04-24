@@ -37,6 +37,11 @@ const OpenAI = require('openai');
 const { authenticateToken } = require('../middleware/auth');
 const reactAgent = require('../services/react-agent');
 const { buildTaskTools, ARTIFACT_DIR } = require('../services/agents/task-tools');
+const {
+  buildExecutionProfile,
+  buildExecutionProfilePrompt,
+  validateFinalize,
+} = require('../services/agents/agentic-execution-profile');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -167,6 +172,7 @@ router.post(
     const fileIds = Array.isArray(req.body.files)
       ? req.body.files.map(String).filter(Boolean).slice(0, 20)
       : [];
+    const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds });
     const taskId = crypto.randomUUID();
     const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
     const controller = new AbortController();
@@ -186,6 +192,7 @@ router.post(
       maxSteps,
       maxRuntimeMs,
       streamState,
+      executionProfile,
     });
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -236,6 +243,7 @@ router.post(
               status,
               displayGoal,
               artifacts,
+              executionProfile,
               maxSteps,
               maxRuntimeMs,
               updatedAt: task.updatedAt,
@@ -278,6 +286,7 @@ router.post(
       goal: displayGoal,
       model,
       tools: tools.map(t => t.name),
+      executionProfile,
     });
 
     // Per-step id counter shared with the tool event bus so the UI
@@ -329,6 +338,7 @@ router.post(
                 status: 'running',
                 displayGoal,
                 artifacts,
+                executionProfile,
                 maxSteps,
                 maxRuntimeMs,
                 updatedAt: new Date().toISOString(),
@@ -348,8 +358,9 @@ router.post(
         maxSteps,
         maxRuntimeMs,
         model,
-        extraSystem: buildAgentSystemPrompt(systemContract, fileIds),
+        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile),
         ctx: toolCtx,
+        finalizeGuard: ({ steps }) => validateFinalize(executionProfile, steps),
         onStepStart: (step) => {
           // react-agent gives us THE assistant turn (thought + tool
           // invocations). We turn the `thought` line into a
@@ -395,6 +406,7 @@ router.post(
                 status: result.stoppedReason === 'aborted' ? 'cancelled' : 'completed',
                 displayGoal,
                 artifacts,
+                executionProfile,
                 stoppedReason: result.stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
@@ -493,10 +505,13 @@ function normalizeSystemContract(text) {
     .slice(0, 4000);
 }
 
-function buildAgentSystemPrompt(systemContract, fileIds) {
+function buildAgentSystemPrompt(systemContract, fileIds, executionProfile) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (systemContract) {
     parts.push(`Additional execution contract:\n${systemContract}`);
+  }
+  if (executionProfile) {
+    parts.push(buildExecutionProfilePrompt(executionProfile));
   }
   if (fileIds.length) {
     parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering.`);
@@ -504,7 +519,7 @@ function buildAgentSystemPrompt(systemContract, fileIds) {
   return parts.join('\n\n');
 }
 
-function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState }) {
+function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState, executionProfile = null }) {
   pruneOldTasks();
   const now = new Date().toISOString();
   const record = {
@@ -520,6 +535,7 @@ function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controll
     createdAt: now,
     updatedAt: now,
     streamState,
+    executionProfile,
     events: [],
     assistantMessageId: null,
   };
@@ -562,7 +578,7 @@ function initialAgentState() {
 function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile } };
     case 'step_start':
       return {
         ...state,

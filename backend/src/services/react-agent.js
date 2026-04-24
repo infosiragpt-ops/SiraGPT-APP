@@ -94,6 +94,7 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
  * @param {object}   [opts.ctx]            passed as 2nd arg to every tool.execute
  * @param {string}   [opts.model="gpt-4o"] model to drive the loop
  * @param {string}   [opts.extraSystem]   appended to the system prompt (query-specific guidance)
+ * @param {function} [opts.finalizeGuard] validates finalize calls before allowing termination
  */
 async function run(openai, opts) {
   const {
@@ -107,6 +108,7 @@ async function run(openai, opts) {
     ctx = {},
     model = 'gpt-4o',
     extraSystem = '',
+    finalizeGuard = null,
   } = opts;
 
   if (!query) throw new Error('react-agent: query is required');
@@ -221,9 +223,35 @@ async function run(openai, opts) {
       const toolName = call.function?.name;
       const dispatch = await dispatchTool(registry, toolName, call.function?.arguments, ctx);
 
-      const observation = dispatch.error
+      let observation = dispatch.error
         ? { error: dispatch.error }
         : dispatch.result;
+
+      if (toolName === 'finalize' && !dispatch.error && typeof finalizeGuard === 'function') {
+        const proposedAction = { tool: toolName, args: call.function?.arguments || '', observation };
+        const proposedSteps = steps.concat([{ ...stepRecord, actions: stepRecord.actions.concat([proposedAction]) }]);
+        let guard;
+        try {
+          guard = await finalizeGuard({
+            answer: dispatch.result?.answer || '',
+            confidence: dispatch.result?.confidence || null,
+            steps: proposedSteps,
+            currentStep: stepRecord,
+            ctx,
+          });
+        } catch (err) {
+          guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
+        }
+        if (!guard?.ok) {
+          observation = {
+            error: 'finalize_guard_failed',
+            message: guard?.message || 'Finalization blocked by execution policy.',
+            missingTools: guard?.missingTools || [],
+            requiredTools: guard?.requiredTools || [],
+            repairInstructions: guard?.repairInstructions || 'Run the missing tool calls, then call finalize again.',
+          };
+        }
+      }
 
       stepRecord.actions.push({ tool: toolName, args: call.function?.arguments || '', observation });
 
@@ -236,7 +264,7 @@ async function run(openai, opts) {
         content: JSON.stringify(observation).slice(0, 8000), // cap to avoid blowing context
       });
 
-      if (toolName === 'finalize' && !dispatch.error) {
+      if (toolName === 'finalize' && !dispatch.error && !observation.error) {
         finalAnswer = dispatch.result?.answer || '';
         stoppedReason = 'finalized';
         finalized = true;

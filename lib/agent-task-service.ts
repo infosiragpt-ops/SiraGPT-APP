@@ -24,7 +24,7 @@ export interface AgentArtifact {
 }
 
 export type AgentTaskEvent =
-  | { type: "meta"; taskId?: string; goal: string; model: string; tools: string[] }
+  | { type: "meta"; taskId?: string; goal: string; model: string; tools: string[]; executionProfile?: Record<string, unknown> }
   | { type: "step_start"; id: string; label: string; icon?: AgenticIcon }
   | { type: "tool_call"; stepId: string; tool: string; preview: string; language?: string; codePreview?: string }
   | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview: string; partial?: boolean }
@@ -97,7 +97,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
 }
 
 export interface AgentTaskState {
-  meta?: { taskId?: string; goal: string; model: string; tools: string[] }
+  meta?: { taskId?: string; goal: string; model: string; tools: string[]; executionProfile?: Record<string, unknown> }
   steps: Array<{
     id: string
     label: string
@@ -121,7 +121,7 @@ export interface AgentTaskState {
 export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTaskState {
   switch (evt.type) {
     case "meta":
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools } }
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile } }
     case "step_start":
       return {
         ...state,

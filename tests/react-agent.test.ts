@@ -23,6 +23,7 @@ type ReactAgent = {
     onStep?: (step: ReactStep) => void
     ctx?: unknown
     model?: string
+    finalizeGuard?: (args: { answer: string; confidence: string | null; steps: ReactStep[]; currentStep: ReactStep; ctx: unknown }) => Promise<{ ok: boolean; message?: string; missingTools?: string[]; repairInstructions?: string }> | { ok: boolean; message?: string; missingTools?: string[]; repairInstructions?: string }
   }) => Promise<ReactResult>
   DEFAULT_MAX_STEPS: number
 }
@@ -187,6 +188,33 @@ describe("react-agent · safety", () => {
     const result = await reactAgent.run(fake, { query: "q", tools: [] })
     assert.equal(result.stoppedReason, "plain_text_finalize")
     assert.match(result.finalAnswer || "", /it's blue/)
+  })
+
+  it("blocks finalize with a structured observation until deterministic gates pass", async () => {
+    const fake = new FakeOpenAI([
+      { content: "Trying to finalize too early.", tool_calls: [finalizeCall("a", "too early")] },
+      { content: "Running required tool.", tool_calls: [{ id: "b", function: { name: "echo", arguments: JSON.stringify({ text: "evidence" }) } }] },
+      { content: "Finalizing after evidence.", tool_calls: [finalizeCall("c", "done with evidence")] },
+    ])
+    const result = await reactAgent.run(fake, {
+      query: "q",
+      tools: [{
+        name: "echo",
+        description: "required tool",
+        execute: async (args: any) => ({ ok: true, text: args.text }),
+      }],
+      finalizeGuard: ({ steps }) => {
+        const hasEcho = steps.some(step => step.actions.some(action => action.tool === "echo"))
+        return hasEcho
+          ? { ok: true }
+          : { ok: false, message: "missing echo", missingTools: ["echo"], repairInstructions: "call echo first" }
+      },
+    })
+
+    assert.equal(result.stoppedReason, "finalized")
+    assert.equal(result.finalAnswer, "done with evidence")
+    assert.equal((result.steps[0].actions[0].observation as { error?: string }).error, "finalize_guard_failed")
+    assert.equal(result.steps[1].actions[0].tool, "echo")
   })
 })
 
