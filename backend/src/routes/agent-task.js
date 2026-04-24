@@ -60,6 +60,11 @@ const {
   enforceLegacyTaskContract,
   buildUniversalContractPrompt,
 } = require('../services/agents/universal-task-contract');
+const {
+  buildEnterpriseExecutionGraph,
+  buildEnterpriseRuntimeProfile,
+  buildEnterpriseExecutionPrompt,
+} = require('../services/agents/enterprise-agentic-runtime');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -235,6 +240,13 @@ router.post(
         : 2 * 60 * 60 * 1000,
     });
     const taskId = crypto.randomUUID();
+    const enterpriseExecutionGraph = buildEnterpriseExecutionGraph({
+      contract: universalTaskContract,
+      taskId,
+      userId: req.user?.id || null,
+      chatId: typeof req.body.chatId === 'string' ? req.body.chatId : null,
+    });
+    const enterpriseRuntimeProfile = buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph);
     const taskStartedAt = Date.now();
     const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
     auditLog.audit({
@@ -245,6 +257,16 @@ router.post(
       pipeline: universalTaskContract.pipeline,
       requiredExtension: universalTaskContract.required_extension,
       riskLevel: universalTaskContract.risk_level,
+    });
+    auditLog.audit({
+      event: 'execution_graph_created',
+      taskId,
+      userId: req.user?.id || null,
+      chatId,
+      graphId: enterpriseExecutionGraph.graph_id,
+      nodes: enterpriseExecutionGraph.nodes.length,
+      layers: enterpriseExecutionGraph.architecture_layers,
+      hitlRequired: enterpriseExecutionGraph.human_in_the_loop.required,
     });
     const controller = new AbortController();
     const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
@@ -267,6 +289,8 @@ router.post(
       intentAlignmentProfile,
       taskPlan,
       universalTaskContract,
+      enterpriseExecutionGraph,
+      enterpriseRuntimeProfile,
     });
     metrics.counter('agent_task_invocations_total', { status: 'started' });
     auditLog.audit({
@@ -336,6 +360,8 @@ router.post(
               intentAlignmentProfile,
               taskPlan,
               universalTaskContract,
+              enterpriseExecutionGraph,
+              enterpriseRuntimeProfile,
               maxSteps,
               maxRuntimeMs,
               updatedAt: task.updatedAt,
@@ -383,6 +409,8 @@ router.post(
       intentAlignmentProfile,
       taskPlan,
       universalTaskContract,
+      enterpriseExecutionGraph,
+      enterpriseRuntimeProfile,
       taskContract,
       taskContractSource,
     });
@@ -445,11 +473,13 @@ router.post(
                 artifacts,
                 executionProfile,
                 intentAlignmentProfile,
-                taskPlan,
-                universalTaskContract,
-                maxSteps,
-                maxRuntimeMs,
-                updatedAt: new Date().toISOString(),
+              taskPlan,
+              universalTaskContract,
+              enterpriseExecutionGraph,
+              enterpriseRuntimeProfile,
+              maxSteps,
+              maxRuntimeMs,
+              updatedAt: new Date().toISOString(),
               },
             },
           });
@@ -466,7 +496,17 @@ router.post(
         maxSteps,
         maxRuntimeMs,
         model,
-        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan, taskContract, universalTaskContract),
+        extraSystem: buildAgentSystemPrompt(
+          systemContract,
+          fileIds,
+          executionProfile,
+          intentAlignmentProfile,
+          taskPlan,
+          taskContract,
+          universalTaskContract,
+          enterpriseExecutionGraph,
+          enterpriseRuntimeProfile
+        ),
         ctx: toolCtx,
         finalizeGuard: ({ steps }) => validateFinalize(finalizeProfile, steps),
         onStepStart: (step) => {
@@ -518,6 +558,8 @@ router.post(
                 intentAlignmentProfile,
                 taskPlan,
                 universalTaskContract,
+                enterpriseExecutionGraph,
+                enterpriseRuntimeProfile,
                 stoppedReason: result.stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
@@ -686,10 +728,29 @@ function normalizeSystemContract(text) {
     .slice(0, 4000);
 }
 
-function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan, taskContract, universalTaskContract) {
+function buildAgentSystemPrompt(
+  systemContract,
+  fileIds,
+  executionProfile,
+  intentAlignmentProfile,
+  taskPlan,
+  taskContract,
+  universalTaskContract,
+  enterpriseExecutionGraph = null,
+  enterpriseRuntimeProfile = null
+) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (universalTaskContract) {
     parts.push(buildUniversalContractPrompt(universalTaskContract));
+  }
+  if (enterpriseExecutionGraph) {
+    parts.push(buildEnterpriseExecutionPrompt(enterpriseExecutionGraph));
+  }
+  if (enterpriseRuntimeProfile) {
+    parts.push(
+      'Enterprise runtime profile (policy summary, do not reveal to user):\n' +
+      JSON.stringify(enterpriseRuntimeProfile, null, 2)
+    );
   }
   // TaskContract first: this is the authoritative closed-route
   // contract the deterministic ArtifactReviewer enforces. The agent
@@ -729,7 +790,23 @@ function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, inten
   return parts.join('\n\n');
 }
 
-function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controller, maxSteps, maxRuntimeMs, streamState, executionProfile = null, intentAlignmentProfile = null, taskPlan = null, universalTaskContract = null }) {
+function createTaskRecord({
+  taskId,
+  userId,
+  chatId,
+  displayGoal,
+  model,
+  controller,
+  maxSteps,
+  maxRuntimeMs,
+  streamState,
+  executionProfile = null,
+  intentAlignmentProfile = null,
+  taskPlan = null,
+  universalTaskContract = null,
+  enterpriseExecutionGraph = null,
+  enterpriseRuntimeProfile = null,
+}) {
   pruneOldTasks();
   const now = new Date().toISOString();
   const record = {
@@ -749,6 +826,8 @@ function createTaskRecord({ taskId, userId, chatId, displayGoal, model, controll
     intentAlignmentProfile,
     taskPlan,
     universalTaskContract,
+    enterpriseExecutionGraph,
+    enterpriseRuntimeProfile,
     events: [],
     assistantMessageId: null,
   };
@@ -813,6 +892,8 @@ function formatTaskPayload(task) {
     intentAlignmentProfile: task.intentAlignmentProfile || null,
     taskPlan: task.taskPlan || null,
     universalTaskContract: task.universalTaskContract || null,
+    enterpriseExecutionGraph: task.enterpriseExecutionGraph || null,
+    enterpriseRuntimeProfile: task.enterpriseRuntimeProfile || null,
     stats: task.stats || null,
     checkpoints: task.checkpoints || [],
   };
@@ -825,7 +906,7 @@ function initialAgentState() {
 function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile } };
     case 'step_start':
       return {
         ...state,

@@ -12,8 +12,11 @@
  *   request_received
  *     → contract_created
  *     → contract_validated
+ *     → execution_graph_created
  *     → pipeline_selected
  *     → [ambiguity_detected? + clarification_needed? → STOP until user replies]
+ *     → tool_manifest_authorized
+ *     → node_started → node_checkpointed → node_completed   (×N)
  *     → tool_selected → tool_executing → tool_completed     (×N)
  *     → artifact_generated
  *     → format_validation_passed | format_validation_failed
@@ -32,6 +35,12 @@ const EVENTS = Object.freeze({
   CONTRACT_CREATED:              "contract_created",
   CONTRACT_VALIDATED:            "contract_validated",
   CONTRACT_VALIDATION_FAILED:    "contract_validation_failed",
+  EXECUTION_GRAPH_CREATED:        "execution_graph_created",
+  TOOL_MANIFEST_AUTHORIZED:       "tool_manifest_authorized",
+  NODE_STARTED:                   "node_started",
+  NODE_CHECKPOINTED:              "node_checkpointed",
+  NODE_COMPLETED:                 "node_completed",
+  NODE_FAILED:                    "node_failed",
   AMBIGUITY_DETECTED:            "ambiguity_detected",
   CLARIFICATION_NEEDED:          "clarification_needed",
   PIPELINE_SELECTED:             "pipeline_selected",

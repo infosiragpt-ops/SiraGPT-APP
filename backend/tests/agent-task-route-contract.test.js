@@ -70,6 +70,28 @@ test('agent task route: stores UniversalTaskContract in meta state', () => {
   assert.equal(state.meta.universalTaskContract.required_extension, '.svg');
 });
 
+test('agent task route: stores enterprise ExecutionGraph in meta state', () => {
+  const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
+    type: 'meta',
+    taskId: 'task-enterprise',
+    goal: 'Crea una web SaaS',
+    model: 'gpt-4o',
+    tools: ['run_tests'],
+    enterpriseExecutionGraph: {
+      graph_id: 'eg_1234567890abcdef',
+      architecture_layers: ['AgenticOperatingCore', 'WorkflowOrchestrator', 'SoftwareEngineeringPipeline'],
+      durable_execution: { enabled: true },
+      nodes: [{ id: 'release_controller' }],
+    },
+    enterpriseRuntimeProfile: {
+      capabilities: ['SoftwareEngineeringPipeline', 'FullStackWebBuilder'],
+    },
+  });
+
+  assert.equal(state.meta.enterpriseExecutionGraph.graph_id, 'eg_1234567890abcdef');
+  assert.equal(state.meta.enterpriseRuntimeProfile.capabilities.includes('FullStackWebBuilder'), true);
+});
+
 test('agent task route: system prompt includes UniversalTaskContract sovereignty rules', () => {
   const prompt = INTERNAL.buildAgentSystemPrompt('', [], null, null, null, null, {
     version: 'universal-task-contract-2026-04',
@@ -98,6 +120,41 @@ test('agent task route: system prompt includes UniversalTaskContract sovereignty
   assert.match(prompt, /required_extension/);
   assert.match(prompt, /\.svg/);
   assert.match(prompt, /Never substitute formats/);
+});
+
+test('agent task route: system prompt includes enterprise ExecutionGraph rules', () => {
+  const enterpriseExecutionGraph = {
+    graph_id: 'eg_1234567890abcdef',
+    idempotency_key: 'idem_1234567890abcdef1234',
+    pipeline: 'CodePipeline',
+    durable_execution: { enabled: true, state_store: 'task-store' },
+    human_in_the_loop: { required: false },
+    gates: { validation_gate: ['tests_or_build_executed'], release_gate: ['ReleaseController approved'] },
+    qa_board: { reports_required: ['ValidationReport'], reviewers: ['ReleaseController'] },
+    nodes: [
+      {
+        id: 'validation_fabric',
+        layer: 'ValidationFabric',
+        agent_role: 'QA',
+        tools: [],
+        dependencies: [],
+      },
+      {
+        id: 'release_controller',
+        layer: 'HumanInTheLoopControlCenter',
+        agent_role: 'ReleaseController',
+        tools: [],
+        dependencies: ['validation_fabric'],
+      },
+    ],
+  };
+  const prompt = INTERNAL.buildAgentSystemPrompt('', [], null, null, null, null, null, enterpriseExecutionGraph, {
+    capabilities: ['SoftwareEngineeringPipeline'],
+  });
+
+  assert.match(prompt, /ENTERPRISE EXECUTION GRAPH/);
+  assert.match(prompt, /validation_fabric/);
+  assert.match(prompt, /ReleaseController/);
 });
 
 test('agent task route: does not drop tool events emitted without a current step', () => {

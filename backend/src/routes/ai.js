@@ -21,6 +21,11 @@ const {
   buildUniversalTaskContract,
   buildUniversalContractPrompt,
 } = require('../services/agents/universal-task-contract');
+const {
+  buildEnterpriseExecutionGraph,
+  buildEnterpriseRuntimeProfile,
+  buildEnterpriseExecutionPrompt,
+} = require('../services/agents/enterprise-agentic-runtime');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -649,17 +654,28 @@ router.post(
         : '';
       let universalTaskContract = null;
       let universalContractBlock = '';
+      let enterpriseExecutionGraph = null;
+      let enterpriseRuntimeProfile = null;
+      let enterpriseExecutionBlock = '';
       try {
         universalTaskContract = buildUniversalTaskContract({
           rawUserRequest: prompt,
           fileIds: processedFiles.map(f => f.id || f.fileId || f.openaiFileId || f.name || 'attachment'),
         });
         universalContractBlock = `\n\n${buildUniversalContractPrompt(universalTaskContract)}`;
+        enterpriseExecutionGraph = buildEnterpriseExecutionGraph({
+          contract: universalTaskContract,
+          taskId: `chat-${chatId || crypto.randomUUID()}`,
+          userId: userId || null,
+          chatId: canPersist ? chatId : null,
+        });
+        enterpriseRuntimeProfile = buildEnterpriseRuntimeProfile(universalTaskContract, enterpriseExecutionGraph);
+        enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}`;
       } catch (contractErr) {
-        console.warn('[ai] universal task contract unavailable (continuing without):', contractErr.message || contractErr);
+        console.warn('[ai] universal/enterprise task contract unavailable (continuing without):', contractErr.message || contractErr);
       }
-      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + memoryBlock + feedbackBlock + evidenceBlock };
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'}`);
+      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + feedbackBlock + evidenceBlock };
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
