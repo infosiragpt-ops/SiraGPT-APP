@@ -43,6 +43,14 @@ const { listAgents: listProductOsAgents, computeHandoffGraph } = require("../ser
 const intentRouter = require("../services/ai-product-os/semantic-intent-router");
 const toolRegistry = require("../services/ai-product-os/tool-registry");
 const planner = require("../services/ai-product-os/planner-agent");
+const modelRouter = require("../services/ai-product-os/model-router");
+const skillSystem = require("../services/ai-product-os/skill-system");
+const memoryLayer = require("../services/ai-product-os/memory-layer");
+const orchestrator = require("../services/ai-product-os/orchestrator");
+
+// Single in-memory facade for the local memory tier. Production binds
+// a Qdrant / pgvector adapter via createMemory({ adapter }).
+const sharedMemory = memoryLayer.createMemory();
 const { validateContract } = require("../services/agents/task-contract-resolver");
 const { runQaBoard } = require("../services/agents/qa-board");
 const { createTracer } = require("../services/observability/spans");
@@ -545,6 +553,135 @@ router.get("/product-os/intent-schema", authenticateToken, (_req, res) => {
     final_output_by_intent: intentRouter.FINAL_OUTPUT_BY_INTENT,
   });
 });
+
+// ─── Model Router (Capa 1) ─────────────────────────────────────────────
+
+router.get("/product-os/models", authenticateToken, (req, res) => {
+  const plan = typeof req.query.plan === "string" ? req.query.plan : null;
+  ok(res, { integrity: modelRouter.integrity(), models: modelRouter.listModels(plan ? { plan } : {}) });
+});
+
+router.post(
+  "/product-os/models/select",
+  authenticateToken,
+  [
+    body("task").optional().isString(),
+    body("complexity").optional().isString(),
+    body("requires_reasoning").optional().isBoolean(),
+    body("requires_tools").optional().isBoolean(),
+    body("requires_long_context").optional().isBoolean(),
+    body("requires_vision").optional().isBoolean(),
+    body("requires_code").optional().isBoolean(),
+    body("max_cost").optional().isString(),
+    body("latency").optional().isString(),
+    body("language").optional().isString(),
+    body("user_plan").optional().isString(),
+    body("prefer").optional().isString(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    ok(res, modelRouter.select(req.body || {}));
+  }
+);
+
+// ─── Skill System ──────────────────────────────────────────────────────
+
+router.get("/product-os/skills", authenticateToken, (req, res) => {
+  const minPlan = typeof req.query.plan === "string" ? req.query.plan : null;
+  ok(res, { integrity: skillSystem.integrity(), skills: skillSystem.listSkills(minPlan ? { minPlan } : {}) });
+});
+
+router.post(
+  "/product-os/skills/resolve",
+  authenticateToken,
+  [
+    body("decision").isObject().withMessage("decision (object) required"),
+    body("user_plan").optional().isString(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    const skill = skillSystem.resolveSkillForIntent(req.body.decision, { userPlan: req.body.user_plan || "FREE" });
+    const merged = skillSystem.mergeDecisionWithSkill(req.body.decision, skill);
+    ok(res, { skill, merged_decision: merged });
+  }
+);
+
+// ─── Memory Layer ──────────────────────────────────────────────────────
+
+router.post(
+  "/product-os/memory/turn",
+  authenticateToken,
+  [
+    body("userId").isString().isLength({ min: 1, max: 200 }),
+    body("role").isString().isIn(["user", "assistant", "system", "tool"]),
+    body("content").isString().isLength({ min: 1, max: 50000 }),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      await sharedMemory.pushTurn(req.body.userId, { role: req.body.role, content: req.body.content });
+      const recent = await sharedMemory.recentTurns(req.body.userId, 12);
+      ok(res, { recent });
+    } catch (err) {
+      fail(res, 500, err.message || "memory.turn failed");
+    }
+  }
+);
+
+router.post(
+  "/product-os/memory/recall",
+  authenticateToken,
+  [
+    body("userId").isString().isLength({ min: 1, max: 200 }),
+    body("query").isString().isLength({ min: 1, max: 4000 }),
+    body("topK").optional().isInt({ min: 1, max: 20 }),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    const ctx = await sharedMemory.buildContextForTurn({
+      userId: req.body.userId,
+      query: req.body.query,
+      topK: req.body.topK || 5,
+    });
+    ok(res, ctx);
+  }
+);
+
+// ─── Orchestrator (end-to-end) ─────────────────────────────────────────
+
+router.post(
+  "/product-os/orchestrate",
+  authenticateToken,
+  [
+    body("prompt").isString().isLength({ min: 1, max: 8000 }),
+    body("history").optional().isArray(),
+    body("context").optional().isObject(),
+    body("user_plan").optional().isString(),
+    body("dryRun").optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const result = await orchestrator.runUserRequest({
+        prompt: req.body.prompt,
+        history: req.body.history,
+        context: req.body.context,
+        userId: req.user?.id || req.user?.userId || null,
+        userPlan: req.body.user_plan || req.user?.plan || "FREE",
+        memory: sharedMemory,
+        dryRun: req.body.dryRun !== false,
+      });
+      ok(res, { ...result, summary: orchestrator.summarize(result) });
+    } catch (err) {
+      fail(res, 500, err.message || "orchestrate failed");
+    }
+  }
+);
 
 // ─── Observability demo (for wiring tests / debug) ─────────────────────
 

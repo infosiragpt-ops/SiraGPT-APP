@@ -173,6 +173,24 @@ const TOOLS = [
     sandbox_required: false, audit_policy: "never", data_classes: ["public"],
     recommended_for: ["web_scraping", "research_question"],
   },
+  {
+    id: "web.rate.limit", name: "Web rate limiter",
+    description: "Apply per-domain crawl budgets, exponential backoff and retry-after compliance before fetching.",
+    category: "web",
+    input_schema: {
+      type: "object",
+      required: ["domain"],
+      properties: {
+        domain: { type: "string" },
+        crawlDelayMs: { type: "integer" },
+        retryAfterMs: { type: "integer" },
+      },
+    },
+    output_schema: { type: "object" },
+    scopes: [], side_effect_level: "read", requires_confirmation: false,
+    sandbox_required: false, audit_policy: "always", data_classes: ["public"],
+    recommended_for: ["web_scraping"],
+  },
 
   // ── BI / data ─────────────────────────────────────────────────────
   {
