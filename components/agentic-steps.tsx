@@ -57,6 +57,7 @@ function ToolBadge({ tool, language }: { tool: string; language?: string }) {
     if (language === "bash") return "Bash"
     if (tool === "create_document") return "Script"
     if (tool === "verify_artifact") return "Verify"
+    if (tool === "run_tests") return "Tests"
     if (tool === "web_search") return "Search"
     if (tool === "rag_retrieve") return "RAG"
     return tool

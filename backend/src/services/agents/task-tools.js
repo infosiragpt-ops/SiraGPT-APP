@@ -549,6 +549,69 @@ function summarisePreview(s) {
   return parts.join(' · ');
 }
 
+// ─── Tool 7: run_tests (auto-test for generated code) ───────────────────
+//
+// Closes the "corre tests por sí solo" loop. The agent writes a
+// solution + a tiny test_source that calls _check(name, cond, detail).
+// The harness counts passed/failed and surfaces failure details so
+// the agent can repair before finalize. Same sandbox + timeouts as
+// python_exec — no network, fresh temp dir, kill on overrun.
+//
+// Convention: tests use the helper _check(name, condition, detail).
+// Example for python:
+//   _check('add 1+1', solution.add(1, 1) == 2)
+//   _check('handles negatives', solution.add(-3, 5) == 2, detail='wanted 2')
+
+const runTests = {
+  name: 'run_tests',
+  description: 'Run unit tests against a code solution in the sandbox. Use after generating a function/module to verify it actually works before finalize. The harness exposes a `_check(name, condition, detail)` helper. Returns passed/failed counts and per-failure details so you can iterate.',
+  parameters: {
+    type: 'object',
+    properties: {
+      language: { type: 'string', enum: ['python', 'javascript', 'node'], description: 'Language of both solution and tests.' },
+      source:   { type: 'string', description: 'The solution code (functions/classes to test).' },
+      testSource: { type: 'string', description: 'Test code that calls _check(name, condition, detail). Multi-line allowed.' },
+      timeoutMs: { type: 'integer', minimum: 500, maximum: 60000, description: 'Wall-clock timeout in ms (default 10000).' },
+    },
+    required: ['language', 'source', 'testSource'],
+    additionalProperties: false,
+  },
+  async execute({ language, source, testSource, timeoutMs }, ctx = {}) {
+    ctx.onEvent?.({
+      type: 'tool_call',
+      tool: 'run_tests',
+      preview: previewText(testSource, 240),
+      language,
+      codePreview: previewText(`# solution\n${source}\n\n# tests\n${testSource}`, 600),
+    });
+    const r = await sandbox.runTests({
+      language,
+      source,
+      testSource,
+      timeoutMs: timeoutMs || 10000,
+    });
+    const summary = `${r.passed}✓ / ${r.failed}✗${r.timedOut ? ' (timeout)' : ''}`;
+    ctx.onEvent?.({
+      type: 'tool_output',
+      tool: 'run_tests',
+      ok: r.ok,
+      preview: r.failures.length === 0
+        ? summary
+        : `${summary} · primer fallo: ${previewText(r.failures[0].detail || r.failures[0].name, 300)}`,
+    });
+    return {
+      ok: r.ok,
+      passed: r.passed,
+      failed: r.failed,
+      timedOut: r.timedOut,
+      durationMs: r.durationMs,
+      failures: (r.failures || []).slice(0, 10),
+      stdout: previewText(r.stdout || '', 1200),
+      stderr: previewText(r.stderr || '', 800),
+    };
+  },
+};
+
 // ─── Assembly ──────────────────────────────────────────────────────────
 
 /**
@@ -556,7 +619,7 @@ function summarisePreview(s) {
  * `tools` parameter.
  */
 function buildTaskTools() {
-  return [pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact];
+  return [pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact, runTests];
 }
 
 module.exports = {
@@ -564,5 +627,5 @@ module.exports = {
   saveArtifact,
   ARTIFACT_DIR,
   EXTENSION_TO_MIME,
-  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact, previewText, artifactIdFor, metadataPathFor, summarisePreview },
+  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact, runTests, previewText, artifactIdFor, metadataPathFor, summarisePreview },
 };
