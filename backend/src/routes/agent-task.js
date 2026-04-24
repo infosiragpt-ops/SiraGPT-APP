@@ -67,7 +67,9 @@ const TASK_SYSTEM_PROMPT = `You are siraGPT's task agent. You work like Claude C
 
 Rules:
 - When the user needs data, call web_search (Web of Science / Scopus / OpenAlex / SciELO / Semantic Scholar / Crossref / PubMed / DOAJ) instead of guessing. Do not fabricate citations.
-- When the user refers to uploaded/private documents, previous project knowledge, PDFs, or "según mis archivos", call rag_retrieve before answering or generating files.
+- When the user refers to uploaded/private documents, previous project knowledge, PDFs, or "según mis archivos":
+    · If they want a CONCRETE ANSWER grounded on those docs (a question, a claim, a quote, a number) → call self_rag_answer. It runs the Self-RAG reflection-token loop (ISREL/ISSUP/ISUSE per segment, beam ranking) and returns a cited answer you can quote verbatim in finalize — do NOT rewrite supported segments, only compose around them.
+    · If you only need RAW CHUNKS to combine with other data (build a table, cross-check with web_search, etc.) → call rag_retrieve instead.
 - When the user asks for a file (Excel, Word, PPT, PDF), use create_document. Write a complete Python script that writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab.
 - Use python_exec for data wrangling, verification, numeric work — ANY time you'd otherwise "estimate" a number.
 - For academic/scientific/market research, collect enough evidence first, keep DOI/URL/year/journal/source metadata, and separate verified findings from assumptions.
@@ -555,6 +557,7 @@ function inferIconFor(toolName) {
     case 'verify_artifact': return 'verify';
     case 'run_tests':       return 'verify';
     case 'rag_retrieve':    return 'search';
+    case 'self_rag_answer': return 'verify';
     case 'finalize':        return 'check';
     default:                return 'thought';
   }

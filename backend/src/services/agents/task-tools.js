@@ -456,6 +456,142 @@ const ragRetrieve = {
   },
 };
 
+// ─── Tool 5b: self_rag_answer (Self-RAG critique loop) ─────────────────
+//
+// Wraps backend/src/services/rag/self-rag-engine.js (ICLR 2024
+// Self-RAG: reflection-token gated retrieve → generate → critique).
+// Where rag_retrieve gives the agent chunks to summarise freely,
+// self_rag_answer produces the GROUNDED answer itself: for each
+// segment the engine predicts a Retrieve/ISREL/ISSUP/ISUSE token,
+// only supported segments survive, and beam selection picks the
+// best-scored trajectory. Use this when the user asks a factual
+// question against uploaded docs and we need citations + a
+// "don't hallucinate" guarantee, not just the raw passages.
+
+const selfRagAnswer = {
+  name: 'self_rag_answer',
+  description: "Answer a grounded question using the Self-RAG reflection-token loop (Asai et al. ICLR 2024). Produces the final answer directly with per-segment ISREL/ISSUP/ISUSE critique scores and citations. Prefer this over rag_retrieve when the user wants a concrete answer grounded on their uploaded PDFs/docs; use rag_retrieve when you only need raw chunks to combine with other data.",
+  parameters: {
+    type: 'object',
+    properties: {
+      question:     { type: 'string', description: 'The user question to answer. Keep it self-contained.' },
+      k:            { type: 'integer', minimum: 1, maximum: 12, description: 'Passages per retrieve call (default 4).' },
+      maxSegments:  { type: 'integer', minimum: 1, maximum: 10, description: 'Max answer segments before termination (default 4).' },
+      retrieveMode: { type: 'string', enum: ['adaptive', 'always', 'never'], description: 'Retrieval gating. `adaptive` lets the engine decide; `always` forces retrieve every segment (strict grounding); `never` skips retrieval.' },
+      hardConstraints: { type: 'boolean', description: 'If true, drop any segment whose ISSUP is not "fully supported" (stricter but may yield shorter answers).' },
+      beamSize:     { type: 'integer', minimum: 1, maximum: 4, description: 'Tree-decoding beam width (default 1 = greedy).' },
+      collection:   { type: 'string', description: 'RAG collection to query (defaults to the chat\'s default).' },
+    },
+    required: ['question'],
+    additionalProperties: false,
+  },
+  async execute({ question, k = 4, maxSegments = 4, retrieveMode = 'adaptive', hardConstraints = false, beamSize = 1, collection }, ctx = {}) {
+    if (!ctx.userId) return { ok: false, error: 'self_rag_answer requires an authenticated userId in ctx' };
+    if (!ctx.openai) return { ok: false, error: 'self_rag_answer requires ctx.openai' };
+
+    ctx.onEvent?.({ type: 'tool_call', tool: 'self_rag_answer', preview: previewText(question, 240) });
+
+    let engine, rag;
+    try {
+      engine = require('../rag/self-rag-engine');
+      rag = require('../rag-service');
+    } catch (err) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'self_rag_answer', ok: false, preview: `engine load failed: ${err.message}` });
+      return { ok: false, error: err.message };
+    }
+
+    const retrieveFn = async (q, topK) => {
+      try {
+        const hits = await rag.retrieve(
+          ctx.userId,
+          collection || ctx.collection || 'default',
+          q,
+          topK,
+          {
+            useExpansion: true,
+            useHybrid: true,
+            useMMR: true,
+            useGraph: true,
+            graphOpenAI: ctx.openai,
+            sessionId: ctx.chatId || null,
+          }
+        );
+        return (Array.isArray(hits) ? hits : []).map((h, i) => ({
+          id: h.id || `${i}`,
+          text: h.text || h.content || h.chunk || '',
+          source: h.source || h.metadata?.source || h.document || null,
+        }));
+      } catch (err) {
+        console.warn('[self_rag_answer] retrieve failed:', err.message);
+        return [];
+      }
+    };
+
+    try {
+      const runner = beamSize > 1 ? engine.inferBeam : engine.infer;
+      const out = await runner({
+        openai: ctx.openai,
+        input: question,
+        retrieve: retrieveFn,
+        k,
+        model: 'gpt-4o-mini',
+        retrieveMode,
+        hardConstraints,
+        maxSegments,
+        beamSize,
+      });
+
+      // Build the user-visible text from the engine's segments.
+      // Every retrieved-and-supported segment becomes its own
+      // paragraph with a trailing [N] citation; no-retrieve segments
+      // (the engine's "didn't need grounding" path) stay plain text.
+      const cites = [];
+      const lines = (out.segments || []).map((s, i) => {
+        const txt = (s.text || '').trim();
+        if (!txt) return '';
+        if (s.source && s.isSup && s.isSup !== 'no support') {
+          const n = cites.length + 1;
+          cites.push({ n, source: s.source, isRel: s.isRel, isSup: s.isSup, score: s.score });
+          return `${txt} [${n}]`;
+        }
+        return txt;
+      }).filter(Boolean);
+
+      const answer = (out.answer && out.answer.trim()) || lines.join('\n\n');
+      const references = cites.length
+        ? '\n\n**Referencias**\n' + cites.map(c => `[${c.n}] ${c.source} · ISSUP=${c.isSup || '—'} · score ${typeof c.score === 'number' ? c.score.toFixed(2) : '—'}`).join('\n')
+        : '';
+
+      const supportedCount = (out.segments || []).filter(s => s.isSup && s.isSup !== 'no support').length;
+      const totalCount = (out.segments || []).length;
+      const summary = `${totalCount} segmentos, ${supportedCount} soportados, ${out.terminatedBy || '?'}`;
+
+      ctx.onEvent?.({ type: 'tool_output', tool: 'self_rag_answer', ok: true, preview: summary });
+
+      return {
+        ok: true,
+        answer: answer + references,
+        summary,
+        segments: (out.segments || []).map(s => ({
+          index: s.index,
+          text: previewText(s.text || '', 400),
+          source: s.source,
+          retrieveDecision: s.retrieveDecision,
+          isRel: s.isRel,
+          isSup: s.isSup,
+          isUse: s.isUse,
+          score: s.score,
+        })),
+        terminatedBy: out.terminatedBy,
+        passagesSeen: (out.passagesSeen || []).length,
+      };
+    } catch (err) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'self_rag_answer', ok: false, preview: err.message || 'self-rag failed' });
+      return { ok: false, error: err.message || String(err) };
+    }
+  },
+};
+
 // ─── Tool 6: verify_artifact (self-supervision) ─────────────────────────
 //
 // Reads an artifact the agent just created back from disk and returns
@@ -714,7 +850,7 @@ const runTests = {
  * `tools` parameter.
  */
 function buildTaskTools() {
-  return [pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact, runTests];
+  return [pythonExec, bashExec, webSearch, createDocument, ragRetrieve, selfRagAnswer, verifyArtifact, runTests];
 }
 
 module.exports = {
@@ -722,5 +858,5 @@ module.exports = {
   saveArtifact,
   ARTIFACT_DIR,
   EXTENSION_TO_MIME,
-  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact, runTests, previewText, artifactIdFor, metadataPathFor, summarisePreview, validateAgentArtifactBuffer, assertArtifactValidation },
+  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, selfRagAnswer, verifyArtifact, runTests, previewText, artifactIdFor, metadataPathFor, summarisePreview, validateAgentArtifactBuffer, assertArtifactValidation },
 };

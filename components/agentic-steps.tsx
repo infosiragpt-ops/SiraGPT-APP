@@ -60,6 +60,7 @@ function ToolBadge({ tool, language }: { tool: string; language?: string }) {
     if (tool === "run_tests") return "Tests"
     if (tool === "web_search") return "Search"
     if (tool === "rag_retrieve") return "RAG"
+    if (tool === "self_rag_answer") return "Self-RAG"
     return tool
   })()
   return (

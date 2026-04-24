@@ -1,55 +1,49 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect, useCallback } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   Bot,
+  BookOpen,
+  Brain,
+  Briefcase,
+  CheckCircle2,
+  Code,
+  Copy,
+  Database,
+  Edit,
+  FileText,
+  Gamepad2,
+  Globe,
+  Heart,
+  Layers3,
+  Loader2,
+  Lock,
+  MessageSquare,
+  Palette,
   Plus,
   Search,
-  Star,
-  Users,
-  TrendingUp,
-  Sparkles,
-  BookOpen,
-  Code,
-  Palette,
-  MoreHorizontal,
-  Edit,
-  Trash2,
   Share2,
-  Copy,
-  MessageSquare,
-  User,
-  Loader2,
-  Eye,
-  Lock,
-  Globe,
-  Briefcase,
-  Heart,
-  Gamepad2,
-  ChevronRight,
-  UserCircle,
+  ShieldCheck,
+  Sparkles,
+  Star,
+  Trash2,
+  TrendingUp,
+  Users,
+  Wand2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card" // Added CardTitle
 import { Badge } from "@/components/ui/badge"
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu"
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter, // Added DialogFooter
 } from "@/components/ui/dialog"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { cn } from "@/lib/utils"
@@ -57,263 +51,403 @@ import { toast } from "sonner"
 import { gptsService, type CustomGPT, type GPTFilters } from "@/lib/gpts-service"
 import { useChat } from "@/lib/chat-context-integrated"
 
-// Categories with icons - reordered for a more "store-like" feel
-const categories = [
-  { name: "All", icon: <Sparkles className="w-4 h-4" /> }, // Use Sparkles for All to signify "discovery"
-  { name: "Trending", icon: <TrendingUp className="w-4 h-4" /> }, // Added a "Trending" category (will need data support)
-  { name: "Writing", icon: <BookOpen className="w-4 h-4" /> },
-  { name: "Productivity", icon: <Briefcase className="w-4 h-4" /> },
-  { name: "Programming", icon: <Code className="w-4 h-4" /> },
-  { name: "Design", icon: <Palette className="w-4 h-4" /> },
-  { name: "Research & Analysis", icon: <Search className="w-4 h-4" /> },
-  { name: "Education", icon: <BookOpen className="w-4 h-4" /> },
-  { name: "Data Analysis", icon: <Users className="w-4 h-4" /> },
-  { name: "Lifestyle", icon: <Heart className="w-4 h-4" /> },
-  { name: "Entertainment", icon: <Gamepad2 className="w-4 h-4" /> },
-  { name: "Marketing", icon: <TrendingUp className="w-4 h-4" /> },
-  { name: "Finance", icon: <Users className="w-4 h-4" /> },
-  { name: "Health & Fitness", icon: <Heart className="w-4 h-4" /> },
-  { name: "Travel", icon: <Globe className="w-4 h-4" /> },
-  { name: "Other", icon: <Star className="w-4 h-4" /> },
+type CategoryOption = {
+  value: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+}
+
+type VisibilityFilter = "all" | "mine" | "public"
+
+const categories: CategoryOption[] = [
+  { value: "All", label: "Todo", icon: Sparkles },
+  { value: "Trending", label: "Tendencia", icon: TrendingUp },
+  { value: "Writing", label: "Escritura", icon: BookOpen },
+  { value: "Productivity", label: "Productividad", icon: Briefcase },
+  { value: "Programming", label: "Programación", icon: Code },
+  { value: "Design", label: "Diseño", icon: Palette },
+  { value: "Research & Analysis", label: "Investigación", icon: Search },
+  { value: "Education", label: "Educación", icon: BookOpen },
+  { value: "Data Analysis", label: "Datos", icon: Database },
+  { value: "Lifestyle", label: "Lifestyle", icon: Heart },
+  { value: "Entertainment", label: "Entretenimiento", icon: Gamepad2 },
+  { value: "Marketing", label: "Marketing", icon: TrendingUp },
+  { value: "Finance", label: "Finanzas", icon: Users },
+  { value: "Health & Fitness", label: "Salud", icon: Heart },
+  { value: "Travel", label: "Viajes", icon: Globe },
+  { value: "Other", label: "Otros", icon: Star },
 ]
 
-// Debounce hook
+const visibilityOptions: Array<{ value: VisibilityFilter; label: string }> = [
+  { value: "all", label: "Todos" },
+  { value: "mine", label: "Mis GPTs" },
+  { value: "public", label: "Públicos" },
+]
+
 function useDebounce<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState<T>(value)
 
   useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedValue(value)
-    }, delay)
-
-    return () => {
-      clearTimeout(handler)
-    }
+    const handler = window.setTimeout(() => setDebouncedValue(value), delay)
+    return () => window.clearTimeout(handler)
   }, [value, delay])
 
   return debouncedValue
 }
 
-// Custom Avatar/Icon component for GPTs - Updated to handle both images and text/emoji
-const GPTAvatar = ({ gpt }: { gpt: CustomGPT }) => {
-  // Check if iconUrl is a valid image URL (starts with http/https or data:)
-  const isImageUrl = gpt.iconUrl && (
-    gpt.iconUrl.startsWith('http') ||
-    gpt.iconUrl.startsWith('https') ||
-    gpt.iconUrl.startsWith('/upload') ||
+function resolveIconSrc(iconUrl?: string) {
+  if (!iconUrl) return null
+  if (/^(https?:|data:|blob:)/i.test(iconUrl)) return iconUrl
+  if (iconUrl.startsWith("/uploads") || iconUrl.startsWith("/upload")) {
+    const imageHost = process.env.NEXT_PUBLIC_IMAGE_URL || "http://localhost:5000"
+    return `${imageHost}${iconUrl}`
+  }
+  if (iconUrl.startsWith("/")) return iconUrl
+  return null
+}
 
-    gpt.iconUrl.startsWith('data:')
-  )
+function getKnowledgeCount(gpt: CustomGPT) {
+  return gpt._count?.files || (gpt as CustomGPT & { knowledgeFiles?: unknown[] }).knowledgeFiles?.length || 0
+}
 
-  if (isImageUrl) {
+function getInstructionQuality(gpt: CustomGPT) {
+  let score = 20
+  const instructionsLength = gpt.instructions?.trim().length || 0
+  const starters = Array.isArray(gpt.conversationStarters) ? gpt.conversationStarters.length : 0
+  const knowledgeFiles = getKnowledgeCount(gpt)
+
+  if (instructionsLength >= 800) score += 30
+  else if (instructionsLength >= 300) score += 18
+  else if (instructionsLength >= 120) score += 10
+
+  if (gpt.description?.trim()) score += 12
+  if (starters >= 3) score += 12
+  else if (starters > 0) score += 6
+  if (knowledgeFiles > 0) score += 16
+  if (gpt.visibility === "PUBLIC") score += 5
+  if (gpt.isFeatured) score += 5
+
+  const clamped = Math.min(100, score)
+  if (clamped >= 82) return { score: clamped, label: "Excelente", color: "bg-emerald-500" }
+  if (clamped >= 62) return { score: clamped, label: "Sólido", color: "bg-blue-500" }
+  if (clamped >= 42) return { score: clamped, label: "Mejorable", color: "bg-amber-500" }
+  return { score: clamped, label: "Básico", color: "bg-rose-500" }
+}
+
+function getVisibilityMeta(visibility: CustomGPT["visibility"]) {
+  if (visibility === "PUBLIC") {
+    return { label: "Público", icon: Globe, className: "border-emerald-200 bg-emerald-50 text-emerald-700" }
+  }
+  if (visibility === "UNLISTED") {
+    return { label: "Enlace", icon: Share2, className: "border-blue-200 bg-blue-50 text-blue-700" }
+  }
+  return { label: "Privado", icon: Lock, className: "border-zinc-200 bg-zinc-50 text-zinc-600" }
+}
+
+function formatCount(value?: number) {
+  const n = Number(value || 0)
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return n.toString()
+}
+
+function GPTAvatar({ gpt, large = false }: { gpt: CustomGPT; large?: boolean }) {
+  const iconSrc = resolveIconSrc(gpt.iconUrl)
+  const sizeClass = large ? "h-14 w-14 text-2xl" : "h-12 w-12 text-xl"
+
+  if (iconSrc) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={process.env.NEXT_PUBLIC_IMAGE_URL! + gpt.iconUrl}
+        src={iconSrc}
         alt={`${gpt.name} icon`}
-        className="w-10 h-10 sm:w-12 sm:h-12 rounded-full object-cover flex-shrink-0"
+        className={cn(sizeClass, "rounded-2xl object-cover ring-1 ring-black/5")}
       />
     )
   }
 
-  // If iconUrl is text/emoji or no iconUrl
   return (
-    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-lg sm:text-xl font-semibold flex-shrink-0">
-      {gpt.iconUrl || (gpt.name ? gpt.name[0].toUpperCase() : "🤖")}
+    <div className={cn(
+      sizeClass,
+      "grid shrink-0 place-items-center rounded-2xl bg-[radial-gradient(circle_at_30%_20%,#ffffff_0,#dbeafe_28%,#2563eb_100%)] font-semibold text-white shadow-sm"
+    )}>
+      {gpt.iconUrl || gpt.name?.[0]?.toUpperCase() || <Bot className="h-5 w-5" />}
     </div>
   )
 }
 
-// GPT Card Component - Updated for click behavior and ownership controls
-const GPTCard = ({
-  gpt,
-  onStartChat,
-  onEdit,
-  onDelete,
-  showActions = false,
-  isOwner = false,
+function StatCard({
+  label,
+  value,
+  icon: Icon,
 }: {
-  gpt: CustomGPT
-  onStartChat: (gpt: CustomGPT) => void
-  onEdit?: (gpt: CustomGPT) => void
-  onDelete?: (gpt: CustomGPT) => void
-  showActions?: boolean
-  isOwner?: boolean
-}) => {
-  const [isLoadingChat, setIsLoadingChat] = useState(false)
-
-  const handleStartChat = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    setIsLoadingChat(true)
-    try {
-      await onStartChat(gpt)
-    } catch (error) {
-      console.error('Error starting chat:', error)
-      toast.error('Failed to start chat')
-    } finally {
-      setIsLoadingChat(false)
-    }
-  }
-
-  const handleEdit = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (onEdit) onEdit(gpt)
-  }
-
-  const handleDelete = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (onDelete) onDelete(gpt)
-  }
-
+  label: string
+  value: string | number
+  icon: React.ComponentType<{ className?: string }>
+}) {
   return (
-    <div className="bg-white dark:bg-card rounded-lg p-3 sm:p-4 md:p-6 hover:shadow-lg transition-shadow border border-border">
-      <div className="flex items-start space-x-3 sm:space-x-4">
-        <GPTAvatar gpt={gpt} />
-        <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-foreground mb-1 text-sm sm:text-base truncate">{gpt.name}</h3>
-          <p className="text-muted-foreground text-xs sm:text-sm mb-2 sm:mb-3 line-clamp-2">{gpt.description}</p>
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0">
-            <div className="flex items-center flex-wrap gap-2 sm:gap-4 text-xs text-muted-foreground">
-              <span className="truncate">By {gpt.creator?.name || 'Unknown'}</span>
-              {gpt._count?.conversations && gpt._count.conversations > 0 && (
-                <div className="flex items-center space-x-1 flex-shrink-0">
-                  <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                  <span>4.5</span>
-                </div>
-              )}
-              {gpt._count?.conversations && (
-                <span className="flex-shrink-0">{gpt._count.conversations.toLocaleString()} users</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1 sm:gap-2 flex-wrap">
-              {isOwner && onEdit && (
-                <button
-                  onClick={handleEdit}
-                  className="flex items-center px-2 sm:px-3 py-1 text-xs bg-muted hover:bg-muted/80 text-muted-foreground rounded-md sm:rounded-lg transition-colors flex-shrink-0"
-                >
-                  <Edit className="w-3 h-3 mr-1" />
-                  <span className="hidden sm:inline">Edit</span>
-                </button>
-              )}
-              {isOwner && onDelete && (
-                <button
-                  onClick={handleDelete}
-                  className="flex items-center px-2 sm:px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-600 rounded-md sm:rounded-lg transition-colors flex-shrink-0"
-                >
-                  <Trash2 className="w-3 h-3 mr-1" />
-                  <span className="hidden sm:inline">Delete</span>
-                </button>
-              )}
-              <button
-                onClick={handleStartChat}
-                disabled={isLoadingChat}
-                className="flex items-center px-2 sm:px-3 py-1 text-xs bg-primary text-primary-foreground hover:bg-primary/90 rounded-md sm:rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
-              >
-                {isLoadingChat ? (
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                ) : (
-                  'Chat'
-                )}
-              </button>
-            </div>
-          </div>
+    <div className="rounded-3xl border border-black/5 bg-white/80 p-4 shadow-sm backdrop-blur-xl">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">{label}</p>
+          <p className="mt-2 text-2xl font-semibold text-zinc-950">{value}</p>
+        </div>
+        <div className="grid h-10 w-10 place-items-center rounded-2xl bg-zinc-950 text-white">
+          <Icon className="h-5 w-5" />
         </div>
       </div>
     </div>
   )
 }
 
-// Category Navigation Component
-const CategoryNav = ({ selectedCategory, onSelectCategory }: {
-  selectedCategory: string,
+function CapabilityCard({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  title: string
+  description: string
+}) {
+  return (
+    <div className="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-[0_18px_55px_rgba(15,23,42,0.06)]">
+      <div className="grid h-11 w-11 place-items-center rounded-2xl bg-zinc-100 text-zinc-900">
+        <Icon className="h-5 w-5" />
+      </div>
+      <h3 className="mt-4 text-sm font-semibold text-zinc-950">{title}</h3>
+      <p className="mt-2 text-sm leading-6 text-zinc-600">{description}</p>
+    </div>
+  )
+}
+
+function CategoryNav({
+  selectedCategory,
+  onSelectCategory,
+  pending,
+}: {
+  selectedCategory: string
   onSelectCategory: (category: string) => void
-}) => (
-  <nav className="flex flex-wrap gap-1.5 sm:gap-2 lg:gap-3 mb-6 sm:mb-8 overflow-x-auto scrollbar-hide">
-    {categories.map((category) => (
-      <Button
-        key={category.name}
-        variant={selectedCategory === category.name ? "default" : "outline"}
-        onClick={() => onSelectCategory(category.name)}
-        className={cn(
-          "px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 text-xs sm:text-sm rounded-full transition-all duration-200 flex-shrink-0 whitespace-nowrap",
-          selectedCategory === category.name
-            ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm"
-            : "border-border bg-card text-muted-foreground hover:bg-muted hover:border-muted-foreground"
+  pending?: boolean
+}) {
+  return (
+    <nav className="flex flex-wrap gap-2">
+      {categories.map((category) => {
+        const Icon = category.icon
+        const active = selectedCategory === category.value
+        return (
+          <button
+            key={category.value}
+            type="button"
+            onClick={() => onSelectCategory(category.value)}
+            className={cn(
+              "inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-all",
+              active
+                ? "border-zinc-950 bg-zinc-950 text-white shadow-sm"
+                : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50",
+              pending && "opacity-80"
+            )}
+          >
+            <Icon className="h-4 w-4" />
+            {category.label}
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+function GPTCard({
+  gpt,
+  onStartChat,
+  onEdit,
+  onDelete,
+  onShare,
+  isOwner = false,
+}: {
+  gpt: CustomGPT
+  onStartChat: (gpt: CustomGPT) => Promise<void>
+  onEdit?: (gpt: CustomGPT) => void
+  onDelete?: (gpt: CustomGPT) => void
+  onShare?: (gpt: CustomGPT) => void
+  isOwner?: boolean
+}) {
+  const [isLoadingChat, setIsLoadingChat] = useState(false)
+  const quality = getInstructionQuality(gpt)
+  const visibility = getVisibilityMeta(gpt.visibility)
+  const VisibilityIcon = visibility.icon
+  const knowledgeCount = getKnowledgeCount(gpt)
+
+  const handleStartChat = async () => {
+    setIsLoadingChat(true)
+    try {
+      await onStartChat(gpt)
+    } catch (error) {
+      console.error("Error starting GPT chat:", error)
+    } finally {
+      setIsLoadingChat(false)
+    }
+  }
+
+  return (
+    <article className="group relative overflow-hidden rounded-[2rem] border border-zinc-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.07)] transition-all duration-300 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-[0_28px_80px_rgba(15,23,42,0.12)]">
+      <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-zinc-950 via-blue-500 to-emerald-400 opacity-0 transition-opacity group-hover:opacity-100" />
+
+      <div className="flex items-start gap-4">
+        <GPTAvatar gpt={gpt} large />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-lg font-semibold tracking-[-0.02em] text-zinc-950">{gpt.name}</h3>
+            {gpt.isFeatured && (
+              <Badge className="rounded-full bg-amber-100 text-amber-700 hover:bg-amber-100">
+                Destacado
+              </Badge>
+            )}
+          </div>
+          <p className="mt-1 line-clamp-2 text-sm leading-6 text-zinc-600">
+            {gpt.description || "Asistente personalizado con instrucciones persistentes y memoria contextual."}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        <span className={cn("inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium", visibility.className)}>
+          <VisibilityIcon className="h-3.5 w-3.5" />
+          {visibility.label}
+        </span>
+        {gpt.category && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-600">
+            <Layers3 className="h-3.5 w-3.5" />
+            {gpt.category}
+          </span>
         )}
-      >
-        {category.icon && <span className="mr-1 sm:mr-2 flex-shrink-0">{category.icon}</span>}
-        <span className="truncate">{category.name}</span>
-      </Button>
-    ))}
-  </nav>
-)
+        <span className="inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+          <Database className="h-3.5 w-3.5" />
+          {knowledgeCount} archivo{knowledgeCount === 1 ? "" : "s"} RAG
+        </span>
+        {knowledgeCount > 0 && (
+          <span
+            title="Self-RAG: reflexión ISREL/ISSUP/ISUSE por segmento antes de responder"
+            className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700"
+          >
+            <Brain className="h-3.5 w-3.5" />
+            Self-RAG
+          </span>
+        )}
+      </div>
+
+      <div className="mt-5 grid grid-cols-3 gap-3">
+        <div className="rounded-2xl bg-zinc-50 p-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">Chats</p>
+          <p className="mt-1 text-lg font-semibold text-zinc-950">{formatCount(gpt._count?.conversations)}</p>
+        </div>
+        <div className="rounded-2xl bg-zinc-50 p-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">Modelo</p>
+          <p className="mt-1 truncate text-sm font-semibold text-zinc-950">{gpt.modelName || "default"}</p>
+        </div>
+        <div className="rounded-2xl bg-zinc-50 p-3">
+          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">Temp.</p>
+          <p className="mt-1 text-lg font-semibold text-zinc-950">{Number(gpt.temperature ?? 0.7).toFixed(1)}</p>
+        </div>
+      </div>
+
+      <div className="mt-5">
+        <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
+          <span>Seguimiento de instrucciones</span>
+          <span>{quality.label} · {quality.score}%</span>
+        </div>
+        <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-100">
+          <div className={cn("h-full rounded-full transition-all", quality.color)} style={{ width: `${quality.score}%` }} />
+        </div>
+      </div>
+
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-zinc-500">
+          Por <span className="font-medium text-zinc-700">{gpt.creator?.name || "Equipo"}</span>
+        </p>
+        <div className="flex items-center gap-2">
+          {onShare && gpt.visibility !== "PRIVATE" && (
+            <Button variant="outline" size="icon" onClick={() => onShare(gpt)} className="h-9 w-9 rounded-full">
+              <Share2 className="h-4 w-4" />
+              <span className="sr-only">Compartir</span>
+            </Button>
+          )}
+          {isOwner && onEdit && (
+            <Button variant="outline" size="icon" onClick={() => onEdit(gpt)} className="h-9 w-9 rounded-full">
+              <Edit className="h-4 w-4" />
+              <span className="sr-only">Editar</span>
+            </Button>
+          )}
+          {isOwner && onDelete && (
+            <Button variant="outline" size="icon" onClick={() => onDelete(gpt)} className="h-9 w-9 rounded-full text-rose-600 hover:text-rose-700">
+              <Trash2 className="h-4 w-4" />
+              <span className="sr-only">Eliminar</span>
+            </Button>
+          )}
+          <Button onClick={handleStartChat} disabled={isLoadingChat} className="h-9 rounded-full bg-zinc-950 px-4 text-white hover:bg-zinc-800">
+            {isLoadingChat ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4" />}
+            <span className="ml-2">Usar GPT</span>
+          </Button>
+        </div>
+      </div>
+    </article>
+  )
+}
 
 export default function GPTsPage() {
   const { user } = useAuth()
   const { selectChat } = useChat()
   const router = useRouter()
+  const [isPending, startTransition] = React.useTransition()
 
-  // State management
   const [gpts, setGpts] = useState<CustomGPT[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState("All")
+  const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>("all")
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [selectedGPT, setSelectedGPT] = useState<CustomGPT | null>(null)
 
-  // Debounced search query
-  const debouncedSearchQuery = useDebounce(searchQuery, 500)
+  const debouncedSearchQuery = useDebounce(searchQuery, 350)
 
-  // Fetch GPTs based on filters
   const fetchGPTs = useCallback(async () => {
     setLoading(true)
     try {
       const filters: GPTFilters = {
         search: debouncedSearchQuery || undefined,
         category: selectedCategory !== "All" && selectedCategory !== "Trending" ? selectedCategory : undefined,
-        visibility: "all"
+        visibility: visibilityFilter,
       }
 
-      console.log('Fetching GPTs with filters:', filters)
       let fetchedGPTs = await gptsService.getGPTs(filters)
-
-      // Simulate "Trending" by sorting by conversations
       if (selectedCategory === "Trending") {
-        fetchedGPTs = fetchedGPTs
+        fetchedGPTs = [...fetchedGPTs]
           .sort((a, b) => (b._count?.conversations || 0) - (a._count?.conversations || 0))
           .slice(0, 12)
       }
 
       setGpts(fetchedGPTs)
     } catch (error) {
-      console.error('Error fetching GPTs:', error)
-      toast.error('Failed to load GPTs')
+      console.error("Error fetching GPTs:", error)
+      toast.error("No se pudieron cargar los GPTs")
     } finally {
       setLoading(false)
     }
-  }, [debouncedSearchQuery, selectedCategory])
+  }, [debouncedSearchQuery, selectedCategory, visibilityFilter])
 
-  // Initial load and when filters change
   useEffect(() => {
     fetchGPTs()
   }, [fetchGPTs])
 
-  // Update the handleStartChat function
   const handleStartChat = async (gpt: CustomGPT) => {
-    console.log('Starting chat with GPT:', gpt)
     try {
       const chat = await gptsService.startChatWithGPT(gpt.id)
-      console.log('Started chat:', chat)
-
-      router.push(`/chat?id=${chat.id}`)
-      localStorage.setItem('currentChatId', chat.id)
-
+      localStorage.setItem("currentChatId", chat.id)
       selectChat(chat.id)
-
-      toast.success(`Started chat with ${gpt.name}`)
+      router.push(`/chat?id=${chat.id}`)
+      toast.success(`Chat iniciado con ${gpt.name}`)
     } catch (error: any) {
-      console.error('Error starting chat:', error)
-      toast.error(error.message || 'Failed to start chat')
+      toast.error(error?.message || "No se pudo iniciar el chat")
+      throw error
     }
   }
 
@@ -322,18 +456,15 @@ export default function GPTsPage() {
   }
 
   const handleDelete = async (gpt: CustomGPT) => {
-    const confirmed = await new Promise((resolve) => {
-      resolve(window.confirm(`Are you sure you want to delete "${gpt.name}"? This action cannot be undone.`))
-    })
-
+    const confirmed = window.confirm(`Eliminar "${gpt.name}"? Esta acción no se puede deshacer.`)
     if (!confirmed) return
 
     try {
       await gptsService.deleteGPT(gpt.id)
-      setGpts(gpts.filter(g => g.id !== gpt.id))
-      toast.success('GPT deleted successfully')
+      setGpts(current => current.filter(item => item.id !== gpt.id))
+      toast.success("GPT eliminado")
     } catch (error: any) {
-      toast.error(error.message || 'Failed to delete GPT')
+      toast.error(error?.message || "No se pudo eliminar el GPT")
     }
   }
 
@@ -342,134 +473,193 @@ export default function GPTsPage() {
     setShareDialogOpen(true)
   }
 
-  const copyShareLink = () => {
-    if (selectedGPT) {
-      const shareUrl = gptsService.getShareUrl(selectedGPT.shareId)
-      navigator.clipboard.writeText(shareUrl)
-      toast.success('Share link copied to clipboard!')
-    }
+  const copyShareLink = async () => {
+    if (!selectedGPT) return
+    await navigator.clipboard.writeText(gptsService.getShareUrl(selectedGPT.shareId))
+    toast.success("Enlace copiado")
   }
 
   const handleCreateNew = () => {
-    router.push('/gpts/create')
+    router.push("/gpts/create")
   }
 
-  // Filter GPTs based on category and search
-  const getDisplayGPTs = () => {
-    let filtered = gpts
-
-    // Sort: Featured first, then by creation date
-    filtered = filtered.sort((a, b) => {
-      if (a.isFeatured && !b.isFeatured) return -1
-      if (!a.isFeatured && b.isFeatured) return 1
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    })
-
-    return filtered
+  const handleCategoryChange = (category: string) => {
+    startTransition(() => setSelectedCategory(category))
   }
 
-  const allDisplayGPTs = getDisplayGPTs()
+  const handleVisibilityChange = (visibility: VisibilityFilter) => {
+    startTransition(() => setVisibilityFilter(visibility))
+  }
+
+  const allDisplayGPTs = [...gpts].sort((a, b) => {
+    if (a.isFeatured && !b.isFeatured) return -1
+    if (!a.isFeatured && b.isFeatured) return 1
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  })
+
   const userOwnedGPTs = allDisplayGPTs.filter(gpt => gpt.creator?.id === user?.id)
+  const publicGPTs = allDisplayGPTs.filter(gpt => gpt.visibility === "PUBLIC")
+  const ragGPTs = allDisplayGPTs.filter(gpt => getKnowledgeCount(gpt) > 0)
+  const activeCategory = categories.find(category => category.value === selectedCategory)?.label || selectedCategory
 
   return (
-    <div className="min-h-full bg-background text-foreground">
-      <div className="h-full w-full px-3 sm:px-4 md:px-6 lg:px-8 py-4 md:py-6 lg:py-8 max-w-7xl mx-auto">
-        {/* Header and Create Button */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-4 sm:mb-6">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 sm:gap-3">
-              <SidebarTrigger className="md:hidden" />
-              <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold flex items-center gap-2 text-foreground">
-                <Bot className="h-5 w-5 sm:h-6 sm:w-6 text-primary flex-shrink-0" />
-                <span className="truncate">GPTs Store</span>
+    <main data-testid="gpts-store-page" className="min-h-full bg-[#f7f7f4] text-zinc-950">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
+        <section className="relative overflow-hidden rounded-[2.25rem] border border-zinc-200 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.08)]">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(37,99,235,0.12),transparent_28%),radial-gradient(circle_at_80%_10%,rgba(16,185,129,0.12),transparent_25%),linear-gradient(135deg,rgba(255,255,255,0.96),rgba(250,250,247,0.94))]" />
+          <div className="relative grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.35fr_0.65fr] lg:p-10">
+            <div>
+              <div className="flex items-center gap-3">
+                <SidebarTrigger className="md:hidden" />
+                <Badge className="rounded-full bg-zinc-950 px-3 py-1 text-white hover:bg-zinc-950">
+                  <Bot className="mr-1.5 h-3.5 w-3.5" />
+                  GPTs Store
+                </Badge>
+              </div>
+              <h1 className="mt-6 max-w-3xl text-4xl font-semibold tracking-[-0.055em] text-zinc-950 sm:text-5xl lg:text-6xl">
+                Asistentes personalizados con RAG, instrucciones y flujo profesional.
               </h1>
-            </div>
-            <p className="text-xs sm:text-sm text-muted-foreground mt-1 line-clamp-2 ml-0 sm:ml-0">
-              Discover and create custom AI assistants for any task
-            </p>
-          </div>
-
-          <Button
-            onClick={handleCreateNew}
-            className="h-8 sm:h-9 px-3 sm:px-4 text-xs sm:text-sm bg-primary hover:bg-primary/90 text-primary-foreground shadow transition-transform hover:scale-[1.01] flex-shrink-0 w-full sm:w-auto"
-          >
-            <Plus className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-            Create New GPT
-          </Button>
-        </div>
-
-        {/* Search and Categories */}
-        <div className="mb-6 sm:mb-8 lg:mb-10">
-          <div className="relative mb-4 sm:mb-6">
-            <Search className="absolute left-3 sm:left-4 top-1/2 transform -translate-y-1/2 h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground" />
-            <Input
-              placeholder="Search for GPTs..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 sm:pl-12 pr-3 sm:pr-4 py-2.5 sm:py-3 text-sm sm:text-base rounded-full border-border bg-card shadow-sm focus-visible:ring-offset-background"
-            />
-          </div>
-
-          <CategoryNav selectedCategory={selectedCategory} onSelectCategory={setSelectedCategory} />
-        </div>
-
-        {/* User's GPTs Section (only if user has GPTs) */}
-        {userOwnedGPTs.length > 0 && (
-          <section className="mb-8 sm:mb-10 lg:mb-12">
-            <div className="mb-4 sm:mb-6">
-              <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-foreground">Your GPTs</h2>
+              <p className="mt-5 max-w-2xl text-base leading-8 text-zinc-600 sm:text-lg">
+                Crea, encuentra y ejecuta GPTs con conocimiento persistente, instrucciones reforzadas y controles de calidad para chats especializados.
+              </p>
+              <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+                <Button onClick={handleCreateNew} className="h-12 rounded-full bg-zinc-950 px-6 text-white hover:bg-zinc-800">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Crear GPT profesional
+                </Button>
+                <Button variant="outline" onClick={() => handleVisibilityChange("mine")} className="h-12 rounded-full border-zinc-300 bg-white/80 px-6">
+                  <Wand2 className="mr-2 h-4 w-4" />
+                  Ver mis GPTs
+                </Button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 md:gap-6">
-              {userOwnedGPTs.slice(0, 3).map((gpt) => (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <StatCard label="Disponibles" value={allDisplayGPTs.length} icon={Bot} />
+              <StatCard label="Con RAG" value={ragGPTs.length} icon={Database} />
+              <StatCard label="Mis GPTs" value={userOwnedGPTs.length} icon={ShieldCheck} />
+              <StatCard label="Públicos" value={publicGPTs.length} icon={Globe} />
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-3">
+          <CapabilityCard
+            icon={Brain}
+            title="RAG por GPT"
+            description="Los archivos del GPT se recuperan como evidencia privada y no se mezclan como texto crudo en el prompt."
+          />
+          <CapabilityCard
+            icon={CheckCircle2}
+            title="Instrucciones resistentes"
+            description="El contrato interno separa persona, reglas del usuario y conocimiento para evitar fuga o sobreescritura."
+          />
+          <CapabilityCard
+            icon={FileText}
+            title="Trazabilidad lista para QA"
+            description="Cada GPT muestra señales de calidad: instrucciones, starters, conocimiento y uso real en conversaciones."
+          />
+        </section>
+
+        <section className="rounded-[2rem] border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex flex-col gap-4">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-400" />
+              <Input
+                data-testid="gpts-search"
+                placeholder="Buscar GPTs por nombre, propósito o especialidad..."
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                className="h-12 rounded-full border-zinc-200 bg-zinc-50 pl-12 text-base shadow-none focus-visible:ring-zinc-300"
+              />
+            </div>
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <CategoryNav selectedCategory={selectedCategory} onSelectCategory={handleCategoryChange} pending={isPending} />
+              <div className="flex shrink-0 rounded-full border border-zinc-200 bg-zinc-50 p-1">
+                {visibilityOptions.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => handleVisibilityChange(option.value)}
+                    className={cn(
+                      "h-9 rounded-full px-4 text-sm font-medium transition",
+                      visibilityFilter === option.value
+                        ? "bg-white text-zinc-950 shadow-sm"
+                        : "text-zinc-500 hover:text-zinc-800"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {userOwnedGPTs.length > 0 && visibilityFilter !== "public" && (
+          <section>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium uppercase tracking-[0.18em] text-zinc-500">Workspace</p>
+                <h2 className="mt-1 text-2xl font-semibold tracking-[-0.04em]">Tus GPTs activos</h2>
+              </div>
+              <Button variant="outline" onClick={handleCreateNew} className="rounded-full">
+                <Plus className="mr-2 h-4 w-4" />
+                Nuevo
+              </Button>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              {userOwnedGPTs.slice(0, 4).map((gpt) => (
                 <GPTCard
-                  key={`user-${gpt.id}`}
+                  key={`owned-${gpt.id}`}
                   gpt={gpt}
                   onStartChat={handleStartChat}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
-                  showActions={true}
-                  isOwner={true}
+                  onShare={handleShare}
+                  isOwner
                 />
               ))}
             </div>
           </section>
         )}
 
-        {/* All GPTs / Category Results */}
-        <section className="mb-8 sm:mb-10 lg:mb-12">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4 mb-4 sm:mb-6">
-            <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-foreground">
-              {selectedCategory === "All"
-                ? "Discover GPTs"
-                : selectedCategory === "Trending"
-                  ? "Trending GPTs"
-                  : `${selectedCategory} GPTs`}
-            </h2>
-            <p className="text-muted-foreground text-xs sm:text-sm">
-              {allDisplayGPTs.length} GPT{allDisplayGPTs.length !== 1 ? 's' : ''}
+        <section>
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-sm font-medium uppercase tracking-[0.18em] text-zinc-500">Catálogo</p>
+              <h2 className="mt-1 text-3xl font-semibold tracking-[-0.045em]">
+                {selectedCategory === "All" ? "Descubrir GPTs" : `${activeCategory}`}
+              </h2>
+            </div>
+            <p className="text-sm text-zinc-500">
+              {loading ? "Cargando..." : `${allDisplayGPTs.length} resultado${allDisplayGPTs.length === 1 ? "" : "s"}`}
             </p>
           </div>
 
           {loading ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 md:gap-6">
-              {[1, 2, 3, 4, 5, 6].map((i) => (
-                <div key={i} className="bg-white dark:bg-card rounded-lg p-3 sm:p-4 md:p-6 border border-border">
+            <div className="grid gap-4 lg:grid-cols-2">
+              {Array.from({ length: 6 }).map((_, index) => (
+                <div key={index} className="rounded-[2rem] border border-zinc-200 bg-white p-5">
                   <div className="animate-pulse">
-                    <div className="flex items-start space-x-3 sm:space-x-4">
-                      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-muted rounded-full flex-shrink-0"></div>
-                      <div className="flex-1 min-w-0">
-                        <div className="h-3 sm:h-4 bg-muted rounded mb-2 w-3/4"></div>
-                        <div className="h-2.5 sm:h-3 bg-muted rounded mb-2"></div>
-                        <div className="h-2.5 sm:h-3 bg-muted rounded w-1/2"></div>
+                    <div className="flex gap-4">
+                      <div className="h-14 w-14 rounded-2xl bg-zinc-100" />
+                      <div className="flex-1">
+                        <div className="h-5 w-2/5 rounded bg-zinc-100" />
+                        <div className="mt-3 h-4 w-4/5 rounded bg-zinc-100" />
                       </div>
+                    </div>
+                    <div className="mt-6 grid grid-cols-3 gap-3">
+                      <div className="h-16 rounded-2xl bg-zinc-100" />
+                      <div className="h-16 rounded-2xl bg-zinc-100" />
+                      <div className="h-16 rounded-2xl bg-zinc-100" />
                     </div>
                   </div>
                 </div>
               ))}
             </div>
           ) : allDisplayGPTs.length > 0 ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 md:gap-6">
+            <div className="grid gap-4 lg:grid-cols-2">
               {allDisplayGPTs.map((gpt) => (
                 <GPTCard
                   key={gpt.id}
@@ -477,73 +667,69 @@ export default function GPTsPage() {
                   onStartChat={handleStartChat}
                   onEdit={gpt.creator?.id === user?.id ? handleEdit : undefined}
                   onDelete={gpt.creator?.id === user?.id ? handleDelete : undefined}
-                  showActions={gpt.creator?.id === user?.id}
+                  onShare={handleShare}
                   isOwner={gpt.creator?.id === user?.id}
                 />
               ))}
             </div>
           ) : (
-            <div className="text-center py-8 sm:py-12 lg:py-16 px-4">
-              <Bot className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4 sm:mb-6" />
-              <h3 className="text-lg sm:text-xl lg:text-2xl font-semibold mb-2 sm:mb-3 text-foreground">
-                {debouncedSearchQuery ? "No GPTs found" : `No GPTs in "${selectedCategory}"`}
+            <div className="rounded-[2rem] border border-dashed border-zinc-300 bg-white px-6 py-16 text-center">
+              <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-zinc-100 text-zinc-500">
+                <Bot className="h-8 w-8" />
+              </div>
+              <h3 className="mt-6 text-2xl font-semibold tracking-[-0.035em]">
+                {debouncedSearchQuery ? "No hay GPTs con esa búsqueda" : `No hay GPTs en "${activeCategory}"`}
               </h3>
-              <p className="text-muted-foreground max-w-md mx-auto leading-relaxed text-sm sm:text-base">
-                {debouncedSearchQuery
-                  ? "Try adjusting your search terms or exploring different categories."
-                  : "It looks a little empty here! Be the first to create a GPT in this category and share your innovation."
-                }
+              <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-zinc-600">
+                Crea un asistente con instrucciones claras, archivos de conocimiento y starters para que el chat responda con precisión desde el primer mensaje.
               </p>
-              {!debouncedSearchQuery && (selectedCategory === "All" || selectedCategory === "Trending") && (
-                <Button onClick={handleCreateNew} className="mt-6 sm:mt-8 h-9 sm:h-10 px-4 sm:px-5 text-sm sm:text-base">
-                  <Plus className="h-3 w-3 sm:h-4 sm:w-4 mr-2" />
-                  Create Your First GPT
-                </Button>
-              )}
+              <div className="mt-6 flex flex-wrap justify-center gap-2">
+                {["Tesis APA 7", "Investigación de mercado", "Diseño web", "Análisis Excel"].map(template => (
+                  <button
+                    key={template}
+                    type="button"
+                    onClick={handleCreateNew}
+                    className="rounded-full border border-zinc-200 bg-zinc-50 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-white"
+                  >
+                    {template}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </section>
 
-        {/* Share Dialog */}
         <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
-          <DialogContent className="bg-card border-border p-4 sm:p-6 rounded-lg shadow-xl max-w-md sm:max-w-lg mx-auto">
-            <DialogHeader className="mb-4">
-              <DialogTitle className="text-lg sm:text-xl lg:text-2xl font-bold text-foreground">Share GPT</DialogTitle>
-              <DialogDescription className="text-muted-foreground text-sm sm:text-base">
-                Share "<strong>{selectedGPT?.name}</strong>" with others.
+          <DialogContent className="rounded-3xl border-zinc-200 bg-white sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Compartir GPT</DialogTitle>
+              <DialogDescription>
+                Comparte "{selectedGPT?.name}" con otros usuarios cuando su visibilidad sea pública o por enlace.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3 sm:space-y-4">
-              <label htmlFor="share-link" className="text-xs sm:text-sm font-medium text-foreground">Shareable Link</label>
-              <div className="flex items-center gap-2">
+            <div className="space-y-3">
+              <label htmlFor="share-link" className="text-sm font-medium text-zinc-800">Enlace</label>
+              <div className="flex gap-2">
                 <Input
                   id="share-link"
-                  value={selectedGPT ? gptsService.getShareUrl(selectedGPT.shareId) : ''}
+                  value={selectedGPT ? gptsService.getShareUrl(selectedGPT.shareId) : ""}
                   readOnly
-                  className="flex-1 bg-muted/50 border-border text-foreground text-xs sm:text-sm h-9 sm:h-10"
+                  className="h-11 rounded-2xl bg-zinc-50"
                 />
-                <Button onClick={copyShareLink} size="icon" className="h-9 w-9 sm:h-10 sm:w-10 shrink-0">
-                  <Copy className="h-3 w-3 sm:h-4 sm:w-4" />
-                  <span className="sr-only">Copy link</span>
+                <Button onClick={copyShareLink} size="icon" className="h-11 w-11 rounded-2xl bg-zinc-950 text-white hover:bg-zinc-800">
+                  <Copy className="h-4 w-4" />
+                  <span className="sr-only">Copiar enlace</span>
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Anyone with this link can use your GPT if its visibility is set to Public or Unlisted.
-              </p>
             </div>
-            <DialogFooter className="mt-4 sm:mt-6">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setShareDialogOpen(false)}
-                className="w-full sm:w-auto text-sm"
-              >
-                Close
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShareDialogOpen(false)} className="rounded-full">
+                Cerrar
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>
-    </div>
+    </main>
   )
 }
