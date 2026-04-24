@@ -25,10 +25,10 @@ const { streamPlan } = require('../services/plan-generator');
 const router = express.Router();
 router.use(authenticateToken);
 
-async function persistSuccess(chatId, userId, brief, plan, svg, dxf) {
+async function persistSuccess(chatId, userId, displayBrief, plan, svg, dxf) {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
   if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: brief } });
+  await prisma.message.create({ data: { chatId, role: 'USER', content: displayBrief } });
   const rooms = plan?.rooms?.length || 0;
   const summary = [
     `He generado tu plano arquitectónico: **${plan?.title || plan?.project?.name || 'Planta'}**.`,
@@ -50,10 +50,10 @@ async function persistSuccess(chatId, userId, brief, plan, svg, dxf) {
   };
 }
 
-async function persistFailure(chatId, userId, brief, reason) {
+async function persistFailure(chatId, userId, displayBrief, reason) {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
   if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: brief } });
+  await prisma.message.create({ data: { chatId, role: 'USER', content: displayBrief } });
   const content = `No pude generar el plano: ${reason}. Intentá con una descripción más detallada (terreno, ambientes, baños) o probá otro modelo desde el selector.`;
   const assistant = await prisma.message.create({
     data: { chatId, role: 'ASSISTANT', content },
@@ -67,6 +67,8 @@ router.post(
   [
     body('prompt').optional().isString().trim().isLength({ min: 4, max: 4000 }),
     body('brief').optional().isString().trim().isLength({ min: 4, max: 4000 }),
+    body('displayPrompt').optional().isString().trim().isLength({ max: 4000 }),
+    body('displayBrief').optional().isString().trim().isLength({ max: 4000 }),
     body('chatId').optional().isString(),
     body('model').optional().isString(),
   ],
@@ -76,6 +78,7 @@ router.post(
 
     const brief = (req.body.prompt || req.body.brief || '').trim();
     if (!brief) return res.status(400).json({ error: 'prompt required' });
+    const displayBrief = (req.body.displayPrompt || req.body.displayBrief || brief).trim();
     const { chatId } = req.body;
 
     // SSE headers.
@@ -127,7 +130,7 @@ router.post(
       send({ type: 'stage', label: 'Guardando en la conversación', pct: 98 });
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistSuccess(chatId, req.user.id, brief, plan, svg, dxf); }
+        try { assistantMessage = await persistSuccess(chatId, req.user.id, displayBrief, plan, svg, dxf); }
         catch (e) { console.error('[plan] persist success error:', e?.message); }
       }
       send({ type: 'final', plan, svg, dxf, assistantMessage });
@@ -136,7 +139,7 @@ router.post(
       console.error('[plan] generation failed:', reason);
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistFailure(chatId, req.user.id, brief, reason); }
+        try { assistantMessage = await persistFailure(chatId, req.user.id, displayBrief, reason); }
         catch (e) { console.error('[plan] persist failure error:', e?.message); }
       }
       send({ type: 'error', error: reason, assistantMessage });

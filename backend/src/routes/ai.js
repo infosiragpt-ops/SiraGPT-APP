@@ -2329,6 +2329,7 @@ router.post(
   '/generate-ppt',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('displayPrompt').optional().isString().trim(),
     body('chatId').isString().withMessage('chatId is required'),
     body('provider').optional().isString(),
     body('model').optional().isString(),
@@ -2343,6 +2344,7 @@ router.post(
       }
 
       const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
+      const displayPrompt = (req.body.displayPrompt || prompt).trim();
       const userId = req.user.id;
 
       console.log('🎨 Vector PPT generation request:', { prompt, chatId, provider, model });
@@ -2415,7 +2417,7 @@ router.post(
         data: {
           chatId,
           role: 'USER',
-          content: prompt,
+          content: displayPrompt,
           files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
         }
       });
@@ -2451,7 +2453,7 @@ router.post(
         data: {
           updatedAt: new Date(),
           title: chat.title === 'New Chat'
-            ? `🎨 Vector PPT: ${prompt.slice(0, 25)}${prompt.length > 25 ? '...' : ''}`
+            ? `🎨 Vector PPT: ${displayPrompt.slice(0, 25)}${displayPrompt.length > 25 ? '...' : ''}`
             : chat.title
         }
       });
@@ -2485,6 +2487,7 @@ router.post(
   '/generate-ppt2',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('displayPrompt').optional().isString().trim(),
     body('chatId').isString().withMessage('chatId is required'),
     body('provider').optional().isString(),
     body('model').optional().isString(),
@@ -2499,6 +2502,7 @@ router.post(
       }
 
       const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
+      const displayPrompt = (req.body.displayPrompt || prompt).trim();
       const userId = req.user.id;
 
       console.log('📊 PPT generation request:', { prompt, chatId, provider, model });
@@ -2569,7 +2573,7 @@ router.post(
         data: {
           chatId,
           role: 'USER',
-          content: prompt,
+          content: displayPrompt,
           files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
         }
       });
@@ -2603,7 +2607,7 @@ router.post(
           data: {
             updatedAt: new Date(),
             title: chat.title === 'New Chat'
-              ? `PPT: ${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}`
+              ? `PPT: ${displayPrompt.slice(0, 30)}${displayPrompt.length > 30 ? '...' : ''}`
               : chat.title
           }
         });
@@ -3142,6 +3146,7 @@ router.post(
   '/generate-webdev',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('displayPrompt').optional().isString().trim(),
     body('chatId').isString().withMessage('chatId is required'),
     body('provider').optional().isString(),
     body('model').optional().isString(),
@@ -3177,6 +3182,7 @@ router.post(
       }
 
       const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
+      const displayPrompt = (req.body.displayPrompt || prompt).trim();
       const userId = req.user.id;
 
       console.log('🌐 Web development streaming request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
@@ -3403,7 +3409,7 @@ Every element should feel intentionally designed, polished, and premium. The use
 
       // Save chat and track usage in background
       if (fullResponseContent.trim()) {
-        await saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles);
+        await saveChatAndTrackUsage(userId, chatId, displayPrompt, fullResponseContent, tokens, model, processedFiles);
       }
 
     } catch (error) {
@@ -3707,6 +3713,7 @@ router.post(
   '/generate-chart',
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('displayPrompt').optional().isString().trim(),
     body('chatId').isString().withMessage('chatId is required'),
     body('fileId').optional().isString(),
   ],
@@ -3719,6 +3726,7 @@ router.post(
       }
 
       let { prompt, chatId, fileId } = req.body;
+      const displayPrompt = (req.body.displayPrompt || prompt).trim();
       const userId = req.user.id;
 
       // If fileId is not provided in the request, try to find one from the recent chat history
@@ -3789,12 +3797,12 @@ router.post(
         data: {
           chatId,
           role: 'USER',
-          content: prompt,
+          content: displayPrompt,
         }
       });
 
       // Determine the content for the assistant's message
-      let assistantContent = `Generated chart for: "${prompt}"`;
+      let assistantContent = `Generated chart for: "${displayPrompt}"`;
       if (!imageUrl && response && response.length > 0 && response[0].content && response[0].content.length > 0 && response[0].content[0].text) {
         assistantContent = response[0].content[0].text;
       }

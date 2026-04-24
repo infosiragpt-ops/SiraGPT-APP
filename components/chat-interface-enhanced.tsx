@@ -5186,6 +5186,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const streamId = crypto.randomUUID();
       const payload = {
         prompt: professionalPrompt,
+        displayPrompt: prompt,
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
@@ -5271,6 +5272,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const payload = {
         prompt: professionalPrompt,
+        displayPrompt: prompt,
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
@@ -5335,6 +5337,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const payload = {
         prompt: professionalPrompt,
+        displayPrompt: prompt,
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,

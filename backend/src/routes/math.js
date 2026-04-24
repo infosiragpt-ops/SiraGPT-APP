@@ -23,10 +23,10 @@ const { streamSolve } = require('../services/math-solver');
 const router = express.Router();
 router.use(authenticateToken);
 
-async function persistSuccess(chatId, userId, prompt, content) {
+async function persistSuccess(chatId, userId, displayPrompt, content) {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
   if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: prompt } });
+  await prisma.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
   const assistant = await prisma.message.create({
     data: { chatId, role: 'ASSISTANT', content },
   });
@@ -34,10 +34,10 @@ async function persistSuccess(chatId, userId, prompt, content) {
   return { id: assistant.id, role: assistant.role, content: assistant.content, files: [] };
 }
 
-async function persistFailure(chatId, userId, prompt, reason) {
+async function persistFailure(chatId, userId, displayPrompt, reason) {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
   if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: prompt } });
+  await prisma.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
   const content = `No pude resolver el problema: ${reason}. Reformulá la pregunta con más detalle (valores numéricos, definiciones) o probá otro modelo.`;
   const assistant = await prisma.message.create({
     data: { chatId, role: 'ASSISTANT', content },
@@ -50,6 +50,7 @@ router.post(
   '/solve',
   [
     body('prompt').isString().trim().isLength({ min: 2, max: 6000 }),
+    body('displayPrompt').optional().isString().trim().isLength({ max: 6000 }),
     body('chatId').optional().isString(),
     body('model').optional().isString(),
   ],
@@ -58,6 +59,7 @@ router.post(
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const prompt = req.body.prompt.trim();
+    const displayPrompt = (req.body.displayPrompt || prompt).trim();
     const { chatId } = req.body;
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -93,7 +95,7 @@ router.post(
       send({ type: 'stage', label: 'Guardando en la conversación', pct: 98 });
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistSuccess(chatId, req.user.id, prompt, content); }
+        try { assistantMessage = await persistSuccess(chatId, req.user.id, displayPrompt, content); }
         catch (e) { console.error('[math] persist success error:', e?.message); }
       }
       send({ type: 'final', content, topic, usedPython, assistantMessage });
@@ -102,7 +104,7 @@ router.post(
       console.error('[math] solver failed:', reason);
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistFailure(chatId, req.user.id, prompt, reason); }
+        try { assistantMessage = await persistFailure(chatId, req.user.id, displayPrompt, reason); }
         catch (e) { console.error('[math] persist failure error:', e?.message); }
       }
       send({ type: 'error', error: reason, assistantMessage });

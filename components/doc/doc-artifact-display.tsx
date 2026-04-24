@@ -34,7 +34,7 @@ import { Button } from "@/components/ui/button"
 
 interface DocFile {
   type: "doc"
-  format: "docx" | "xlsx" | "pptx" | "pdf" | "svg"
+  format: "docx" | "xlsx" | "pptx" | "pdf" | "svg" | "csv"
   title?: string
   explanation?: string
   filename: string
@@ -48,6 +48,7 @@ interface DocFile {
 const FORMAT_META: Record<DocFile["format"], { label: string; accent: string; Icon: any }> = {
   docx: { label: "Word",       accent: "bg-blue-50 text-blue-700 border-blue-200",           Icon: FileText },
   xlsx: { label: "Excel",      accent: "bg-emerald-50 text-emerald-700 border-emerald-200",  Icon: FileSpreadsheet },
+  csv:  { label: "CSV",        accent: "bg-teal-50 text-teal-700 border-teal-200",           Icon: FileSpreadsheet },
   pptx: { label: "PowerPoint", accent: "bg-orange-50 text-orange-700 border-orange-200",     Icon: PresentationIcon },
   pdf:  { label: "PDF",        accent: "bg-red-50 text-red-700 border-red-200",              Icon: FileText },
   svg:  { label: "SVG",        accent: "bg-violet-50 text-violet-700 border-violet-200",     Icon: FileCode2 },
@@ -60,7 +61,10 @@ function formatBytes(n?: number) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function DocArtifactDisplay({ files }: { files: any[] }) {
+export function DocArtifactDisplay({ files, onDocumentPreview }: {
+  files: any[]
+  onDocumentPreview?: (url: string) => void
+}) {
   const docs = React.useMemo<DocFile[]>(
     () => (Array.isArray(files) ? files.filter((f: any) => f?.type === "doc") : []),
     [files]
@@ -68,23 +72,32 @@ export function DocArtifactDisplay({ files }: { files: any[] }) {
   if (docs.length === 0) return null
   return (
     <div className="mt-3 space-y-3">
-      {docs.map((d, i) => <DocCard key={i} doc={d} />)}
+      {docs.map((d, i) => <DocCard key={i} doc={d} onDocumentPreview={onDocumentPreview} />)}
     </div>
   )
 }
 
-function DocCard({ doc }: { doc: DocFile }) {
+function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?: (url: string) => void }) {
   const meta = FORMAT_META[doc.format] || FORMAT_META.docx
   const available = !!doc.dataUrl && doc.dataUrl.startsWith("data:")
   const hasHtmlPreview = !!doc.htmlPreview && doc.htmlPreview.length > 0
   const hasPdfPreview = doc.format === "pdf" && available
   const hasSvgPreview = doc.format === "svg" && available
   const anyPreview = hasHtmlPreview || hasPdfPreview || hasSvgPreview
+  const canPreview = onDocumentPreview ? (available || hasHtmlPreview) : anyPreview
 
-  // Preview open by default when available so the user sees the design
-  // without clicking. Collapsible for long previews.
-  const [previewOpen, setPreviewOpen] = React.useState<boolean>(anyPreview)
+  // When the parent provides a right-pane preview, keep the card
+  // compact and open the split panel only on user click.
+  const [previewOpen, setPreviewOpen] = React.useState<boolean>(anyPreview && !onDocumentPreview)
   const [codeOpen, setCodeOpen] = React.useState(false)
+
+  function preview() {
+    if (onDocumentPreview && available) {
+      onDocumentPreview(doc.dataUrl as string)
+      return
+    }
+    if (anyPreview) setPreviewOpen(v => !v)
+  }
 
   function download() {
     if (!available) return
@@ -120,15 +133,15 @@ function DocCard({ doc }: { doc: DocFile }) {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {anyPreview && (
+          {canPreview && (
             <Button
               variant="ghost" size="sm"
-              onClick={() => setPreviewOpen(v => !v)}
+              onClick={preview}
               className="h-8 px-2"
             >
-              {previewOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              {!onDocumentPreview && previewOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
               <span className="ml-1 hidden text-[11.5px] sm:inline">
-                {previewOpen ? "Ocultar" : "Vista previa"}
+                {!onDocumentPreview && previewOpen ? "Ocultar" : "Vista previa"}
               </span>
             </Button>
           )}

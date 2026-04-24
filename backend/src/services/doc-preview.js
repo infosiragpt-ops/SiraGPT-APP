@@ -12,6 +12,7 @@
  *   · pptx → no good pure-JS renderer exists. We skip and the card
  *            falls back to the "downloadable" layout.
  *   · svg  → pass-through (the frontend renders it directly).
+ *   · csv  → HTML table preview.
  *
  * The preview HTML is deliberately self-contained. We wrap it in a
  * minimal stylesheet targeted at the preview container so it looks
@@ -184,6 +185,77 @@ async function previewXlsx(base64, { maxRows = 60, maxSheets = 3 } = {}) {
   }
 }
 
+function parseCsv(text, maxRows = 80) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '"' && inQuotes && next === '"') {
+      cell += '"';
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      row.push(cell);
+      cell = '';
+      continue;
+    }
+    if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (ch === '\r' && next === '\n') i += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+      if (rows.length >= maxRows) break;
+      continue;
+    }
+    cell += ch;
+  }
+  if (cell.length || row.length) {
+    row.push(cell);
+    if (rows.length < maxRows) rows.push(row);
+  }
+  return rows;
+}
+
+async function previewCsv(base64, { maxRows = 80 } = {}) {
+  try {
+    const text = Buffer.from(base64, 'base64').toString('utf8');
+    const rows = parseCsv(text, maxRows);
+    const parts = [XLSX_STYLES, '<div class="sgpt-xls-preview">'];
+    parts.push('<div class="sheet-tab">CSV</div>');
+    if (rows.length === 0) {
+      parts.push('<div class="truncated">Archivo CSV vacío</div>');
+    } else {
+      parts.push('<table>');
+      rows.forEach((row, rowIdx) => {
+        const Tag = rowIdx === 0 ? 'th' : 'td';
+        parts.push('<tr>');
+        for (const cell of row) parts.push(`<${Tag}>${escapeHtml(cell)}</${Tag}>`);
+        parts.push('</tr>');
+      });
+      parts.push('</table>');
+      const totalRows = text.split(/\r\n|\n|\r/).filter(Boolean).length;
+      if (totalRows > maxRows) {
+        parts.push(`<div class="truncated">…${totalRows - maxRows} filas más. Descarga el archivo para verlas todas.</div>`);
+      }
+    }
+    parts.push('</div>');
+    return { mime: 'text/html', html: parts.join('') };
+  } catch (err) {
+    console.warn('[doc-preview] csv conversion failed:', err?.message);
+    return null;
+  }
+}
+
 /**
  * Main entry point — takes the file format + its base64 body and
  * returns { mime, html } when a preview is available, or null.
@@ -192,6 +264,7 @@ async function renderPreview(format, base64) {
   if (!base64 || typeof base64 !== 'string') return null;
   if (format === 'docx') return previewDocx(base64);
   if (format === 'xlsx') return previewXlsx(base64);
+  if (format === 'csv') return previewCsv(base64);
   // svg is previewed as-is on the client; pdf has a native <embed>;
   // pptx has no decent pure-JS renderer, skipped.
   return null;

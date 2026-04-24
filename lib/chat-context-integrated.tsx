@@ -447,6 +447,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           const fileId = uploadedFiles.length > 0 ? uploadedFiles[0].id : undefined;
           const chartResponse = await apiClient.generateChart({
             prompt: professionalPrompt,
+            displayPrompt: content,
             chatId: activeChat.id,
             fileId,
           });
@@ -469,6 +470,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // Handle Figma flowchart generation
           const figmaResponse = await apiClient.generateFigmaFlowchart({
             prompt: professionalPrompt,
+            displayPrompt: content,
             chatId: activeChat.id,
             conversationHistory: activeChat.messages || [],
           });
@@ -510,7 +512,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           };
           try {
             await apiClient.generateArtifactStream(
-              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -583,7 +585,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           };
           try {
             await apiClient.generateDocStream(
-              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -665,7 +667,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           };
           try {
             await apiClient.generateVizStream(
-              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -742,7 +744,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
           try {
             await apiClient.solveMathStream(
-              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -828,7 +830,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
           try {
             await apiClient.generatePlanStream(
-              { prompt: professionalPrompt, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {

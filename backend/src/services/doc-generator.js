@@ -10,6 +10,7 @@
  *   · pdf    — reportlab / pypdf / pdfplumber: formularios rellenables,
  *              merges, extracción OCR.
  *   · svg    — pure Python string output (arch plans, diagrams).
+ *   · csv    — plain CSV exports for lightweight tabular datasets.
  *
  * Pipeline mirrors viz/math/plan:
  *   1. LLM emits JSON { format, filename, title, explanation, python }.
@@ -72,7 +73,7 @@ const SYSTEM_PROMPT = `You are a senior technical writer + document engineer for
 Return a self-contained JSON object (no fences, no prose before or after):
 
 {
-  "format": "docx" | "xlsx" | "pptx" | "pdf" | "svg",
+  "format": "docx" | "xlsx" | "pptx" | "pdf" | "svg" | "csv",
   "filename": string,
   "title": string,         // user-language short title shown above the artefact
   "explanation": string,   // 1-3 short sentences describing what the document contains
@@ -82,7 +83,7 @@ Return a self-contained JSON object (no fences, no prose before or after):
 === SANDBOX CONVENTIONS ===
 - The constant OUT_PATH is defined before your code runs. Just write the file there and DO NOT print anything.
 - Available libraries already installed on the host:
-    python-docx + docxtpl · openpyxl + xlsxwriter · python-pptx · reportlab + pypdf + pdfplumber · PIL
+    python-docx + docxtpl · openpyxl + xlsxwriter · python-pptx · reportlab + pypdf + pdfplumber · PIL · csv stdlib
     (sympy / numpy / scipy / pandas / matplotlib / seaborn also available when you need them)
 - You MUST import every library you use at the top of your snippet.
 
@@ -194,6 +195,7 @@ visually consistent, on-brand, and academically correct. The bundle:
 - pptx → defensas de tesis, presentaciones académicas o pitch.
 - pdf  → reportes letterheaded de una sola vista, formularios rellenables, certificados.
 - svg  → mapas arquitectónicos / urbanos / planos imprimibles. Use sgpt_svg.ArchMap for maps (e.g. San Marcos Huari, plaza / barrio / campus). For pure floor plans the /api/plan pipeline is a better fit — only use this format when the user asks for a map.
+- csv  → exports tabulares simples when the user explicitly asks for CSV or a lightweight table file.
 
 === QUALITY BAR ===
 - NEVER hand-roll fonts, margins, or colours if a helper exists — use the bundle.
@@ -202,6 +204,7 @@ visually consistent, on-brand, and academically correct. The bundle:
 - For Excel analytics, include raw data, calculated outputs, and a short interpretation sheet when the user asks for Cronbach, Spearman, descriptive statistics, or market analysis.
 - For PPTX, use a coherent palette, agenda, section dividers, strong slide titles, concise bullets, and speaker notes when useful. Avoid slide walls of text.
 - For PDF forms/reports, use clear hierarchy, page numbers, metadata, and printable spacing.
+- For CSV, use Python's csv module with UTF-8 safe text, a header row, and no visual formatting.
 - For "Cronbach" or "Spearman" ALWAYS use the sgpt_xlsx analytics helpers.
 - For "defensa" or "presentación UPN" ALWAYS use Deck(palette="tesis_upn").
 - Embed REAL data when the user supplied it; otherwise fabricate plausible sample data and note so in "explanation".
@@ -229,6 +232,7 @@ const EXT_MIME = {
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   pdf: 'application/pdf',
   svg: 'image/svg+xml',
+  csv: 'text/csv',
 };
 
 async function callLlm({ prompt, model, signal }) {

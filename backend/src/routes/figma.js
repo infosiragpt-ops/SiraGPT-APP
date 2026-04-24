@@ -11,6 +11,7 @@ const router = express.Router();
  */
 router.post('/generate_flowchart', [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
+    body('displayPrompt').optional().isString().trim(),
     body('chatId').optional().isString(),
     body('conversationHistory').optional().isArray()
 ], authenticateToken, async (req, res) => {
@@ -21,6 +22,7 @@ router.post('/generate_flowchart', [
         }
 
         const { prompt, chatId, conversationHistory = [] } = req.body;
+        const displayPrompt = (req.body.displayPrompt || prompt).trim();
         const userId = req.user.id;
 
         console.log('🎨 Generating Figma flowchart:', { prompt, chatId, userId });
@@ -55,7 +57,7 @@ router.post('/generate_flowchart', [
                     data: {
                         chatId,
                         role: 'USER',
-                        content: prompt,
+                        content: displayPrompt,
                     },
                 });
                 console.log('✅ User message saved to database');
@@ -102,7 +104,7 @@ router.post('/generate_flowchart', [
                     data: {
                         chatId,
                         role: 'ASSISTANT',
-                        content: `I've created a flowchart for: "${prompt}"\n\n${flowchartData.mermaidCode ? '```mermaid\n' + flowchartData.mermaidCode + '\n```' : ''}`,
+                        content: `I've created a flowchart for: "${displayPrompt}"\n\n${flowchartData.mermaidCode ? '```mermaid\n' + flowchartData.mermaidCode + '\n```' : ''}`,
                         files: JSON.stringify([fileData])
                     }
                 });

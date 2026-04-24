@@ -1,5 +1,5 @@
 /**
- * /api/doc — SSE streaming document generator (docx/xlsx/pptx/pdf/svg).
+ * /api/doc — SSE streaming document generator (docx/xlsx/pptx/pdf/svg/csv).
  *
  * Same SSE contract as /api/plan, /api/math, /api/viz. On success
  * persists an assistant message with a `doc`-typed file carrying a
@@ -17,16 +17,15 @@ const { streamDoc } = require('../services/doc-generator');
 const router = express.Router();
 router.use(authenticateToken);
 
-async function persistSuccess(chatId, userId, prompt, content, file) {
+async function persistSuccess(chatId, userId, displayPrompt, content, file) {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
   if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: prompt } });
-  // Strip the heavy dataUrl before JSON.stringify to avoid bloating
-  // the row — we persist a placeholder url and ship the real dataUrl
-  // only over the wire. The front-end keeps it in memory for the
-  // current session. Future turn: write the bytes to S3 / local
-  // uploads and store a normal URL.
-  const persistedFile = { ...file, dataUrl: file.dataUrl ? '[in-session]' : null };
+  await prisma.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
+  // Persist the dataUrl so document downloads and right-pane previews
+  // keep working after a chat reload. Generated files are scoped by the
+  // authenticated chat fetch; future storage can move bytes to object
+  // storage without changing the client contract.
+  const persistedFile = file;
   const assistant = await prisma.message.create({
     data: { chatId, role: 'ASSISTANT', content, files: JSON.stringify([persistedFile]) },
   });
@@ -37,10 +36,10 @@ async function persistSuccess(chatId, userId, prompt, content, file) {
   };
 }
 
-async function persistFailure(chatId, userId, prompt, reason) {
+async function persistFailure(chatId, userId, displayPrompt, reason) {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
   if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: prompt } });
+  await prisma.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
   const content = `No pude generar el documento: ${reason}. Dame más detalle (formato, estructura, datos) y lo intento otra vez.`;
   const assistant = await prisma.message.create({
     data: { chatId, role: 'ASSISTANT', content },
@@ -53,6 +52,7 @@ router.post(
   '/generate',
   [
     body('prompt').isString().trim().isLength({ min: 4, max: 6000 }),
+    body('displayPrompt').optional().isString().trim().isLength({ max: 6000 }),
     body('chatId').optional().isString(),
     body('model').optional().isString(),
   ],
@@ -61,6 +61,7 @@ router.post(
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const prompt = req.body.prompt.trim();
+    const displayPrompt = (req.body.displayPrompt || prompt).trim();
     const { chatId } = req.body;
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -96,7 +97,7 @@ router.post(
       send({ type: 'stage', label: 'Guardando en la conversación', pct: 98 });
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistSuccess(chatId, req.user.id, prompt, content, file); }
+        try { assistantMessage = await persistSuccess(chatId, req.user.id, displayPrompt, content, file); }
         catch (e) { console.error('[doc] persist success error:', e?.message); }
       }
       send({ type: 'final', content, file, format, assistantMessage });
@@ -105,7 +106,7 @@ router.post(
       console.error('[doc] generation failed:', reason);
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistFailure(chatId, req.user.id, prompt, reason); }
+        try { assistantMessage = await persistFailure(chatId, req.user.id, displayPrompt, reason); }
         catch (e) { console.error('[doc] persist failure error:', e?.message); }
       }
       send({ type: 'error', error: reason, assistantMessage });

@@ -26,10 +26,10 @@ const { streamViz } = require('../services/viz-generator');
 const router = express.Router();
 router.use(authenticateToken);
 
-async function persistSuccess(chatId, userId, prompt, content, file) {
+async function persistSuccess(chatId, userId, displayPrompt, content, file) {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
   if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: prompt } });
+  await prisma.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
   const assistant = await prisma.message.create({
     data: { chatId, role: 'ASSISTANT', content, files: JSON.stringify([file]) },
   });
@@ -40,10 +40,10 @@ async function persistSuccess(chatId, userId, prompt, content, file) {
   };
 }
 
-async function persistFailure(chatId, userId, prompt, reason) {
+async function persistFailure(chatId, userId, displayPrompt, reason) {
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
   if (!chat) return null;
-  await prisma.message.create({ data: { chatId, role: 'USER', content: prompt } });
+  await prisma.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
   const content = `No pude generar la visualización: ${reason}. Reformulá el pedido dándome los datos concretos o el tipo de gráfico que querés.`;
   const assistant = await prisma.message.create({
     data: { chatId, role: 'ASSISTANT', content },
@@ -56,6 +56,7 @@ router.post(
   '/generate',
   [
     body('prompt').isString().trim().isLength({ min: 4, max: 6000 }),
+    body('displayPrompt').optional().isString().trim().isLength({ max: 6000 }),
     body('chatId').optional().isString(),
     body('model').optional().isString(),
   ],
@@ -64,6 +65,7 @@ router.post(
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const prompt = req.body.prompt.trim();
+    const displayPrompt = (req.body.displayPrompt || prompt).trim();
     const { chatId } = req.body;
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -99,7 +101,7 @@ router.post(
       send({ type: 'stage', label: 'Guardando en la conversación', pct: 98 });
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistSuccess(chatId, req.user.id, prompt, content, file); }
+        try { assistantMessage = await persistSuccess(chatId, req.user.id, displayPrompt, content, file); }
         catch (e) { console.error('[viz] persist success error:', e?.message); }
       }
       send({ type: 'final', content, file, format, assistantMessage });
@@ -108,7 +110,7 @@ router.post(
       console.error('[viz] generation failed:', reason);
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistFailure(chatId, req.user.id, prompt, reason); }
+        try { assistantMessage = await persistFailure(chatId, req.user.id, displayPrompt, reason); }
         catch (e) { console.error('[viz] persist failure error:', e?.message); }
       }
       send({ type: 'error', error: reason, assistantMessage });

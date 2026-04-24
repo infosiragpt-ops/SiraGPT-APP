@@ -1320,14 +1320,14 @@ class ApiClient {
     return this.request(`/library/media-library${query ? `?${query}` : ''}`);
   }
 
-  async generateChart(data: { prompt: string; chatId?: string, fileId?: string }) {
+  async generateChart(data: { prompt: string; displayPrompt?: string; chatId?: string, fileId?: string }) {
     return this.request('/ai/generate-chart', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
-  async generateFigmaFlowchart(data: { prompt: string; chatId?: string; conversationHistory?: any[] }) {
+  async generateFigmaFlowchart(data: { prompt: string; displayPrompt?: string; chatId?: string; conversationHistory?: any[] }) {
     return this.request('/figma/generate_flowchart', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -1345,7 +1345,7 @@ class ApiClient {
   // so the chat can render live feedback instead of a silent spinner.
   // Events: { type: 'stage'|'tokens'|'final'|'error', ... }
   async solveMathStream(
-    data: { prompt: string; chatId?: string; model?: string },
+    data: { prompt: string; displayPrompt?: string; chatId?: string; model?: string },
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {
@@ -1353,7 +1353,7 @@ class ApiClient {
   }
 
   async generateVizStream(
-    data: { prompt: string; chatId?: string; model?: string },
+    data: { prompt: string; displayPrompt?: string; chatId?: string; model?: string },
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {
@@ -1361,7 +1361,7 @@ class ApiClient {
   }
 
   async generateDocStream(
-    data: { prompt: string; chatId?: string; model?: string },
+    data: { prompt: string; displayPrompt?: string; chatId?: string; model?: string },
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {
@@ -1369,7 +1369,7 @@ class ApiClient {
   }
 
   async generateArtifactStream(
-    data: { prompt: string; chatId?: string; model?: string },
+    data: { prompt: string; displayPrompt?: string; chatId?: string; model?: string },
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {
@@ -1377,7 +1377,7 @@ class ApiClient {
   }
 
   async generatePlanStream(
-    data: { prompt: string; chatId?: string; model?: string },
+    data: { prompt: string; displayPrompt?: string; chatId?: string; model?: string },
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {
@@ -1436,6 +1436,7 @@ class ApiClient {
   async generateWebDevStream(
     data: {
       prompt: string;
+      displayPrompt?: string;
       chatId: string;
       provider?: string;
       model?: string;
@@ -1515,6 +1516,7 @@ class ApiClient {
   // Vector PPT Generation endpoint (Gamma-style, pure vector graphics)
   async generateVectorPPT(data: {
     prompt: string;
+    displayPrompt?: string;
     chatId: string;
     provider?: string;
     model?: string;
@@ -1529,6 +1531,7 @@ class ApiClient {
   // PPT Generation endpoint (WITH IMAGES - OLD VERSION)
   async generatePPT(data: {
     prompt: string;
+    displayPrompt?: string;
     chatId: string;
     provider?: string;
     model?: string;

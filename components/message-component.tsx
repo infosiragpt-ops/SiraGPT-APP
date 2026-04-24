@@ -2279,7 +2279,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 <FigmaDiagramDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <PlanArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <VizArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
-                                <DocArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
+                                <DocArtifactDisplay
+                                    files={Array.isArray(parsedFiles) ? parsedFiles : []}
+                                    onDocumentPreview={onDocumentPreview}
+                                />
                                 <InteractiveArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <GmailConnectionDisplay />
                                 <GoogleServicesConnectionDisplay />
