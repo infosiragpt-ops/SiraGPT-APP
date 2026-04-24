@@ -134,6 +134,43 @@ const toolManifestSchema = {
         max_retries: { type: "integer", minimum: 0, maximum: 10 },
       },
     },
+    // v1.1 — enterprise governance fields (all OPTIONAL, additive).
+    side_effect_level: {
+      type: "string",
+      enum: ["none", "local-fs", "remote-read", "remote-write", "destructive"],
+      description: "How the tool affects the outside world. Destructive tools trigger requires_confirmation by default.",
+    },
+    requires_confirmation: {
+      type: "boolean",
+      description: "True when the orchestrator must surface a HITL approval before calling this tool.",
+    },
+    sandbox_required: {
+      type: "boolean",
+      description: "True when the tool must run inside the code-sandbox (stripped env, timeouts, no real creds).",
+    },
+    audit_policy: {
+      type: "string",
+      enum: ["off", "sample", "every-call", "every-call-plus-args"],
+      description: "How much of the invocation the audit-log captures.",
+    },
+    scopes: {
+      type: "array",
+      items: {
+        type: "string",
+        pattern: "^[a-z][a-z0-9_.:-]{1,64}$",
+      },
+      maxItems: 20,
+      description: "OAuth-style scopes the caller must hold (e.g. 'rag.read', 'files.write', 'web.external').",
+    },
+    data_classes: {
+      type: "array",
+      items: {
+        type: "string",
+        enum: ["public", "internal", "confidential", "pii", "phi", "financial", "secret"],
+      },
+      maxItems: 8,
+      description: "Data classes the tool can touch — enforced at dispatch against the session's clearance.",
+    },
   },
 };
 
