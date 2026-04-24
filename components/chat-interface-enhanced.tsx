@@ -96,7 +96,7 @@ import VoiceControls from "./voice-controls"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
-import { agenticSearchService } from "@/lib/agentic-search-service"
+import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { agentTaskService, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
@@ -121,6 +121,337 @@ import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
 import { WordConnector } from "./WordConnector"
 import { ExcelConnector, type ExcelConnectorRef } from "./ExcelConnector"
+
+type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
+type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
+
+type SearchActivityEntry = {
+  id: string
+  title: string
+  body?: string
+  meta?: string
+  at: number
+  status: SearchActivityEntryStatus
+  sources?: AgenticSource[]
+}
+
+type SearchActivityState = {
+  messageId: string
+  query: string
+  target: number
+  batchSize: number
+  topK: number
+  providers: string[]
+  startedAt: number
+  updatedAt: number
+  status: SearchActivityStatus
+  totalCollected: number
+  dedupedCount?: number
+  selectedCount?: number
+  elapsedMs?: number
+  entries: SearchActivityEntry[]
+}
+
+const SEARCH_ACTIVITY_MAX_ENTRIES = 140
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+function formatActivityDuration(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+function sourceHref(source: AgenticSource) {
+  if (source.url) return source.url
+  if (source.doi) return `https://doi.org/${source.doi.replace(/^https?:\/\/doi\.org\//i, "")}`
+  if (source.pdfUrl) return source.pdfUrl
+  return null
+}
+
+function sourceMeta(source: AgenticSource) {
+  return [
+    source.year ? String(source.year) : null,
+    source.journal || source.source || null,
+    source.doi ? `DOI ${source.doi.replace(/^https?:\/\/doi\.org\//i, "")}` : null,
+  ].filter(Boolean).join(" · ")
+}
+
+function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number): SearchActivityEntry | null {
+  switch (evt.type) {
+    case "start":
+      return {
+        id: `${evt.type}-${at}-${index}`,
+        title: "Preparando búsqueda profesional",
+        body: `Consulta: ${evt.query}`,
+        meta: `Objetivo ${evt.target} · lotes de ${evt.batchSize} · top ${evt.topK} · ${evt.providers.join(", ")}`,
+        at,
+        status: "running",
+      }
+    case "batch":
+      return {
+        id: `${evt.type}-${evt.batchN}-${at}`,
+        title: `${evt.provider} · lote ${evt.batchN}`,
+        body: `${evt.unique} fuentes nuevas, ${evt.received} recibidas, ${evt.duplicates} duplicadas.`,
+        meta: `${evt.totalCollected}/${evt.target} recopiladas`,
+        at,
+        status: "running",
+        sources: evt.sources.slice(0, 3),
+      }
+    case "batch_error":
+      return {
+        id: `${evt.type}-${evt.batchN}-${at}`,
+        title: `${evt.provider} tuvo un error parcial`,
+        body: evt.error,
+        meta: `${evt.totalCollected} fuentes conservadas`,
+        at,
+        status: "warning",
+      }
+    case "provider_done":
+      return {
+        id: `${evt.type}-${evt.provider}-${at}`,
+        title: `${evt.provider} completado`,
+        body: `${evt.contributed} fuentes aportadas.`,
+        meta: evt.reason,
+        at,
+        status: "complete",
+      }
+    case "collection_done":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Recopilación completada",
+        body: `${evt.totalCollected} fuentes encontradas, ${evt.deduped} únicas.`,
+        meta: `${evt.requestedCalls} llamadas · ${formatActivityDuration(evt.elapsedMs)}`,
+        at,
+        status: "complete",
+      }
+    case "ranking_start":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Seleccionando fuentes de mayor calidad",
+        body: evt.message,
+        meta: `${evt.pool} candidatas · top ${evt.topK}`,
+        at,
+        status: "running",
+      }
+    case "rerank_error":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Reranking parcial",
+        body: evt.error,
+        meta: "Se continúa con orden heurístico.",
+        at,
+        status: "warning",
+      }
+    case "selected":
+      return {
+        id: `${evt.type}-${at}`,
+        title: `Top ${evt.topK} seleccionado`,
+        body: evt.rerankerWasUsed ? "Selección refinada con reranker." : "Selección heurística por relevancia y metadatos.",
+        meta: `${evt.sources.length} fuentes listas para síntesis`,
+        at,
+        status: "complete",
+        sources: evt.sources.slice(0, 5),
+      }
+    case "summary":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Redactando síntesis final",
+        body: "El informe ya está entrando al mensaje del chat.",
+        at,
+        status: "running",
+      }
+    case "done":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Búsqueda lista",
+        body: `${evt.stats.selectedCount} fuentes seleccionadas de ${evt.stats.dedupedCount} únicas.`,
+        meta: evt.stats.elapsedMs ? formatActivityDuration(evt.stats.elapsedMs) : undefined,
+        at,
+        status: "complete",
+      }
+    case "saved":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Resultado guardado en el chat",
+        body: "La respuesta final quedó persistida.",
+        at,
+        status: "complete",
+      }
+    case "persist_error":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "No se pudo persistir el resultado",
+        body: evt.error,
+        at,
+        status: "warning",
+      }
+    case "aborted":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Búsqueda detenida",
+        body: evt.reason,
+        meta: evt.provider ? `${evt.provider}${evt.round ? ` · ronda ${evt.round}` : ""}` : undefined,
+        at,
+        status: "warning",
+      }
+    case "error":
+      return {
+        id: `${evt.type}-${at}`,
+        title: "Error en la búsqueda",
+        body: evt.message,
+        at,
+        status: "error",
+      }
+    default:
+      return null
+  }
+}
+
+function applySearchActivityEvent(activity: SearchActivityState, evt: AgenticEvent): SearchActivityState {
+  const at = Date.now()
+  const entry = buildSearchActivityEntry(evt, activity.entries.length, at)
+  const entries = entry
+    ? [...activity.entries, entry].slice(-SEARCH_ACTIVITY_MAX_ENTRIES)
+    : activity.entries
+  const next: SearchActivityState = { ...activity, updatedAt: at, entries }
+
+  switch (evt.type) {
+    case "start":
+      next.query = evt.query
+      next.target = evt.target
+      next.batchSize = evt.batchSize
+      next.topK = evt.topK
+      next.providers = evt.providers
+      next.status = "running"
+      break
+    case "batch":
+      next.totalCollected = evt.totalCollected
+      next.target = evt.target
+      next.status = "running"
+      break
+    case "collection_done":
+      next.totalCollected = evt.totalCollected
+      next.dedupedCount = evt.deduped
+      next.elapsedMs = evt.elapsedMs
+      break
+    case "ranking_start":
+      next.topK = evt.topK
+      break
+    case "selected":
+      next.selectedCount = evt.sources.length
+      break
+    case "done":
+      next.status = "complete"
+      next.totalCollected = evt.stats.totalCollected
+      next.dedupedCount = evt.stats.dedupedCount
+      next.selectedCount = evt.stats.selectedCount
+      next.elapsedMs = evt.stats.elapsedMs
+      break
+    case "aborted":
+      next.status = "aborted"
+      break
+    case "error":
+      next.status = "error"
+      break
+    default:
+      break
+  }
+
+  return next
+}
+
+function SearchActivityPanel({ activity, onClose }: { activity: SearchActivityState; onClose: () => void }) {
+  const elapsed = activity.elapsedMs ?? activity.updatedAt - activity.startedAt
+  const statusLabel = activity.status === "complete"
+    ? "Completado"
+    : activity.status === "aborted"
+      ? "Detenido"
+      : activity.status === "error"
+        ? "Error"
+        : "En curso"
+
+  return (
+    <div className="flex h-full flex-col bg-background">
+      <div className="flex items-center justify-between border-b border-border/50 px-5 py-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-semibold">Actividad</h2>
+            <span className="text-sm text-muted-foreground">· {formatActivityDuration(elapsed)}</span>
+          </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{statusLabel} · {activity.totalCollected}/{activity.target} fuentes</p>
+        </div>
+        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={onClose} aria-label="Cerrar actividad">
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div className="border-b border-border/40 px-5 py-3">
+        <div className="rounded-2xl border border-border/50 bg-muted/25 p-3">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Consulta</div>
+          <p className="mt-1 line-clamp-3 text-sm leading-6 text-foreground">{activity.query}</p>
+          <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+            <span className="rounded-full bg-background px-2 py-1">Top {activity.topK}</span>
+            <span className="rounded-full bg-background px-2 py-1">Lotes {activity.batchSize}</span>
+            <span className="rounded-full bg-background px-2 py-1">{activity.providers.length || 0} proveedores</span>
+          </div>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1">
+        <div className="px-5 py-5">
+          <div className="mb-3 text-sm font-medium text-muted-foreground">Proceso</div>
+          <div className="space-y-5">
+            {activity.entries.map((entry, entryIndex) => (
+              <div key={entry.id} className="relative pl-6">
+                <span className={cn(
+                  "absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full ring-4 ring-background",
+                  entry.status === "complete" && "bg-emerald-500",
+                  entry.status === "running" && "bg-sky-500",
+                  entry.status === "warning" && "bg-amber-500",
+                  entry.status === "error" && "bg-red-500",
+                )} />
+                {entryIndex < activity.entries.length - 1 && (
+                  <span className="absolute left-[4px] top-5 h-[calc(100%+0.75rem)] w-px bg-border/60" />
+                )}
+                <div className="text-sm font-medium leading-5 text-foreground">{entry.title}</div>
+                {entry.body && <div className="mt-1 text-sm leading-6 text-muted-foreground">{entry.body}</div>}
+                {entry.meta && <div className="mt-1 text-xs text-muted-foreground/80">{entry.meta}</div>}
+                {entry.sources && entry.sources.length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    {entry.sources.map((source, index) => {
+                      const href = sourceHref(source)
+                      return (
+                        <div key={`${entry.id}-source-${index}`} className="rounded-lg border border-border/40 bg-muted/20 px-2.5 py-2">
+                          {href ? (
+                            <a href={href} target="_blank" rel="noreferrer" className="line-clamp-2 text-xs font-medium text-sky-700 hover:underline dark:text-sky-300">
+                              {source.title || href}
+                            </a>
+                          ) : (
+                            <div className="line-clamp-2 text-xs font-medium">{source.title || "Fuente sin título"}</div>
+                          )}
+                          <div className="mt-0.5 line-clamp-1 text-[11px] text-muted-foreground">{sourceMeta(source)}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </ScrollArea>
+    </div>
+  )
+}
 
 // Selected Text Display Component
 const SelectedTextDisplay = ({ text, onClear }: { text: string | null; onClear: () => void; }) => {
@@ -1649,6 +1980,8 @@ function ChatInterfaceContent() {
 
   const [input, setInput] = React.useState("")
   const [isRecording, setIsRecording] = React.useState(false)
+  const [searchActivities, setSearchActivities] = React.useState<Record<string, SearchActivityState>>({})
+  const [activeSearchActivityId, setActiveSearchActivityId] = React.useState<string | null>(null)
 
   // Project launcher prefill — when a user starts a chat from the
   // project detail page, their typed draft is stashed under
@@ -1836,6 +2169,7 @@ function ChatInterfaceContent() {
     // Reset other UI states
     setShowAudioPanel(false);
     setDocumentPreviewUrl(null);
+    setActiveSearchActivityId(null);
     setSplitViewContent(null);
     setSelectedWordText(null);
     setUploadedFiles([]);
@@ -2135,6 +2469,31 @@ But first, you need to connect your Spotify account securely using the button be
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<string | null>(null);
+  const activeSearchActivity = activeSearchActivityId ? searchActivities[activeSearchActivityId] : null;
+  const searchActivityPanelOpen = Boolean(activeSearchActivity);
+
+  React.useEffect(() => {
+    setActiveSearchActivityId(null);
+  }, [currentChat?.id]);
+
+  const openSearchActivityPanel = React.useCallback((messageId: string) => {
+    setActiveSearchActivityId(messageId);
+  }, []);
+
+  const closeSearchActivityPanel = React.useCallback(() => {
+    setActiveSearchActivityId(null);
+  }, []);
+
+  const handleMessageAreaClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const trigger = target?.closest<HTMLElement>('[data-search-activity-id]');
+    if (!trigger) return;
+    const messageId = trigger.dataset.searchActivityId;
+    if (!messageId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openSearchActivityPanel(messageId);
+  }, [openSearchActivityPanel]);
   const [shareModalOpen, setShareModalOpen] = React.useState(false);
   const [shareUrl, setShareUrl] = React.useState<string | null>(null);
 
@@ -4440,6 +4799,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     handleExcelConnectorToggle,
   };
 
+  const rightPanelActive = Boolean(
+    searchActivityPanelOpen ||
+    documentPreviewUrl ||
+    isWordConnectorActive ||
+    isExcelConnectorActive ||
+    activeArtifact
+  );
+
   const handleWebSearch = async (searchQuery: string) => {
     if (!searchQuery) {
       toast.error('Please enter a search query');
@@ -4504,18 +4871,34 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return { ...prevChat, messages: updatedMessages };
       });
 
-      // UI philosophy: the orchestrator still pulls 500 sources in
-      // 10-by-10 agentic rounds, reranks, and synthesizes — but none
-      // of that trace reaches the chat bubble. The user sees only a
-      // single "pensando" SVG + a concise status line while the run
-      // is in progress, then the polished markdown summary when it's
-      // done. The full event log stays in the server logs.
-      //
-      // Raw `<svg>` is allowed because message-component.tsx pipes
-      // ReactMarkdown through rehypeRaw.
-      const THINKING_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="22" viewBox="10 40 45 50" style="display:inline-block;vertical-align:middle;margin-right:8px;color:currentColor"><rect x="20" y="50" width="4" height="10" fill="currentColor"><animateTransform attributeName="transform" attributeType="xml" type="translate" values="0 0; 0 20; 0 0" begin="0s" dur="0.6s" repeatCount="indefinite"/></rect><rect x="30" y="50" width="4" height="10" fill="currentColor"><animateTransform attributeName="transform" attributeType="xml" type="translate" values="0 0; 0 20; 0 0" begin="0.2s" dur="0.6s" repeatCount="indefinite"/></rect><rect x="40" y="50" width="4" height="10" fill="currentColor"><animateTransform attributeName="transform" attributeType="xml" type="translate" values="0 0; 0 20; 0 0" begin="0.4s" dur="0.6s" repeatCount="indefinite"/></rect></svg>`;
+      setSearchActivities(prev => ({
+        ...prev,
+        [aiMessage.id]: {
+          messageId: aiMessage.id,
+          query: searchQuery,
+          target: 500,
+          batchSize: 10,
+          topK: 25,
+          providers: [],
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+          status: "running",
+          totalCollected: 0,
+          entries: [],
+        },
+      }));
 
-      const renderStatus = (label: string) => `${THINKING_SVG} **${label}**`;
+      // The chat bubble stays minimal, but it is now a real activity
+      // trigger. ReactMarkdown renders this raw HTML via rehypeRaw; the
+      // parent message list delegates clicks by data-search-activity-id
+      // so we do not need to mutate MessageComponent.
+      const renderStatus = (label: string) => (
+        `<button type="button" class="agentic-search-status" data-search-activity-id="${escapeHtml(aiMessage.id)}" aria-label="Abrir actividad de búsqueda: ${escapeHtml(label)}">` +
+        `<span class="agentic-search-status__bars" aria-hidden="true"><span></span><span></span><span></span></span>` +
+        `<span class="agentic-search-status__label">${escapeHtml(label)}</span>` +
+        `<span class="agentic-search-status__hint">Actividad</span>` +
+        `</button>`
+      );
 
       const updateBubble = (content: string) => {
         setCurrentChat(prev => {
@@ -4540,6 +4923,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       let finalSummary = '';
       let aborted = false;
+      const recordSearchEvent = (evt: AgenticEvent) => {
+        setSearchActivities(prev => {
+          const current = prev[aiMessage.id];
+          if (!current) return prev;
+          return { ...prev, [aiMessage.id]: applySearchActivityEvent(current, evt) };
+        });
+      };
 
       await agenticSearchService.runStream(
         {
@@ -4552,6 +4942,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         },
         {
           onEvent: (evt) => {
+            recordSearchEvent(evt);
             // Translate the verbose event stream into a single-line
             // status so the user understands roughly where the search
             // is without being buried in trace output.
@@ -4595,12 +4986,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           onError: (error) => {
             // AbortError is the Stop-button path — cleanup silently.
             if (controller.signal.aborted || /abort/i.test(error.message || '')) {
+              recordSearchEvent({ type: "aborted", reason: "Cancelado por el usuario" });
               updateBubble('🛑 Búsqueda detenida por el usuario.');
               setIsWebSearching(false);
               searchAbortControllerRef.current = null;
               return;
             }
             console.error('Agentic search failed:', error);
+            recordSearchEvent({ type: "error", message: error.message || 'Agentic search failed' });
             const errorMessage = error.message || 'Agentic search failed';
             if (isMonthlyLimitError(errorMessage)) {
               setSubscribeOpen(true);
@@ -4782,10 +5175,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             share width with it via the resizable divider; otherwise we
             take the full container. min-w-0 so children can shrink. */}
         <div
-          style={(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact)
+          style={rightPanelActive
             ? { width: `${splitRatio}%`, transition: isDraggingSplit ? undefined : 'width 300ms ease' }
             : undefined}
-          className={`relative flex flex-col h-full min-w-0 overflow-hidden ${(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact) ? 'shrink-0' : 'w-full'}`}
+          className={`relative flex flex-col h-full min-w-0 overflow-hidden ${rightPanelActive ? 'shrink-0' : 'w-full'}`}
         >
           {/* Header */}
           <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-4  backdrop-blur-sm ">
@@ -4821,7 +5214,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
                     Hidden when a right-side panel (preview/artifact/connector) is
                     active so the header fits the narrower pane. */}
-                {currentChat?.id && currentChat?.messages && currentChat.messages.length > 0 && !showAudioPanel && !(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact) && (
+                {currentChat?.id && currentChat?.messages && currentChat.messages.length > 0 && !showAudioPanel && !rightPanelActive && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -4834,7 +5227,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 )}
                 {/* WhatsApp CTA — marketing surface; hide it when the pane
                     is narrow (split active) so the primary controls stay visible. */}
-                {!(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact) && (
+                {!rightPanelActive && (
                   <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
                 )}
                 <ThemeToggle />
@@ -4854,7 +5247,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   // panel is active — the left pane is ~half width then,
                   // and the "Subir de plan" pill was wrapping into the
                   // message area.
-                  const isSplitActive = !!(documentPreviewUrl || isWordConnectorActive || isExcelConnectorActive || activeArtifact)
+                  const isSplitActive = rightPanelActive
                   const showTextCta = !isSplitActive && (isFree || usageRatio >= 0.7)
                   const warn = !isFree && usageRatio >= 0.9
                   const caution = !isFree && usageRatio >= 0.7 && usageRatio < 0.9
@@ -5294,7 +5687,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               ) : (
                 <>
                   {/* Messages */}
-                  <ScrollArea className="flex-1 w-full pb-2 mb-6" ref={scrollAreaRef}>
+                  <ScrollArea className="flex-1 w-full pb-2 mb-6" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
                     <div className="space-y-2 max-w-3xl mx-auto w-full px-4 md:px-4 pt-24 pb-40">
                       {(() => {
                         const messages = currentChat?.messages || [];
@@ -5586,7 +5979,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             Rendered together with the 6px col-resize divider so the
             user can drag the split from 25% to 75% and double-click
             to reset to 50/50. Persisted in localStorage. */}
-        {(isWordConnectorActive || isExcelConnectorActive || documentPreviewUrl || activeArtifact) && (
+        {rightPanelActive && (
           <>
             <div
               role="separator"
@@ -5612,13 +6005,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               style={{ width: `${100 - splitRatio}%`, transition: isDraggingSplit ? undefined : 'width 300ms ease' }}
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
-              {documentPreviewUrl && (
+              {activeSearchActivity && (
+                <SearchActivityPanel
+                  activity={activeSearchActivity}
+                  onClose={closeSearchActivityPanel}
+                />
+              )}
+              {!activeSearchActivity && documentPreviewUrl && (
                 <DocumentPreview
                   url={documentPreviewUrl}
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {isWordConnectorActive && (
+              {!activeSearchActivity && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -5631,14 +6030,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {isExcelConnectorActive && (
+              {!activeSearchActivity && isExcelConnectorActive && (
                 <ExcelConnector
                   ref={excelConnectorRef}
                   onClose={() => setIsExcelConnectorActive(false)}
                   isGeneratingExternal={isGeneratingExcel}
                 />
               )}
-              {activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && (
+              {!activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && (
                 <ArtifactPanel />
               )}
             </div>

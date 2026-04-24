@@ -2748,3 +2748,164 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .reduce-motion .liquid-menu-item[data-highlighted] .liquid-icon { transform: none !important; }
 .reduce-motion .liquid-menu-item:hover .liquid-label,
 .reduce-motion .liquid-menu-item[data-highlighted] .liquid-label { transform: none !important; }
+
+/* Agentic web-search status pill. The shimmer is intentionally wide and
+ * diagonal so it reads like a water wave / light ray passing over the
+ * "Recopilando fuentes" state without adding a noisy second surface. */
+.agentic-search-status {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.62rem;
+  max-width: min(100%, 560px);
+  border: 1px solid hsl(210 24% 82% / 0.72);
+  border-radius: 999px;
+  padding: 0.58rem 0.86rem 0.58rem 0.72rem;
+  color: hsl(222 47% 11%);
+  background:
+    radial-gradient(circle at 18% 12%, hsl(0 0% 100% / 0.92), transparent 32%),
+    linear-gradient(135deg, hsl(210 70% 98% / 0.96), hsl(196 86% 95% / 0.72) 48%, hsl(0 0% 100% / 0.88));
+  box-shadow:
+    0 14px 30px -24px hsl(205 85% 32% / 0.5),
+    inset 0 1px 0 hsl(0 0% 100% / 0.85),
+    inset 0 -14px 24px -26px hsl(196 92% 42% / 0.42);
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  vertical-align: middle;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+.agentic-search-status::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -90% -42%;
+  background:
+    linear-gradient(
+      112deg,
+      transparent 28%,
+      hsl(190 100% 88% / 0.16) 38%,
+      hsl(0 0% 100% / 0.82) 47%,
+      hsl(190 100% 70% / 0.24) 54%,
+      transparent 66%
+    );
+  filter: blur(0.2px);
+  transform: translateX(-62%) rotate(4deg);
+  animation: agentic-search-wave 2.35s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.agentic-search-status::after {
+  content: "";
+  position: absolute;
+  z-index: -2;
+  inset: 1px;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 74% 115%, hsl(196 100% 58% / 0.16), transparent 48%),
+    radial-gradient(ellipse at 2% 0%, hsl(0 0% 100% / 0.7), transparent 42%);
+  pointer-events: none;
+}
+.agentic-search-status:hover,
+.agentic-search-status:focus-visible {
+  border-color: hsl(196 92% 54% / 0.48);
+  box-shadow:
+    0 18px 38px -26px hsl(205 85% 32% / 0.62),
+    inset 0 1px 0 hsl(0 0% 100% / 0.9),
+    inset 0 -14px 24px -26px hsl(196 92% 42% / 0.52);
+  transform: translateY(-1px);
+  outline: none;
+}
+.agentic-search-status:focus-visible {
+  box-shadow:
+    0 0 0 3px hsl(196 92% 54% / 0.18),
+    0 18px 38px -26px hsl(205 85% 32% / 0.62),
+    inset 0 1px 0 hsl(0 0% 100% / 0.9);
+}
+.agentic-search-status__bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  width: 18px;
+  height: 18px;
+  color: hsl(222 18% 34%);
+}
+.agentic-search-status__bars span {
+  display: block;
+  width: 3px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: agentic-search-bars 0.78s ease-in-out infinite;
+}
+.agentic-search-status__bars span:nth-child(2) { animation-delay: 120ms; }
+.agentic-search-status__bars span:nth-child(3) { animation-delay: 240ms; }
+.agentic-search-status__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.02rem;
+  font-weight: 720;
+  letter-spacing: -0.015em;
+}
+.agentic-search-status__hint {
+  flex: none;
+  border-radius: 999px;
+  padding: 0.18rem 0.48rem;
+  background: hsl(0 0% 100% / 0.72);
+  color: hsl(222 14% 42%);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+.dark .agentic-search-status {
+  color: hsl(210 40% 98%);
+  border-color: hsl(210 24% 30% / 0.74);
+  background:
+    radial-gradient(circle at 18% 12%, hsl(0 0% 100% / 0.12), transparent 32%),
+    linear-gradient(135deg, hsl(219 28% 13% / 0.95), hsl(206 36% 15% / 0.82) 48%, hsl(222 28% 10% / 0.92));
+  box-shadow:
+    0 14px 30px -24px hsl(0 0% 0% / 0.8),
+    inset 0 1px 0 hsl(0 0% 100% / 0.12),
+    inset 0 -14px 24px -26px hsl(196 92% 52% / 0.5);
+}
+.dark .agentic-search-status__bars {
+  color: hsl(197 80% 74%);
+}
+.dark .agentic-search-status__hint {
+  background: hsl(0 0% 100% / 0.08);
+  color: hsl(210 18% 78%);
+}
+
+@keyframes agentic-search-wave {
+  0% { transform: translateX(-68%) rotate(4deg); opacity: 0; }
+  18% { opacity: 1; }
+  58% { opacity: 0.96; }
+  100% { transform: translateX(68%) rotate(4deg); opacity: 0; }
+}
+
+@keyframes agentic-search-bars {
+  0%, 100% { height: 6px; opacity: 0.58; transform: translateY(0); }
+  42% { height: 15px; opacity: 1; transform: translateY(-1px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentic-search-status,
+  .agentic-search-status::before,
+  .agentic-search-status__bars span {
+    animation: none !important;
+    transition: none !important;
+  }
+  .agentic-search-status::before { opacity: 0.42; transform: translateX(0) rotate(4deg); }
+  .agentic-search-status:hover,
+  .agentic-search-status:focus-visible { transform: none; }
+}
+.reduce-motion .agentic-search-status,
+.reduce-motion .agentic-search-status::before,
+.reduce-motion .agentic-search-status__bars span {
+  animation: none !important;
+  transition: none !important;
+}
+.reduce-motion .agentic-search-status::before { opacity: 0.42; transform: translateX(0) rotate(4deg); }
+.reduce-motion .agentic-search-status:hover,
+.reduce-motion .agentic-search-status:focus-visible { transform: none; }
