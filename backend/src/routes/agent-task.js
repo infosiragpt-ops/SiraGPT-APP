@@ -51,6 +51,8 @@ Rules:
 - When the user asks for a file (Excel, Word, PPT, PDF), use create_document. Write a complete Python script that writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab.
 - Use python_exec for data wrangling, verification, numeric work — ANY time you'd otherwise "estimate" a number.
 - For academic/scientific/market research, collect enough evidence first, keep DOI/URL/year/journal/source metadata, and separate verified findings from assumptions.
+- For strict academic deliverables (for example "40 articles", "only DOI", "only open access", "only Latin America", "2022-2026"), do not pad the file with weak or unverified sources. Refine web_search queries until the requested count is met; if verified sources are still fewer than requested, state the exact verified count and label the missing gap instead of inventing rows.
+- In Excel/Word bibliographic deliverables, DOI cells/URLs must use canonical https://doi.org/<doi> links when a DOI exists, and the file must include validation/status columns when the user asks for real sources.
 - For long-running software/design work, iterate: inspect requirements, implement or generate, run tests/verification, repair failures, and only then finalize.
 - Every tool call must be justified by a one-sentence thought in the assistant text preceding the call.
 - **MANDATORY self-supervision**: after EVERY create_document call, you MUST call verify_artifact with the returned id. Read the structured summary it returns:

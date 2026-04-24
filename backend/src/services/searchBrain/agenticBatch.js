@@ -271,6 +271,12 @@ async function* runAgenticBatch(opts) {
         sources: fresh.map(compactSource),
       };
 
+      if (fresh.length === 0) {
+        exhausted.add(provider);
+        yield { type: "provider_done", provider, contributed: contributed[provider], reason: "no_new_results" };
+        continue;
+      }
+
       if (batch.length < batchSize) {
         exhausted.add(provider);
         yield { type: "provider_done", provider, contributed: contributed[provider], reason: "page_short" };

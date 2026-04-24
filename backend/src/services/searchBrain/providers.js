@@ -89,6 +89,8 @@ function reconstructAbstract(invertedIndex) {
 
 async function searchOpenAlex(query, opts = {}) {
   const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
+  const perPage = Math.min(25, maxResults);
+  const offset = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
   // Auth / polite-pool resolution, in priority order:
   //   1. opts.apiKey / opts.mailto — caller explicit override (per-user
   //      settings, ad-hoc requests).
@@ -100,7 +102,8 @@ async function searchOpenAlex(query, opts = {}) {
   const mailto = opts.mailto || process.env.OPENALEX_MAILTO;
   const url = new URL("https://api.openalex.org/works");
   url.searchParams.set("search", query);
-  url.searchParams.set("per-page", String(Math.min(25, maxResults)));
+  url.searchParams.set("per-page", String(perPage));
+  url.searchParams.set("page", String(Math.floor(offset / perPage) + 1));
   if (apiKey) url.searchParams.set("api_key", apiKey);
   if (mailto) url.searchParams.set("mailto", mailto);
   const body = await fetchJson(url.toString(), { timeoutMs: opts.timeoutMs, mailto });
@@ -132,7 +135,8 @@ async function searchOpenAlex(query, opts = {}) {
 async function searchSemanticScholar(query, opts = {}) {
   const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
   const fields = "title,abstract,authors,year,citationCount,openAccessPdf,externalIds,journal,publicationTypes,url";
-  const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${Math.min(100, maxResults)}&fields=${encodeURIComponent(fields)}`;
+  const offset = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
+  const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${Math.min(100, maxResults)}&offset=${offset}&fields=${encodeURIComponent(fields)}`;
   const body = await fetchJson(url, { timeoutMs: opts.timeoutMs });
   if (!body || !Array.isArray(body.data)) return [];
   return body.data.slice(0, maxResults).map((p, i) => {
@@ -161,7 +165,8 @@ async function searchSemanticScholar(query, opts = {}) {
 async function searchCrossRef(query, opts = {}) {
   const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
   const mailto = opts.mailto;
-  const url = `https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=${Math.min(200, maxResults)}`;
+  const offset = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
+  const url = `https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=${Math.min(200, maxResults)}&offset=${offset}`;
   const body = await fetchJson(url, { timeoutMs: opts.timeoutMs, mailto });
   if (!body || !body.message || !Array.isArray(body.message.items)) return [];
   return body.message.items.slice(0, maxResults).map((w, i) => {
@@ -192,8 +197,9 @@ async function searchCrossRef(query, opts = {}) {
 async function searchPubMed(query, opts = {}) {
   const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const offset = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
   // Step 1: esearch → PMIDs.
-  const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmax=${Math.min(50, maxResults)}&retmode=json`;
+  const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmax=${Math.min(50, maxResults)}&retstart=${offset}&retmode=json`;
   const searchBody = await fetchJson(searchUrl, { timeoutMs });
   const ids = searchBody?.esearchresult?.idlist;
   if (!Array.isArray(ids) || ids.length === 0) return [];
@@ -231,7 +237,10 @@ async function searchPubMed(query, opts = {}) {
 
 async function searchDOAJ(query, opts = {}) {
   const maxResults = opts.maxResults ?? DEFAULT_MAX_RESULTS;
-  const url = `https://doaj.org/api/search/articles/${encodeURIComponent(query)}?page=1&pageSize=${Math.min(100, maxResults)}`;
+  const pageSize = Math.min(100, maxResults);
+  const offset = typeof opts.offset === "number" && opts.offset >= 0 ? opts.offset : 0;
+  const page = Math.floor(offset / pageSize) + 1;
+  const url = `https://doaj.org/api/search/articles/${encodeURIComponent(query)}?page=${page}&pageSize=${pageSize}`;
   const body = await fetchJson(url, { timeoutMs: opts.timeoutMs });
   if (!body || !Array.isArray(body.results)) return [];
   return body.results.slice(0, maxResults).map((row, i) => {
