@@ -2,9 +2,11 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const runtime = require('../src/services/rag/operational-runtime');
+const graphrag = require('../src/services/agents/graphrag');
+const tripleGraph = require('../src/services/triple-graph');
 
-function fakeRag({ existingSources = [] } = {}) {
-  const calls = { ingest: [], retrieve: [], listSources: 0 };
+function fakeRag({ existingSources = [], triples = [] } = {}) {
+  const calls = { ingest: [], ingestTriples: [], retrieve: [], listSources: 0 };
   return {
     calls,
     async listSources() {
@@ -29,6 +31,21 @@ function fakeRag({ existingSources = [] } = {}) {
     },
     async stats() {
       return { chunks: existingSources.length, sources: existingSources.length, dim: 1536 };
+    },
+    async ingestTriples(userId, collection, opts = {}) {
+      calls.ingestTriples.push({ userId, collection, opts });
+      const sourceFilter = Array.isArray(opts.sources) && opts.sources.length > 0
+        ? new Set(opts.sources)
+        : null;
+      const selected = sourceFilter
+        ? triples.filter(t => sourceFilter.has(t.source))
+        : triples;
+      const result = await tripleGraph.addTriples(userId, collection, selected, { embedder: null });
+      return {
+        chunksScanned: selected.length,
+        triplesAdded: result.added,
+        totalTriples: tripleGraph.stats(userId, collection).triples,
+      };
     },
     getOpenAI() {
       return null;
@@ -127,6 +144,104 @@ test('shouldCompactFilePrompt only compacts when evidence exists and token budge
   assert.equal(runtime.shouldCompactFilePrompt(20000, true), true);
   assert.equal(runtime.shouldCompactFilePrompt(20000, false), false);
   assert.equal(runtime.shouldCompactFilePrompt(1000, true), false);
+});
+
+function scriptedGraphRagOpenAI() {
+  return {
+    chat: {
+      completions: {
+        create: async ({ messages }) => {
+          const sys = messages.find(m => m.role === 'system')?.content || '';
+          if (sys.startsWith('Summarise a COMMUNITY')) {
+            return { choices: [{ message: { content: JSON.stringify({
+              topic: 'Long-document themes',
+              summary: 'The community links policy, retrieval, and evaluation signals across the long corpus.',
+              key_entities: ['policy', 'retrieval', 'evaluation'],
+              themes: ['retrieval quality', 'grounded synthesis'],
+            }) } }] };
+          }
+          if (sys.startsWith('Summarise a SUPER-COMMUNITY')) {
+            return { choices: [{ message: { content: JSON.stringify({
+              topic: 'Corpus-level synthesis',
+              summary: 'The corpus combines retrieval quality with grounded evaluation.',
+              cross_cutting_themes: ['long-context grounding'],
+            }) } }] };
+          }
+          if (sys.startsWith('You are helping answer a GLOBAL')) {
+            return { choices: [{ message: { content: JSON.stringify({
+              partial_answer: 'The long documents emphasize retrieval quality, grounded synthesis, and evaluation feedback.',
+              helpfulness: 88,
+              reasoning: 'directly answers themes',
+            }) } }] };
+          }
+          if (sys.startsWith('Synthesise a single GLOBAL')) {
+            return { choices: [{ message: { content: JSON.stringify({
+              answer: 'Sintesis global: los documentos largos giran alrededor de recuperacion selectiva, sintesis fundamentada y evaluacion continua.',
+              themes: ['recuperacion selectiva', 'sintesis fundamentada', 'evaluacion continua'],
+              contributing_communities: ['c0'],
+            }) } }] };
+          }
+          return { choices: [{ message: { content: '{}' } }] };
+        },
+      },
+    },
+  };
+}
+
+test('buildRuntimeContext builds GraphRAG on demand for first global long-document query', async () => {
+  const uid = `og-${Math.random()}`;
+  const chatId = 'graph-chat';
+  const collection = `chat:${chatId}`;
+  tripleGraph.clear(uid, collection);
+  graphrag.clearIndex(uid, collection);
+
+  const rag = fakeRag({
+    triples: [
+      { subject: 'policy', predicate: 'uses', object: 'retrieval', source: 'file:long1' },
+      { subject: 'retrieval', predicate: 'supports', object: 'evaluation', source: 'file:long1' },
+      { subject: 'evaluation', predicate: 'improves', object: 'grounding', source: 'file:long1' },
+    ],
+  });
+
+  const out = await runtime.buildRuntimeContext({
+    rag,
+    userId: uid,
+    chatId,
+    prompt: 'Dame los temas principales de todos los documentos largos.',
+    processedFiles: [
+      { id: 'long1', originalName: 'Long Corpus.pdf', mimeType: 'application/pdf', extractedText: 'GraphRAG evidence '.repeat(900) },
+    ],
+    openai: scriptedGraphRagOpenAI(),
+  });
+
+  assert.equal(out.active, true);
+  assert.equal(out.graphIndexResult.ready, true);
+  assert.equal(out.graphIndexResult.built, true);
+  assert.equal(rag.calls.ingestTriples.length, 1);
+  assert.equal(out.graphAnswer.themes.length, 3);
+  assert.match(out.contextBlock, /GraphRAG global synthesis/);
+  assert.match(out.contextBlock, /graphrag=true/);
+  assert.match(out.contextBlock, /Sintesis global/);
+});
+
+test('buildEvidenceBlock can carry a GraphRAG synthesis even when vector hits are empty', () => {
+  const block = runtime.buildEvidenceBlock({
+    query: 'What themes appear across all documents?',
+    collection: 'default',
+    docs: [{ title: 'Corpus', source: 'file:x' }],
+    hits: [],
+    graphAnswer: {
+      answer: 'The corpus has three major themes.',
+      themes: ['a', 'b', 'c'],
+      contributing_communities: ['c0'],
+      stats: { n_communities: 1 },
+    },
+    retrievalMeta: { graphRag: true },
+  });
+
+  assert.match(block, /SIRA EVIDENCE RUNTIME/);
+  assert.match(block, /no local vector snippets retrieved/);
+  assert.match(block, /GraphRAG global synthesis/);
 });
 
 test('runQualityAudit stores compact Self-RAG metadata on the assistant message', async () => {

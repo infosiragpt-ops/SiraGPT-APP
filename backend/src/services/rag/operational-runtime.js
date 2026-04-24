@@ -22,6 +22,8 @@ const EVIDENCE_SNIPPET_CHARS = 1200;
 const AUDIT_PASSAGE_LIMIT = Number.parseInt(process.env.SIRAGPT_RAG_AUDIT_PASSAGES || '6', 10);
 const AUDIT_ANSWER_CHARS = Number.parseInt(process.env.SIRAGPT_RAG_AUDIT_ANSWER_CHARS || '6000', 10);
 const GRAPHRAG_MAX_ENTITIES = Number.parseInt(process.env.SIRAGPT_GRAPHRAG_MAX_ENTITIES || '500', 10);
+const LONG_DOC_CHAR_THRESHOLD = Number.parseInt(process.env.SIRAGPT_RAG_LONG_DOC_CHARS || '10000', 10);
+const GRAPHRAG_ON_DEMAND_MAX_SOURCES = Number.parseInt(process.env.SIRAGPT_GRAPHRAG_ON_DEMAND_MAX_SOURCES || '8', 10);
 const COMPACT_FILE_CONTEXT_TOKEN_THRESHOLD = Number.parseInt(
   process.env.SIRAGPT_RAG_COMPACT_FILE_TOKENS || '16000',
   10,
@@ -142,7 +144,7 @@ async function safeStats(rag, userId, collection) {
 
 function shouldUseGraphBackfill(docs) {
   if (process.env.SIRAGPT_RAG_GRAPH_BACKFILL === '0') return false;
-  return (docs || []).some(doc => (doc?.chars || doc?.text?.length || 0) >= 10000);
+  return (docs || []).some(doc => (doc?.chars || doc?.text?.length || 0) >= LONG_DOC_CHAR_THRESHOLD);
 }
 
 async function maybeBuildGraphRagIndex({ openai, userId, collection, logger = console } = {}) {
@@ -202,6 +204,68 @@ function scheduleGraphBackfill({ rag, userId, collection, sources, openai, logge
   return true;
 }
 
+function shouldUseGraphRagForPrompt(prompt, docs) {
+  if (!isGlobalSensemakingQuery(prompt)) return false;
+  const cleanDocs = Array.isArray(docs) ? docs : [];
+  return cleanDocs.length > 1
+    || cleanDocs.some(doc => (doc?.chars || doc?.text?.length || 0) >= LONG_DOC_CHAR_THRESHOLD);
+}
+
+function graphRagSourcesForDocs(docs, indexResult = {}) {
+  const preferred = Array.isArray(indexResult.ingestedSources) && indexResult.ingestedSources.length > 0
+    ? indexResult.ingestedSources
+    : (docs || []).map(doc => doc.source);
+  return [...new Set(preferred.filter(Boolean))]
+    .slice(0, Math.max(1, GRAPHRAG_ON_DEMAND_MAX_SOURCES));
+}
+
+async function ensureGraphRagReady({
+  rag,
+  openai,
+  userId,
+  collection,
+  docs = [],
+  indexResult = {},
+  query,
+  logger = console,
+} = {}) {
+  if (process.env.SIRAGPT_GRAPHRAG_ON_DEMAND === '0') return { ready: false, reason: 'disabled' };
+  if (!shouldUseGraphRagForPrompt(query, docs)) return { ready: false, reason: 'not a global long-document query' };
+  if (!openai || !userId || !collection) return { ready: false, reason: 'missing openai/user/collection' };
+
+  try {
+    const graphrag = require('../agents/graphrag');
+    const existing = graphrag.getIndex(userId, collection);
+    if (existing && process.env.SIRAGPT_GRAPHRAG_REBUILD !== '1') {
+      return { ready: true, built: false, reason: 'already built', stats: existing.stats || null };
+    }
+
+    if (!rag || typeof rag.ingestTriples !== 'function') {
+      return { ready: false, reason: 'rag.ingestTriples unavailable' };
+    }
+
+    const sources = graphRagSourcesForDocs(docs, indexResult);
+    if (sources.length === 0) return { ready: false, reason: 'no sources' };
+
+    const backfill = await rag.ingestTriples(userId, collection, { openai, sources });
+    const build = await maybeBuildGraphRagIndex({ openai, userId, collection, logger });
+    const current = graphrag.getIndex(userId, collection);
+
+    return {
+      ready: Boolean(current),
+      built: Boolean(build?.built),
+      reason: current ? 'ready' : (build?.reason || 'index unavailable'),
+      sources,
+      backfill,
+      build,
+      stats: current?.stats || build?.stats || null,
+    };
+  } catch (err) {
+    logger.warn?.('[operational-rag] GraphRAG on-demand build failed:', err.message || err);
+    return { ready: false, reason: err.message || 'on-demand build failed' };
+  }
+}
+
 function formatHit(hit, index) {
   const title = hit.title || hit.source || `Fuente ${index + 1}`;
   const score = Number.isFinite(hit.score) ? ` score=${hit.score.toFixed(3)}` : '';
@@ -210,25 +274,32 @@ function formatHit(hit, index) {
 }
 
 function buildEvidenceBlock({ query, collection, docs, hits, graphAnswer = null, retrievalMeta = {} }) {
-  if (!Array.isArray(hits) || hits.length === 0) return '';
+  const hasHits = Array.isArray(hits) && hits.length > 0;
+  const hasGraphAnswer = Boolean(graphAnswer?.answer && !graphAnswer?.stats?.index_missing);
+  if (!hasHits && !hasGraphAnswer) return '';
+
   const docList = (docs || [])
     .map(d => `- ${d.title} (${d.source}${d.truncated ? '; indexed text truncated for safety' : ''})`)
     .join('\n');
-  const evidence = hits.map(formatHit).join('\n\n');
-  const graphSection = graphAnswer?.answer && !graphAnswer?.stats?.index_missing
-    ? `\n\n## GraphRAG global synthesis\n${graphAnswer.answer}\nThemes: ${(graphAnswer.themes || []).join(', ') || 'none'}`
+  const evidence = hasHits
+    ? hits.map(formatHit).join('\n\n')
+    : '(no local vector snippets retrieved)';
+  const graphCommunities = (graphAnswer?.contributing_communities || []).join(', ') || 'none';
+  const graphSection = hasGraphAnswer
+    ? `\n\n## GraphRAG global synthesis\n${graphAnswer.answer}\nThemes: ${(graphAnswer.themes || []).join(', ') || 'none'}\nContributing communities: ${graphCommunities}`
     : '';
 
   return [
     '## SIRA EVIDENCE RUNTIME',
     `Collection: ${collection}`,
     `Query: ${String(query || '').slice(0, 500)}`,
-    `Retrieval: hybrid=${Boolean(retrievalMeta.useHybrid)}, expansion=${Boolean(retrievalMeta.useExpansion)}, mmr=${Boolean(retrievalMeta.useMMR)}, graph=${Boolean(retrievalMeta.useGraph)}, rerank=${Boolean(retrievalMeta.rerank)}`,
+    `Retrieval: hybrid=${Boolean(retrievalMeta.useHybrid)}, expansion=${Boolean(retrievalMeta.useExpansion)}, mmr=${Boolean(retrievalMeta.useMMR)}, graph=${Boolean(retrievalMeta.useGraph)}, graphrag=${Boolean(retrievalMeta.graphRag)}, rerank=${Boolean(retrievalMeta.rerank)}`,
     docList ? `Documents indexed:\n${docList}` : '',
     '',
     'Grounding contract:',
     '- Use the evidence snippets below as the authoritative source for claims about uploaded/project documents.',
     '- Cite document-grounded claims with [S1], [S2], etc. using only the snippets that support the claim.',
+    '- For global or sensemaking requests, use GraphRAG synthesis as corpus-level guidance and keep concrete claims tied to retrieved evidence where possible.',
     '- If the snippets do not support a requested claim, say that the available evidence is insufficient instead of inferring it.',
     '- Ignore snippets that are irrelevant or contradictory unless you explicitly explain the conflict.',
     '',
@@ -244,7 +315,7 @@ function shouldRunForPrompt(prompt, docs) {
   if (/^\s*(hola|hello|hi|hey|buenas|gracias|thanks|ok|vale)\s*[.!?]*\s*$/i.test(p)) {
     return false;
   }
-  if (docs.some(d => d.chars >= 10000)) return true;
+  if (docs.some(d => d.chars >= LONG_DOC_CHAR_THRESHOLD)) return true;
   return /\b(documento|documentos|archivo|archivos|pdf|fuente|fuentes|seg[uú]n|adjunto|adjuntos|uploaded|file|files|source|sources|resumen|resume|analiza|analisis|analysis|extract|extrae|cita|citas)\b/i.test(p);
 }
 
@@ -445,14 +516,28 @@ async function buildRuntimeContext({
     fallbackSeed: docs.map(d => d.source).join('|'),
   });
   const indexResult = await ensureIndexed({ rag, userId, collection, docs });
+  const openaiClient = openai || (rag && typeof rag.getOpenAI === 'function' ? rag.getOpenAI() : null);
+  const wantsGraphRag = shouldUseGraphRagForPrompt(prompt, docs);
+  let graphIndexResult = null;
 
   if (!indexResult.indexed && indexResult.chunksAdded === 0) {
     logger.warn?.('[operational-rag] indexing skipped:', indexResult.reason);
+  } else if (wantsGraphRag) {
+    graphIndexResult = await ensureGraphRagReady({
+      rag,
+      openai: openaiClient,
+      userId,
+      collection,
+      docs,
+      indexResult,
+      query: prompt,
+      logger,
+    });
   } else if (shouldUseGraphBackfill(docs)) {
     const graphSources = (indexResult.ingestedSources && indexResult.ingestedSources.length > 0)
       ? indexResult.ingestedSources
       : docs.map(doc => doc.source);
-    scheduleGraphBackfill({ rag, userId, collection, sources: graphSources, openai, logger });
+    scheduleGraphBackfill({ rag, userId, collection, sources: graphSources, openai: openaiClient, logger });
   }
 
   const retrievalMeta = {
@@ -460,6 +545,7 @@ async function buildRuntimeContext({
     useHybrid: true,
     useMMR: true,
     useGraph: true,
+    graphRag: Boolean(graphIndexResult?.ready),
     rerank: process.env.SIRAGPT_RAG_RERANK === '1',
   };
 
@@ -468,8 +554,8 @@ async function buildRuntimeContext({
     hits = await rag.retrieve(userId, collection, prompt, k, {
       ...retrievalMeta,
       mmrLambda: 0.72,
-      graphOpenAI: openai || (typeof rag.getOpenAI === 'function' ? rag.getOpenAI() : null),
-      rerankOpenAI: retrievalMeta.rerank ? (openai || (typeof rag.getOpenAI === 'function' ? rag.getOpenAI() : null)) : null,
+      graphOpenAI: openaiClient,
+      rerankOpenAI: retrievalMeta.rerank ? openaiClient : null,
       sessionId: chatId || null,
       overfetchK: Math.max(k * 3, 18),
     });
@@ -486,11 +572,11 @@ async function buildRuntimeContext({
   }
 
   const graphAnswer = await maybeQueryGraphRag({
-    openai,
+    openai: openaiClient,
     userId,
     collection,
     query: prompt,
-    enabled: hits.length > 0,
+    enabled: wantsGraphRag,
   });
 
   const contextBlock = buildEvidenceBlock({
@@ -508,6 +594,7 @@ async function buildRuntimeContext({
     docs,
     hits,
     graphAnswer,
+    graphIndexResult,
     indexResult,
     retrievalMeta,
     contextBlock,
@@ -523,8 +610,10 @@ module.exports = {
   collectionFor,
   ensureIndexed,
   maybeBuildGraphRagIndex,
+  ensureGraphRagReady,
   scheduleGraphBackfill,
   shouldUseGraphBackfill,
+  shouldUseGraphRagForPrompt,
   buildEvidenceBlock,
   buildRuntimeContext,
   passagesForAudit,
