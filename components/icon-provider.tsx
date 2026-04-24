@@ -33,6 +33,8 @@ interface IconConfig {
     component?: React.ElementType<LucideProps>;
     imagePath?: string;
     filter?: string;
+    lightFilter?: string;
+    darkFilter?: string;
     preserveColor?: boolean;
 }
 
@@ -64,20 +66,26 @@ export const iconMap: { [key: string]: IconConfig } = {
 
     // --- Custom PNG Icons (Make sure these paths are correct in your /public/icons folder) ---
     Banana: { type: 'png', imagePath: '/icons/banana.png' }, // Custom example
-    Magic: { type: 'png', imagePath: 'icons/openai.png' },       // For GPT-4.1 if not using ChatGPTLogo
+    Magic: { type: 'png', imagePath: '/icons/openai.svg', darkFilter: "invert(1)" },       // For GPT-4.1 if not using ChatGPTLogo
 
-    ChatGPTLogo: { type: 'png', imagePath: '/icons/openai.png' },      // Official ChatGPT/OpenAI Logo
+    ChatGPTLogo: { type: 'png', imagePath: '/icons/openai.svg', darkFilter: "invert(1)" },      // Official ChatGPT/OpenAI Logo
     ChatGPTPinkLogo: {
         type: 'png',
-        imagePath: '/icons/chatgpt.png',
+        imagePath: '/icons/openai.svg',
         filter: "brightness(0) saturate(100%) invert(30%) sepia(88%) saturate(2833%) hue-rotate(310deg) brightness(99%) contrast(95%)",
         preserveColor: true,
     },
-    DeepseekLogo: { type: 'png', imagePath: '/icons/deepseek.png' },    // Official Deepseek Logo
-    GrokLogo: { type: 'png', imagePath: '/icons/grok.png' },            // Official Grok/xAI Logo
-    OpenRouterLogo: { type: 'png', imagePath: '/icons/openrouter.png' }, // Official OpenRouter Logo
-    GeminiLogo: { type: 'png', imagePath: '/icons/gemini.png' },        // Official Gemini/Google AI Logo
-    ClaudeLogo: { type: 'png', imagePath: '/icons/claude.png' },        // Official Claude/Anthropic Logo (assuming you have this PNG)
+    DeepseekLogo: { type: 'png', imagePath: '/icons/deepseek.svg', preserveColor: true },    // Official Deepseek Logo
+    GrokLogo: { type: 'png', imagePath: '/icons/grok.png', preserveColor: true },            // Official Grok/xAI Logo
+    OpenRouterLogo: { type: 'png', imagePath: '/icons/openrouter.png', preserveColor: true }, // Official OpenRouter Logo
+    GeminiLogo: { type: 'png', imagePath: '/icons/gemini.svg', preserveColor: true },        // Official Gemini/Google AI Logo
+    ClaudeLogo: { type: 'png', imagePath: '/icons/claude.svg', preserveColor: true },        // Official Claude/Anthropic Logo
+    KimiLogo: { type: 'png', imagePath: '/icons/kimi.png', preserveColor: true },
+    ZaiLogo: { type: 'png', imagePath: '/icons/z-ai.svg', preserveColor: true },
+    SeedreamLogo: { type: 'svg', component: Palette },
+    QwenLogo: { type: 'svg', component: CloudSun },
+    MetaLogo: { type: 'svg', component: ToyBrick },
+    MistralLogo: { type: 'svg', component: Wind },
 };
 
 // Hum LucideProps se 'name' ko hata rahe hain takay hum apni 'name' property define kar sakein.
@@ -97,6 +105,11 @@ export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) =
     const iconConfig = iconMap[name];
 
     if (iconConfig.type === 'png') {
+        const filter =
+            iconConfig.filter ||
+            (theme === "dark" ? iconConfig.darkFilter : iconConfig.lightFilter) ||
+            "none";
+
         return (
             <div style={{ width: size, height: size, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Image
@@ -106,7 +119,7 @@ export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) =
                     height={size}
                     style={{
                         objectFit: "contain",
-                        filter: iconConfig.filter || (iconConfig.preserveColor ? "none" : theme === "light" ? "invert(1)" : "invert(0)"),
+                        filter,
                     }}
                 />
             </div>

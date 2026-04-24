@@ -24,7 +24,7 @@ const modelsToSeed = [
       displayName: 'Kimi K2.6',
       provider: 'OpenRouter',
       type: 'TEXT',
-      icon: 'OpenRouterLogo',
+      icon: 'KimiLogo',
       description: 'Moonshot Kimi K2.6 via OpenRouter: multimodal, long context, coding and agentic tasks.',
       isActive: true,
     },

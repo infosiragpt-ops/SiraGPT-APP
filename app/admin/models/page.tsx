@@ -30,6 +30,7 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "sonner"
 import { IconProvider } from "@/components/icon-provider"
+import { resolveModelIconName } from "@/lib/model-icons"
 
 interface AIModel {
   id: string
@@ -448,12 +449,7 @@ export default function ModelsPage() {
   }
 
   const getProviderIcon = (provider: string) => {
-    const iconMap: Record<string, string> = {
-      'OpenAI': 'ChatGPTLogo',
-      'Gemini': 'GeminiLogo',
-      'OpenRouter': 'OpenRouterLogo'
-    }
-    return iconMap[provider] || 'Bot'
+    return resolveModelIconName({ provider })
   }
 
   const formatDate = (dateString: string) => {
@@ -785,12 +781,10 @@ export default function ModelsPage() {
                 <TableRow key={model.id}>
                   <TableCell>
                     <div className="flex items-center space-x-2">
-                      {model.icon && (
-                        <IconProvider 
-                          name={model.icon} 
-                          className="h-6 w-6" 
-                        />
-                      )}
+                      <IconProvider
+                        name={resolveModelIconName(model)}
+                        className="h-6 w-6"
+                      />
                       <div>
                         <div className="font-medium">{model.displayName}</div>
                         <div className="text-sm text-muted-foreground">

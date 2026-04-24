@@ -42,7 +42,7 @@ const KIMI_K26_OPENROUTER = {
   displayName: 'Kimi K2.6',
   provider: 'OpenRouter',
   type: 'TEXT',
-  icon: 'OpenRouterLogo',
+  icon: 'KimiLogo',
   description: 'Moonshot Kimi K2.6 via OpenRouter: long context, multimodal, coding & agents.',
 };
 
@@ -70,6 +70,14 @@ const OPENROUTER_IMAGE_MODELS = [
     type: 'IMAGE',
     icon: 'GeminiLogo',
     description: 'Google Gemini 3 Pro Image Preview via OpenRouter for professional image generation.',
+  },
+  {
+    name: 'bytedance-seed/seedream-4.5',
+    displayName: 'Seedream 4.5',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    icon: 'SeedreamLogo',
+    description: 'ByteDance Seedream 4.5 via OpenRouter for professional image generation.',
   },
 ];
 

@@ -257,6 +257,7 @@ class ModelSyncService {
                 description: model.description,
                 provider: model.provider,
                 type: model.type,
+                icon: this.getModelIcon(model),
                 lastSynced: new Date(),
                 syncSource: 'api',
                 contextLength: model.contextLength,
@@ -276,7 +277,7 @@ class ModelSyncService {
                 provider: model.provider,
                 type: model.type,
                 isActive: model.isActive,
-                icon: this.getProviderIcon(model.provider),
+                icon: this.getModelIcon(model),
                 lastSynced: new Date(),
                 syncSource: 'api',
                 contextLength: model.contextLength,
@@ -361,15 +362,43 @@ class ModelSyncService {
   }
 
   /**
+   * Get provider/model icon. OpenRouter is a transport provider, so model
+   * slugs such as anthropic/claude-* or moonshotai/kimi-* keep their brand.
+   */
+  getModelIcon(model = {}) {
+    const modelName = `${model.name || ''} ${model.displayName || ''}`.toLowerCase();
+    const provider = `${model.provider || ''}`.toLowerCase();
+
+    if (/(^|[/\s-])(gpt|chatgpt|dall[-\s]?e)\b|openai\//.test(modelName)) return 'ChatGPTLogo';
+    if (/gemini|google\/|imagen|veo/.test(modelName)) return 'GeminiLogo';
+    if (/claude|anthropic\//.test(modelName)) return 'ClaudeLogo';
+    if (/grok|x-ai\//.test(modelName)) return 'GrokLogo';
+    if (/deepseek/.test(modelName)) return 'DeepseekLogo';
+    if (/kimi|moonshot/.test(modelName)) return 'KimiLogo';
+    if (/\bz\.?ai\b|z-ai\/|zhipu|chatglm|\bglm[-\s]?\d?/.test(modelName)) return 'ZaiLogo';
+    if (/seedream|bytedance|doubao/.test(modelName)) return 'SeedreamLogo';
+    if (/qwen|alibaba/.test(modelName)) return 'QwenLogo';
+    if (/llama|meta-llama|meta\//.test(modelName)) return 'MetaLogo';
+    if (/mistral|codestral/.test(modelName)) return 'MistralLogo';
+
+    return this.getProviderIcon(provider);
+  }
+
+  /**
    * Get provider icon
    */
   getProviderIcon(provider) {
+    const normalized = `${provider || ''}`.toLowerCase();
     const icons = {
-      'OpenAI': 'ChatGPTLogo',
-      'Gemini': 'GeminiLogo',
-      'OpenRouter': 'OpenRouterLogo'
+      openai: 'ChatGPTLogo',
+      gemini: 'GeminiLogo',
+      google: 'GeminiLogo',
+      anthropic: 'ClaudeLogo',
+      'x-ai': 'GrokLogo',
+      xai: 'GrokLogo',
+      openrouter: 'OpenRouterLogo'
     };
-    return icons[provider] || 'Bot';
+    return icons[normalized] || 'Bot';
   }
 
   /**

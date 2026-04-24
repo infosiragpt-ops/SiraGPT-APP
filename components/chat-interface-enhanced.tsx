@@ -120,6 +120,7 @@ import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
 import { WordConnector } from "./WordConnector"
 import { ExcelConnector, type ExcelConnectorRef } from "./ExcelConnector"
+import { resolveModelIconName } from "@/lib/model-icons"
 
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
@@ -2012,6 +2013,7 @@ const NavbarModelSelector = ({
     const tier = inferTier(model);
     const isSelected = model.name === selectedModel;
     const TierIcon = tier.icon;
+    const iconName = resolveModelIconName(model);
     return (
       <DropdownMenuItem
         onSelect={() => onPick(model)}
@@ -2021,7 +2023,7 @@ const NavbarModelSelector = ({
           isSelected && "bg-muted/40",
         )}
       >
-        <IconProvider name={model.icon} className="h-5 w-5 shrink-0" />
+        <IconProvider name={iconName} className="h-5 w-5 shrink-0" />
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center gap-1.5">
             <span className="truncate text-[13px] font-semibold leading-tight">
@@ -2067,7 +2069,7 @@ const NavbarModelSelector = ({
           "data-[state=open]:bg-muted/50",
         )}
       >
-        {selectedModelData && <IconProvider name={selectedModelData.icon} className="h-4 w-4 shrink-0" />}
+        {selectedModelData && <IconProvider name={resolveModelIconName(selectedModelData)} className="h-4 w-4 shrink-0" />}
         <span className="max-w-[180px] truncate">{selectedModelData?.displayName || selectedModel}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
