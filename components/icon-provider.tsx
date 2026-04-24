@@ -32,6 +32,8 @@ interface IconConfig {
     type: 'svg' | 'png';
     component?: React.ElementType<LucideProps>;
     imagePath?: string;
+    filter?: string;
+    preserveColor?: boolean;
 }
 
 export const iconMap: { [key: string]: IconConfig } = {
@@ -65,6 +67,12 @@ export const iconMap: { [key: string]: IconConfig } = {
     Magic: { type: 'png', imagePath: 'icons/openai.png' },       // For GPT-4.1 if not using ChatGPTLogo
 
     ChatGPTLogo: { type: 'png', imagePath: '/icons/openai.png' },      // Official ChatGPT/OpenAI Logo
+    ChatGPTPinkLogo: {
+        type: 'png',
+        imagePath: '/icons/chatgpt.png',
+        filter: "brightness(0) saturate(100%) invert(30%) sepia(88%) saturate(2833%) hue-rotate(310deg) brightness(99%) contrast(95%)",
+        preserveColor: true,
+    },
     DeepseekLogo: { type: 'png', imagePath: '/icons/deepseek.png' },    // Official Deepseek Logo
     GrokLogo: { type: 'png', imagePath: '/icons/grok.png' },            // Official Grok/xAI Logo
     OpenRouterLogo: { type: 'png', imagePath: '/icons/openrouter.png' }, // Official OpenRouter Logo
@@ -98,7 +106,7 @@ export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) =
                     height={size}
                     style={{
                         objectFit: "contain",
-                        filter: theme === "light" ? "invert(1)" : "invert(0)",
+                        filter: iconConfig.filter || (iconConfig.preserveColor ? "none" : theme === "light" ? "invert(1)" : "invert(0)"),
                     }}
                 />
             </div>

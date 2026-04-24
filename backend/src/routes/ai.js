@@ -52,7 +52,7 @@ const OPENROUTER_IMAGE_MODELS = [
     displayName: 'GPT-5.4 Image 2',
     provider: 'OpenRouter',
     type: 'IMAGE',
-    icon: 'OpenRouterLogo',
+    icon: 'ChatGPTPinkLogo',
     description: 'OpenAI GPT-5.4 Image 2 via OpenRouter for high quality image generation.',
   },
   {
@@ -60,16 +60,16 @@ const OPENROUTER_IMAGE_MODELS = [
     displayName: 'Gemini 3.1 Flash Image',
     provider: 'OpenRouter',
     type: 'IMAGE',
-    icon: 'OpenRouterLogo',
+    icon: 'GeminiLogo',
     description: 'Google Gemini 3.1 Flash Image Preview via OpenRouter with fast image generation.',
   },
   {
-    name: 'bytedance-seed/seedream-4.5',
-    displayName: 'Seedream 4.5',
+    name: 'google/gemini-3-pro-image-preview',
+    displayName: 'Gemini 3 Pro Image',
     provider: 'OpenRouter',
     type: 'IMAGE',
-    icon: 'OpenRouterLogo',
-    description: 'ByteDance Seedream 4.5 via OpenRouter for professional image generation.',
+    icon: 'GeminiLogo',
+    description: 'Google Gemini 3 Pro Image Preview via OpenRouter for professional image generation.',
   },
 ];
 
@@ -1308,10 +1308,10 @@ function normalizeImageCount(value) {
 }
 
 function openRouterImageModalitiesFor(model) {
-  const modelId = String(model || '').toLowerCase();
-  if (modelId.includes('seedream') || modelId.startsWith('bytedance-seed/')) {
-    return ['image'];
-  }
+  void model;
+  // OpenRouter image-generation chat completions expect both requested output
+  // modalities; asking for image only can make recent image models return no
+  // usable image payload.
   return ['image', 'text'];
 }
 
