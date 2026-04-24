@@ -6,13 +6,15 @@ const prisma = new PrismaClient({
 });
 
 // Test database connection
-async function connectDatabase() {
+async function connectDatabase({ exitOnFailure = true } = {}) {
   try {
     await prisma.$connect();
     console.log('✅ Database connected successfully');
+    return true;
   } catch (error) {
     console.error('❌ Database connection failed:', error);
-    process.exit(1);
+    if (exitOnFailure) process.exit(1);
+    return false;
   }
 }
 
@@ -21,6 +23,5 @@ process.on('beforeExit', async () => {
   await prisma.$disconnect();
 });
 
-connectDatabase();
-
 module.exports = prisma;
+module.exports.connectDatabase = connectDatabase;
