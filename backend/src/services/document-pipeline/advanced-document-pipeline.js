@@ -342,10 +342,10 @@ function validateText(buffer, format, expected = {}) {
   const headerColumns = (lines[0] || '').split(',').length;
   const checks = isCsv ? {
     notEmpty: text.length > (expected.minChars || 120),
-    header: headerColumns >= 4,
-    rows: lines.length >= 6,
+    header: headerColumns >= (expected.minColumns || 2),
+    rows: lines.length >= (expected.minRows || 2),
     table: lines.every((line) => line.includes(',')),
-    structure: /Seccion|Objetivo|Estado|Score/i.test(lines[0] || ''),
+    structure: lines.slice(1).every((line) => line.split(',').length >= Math.min(headerColumns, 2)),
   } : {
     notEmpty: text.length > (expected.minChars || 120),
     title: /#|<h1|title|Título|Title/i.test(text),

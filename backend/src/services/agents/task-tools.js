@@ -20,6 +20,11 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const sandbox = require('./code-sandbox');
+const {
+  MIN_QUALITY_SCORE,
+  MIN_TECHNICAL_SCORE,
+  validateDocument,
+} = require('../document-pipeline/advanced-document-pipeline');
 
 // Resolve the agentic batch lazily so unit tests that don't need
 // search don't pay the module-load cost or need OpenRouter creds.
@@ -58,11 +63,13 @@ const EXTENSION_TO_MIME = {
   md:   'text/markdown',
 };
 
+const ADVANCED_DOCUMENT_FORMATS = new Set(['docx', 'xlsx', 'pptx', 'pdf', 'csv', 'html', 'md']);
+
 function metadataPathFor(id) {
   return path.join(ARTIFACT_DIR, `${id}.json`);
 }
 
-function saveArtifact({ filename, base64, mime, ownerUserId, chatId }) {
+function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation }) {
   ensureArtifactDir();
   const clean = String(filename || 'artifact').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
   const buf = Buffer.from(base64 || '', 'base64');
@@ -79,6 +86,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId }) {
     chatId: chatId || null,
     mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
     sizeBytes: buf.length,
+    validation: validation || null,
     createdAt: new Date().toISOString(),
   }, null, 2));
   return {
@@ -89,6 +97,52 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId }) {
     path: full,
     downloadUrl: `/api/agent/artifact/${id}?name=${encodeURIComponent(clean)}`,
   };
+}
+
+function validateAgentArtifactBuffer(ext, buffer) {
+  const normalizedExt = ext === 'markdown' ? 'md' : String(ext || '').toLowerCase();
+  if (ADVANCED_DOCUMENT_FORMATS.has(normalizedExt)) {
+    return validateDocument({
+      format: normalizedExt,
+      buffer,
+      expected: normalizedExt === 'csv' ? { minRows: 2, minColumns: 2, minChars: 20 } : {},
+    });
+  }
+
+  const text = buffer.toString('utf8');
+  if (normalizedExt === 'svg') {
+    const checks = {
+      notEmpty: buffer.length > 60,
+      svgOpen: /<svg[\s>]/i.test(text),
+      svgClose: /<\/svg>/i.test(text),
+      noScript: !/<script[\s>]/i.test(text),
+    };
+    const score = Math.round((Object.values(checks).filter(Boolean).length / Object.values(checks).length) * 100);
+    return { format: 'svg', checks, technicalScore: score, qualityScore: score, integrityScore: Math.min(100, Math.round(buffer.length / 100)), overallScore: score, passed: score >= 90 };
+  }
+
+  if (normalizedExt === 'json') {
+    try {
+      JSON.parse(text);
+      return { format: 'json', checks: { parseable: true, notEmpty: buffer.length > 2 }, technicalScore: 100, qualityScore: 90, integrityScore: 90, overallScore: 96, passed: true };
+    } catch (err) {
+      return { format: 'json', checks: { parseable: false, notEmpty: buffer.length > 2 }, technicalScore: 50, qualityScore: 40, integrityScore: 50, overallScore: 47, passed: false, details: { error: err.message } };
+    }
+  }
+
+  const checks = { notEmpty: buffer.length > 20, readable: /\S/.test(text), lineCount: text.split(/\r?\n/).length >= 1 };
+  const score = Math.round((Object.values(checks).filter(Boolean).length / Object.values(checks).length) * 100);
+  return { format: normalizedExt || 'bin', checks, technicalScore: score, qualityScore: score, integrityScore: Math.min(100, Math.round(buffer.length / 100)), overallScore: score, passed: score >= 80 };
+}
+
+function assertArtifactValidation(ext, buffer) {
+  const validation = validateAgentArtifactBuffer(ext, buffer);
+  if (!validation.passed || validation.technicalScore < MIN_TECHNICAL_SCORE || validation.qualityScore < MIN_QUALITY_SCORE) {
+    const err = new Error(`artifact validation failed: technical ${validation.technicalScore}/100, quality ${validation.qualityScore}/100`);
+    err.validation = validation;
+    throw err;
+  }
+  return validation;
 }
 
 function previewText(s, max = 600) {
@@ -297,6 +351,26 @@ const createDocument = {
     }
 
     const raw = fs.readFileSync(tmpOut);
+    let validation;
+    try {
+      validation = assertArtifactValidation(ext, raw);
+    } catch (err) {
+      try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
+      const payload = {
+        ok: false,
+        error: err.message || 'artifact validation failed',
+        validation: err.validation || null,
+        stderr: previewText(r.stderr || '', 1200),
+        stdout: previewText(r.stdout || '', 600),
+      };
+      ctx.onEvent?.({
+        type: 'tool_output',
+        tool: 'create_document',
+        ok: false,
+        preview: `${payload.error}. Regenera el archivo con estructura profesional y vuelve a verificar.`,
+      });
+      return payload;
+    }
     const b64 = raw.toString('base64');
     const artifact = saveArtifact({
       filename: cleanName,
@@ -304,6 +378,7 @@ const createDocument = {
       mime: EXTENSION_TO_MIME[ext],
       ownerUserId: ctx.userId,
       chatId: ctx.chatId,
+      validation,
     });
     try { fs.unlinkSync(tmpOut); } catch { /* may have been moved */ }
 
@@ -327,10 +402,13 @@ const createDocument = {
 
     return {
       ok: true,
+      id: artifact.id,
+      artifactId: artifact.id,
       filename: artifact.filename,
       sizeBytes: artifact.sizeBytes,
       mime: artifact.mime,
       downloadUrl: artifact.downloadUrl,
+      validation,
       stdout: previewText(r.stdout || '', 1200),
     };
   },
@@ -415,6 +493,11 @@ const verifyArtifact = {
       ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact not found' });
       return { ok: false, error: `artifact ${id} not found` };
     }
+    let metadata = null;
+    try {
+      const metadataPath = metadataPathFor(id);
+      if (fs.existsSync(metadataPath)) metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+    } catch { /* metadata is auxiliary */ }
     const full = path.join(ARTIFACT_DIR, entry);
     const ext = path.extname(entry).slice(1).toLowerCase();
     const sizeBytes = fs.statSync(full).size;
@@ -523,6 +606,7 @@ print(json.dumps(result))
     summary.sizeBytes = summary.sizeBytes || sizeBytes;
     summary.filename = entry.slice(id.length + 1);
     summary.artifactId = id;
+    summary.validation = metadata?.validation || null;
     ctx.onEvent?.({
       type: 'tool_output',
       tool: 'verify_artifact',
@@ -627,5 +711,5 @@ module.exports = {
   saveArtifact,
   ARTIFACT_DIR,
   EXTENSION_TO_MIME,
-  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact, runTests, previewText, artifactIdFor, metadataPathFor, summarisePreview },
+  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, verifyArtifact, runTests, previewText, artifactIdFor, metadataPathFor, summarisePreview, validateAgentArtifactBuffer, assertArtifactValidation },
 };
