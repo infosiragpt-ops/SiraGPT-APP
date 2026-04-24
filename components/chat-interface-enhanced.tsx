@@ -152,6 +152,43 @@ type SearchActivityState = {
   entries: SearchActivityEntry[]
 }
 
+type ImageAspectRatio = "1:1" | "3:4" | "9:16" | "4:3" | "16:9"
+
+const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string }> = [
+  { value: "1:1", label: "Cuadrado", ratio: "1:1" },
+  { value: "3:4", label: "Vertical", ratio: "3:4" },
+  { value: "9:16", label: "Historia", ratio: "9:16" },
+  { value: "4:3", label: "Horizontal", ratio: "4:3" },
+  { value: "16:9", label: "Panorámico", ratio: "16:9" },
+]
+
+function ImageAspectRatioMark({
+  ratio,
+  selected = false,
+  className,
+}: {
+  ratio: ImageAspectRatio
+  selected?: boolean
+  className?: string
+}) {
+  const [width, height] = ratio.split(":").map(Number)
+  const landscape = width > height
+  const portrait = height > width
+
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "relative inline-flex shrink-0 items-center justify-center rounded-[4px] border border-current/75 bg-background/70",
+        landscape ? "h-3 w-5" : portrait ? "h-5 w-3" : "h-4 w-4",
+        className
+      )}
+    >
+      <span className={cn("h-1.5 w-1.5 rounded-full", selected ? "bg-current" : "bg-current/60")} />
+    </span>
+  )
+}
+
 const SEARCH_ACTIVITY_MAX_ENTRIES = 140
 const ACADEMIC_DEFAULT_TOP_K = 10
 
@@ -1367,6 +1404,8 @@ const ActiveToolsDisplay = ({
   isImageGenerationActive,
   setIsImageGenerationActive,
   isGeneratingImage = false,
+  selectedImageAspectRatio,
+  setSelectedImageAspectRatio,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   isComputerUseActive,
@@ -1400,6 +1439,8 @@ const ActiveToolsDisplay = ({
   isImageGenerationActive: boolean;
   setIsImageGenerationActive: (value: boolean) => void;
   isGeneratingImage?: boolean;
+  selectedImageAspectRatio: ImageAspectRatio;
+  setSelectedImageAspectRatio: (ratio: ImageAspectRatio) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
   isComputerUseActive: boolean;
@@ -1621,6 +1662,41 @@ const ActiveToolsDisplay = ({
         <div className="flex items-center gap-1.5 bg-pink-100 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300 px-2 py-1 rounded-full text-xs border border-pink-200 dark:border-pink-800">
           <Palette className="h-3 w-3" />
           <span className="font-medium">Image Generation</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 gap-1 rounded-md px-1.5 py-0 text-[11px] font-medium hover:bg-pink-200/70 dark:hover:bg-pink-800/30"
+                title={`Proporción de imagen: ${selectedImageAspectRatio}`}
+                aria-label={`Cambiar proporción de imagen. Actual ${selectedImageAspectRatio}`}
+              >
+                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected />
+                <span>{selectedImageAspectRatio}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" sideOffset={8} className="liquid-menu-surface w-56 p-1.5">
+              {IMAGE_ASPECT_RATIO_OPTIONS.map(option => {
+                const selected = option.value === selectedImageAspectRatio;
+                return (
+                  <DropdownMenuItem
+                    key={option.value}
+                    className="liquid-menu-item min-h-8 cursor-pointer"
+                    onSelect={() => {
+                      setSelectedImageAspectRatio(option.value);
+                    }}
+                  >
+                    <div className="flex w-full items-center gap-2">
+                      <ImageAspectRatioMark ratio={option.value} selected={selected} />
+                      <span className="flex-1 text-sm font-medium">{option.label}</span>
+                      <span className="text-xs text-muted-foreground">{option.ratio}</span>
+                      {selected && <Check className="h-3.5 w-3.5 text-pink-600 dark:text-pink-300" />}
+                    </div>
+                  </DropdownMenuItem>
+                )
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
           {isGeneratingImage && <span className="h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
           <Button
             variant="ghost"
@@ -2081,6 +2157,7 @@ function ChatInterfaceContent() {
   const [isSearching, setIsSearching] = React.useState(false)
   const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
+  const [selectedImageAspectRatio, setSelectedImageAspectRatio] = React.useState<ImageAspectRatio>("1:1")
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
   const isGeneratingImageRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
@@ -4543,11 +4620,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return { ...baseChat, messages: updatedMessages };
       });
 
-      const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string } = {
+      const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: ImageAspectRatio } = {
         prompt,
         chatId: activeChatId,
         provider: selectProvider,
         model: selectedModel,
+        aspectRatio: selectedImageAspectRatio,
       };
 
       if (files && files[0]) {
@@ -4951,6 +5029,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isWebSearchActive, setIsWebSearchActive,
     isImageGenerationActive, setIsImageGenerationActive,
     isGeneratingImage,
+    selectedImageAspectRatio, setSelectedImageAspectRatio,
     isVideoGenerationActive, setIsVideoGenerationActive,
     isComputerUseActive, setIsComputerUseActive,
     computerUseStatus,

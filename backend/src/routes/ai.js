@@ -18,6 +18,7 @@ const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
 const mime = require('mime-types');
+const sharp = require('sharp');
 
 const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
@@ -1241,8 +1242,65 @@ router.post(
 );
 
 
+const IMAGE_ASPECT_RATIOS = {
+  '1:1': { width: 1, height: 1, prompt: 'square 1:1 composition' },
+  '3:4': { width: 3, height: 4, prompt: 'vertical 3:4 portrait composition' },
+  '9:16': { width: 9, height: 16, prompt: 'story 9:16 vertical composition' },
+  '4:3': { width: 4, height: 3, prompt: 'horizontal 4:3 composition' },
+  '16:9': { width: 16, height: 9, prompt: 'panoramic 16:9 cinematic composition' },
+};
+
+function normalizeImageAspectRatio(value) {
+  return Object.prototype.hasOwnProperty.call(IMAGE_ASPECT_RATIOS, value) ? value : '1:1';
+}
+
+function imageGenerationSizeFor(provider, aspectRatio) {
+  if (provider === "Gemini") return "1024x1024";
+  if (aspectRatio === '3:4' || aspectRatio === '9:16') return "1024x1792";
+  if (aspectRatio === '4:3' || aspectRatio === '16:9') return "1792x1024";
+  return "1024x1024";
+}
+
+function promptWithImageAspectRatio(prompt, aspectRatio) {
+  const descriptor = IMAGE_ASPECT_RATIOS[aspectRatio]?.prompt || IMAGE_ASPECT_RATIOS['1:1'].prompt;
+  return `${prompt}\n\nImage framing requirement: ${descriptor}. Keep the main subject safely inside the frame.`;
+}
+
+async function cropImageToAspectRatio(imageBuffer, aspectRatio) {
+  const ratioConfig = IMAGE_ASPECT_RATIOS[normalizeImageAspectRatio(aspectRatio)];
+  const metadata = await sharp(imageBuffer).metadata();
+  const width = metadata.width || 0;
+  const height = metadata.height || 0;
+
+  if (!width || !height) return imageBuffer;
+
+  const targetRatio = ratioConfig.width / ratioConfig.height;
+  const currentRatio = width / height;
+
+  if (Math.abs(currentRatio - targetRatio) < 0.01) {
+    return sharp(imageBuffer).png().toBuffer();
+  }
+
+  let extractWidth = width;
+  let extractHeight = height;
+
+  if (currentRatio > targetRatio) {
+    extractWidth = Math.max(1, Math.round(height * targetRatio));
+  } else {
+    extractHeight = Math.max(1, Math.round(width / targetRatio));
+  }
+
+  const left = Math.max(0, Math.floor((width - extractWidth) / 2));
+  const top = Math.max(0, Math.floor((height - extractHeight) / 2));
+
+  return sharp(imageBuffer)
+    .extract({ left, top, width: extractWidth, height: extractHeight })
+    .png()
+    .toBuffer();
+}
+
 // Helper function to save a base64 encoded image to the filesystem
-async function saveBase64Image(base64Data, userId, prompt) {
+async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1') {
   if (!base64Data) {
     throw new Error('No base64 data provided to save.');
   }
@@ -1262,7 +1320,8 @@ async function saveBase64Image(base64Data, userId, prompt) {
   const filepath = path.join(uploadsDir, filename);
 
 
-  const imageBuffer = Buffer.from(base64Data, 'base64');
+  const rawImageBuffer = Buffer.from(base64Data, 'base64');
+  const imageBuffer = await cropImageToAspectRatio(rawImageBuffer, aspectRatio);
   await fs.writeFile(filepath, imageBuffer);
 
 
@@ -1292,6 +1351,7 @@ router.post(
     body('chatId').optional().isString(),
     body('provider').trim().notEmpty().withMessage('Provider is required'),
     body('model').trim().notEmpty().withMessage('Model is required'),
+    body('aspectRatio').optional().isIn(Object.keys(IMAGE_ASPECT_RATIOS)).withMessage('Invalid image aspect ratio'),
   ],
   authenticateToken,
   async (req, res) => {
@@ -1309,7 +1369,10 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId } = req.body;
+      let { prompt, chatId, provider, model, fileId, aspectRatio } = req.body;
+      aspectRatio = normalizeImageAspectRatio(aspectRatio);
+      const imagePrompt = promptWithImageAspectRatio(prompt, aspectRatio);
+      const requestedImageSize = imageGenerationSizeFor(provider, aspectRatio);
       const userId = req.user.id;
       console.log('userId', userId);
 
@@ -1405,24 +1468,24 @@ router.post(
       });
 
       if (imagePath) { // If there's an image to edit
-        const imagePromise = aiService.generateImageFromImage(imagePath, prompt, provider);
+        const imagePromise = aiService.generateImageFromImage(imagePath, imagePrompt, provider);
         response = await Promise.race([imagePromise, timeoutPromise]);
       } else { // If we are generating a new image from a prompt
         if (provider === "Gemini") {
           const imagePromise = openai.images.generate({
             model: "imagen-3.0-generate-002",
-            prompt: prompt,
+            prompt: imagePrompt,
             response_format: "b64_json",
             n: 1,
-            size: "1024x1024"
+            size: requestedImageSize
           }, { signal: requestAbortController.signal });
           response = await Promise.race([imagePromise, timeoutPromise]);
         } else {
           const imagePromise = openai.images.generate({
             model: 'dall-e-3',
-            prompt: prompt,
+            prompt: imagePrompt,
             n: 1,
-            size: '1024x1024',
+            size: requestedImageSize,
             quality: 'standard',
             response_format: 'b64_json',
           }, { signal: requestAbortController.signal });
@@ -1440,7 +1503,7 @@ router.post(
         return;
       }
 
-      const { imageUrl, fileId: newFileId } = await saveBase64Image(response, userId, prompt);
+      const { imageUrl, fileId: newFileId } = await saveBase64Image(response, userId, prompt, aspectRatio);
 
       if (chatId) {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
@@ -1464,7 +1527,7 @@ router.post(
             role: 'ASSISTANT',
             content: imageUrl,
             tokens: 10000,
-            files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt, fileId: newFileId }])
+            files: JSON.stringify([{ type: 'image', url: imageUrl, prompt: prompt, fileId: newFileId, aspectRatio }])
           }
         });
 
@@ -1490,6 +1553,7 @@ router.post(
 
       res.json({
         imageUrl,
+        aspectRatio,
         tokens: 1000,
         usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
       });

@@ -514,7 +514,7 @@ class ApiClient {
     if (lastError) onError(lastError);
   }
   async generateImage(
-    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string },
+    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: string },
     options: { signal?: AbortSignal } = {},
   ) {
     const response = await this.request('/ai/generate-image', {
