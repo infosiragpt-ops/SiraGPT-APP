@@ -354,15 +354,29 @@ const createDocument = {
     }
 
     const raw = fs.readFileSync(tmpOut);
-    let validation;
+
+    // Heuristic validation is now advisory: it runs, but it does NOT
+    // short-circuit. The TaskContract deterministic tests are the
+    // authoritative gate; without them we fall back to the heuristic
+    // pass/fail, but we always collect the contract feedback first so
+    // the agent's tool_result carries a concrete repair hint.
+    let validation = null;
+    let validationError = null;
     try {
       validation = assertArtifactValidation(ext, raw);
     } catch (err) {
+      validation = err.validation || null;
+      validationError = err.message || 'artifact validation failed';
+    }
+
+    const hasContract = ctx.taskContract && Array.isArray(ctx.taskContract.success_tests) && ctx.taskContract.success_tests.length > 0;
+    if (!hasContract && validationError) {
+      // Legacy path (no contract): keep the old hard-fail on heuristic.
       try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
       const payload = {
         ok: false,
-        error: err.message || 'artifact validation failed',
-        validation: err.validation || null,
+        error: validationError,
+        validation,
         stderr: previewText(r.stderr || '', 1200),
         stdout: previewText(r.stdout || '', 600),
       };
@@ -370,7 +384,7 @@ const createDocument = {
         type: 'tool_output',
         tool: 'create_document',
         ok: false,
-        preview: `${payload.error}. Regenera el archivo con estructura profesional y vuelve a verificar.`,
+        preview: `${validationError}. Regenera el archivo con estructura profesional y vuelve a verificar.`,
       });
       return payload;
     }
@@ -396,15 +410,48 @@ const createDocument = {
       },
     });
 
+    // TaskContract review: every produced artifact is tested against
+    // the contract's deterministic success_tests. If any fail the
+    // tool_result carries the failure list so the agent repairs
+    // before finalize instead of shipping a wrong-format file.
+    let contractReview = null;
+    if (hasContract) {
+      try {
+        const { reviewArtifact } = require('./artifact-reviewer');
+        contractReview = reviewArtifact({
+          contract: ctx.taskContract,
+          artifact: {
+            filename: artifact.filename,
+            buffer: raw,
+          },
+        });
+        ctx.onEvent?.({
+          type: 'contract_review',
+          stepId: ctx.currentStepId,
+          artifactId: artifact.id,
+          passed: contractReview.passed,
+          testsPassed: contractReview.testsPassed,
+          testsTotal: contractReview.testsTotal,
+          failedTests: contractReview.failedTests,
+        });
+      } catch (revErr) {
+        console.warn('[create_document] reviewer threw:', revErr?.message);
+      }
+    }
+
+    const previewMsg = contractReview
+      ? `Archivo ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB) · contrato ${contractReview.testsPassed}/${contractReview.testsTotal}${contractReview.passed ? ' ✓' : ' ✗'}`
+      : `Archivo listo: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB)`;
+
     ctx.onEvent?.({
       type: 'tool_output',
       tool: 'create_document',
-      ok: true,
-      preview: `Archivo listo: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      ok: !contractReview || contractReview.passed,
+      preview: previewMsg,
     });
 
     return {
-      ok: true,
+      ok: !contractReview || contractReview.passed,
       id: artifact.id,
       artifactId: artifact.id,
       filename: artifact.filename,
@@ -412,6 +459,17 @@ const createDocument = {
       mime: artifact.mime,
       downloadUrl: artifact.downloadUrl,
       validation,
+      contractReview: contractReview ? {
+        passed: contractReview.passed,
+        testsTotal: contractReview.testsTotal,
+        testsPassed: contractReview.testsPassed,
+        failedTests: contractReview.failedTests,
+        extDetected: contractReview.ext,
+        mimeSniffed: contractReview.mimeSniffed,
+      } : null,
+      repairHint: contractReview && !contractReview.passed
+        ? `Contract tests FAILED (${contractReview.failedTests.length}): ${contractReview.failedTests.map(f => `${f.id}: ${f.detail}`).join(' | ')}. Regenerate with a corrected script that satisfies every failed test before calling finalize.`
+        : undefined,
       stdout: previewText(r.stdout || '', 1200),
     };
   },

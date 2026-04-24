@@ -53,6 +53,7 @@ const {
   buildAgentTaskPlan,
   buildAgentTaskPlanPrompt,
 } = require('../services/agents/agent-task-plan');
+const { resolveTaskContract, makeEmptyContract } = require('../services/agents/task-contract-resolver');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -193,6 +194,24 @@ router.post(
       : [];
     const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds });
     const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
+    // TaskContract resolution is best-effort: on LLM/network failure
+    // we synthesise a minimal contract so the rest of the pipeline
+    // still has something to validate against. The resolver itself
+    // handles retries + schema validation — see task-contract-resolver.js.
+    let taskContract = makeEmptyContract(agentGoal);
+    let taskContractSource = 'fallback';
+    try {
+      const bootOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const resolved = await resolveTaskContract({
+        goal: agentGoal,
+        openai: bootOpenAI,
+        fileIds,
+      });
+      taskContract = resolved.contract || taskContract;
+      taskContractSource = resolved.source || taskContractSource;
+    } catch (err) {
+      console.warn('[agent-task] task-contract resolver failed, using fallback:', err?.message);
+    }
     const taskPlan = buildAgentTaskPlan({
       goal: agentGoal,
       executionProfile,
@@ -337,6 +356,8 @@ router.post(
       executionProfile,
       intentAlignmentProfile,
       taskPlan,
+      taskContract,
+      taskContractSource,
     });
 
     // Per-step id counter shared with the tool event bus so the UI
@@ -355,6 +376,12 @@ router.post(
       taskId,
       fileIds,
       displayGoal,
+      // The TaskContract is the authoritative source of truth for
+      // every downstream validation. Tools that produce artifacts
+      // run the ArtifactReviewer against this contract and feed any
+      // failed tests back to the agent as part of their tool_result,
+      // so the next ReAct turn can self-repair instead of finalize.
+      taskContract,
       onEvent: (evt) => {
         // Forward tool-level events (tool_call / tool_output / file_artifact)
         // to the client with the active stepId so it can nest them.
@@ -410,7 +437,7 @@ router.post(
         maxSteps,
         maxRuntimeMs,
         model,
-        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan),
+        extraSystem: buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan, taskContract),
         ctx: toolCtx,
         finalizeGuard: ({ steps }) => validateFinalize(executionProfile, steps),
         onStepStart: (step) => {
@@ -599,8 +626,28 @@ function normalizeSystemContract(text) {
     .slice(0, 4000);
 }
 
-function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan) {
+function buildAgentSystemPrompt(systemContract, fileIds, executionProfile, intentAlignmentProfile, taskPlan, taskContract) {
   const parts = [TASK_SYSTEM_PROMPT];
+  // TaskContract first: this is the authoritative closed-route
+  // contract the deterministic ArtifactReviewer enforces. The agent
+  // must match it exactly or the tool_result for create_document
+  // will return a failure with a concrete repair hint.
+  if (taskContract) {
+    parts.push(
+      'TASK CONTRACT (authoritative — the ArtifactReviewer enforces this):\n' +
+      JSON.stringify({
+        user_intent: taskContract.user_intent,
+        artifact_type: taskContract.artifact_type,
+        required_extension: taskContract.required_extension,
+        mime_type: taskContract.mime_type,
+        delivery_mode: taskContract.delivery_mode,
+        content_requirements: taskContract.content_requirements,
+        forbidden_outputs: taskContract.forbidden_outputs,
+        success_tests: (taskContract.success_tests || []).map(t => ({ id: t.id, type: t.type, check: t.check, parameters: t.parameters })),
+      }, null, 2) +
+      '\n\nRules:\n- Every create_document filename MUST end in the required_extension. Do not substitute formats.\n- Every success_tests check WILL be run deterministically; an artifact that fails any of them will be returned with a repairHint and you MUST call create_document again with a corrected script before finalize.\n- Never invent score percentages like "100/100"; the review is binary pass/fail per test.'
+    );
+  }
   if (systemContract) {
     parts.push(`Additional execution contract:\n${systemContract}`);
   }
