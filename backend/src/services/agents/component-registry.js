@@ -24,7 +24,7 @@ const COMPONENTS = [
   {
     id: "ai-product-operating-system",
     name: "AI Product Operating System (Runtime Kernel)",
-    purpose: "Top-level kernel that compiles every request to a UniversalTaskContract + ExecutionGraph DAG and runs it under the 14-law constitution, the 17-agent kernel, the MCP gateway, the canonical event envelope, and the temporal-compatible durable workflow adapter.",
+    purpose: "Top-level kernel that compiles every request to a UniversalTaskContract + ExecutionGraph DAG and runs it under the 14-law constitution, the 17-agent kernel, the semantic intent router, the unified tool registry, the MCP gateway, the canonical event envelope, and the temporal-compatible durable workflow adapter.",
     status: "implemented",
     backing_modules: [
       "backend/src/services/ai-product-os/constitution.js",
@@ -33,10 +33,16 @@ const COMPONENTS = [
       "backend/src/services/ai-product-os/event-envelope.js",
       "backend/src/services/ai-product-os/durable-workflow.js",
       "backend/src/services/ai-product-os/product-os.js",
+      "backend/src/services/ai-product-os/semantic-intent-router.js",
+      "backend/src/services/ai-product-os/tool-registry.js",
+      "backend/src/services/ai-product-os/planner-agent.js",
     ],
     acceptance_criteria: [
       "14-law constitution enforced at pre-compile / pre-execute / per-node / per-output / pre-release / release gates — IMPLEMENTED",
       "17 specialised agents (intent compiler → telemetry) registered with typed manifests, guardrails, handoff targets — IMPLEMENTED",
+      "Semantic Intent Router: LLM-primary (structured outputs schema) with regex fast-path fallback; emits {intent_primary, intent_secondary[], required_agents[], required_tools[], confidence, needs_clarification, final_output} — IMPLEMENTED",
+      "Unified Tool Registry: single source of truth for ~25 tools with input/output schema, scopes, side_effect_level, recommended_for[intent], and bindToMcpGateway() — IMPLEMENTED",
+      "Planner Agent: deterministic 7-phase plan compiler (intent → planning → evidence → build → validate → release → telemetry) with validation_gate / human_approval_gate / release_gate per node — IMPLEMENTED",
       "MCP gateway: tools / resources / prompts registry with JSON-RPC 2.0 dispatch, scope-based authorization, audit trail — IMPLEMENTED",
       "Canonical event envelope (correlation/causation/trace/span ids, OTel-compatible) with serialize / deserialize / validate / chain — IMPLEMENTED",
       "Temporal-compatible durable workflow adapter with retry, timeout, compensation, rollback, AbortSignal, in-memory store, resume from checkpoint — IMPLEMENTED",
@@ -44,6 +50,7 @@ const COMPONENTS = [
       "Bind to a real Temporal cluster (production)",
       "Bind to a real LangGraph runtime for stateful graph agents",
       "Bind to a real OpenAI Agents SDK runtime",
+      "Bind to a real LLM client (OpenAI Responses) so the router actually uses the LLM tier instead of falling back to regex",
     ],
     risk_level: "high",
   },

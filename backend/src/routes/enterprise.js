@@ -40,6 +40,9 @@ const { analyzeBudget } = require("../services/software-engineering/cwv-budget")
 const productOs = require("../services/ai-product-os/product-os");
 const { listLaws, enforceConstitution } = require("../services/ai-product-os/constitution");
 const { listAgents: listProductOsAgents, computeHandoffGraph } = require("../services/ai-product-os/agentic-kernel");
+const intentRouter = require("../services/ai-product-os/semantic-intent-router");
+const toolRegistry = require("../services/ai-product-os/tool-registry");
+const planner = require("../services/ai-product-os/planner-agent");
 const { validateContract } = require("../services/agents/task-contract-resolver");
 const { runQaBoard } = require("../services/agents/qa-board");
 const { createTracer } = require("../services/observability/spans");
@@ -483,6 +486,65 @@ router.post(
     }
   }
 );
+
+// ─── Semantic Intent Router + Planner ──────────────────────────────────
+
+router.post(
+  "/product-os/route",
+  authenticateToken,
+  [
+    body("prompt").isString().isLength({ min: 1, max: 8000 }),
+    body("history").optional().isArray(),
+    body("context").optional().isObject(),
+    body("preferRegex").optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const decision = await intentRouter.classifyIntent({
+        prompt: req.body.prompt,
+        history: req.body.history,
+        context: req.body.context,
+        preferRegex: Boolean(req.body.preferRegex),
+        // No LLM client wired here yet — until product binds an
+        // OpenAI/Anthropic client, the route runs the deterministic
+        // regex tier. Caller can pass `preferRegex: true` to lock that
+        // explicitly.
+      });
+      const { plan, validation } = planner.buildAndValidate(decision);
+      ok(res, { decision, plan, validation });
+    } catch (err) {
+      fail(res, 500, err.message || "intent route failed");
+    }
+  }
+);
+
+router.get("/product-os/tool-registry", authenticateToken, (_req, res) => {
+  ok(res, {
+    integrity: toolRegistry.integrity(),
+    tools: toolRegistry.listTools(),
+  });
+});
+
+router.get(
+  "/product-os/tool-registry/recommended/:intent",
+  authenticateToken,
+  [require("express-validator").param("intent").isString().isLength({ min: 2, max: 64 })],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    ok(res, { intent: req.params.intent, tools: toolRegistry.recommendedFor(req.params.intent) });
+  }
+);
+
+router.get("/product-os/intent-schema", authenticateToken, (_req, res) => {
+  ok(res, {
+    schema: intentRouter.buildClassifierSchema(),
+    primary_intents: intentRouter.PRIMARY_INTENTS,
+    final_output_by_intent: intentRouter.FINAL_OUTPUT_BY_INTENT,
+  });
+});
 
 // ─── Observability demo (for wiring tests / debug) ─────────────────────
 
