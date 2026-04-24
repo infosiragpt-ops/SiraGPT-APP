@@ -5,6 +5,8 @@ const upload = require('../middleware/upload');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
 const prisma = require('../config/database');
+const rag = require('../services/rag-service');
+const operationalRag = require('../services/rag/operational-runtime');
 const fs = require('fs').promises;
 const path = require('path');
 const OpenAI = require('openai');
@@ -22,6 +24,38 @@ let _fileTypePromise = null;
 function loadFileType() {
   if (!_fileTypePromise) _fileTypePromise = import('file-type');
   return _fileTypePromise;
+}
+
+function scheduleDefaultRagIndex(userId, fileRecord) {
+  const docs = operationalRag.normaliseDocs([fileRecord]);
+  if (docs.length === 0) return false;
+
+  setImmediate(async () => {
+    try {
+      const result = await operationalRag.ensureIndexed({
+        rag,
+        userId,
+        collection: operationalRag.DEFAULT_COLLECTION,
+        docs,
+      });
+      if (result.indexed && operationalRag.shouldUseGraphBackfill(docs)) {
+        const graphSources = (result.ingestedSources && result.ingestedSources.length > 0)
+          ? result.ingestedSources
+          : docs.map(doc => doc.source);
+        operationalRag.scheduleGraphBackfill({
+          rag,
+          userId,
+          collection: operationalRag.DEFAULT_COLLECTION,
+          sources: graphSources,
+          openai: rag.getOpenAI(),
+        });
+      }
+    } catch (err) {
+      console.warn('[files] default RAG indexing failed:', err.message || err);
+    }
+  });
+
+  return true;
 }
 
 /**
@@ -114,6 +148,8 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
           }
         });
 
+        const ragQueued = scheduleDefaultRagIndex(req.user.id, fileRecord);
+
         processedFiles.push({
           id: fileRecord.id,
           name: file.originalname,
@@ -123,6 +159,7 @@ router.post('/upload', authenticateToken, upload.array('files', 5), async (req, 
           thumbnailUrl: thumbnailPath ? `/uploads/${req.user.id}/${path.basename(thumbnailPath)}` : null,
           extractedText: result.extractedText,
           openaiFileId: openaiFileId,
+          ragIndexed: ragQueued ? 'queued' : 'skipped',
           success: result.success,
           error: result.error
         });

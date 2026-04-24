@@ -7,6 +7,8 @@ const { v4: uuidv4 } = require('uuid');
 const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
 const streamCache = require('../services/stream-cache');
 const { buildChatListWhere, parseBoolean, parsePositiveInt } = require('../services/chat-scope');
+const feedbackLedger = require('../services/agents/feedback-ledger');
+const rag = require('../services/rag-service');
 
 const router = express.Router();
 
@@ -475,6 +477,11 @@ router.post('/messages/:messageId/feedback', [
     const message = await prisma.message.findUnique({
       where: { id: messageId },
       select: {
+        id: true,
+        chatId: true,
+        role: true,
+        content: true,
+        timestamp: true,
         chat: {
           select: {
             userId: true
@@ -492,6 +499,34 @@ router.post('/messages/:messageId/feedback', [
       where: { id: messageId },
       data: { feedback },
     });
+
+    if (message.role === 'ASSISTANT') {
+      setImmediate(async () => {
+        try {
+          const priorUser = await prisma.message.findFirst({
+            where: {
+              chatId: message.chatId,
+              role: 'USER',
+              timestamp: { lt: message.timestamp },
+            },
+            orderBy: { timestamp: 'desc' },
+            select: { content: true },
+          });
+
+          await feedbackLedger.record({
+            userId: req.user.id,
+            runId: message.id,
+            agent: 'chat',
+            request: priorUser?.content || '',
+            response: message.content || updatedMessage.content || '',
+            helpful: feedback === 'liked',
+            embedder: texts => rag.embed(texts),
+          });
+        } catch (ledgerErr) {
+          console.warn('[chats] feedback ledger update failed:', ledgerErr.message || ledgerErr);
+        }
+      });
+    }
 
     res.status(200).json({ message: updatedMessage });
 

@@ -418,7 +418,7 @@ const createDocument = {
 
 const ragRetrieve = {
   name: 'rag_retrieve',
-  description: 'Retrieve up to K chunks from the user\'s private knowledge collection. Use when the user refers to their own uploaded docs or says "según mis PDFs".',
+  description: 'Retrieve up to K chunks from the user\'s private knowledge collection using the production RAG stack (query expansion + hybrid BM25/vector + MMR + graph expansion when indexed). Use when the user refers to uploaded docs, project files, PDFs, or says "según mis archivos".',
   parameters: {
     type: 'object',
     properties: {
@@ -436,7 +436,14 @@ const ragRetrieve = {
     ctx.onEvent?.({ type: 'tool_call', tool: 'rag_retrieve', preview: query });
     try {
       const rag = require('../rag-service');
-      const hits = await rag.retrieve(ctx.userId, collection || ctx.collection || 'default', query, k);
+      const hits = await rag.retrieve(ctx.userId, collection || ctx.collection || 'default', query, k, {
+        useExpansion: true,
+        useHybrid: true,
+        useMMR: true,
+        useGraph: true,
+        graphOpenAI: ctx.openai || rag.getOpenAI(),
+        sessionId: ctx.chatId || null,
+      });
       ctx.onEvent?.({ type: 'tool_output', tool: 'rag_retrieve', ok: true, preview: `${hits?.length || 0} chunks` });
       return { ok: true, hits };
     } catch (err) {

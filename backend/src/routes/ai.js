@@ -14,6 +14,9 @@ const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
 const longTermMemory = require('../services/long-term-memory');
 const artifactGenerator = require('../services/artifacts/artifact-generator');
+const rag = require('../services/rag-service');
+const operationalRag = require('../services/rag/operational-runtime');
+const feedbackLedger = require('../services/agents/feedback-ledger');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -282,6 +285,7 @@ async function loadUserFile(fileRef, userId) {
 }
 
 async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false) {
+  let assistantMessage = null;
   try {
     console.log("Background task: Saving to database...", { assistantFiles });
 
@@ -296,7 +300,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
       if (!chat) {
         console.error("Chat not found for background save, skipping.");
-        return;
+        return { assistantMessage: null };
       }
 
       if (!regenerate) {
@@ -310,7 +314,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         });
       }
 
-      await prisma.message.create({
+      assistantMessage = await prisma.message.create({
         data: {
           chatId,
           role: 'ASSISTANT',
@@ -346,6 +350,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
   } catch (dbError) {
     console.error("Error in background database save:", dbError);
   }
+  return { assistantMessage };
 }
 
 const streamControllers = new Map();
@@ -592,8 +597,52 @@ router.post(
         }
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + memoryBlock };
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'}`);
+      // RLHF-lite: reuse examples the same user explicitly marked
+      // helpful, so future similar answers match their preferred shape.
+      let feedbackBlock = '';
+      if (userId) {
+        try {
+          const exemplars = await feedbackLedger.findExemplars({
+            userId,
+            request: prompt,
+            embedder: texts => rag.embed(texts),
+            k: 2,
+            onlyHelpful: true,
+            agent: 'chat',
+          });
+          const formatted = feedbackLedger.formatExemplarsBlock(exemplars);
+          feedbackBlock = formatted ? `\n\n## USER-PREFERRED RESPONSE EXAMPLES\n${formatted}` : '';
+        } catch (feedbackErr) {
+          console.warn('[ai] feedback exemplars unavailable (continuing without):', feedbackErr.message || feedbackErr);
+        }
+      }
+
+      // Operational RAG: make the advanced/private-document stack part
+      // of normal chat, not only isolated /api/rag endpoints. Long
+      // attached/project files are indexed once per chat/project and the
+      // prompt receives compact, cited evidence snippets.
+      let operationalRagContext = null;
+      if (userId) {
+        try {
+          operationalRagContext = await operationalRag.buildRuntimeContext({
+            rag,
+            userId,
+            chatId: canPersist ? chatId : null,
+            prompt,
+            processedFiles,
+            project,
+            openai: rag.getOpenAI(),
+          });
+        } catch (ragErr) {
+          console.warn('[ai] operational RAG unavailable (continuing without):', ragErr.message || ragErr);
+        }
+      }
+
+      const evidenceBlock = operationalRagContext?.contextBlock
+        ? `\n\n${operationalRagContext.contextBlock}`
+        : '';
+      const systemInstruction = { role: 'system', content: promptBundle.system + memoryBlock + feedbackBlock + evidenceBlock };
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
@@ -732,7 +781,18 @@ router.post(
         const fileContextTokens = usageService.calculateTextTokens(fileContext, actualModel);
 
         let truncatedFileContext = fileContext;
-        if (fileContextTokens > MAX_CONTEXT_TOKENS) {
+        if (operationalRag.shouldCompactFilePrompt(fileContextTokens, Boolean(operationalRagContext?.contextBlock))) {
+          const manifest = processedFiles.map(f => {
+            const chars = typeof f.extractedText === 'string' ? f.extractedText.length : 0;
+            return `- ${f.name || f.originalName || f.id}: ${f.mimeType || f.type || 'unknown'}; ${chars} extracted characters`;
+          }).join('\n');
+          truncatedFileContext = [
+            'The attached document text was indexed by SIRA EVIDENCE RUNTIME for this turn.',
+            'Use the cited evidence snippets in the system prompt for document-grounded claims.',
+            'File manifest:',
+            manifest,
+          ].join('\n');
+        } else if (fileContextTokens > MAX_CONTEXT_TOKENS) {
           const charPerToken = fileContext.length / fileContextTokens;
           const estimatedCharLimit = Math.floor(MAX_CONTEXT_TOKENS * charPerToken);
           truncatedFileContext = fileContext.substring(0, estimatedCharLimit) + "\n... [CONTENT TRUNCATED DUE TO TOKEN LIMIT] ...";
@@ -1071,7 +1131,19 @@ router.post(
             : finalContent;
         }
 
-        await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles, regenerate);
+        const savedChat = await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles, regenerate);
+        if (savedChat?.assistantMessage?.id && operationalRagContext?.active) {
+          operationalRag.scheduleQualityAudit({
+            prisma,
+            rag,
+            userId,
+            messageId: savedChat.assistantMessage.id,
+            question: prompt,
+            answer: finalContent,
+            hits: operationalRagContext.hits,
+            openai: rag.getOpenAI(),
+          });
+        }
 
         // Project memory — fire-and-forget extraction of durable
         // facts from this turn. Runs only when the chat belongs to a
