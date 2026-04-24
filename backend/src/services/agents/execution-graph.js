@@ -263,11 +263,16 @@ function transitionNode(graph, id, nextState, patch = {}) {
   if (!NODE_STATES.includes(nextState)) throw new Error(`transitionNode: unknown state "${nextState}"`);
   const cur = n.state;
   const legal = {
-    pending:   new Set(["running", "cancelled", "skipped"]),
-    running:   new Set(["done", "failed", "retrying", "cancelled"]),
-    retrying:  new Set(["running", "failed", "cancelled"]),
+    // pending → failed permits the deadlock-sweep path where an
+    // upstream failure blocks a node we never got to run.
+    pending:   new Set(["running", "cancelled", "skipped", "failed"]),
+    // running → skipped / cancelled covers timeout-soft + retry-
+    // then-skip policies without the caller having to two-step
+    // through `failed` first.
+    running:   new Set(["done", "failed", "retrying", "cancelled", "skipped"]),
+    retrying:  new Set(["running", "failed", "cancelled", "skipped"]),
     done:      new Set([]),
-    failed:    new Set(["retrying", "cancelled"]),
+    failed:    new Set(["retrying", "cancelled", "skipped"]),
     cancelled: new Set([]),
     skipped:   new Set([]),
   };
