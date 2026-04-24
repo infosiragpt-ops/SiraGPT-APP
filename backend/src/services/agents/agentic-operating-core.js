@@ -19,6 +19,10 @@ const {
   inferEnterpriseCapabilities,
 } = require('./enterprise-agentic-runtime');
 const { buildToolGatewayCatalog } = require('./enterprise-tool-gateway');
+const {
+  buildAiProductOperatingSystem,
+  buildAiProductOperatingPrompt,
+} = require('./ai-product-os');
 
 const OPERATING_CORE_VERSION = 'agentic-operating-core-2026-04';
 
@@ -193,6 +197,13 @@ function buildAgenticOperatingCore({
     observability,
     regression,
   });
+  const aiProductOS = buildAiProductOperatingSystem({
+    contract,
+    graph,
+    toolRuntimePlan,
+    qaBoardReview,
+    now,
+  });
 
   const core = {
     version: OPERATING_CORE_VERSION,
@@ -223,6 +234,7 @@ function buildAgenticOperatingCore({
     observability,
     regression,
     product_studio: productStudio,
+    ai_product_os: aiProductOS,
     risk_register: riskRegister,
     component_inventory: summarizeComponentRegistry(componentRegistry, domains),
     summary: {
@@ -821,6 +833,11 @@ function validateAgenticOperatingCore(core) {
   if (!core.product_studio?.quality_system?.self_repair?.required) {
     errors.push('product_studio quality system must require self repair');
   }
+  if (!core.ai_product_os?.summary?.contractFirst) errors.push('ai_product_os contract-first summary is required');
+  if (!core.ai_product_os?.system_law?.do_not_answer_freely) errors.push('ai_product_os must forbid free answers before contract execution');
+  if (!core.ai_product_os?.runtime_bindings?.temporal?.required) errors.push('ai_product_os Temporal binding is required');
+  if (!core.ai_product_os?.runtime_bindings?.langgraph?.required) errors.push('ai_product_os LangGraph binding is required');
+  if (!core.ai_product_os?.runtime_bindings?.mcp_gateway?.declared_tools_only) errors.push('ai_product_os MCP gateway must enforce declared tools only');
   return { ok: errors.length === 0, errors };
 }
 
@@ -867,9 +884,33 @@ function buildAgenticOperatingPrompt(core) {
         production_controls: core.product_studio.production_controls,
         release_contract: core.product_studio.release_contract,
       },
+      ai_product_os: {
+        os_id: core.ai_product_os.os_id,
+        components: core.ai_product_os.components,
+        system_law: core.ai_product_os.system_law,
+        schema_artifacts: core.ai_product_os.schema_artifacts.map((artifact) => artifact.filename),
+        runtime_bindings: {
+          temporal: {
+            required: core.ai_product_os.runtime_bindings.temporal.required,
+            configured: core.ai_product_os.runtime_bindings.temporal.configured,
+            workflow_type: core.ai_product_os.runtime_bindings.temporal.workflow_type,
+            fallback_store: core.ai_product_os.runtime_bindings.temporal.fallback_store,
+          },
+          langgraph: {
+            required: core.ai_product_os.runtime_bindings.langgraph.required,
+            persistent_state: core.ai_product_os.runtime_bindings.langgraph.persistent_state,
+          },
+          mcp_gateway: {
+            required: core.ai_product_os.runtime_bindings.mcp_gateway.required,
+            declared_tools_only: core.ai_product_os.runtime_bindings.mcp_gateway.declared_tools_only,
+          },
+        },
+        release_policy: core.ai_product_os.release_policy,
+      },
       risk_register: core.risk_register,
       summary: core.summary,
     }, null, 2),
+    buildAiProductOperatingPrompt(core.ai_product_os),
     'Operating rules:',
     '- Execute exactly the UniversalTaskContract through this core; do not substitute format, tool, source policy or delivery mode.',
     '- Use typed tools only when authorized by Tool Runtime; never invent tools.',
