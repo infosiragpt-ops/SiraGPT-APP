@@ -207,9 +207,15 @@ const COMPONENTS = [
     status: "partial",
     backing_modules: [
       "backend/src/services/software-engineering/project-scaffolder.js",
+      "backend/src/services/software-engineering/sbom.js",
+      "backend/src/services/software-engineering/dependency-audit.js",
+      "backend/src/services/software-engineering/code-review.js",
     ],
     acceptance_criteria: [
       "project scaffolder with App Router (nextjs) + FastAPI templates — IMPLEMENTED (file-tree descriptor, Playwright E2E wired, Docker, CI/CD workflow)",
+      "SBOM generator (CycloneDX 1.5) from package.json + lockfile + requirements.txt + pyproject.toml — IMPLEMENTED",
+      "Dependency auditor: license classification, unpinned versions, duplicate packages, deprecated list — IMPLEMENTED",
+      "Code reviewer: cyclomatic complexity, nesting depth, file/function length, dangerous-call detection, unused-import, secret scan — IMPLEMENTED",
       "SEO metadata + schema.org + sitemap",
       "WCAG AA validator + Core Web Vitals check",
       "test suite wiring (Playwright/Vitest)",

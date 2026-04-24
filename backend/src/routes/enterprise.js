@@ -28,6 +28,9 @@ const { listControls, evaluateAsvs } = require("../services/security/owasp-asvs"
 const { listManifests } = require("../services/agents/tool-manifest");
 const { reviewScraperPolicy } = require("../services/web/scraper-policy");
 const { analyzeSql } = require("../services/db/sql-safety");
+const { generateSbom } = require("../services/software-engineering/sbom");
+const { auditSbom } = require("../services/software-engineering/dependency-audit");
+const { reviewCode } = require("../services/software-engineering/code-review");
 const { validateContract } = require("../services/agents/task-contract-resolver");
 const { runQaBoard } = require("../services/agents/qa-board");
 const { createTracer } = require("../services/observability/spans");
@@ -181,6 +184,82 @@ router.post(
       ok(res, r);
     } catch (err) {
       fail(res, 500, err.message || "qa-board review failed");
+    }
+  }
+);
+
+// ─── Software Engineering Pipeline ─────────────────────────────────────
+
+router.post(
+  "/sbom/generate",
+  authenticateToken,
+  [
+    body("packageJson").optional().isString(),
+    body("packageLock").optional().isString(),
+    body("requirementsTxt").optional().isString(),
+    body("pyprojectToml").optional().isString(),
+    body("projectMeta").optional().isObject(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = generateSbom({
+        packageJson: req.body.packageJson,
+        packageLock: req.body.packageLock,
+        requirementsTxt: req.body.requirementsTxt,
+        pyprojectToml: req.body.pyprojectToml,
+        projectMeta: req.body.projectMeta,
+      });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "sbom generation failed");
+    }
+  }
+);
+
+router.post(
+  "/dependencies/audit",
+  authenticateToken,
+  [
+    body("sbom").isObject().withMessage("sbom (object) required"),
+    body("licenseMap").optional().isObject(),
+    body("options").optional().isObject(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = auditSbom({ sbom: req.body.sbom, licenseMap: req.body.licenseMap, options: req.body.options });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "audit failed");
+    }
+  }
+);
+
+router.post(
+  "/code-review/analyze",
+  authenticateToken,
+  [
+    body("source").isString().isLength({ min: 1, max: 500000 }),
+    body("language").optional().isString().isLength({ min: 1, max: 40 }),
+    body("filename").optional().isString().isLength({ min: 1, max: 200 }),
+    body("thresholds").optional().isObject(),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = reviewCode({
+        source: req.body.source,
+        language: req.body.language,
+        filename: req.body.filename,
+        thresholds: req.body.thresholds,
+      });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "code review failed");
     }
   }
 );
