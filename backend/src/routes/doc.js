@@ -49,6 +49,29 @@ async function persistFailure(chatId, userId, displayPrompt, reason) {
   return { id: assistant.id, role: assistant.role, content: assistant.content, files: [] };
 }
 
+async function loadReferenceFiles(fileIds, userId) {
+  if (!Array.isArray(fileIds) || fileIds.length === 0) return [];
+  const ids = Array.from(new Set(fileIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))).slice(0, 5);
+  if (ids.length === 0) return [];
+  const files = await prisma.file.findMany({
+    where: { id: { in: ids }, userId },
+    select: {
+      id: true,
+      originalName: true,
+      mimeType: true,
+      size: true,
+      extractedText: true,
+    },
+  });
+  return files.map((file) => ({
+    id: file.id,
+    originalName: file.originalName,
+    mimeType: file.mimeType,
+    size: file.size,
+    extractedText: String(file.extractedText || '').slice(0, 12_000),
+  }));
+}
+
 router.post(
   '/generate',
   [
@@ -59,6 +82,8 @@ router.post(
     body('format').optional().isIn(['docx', 'xlsx', 'pptx', 'pdf', 'csv', 'html', 'md', 'markdown']),
     body('template').optional().isString().trim().isLength({ max: 60 }),
     body('complexity').optional().isIn(['simple', 'standard', 'high', 'stress']),
+    body('files').optional().isArray({ max: 5 }),
+    body('files.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -85,12 +110,14 @@ router.post(
     let content = null, file = null, format = null, errorMsg = null;
 
     try {
+      const referenceFiles = await loadReferenceFiles(req.body.files, req.user.id);
       const pipelineOptions = {
         prompt,
         model: req.body.model,
         format: req.body.format,
         template: req.body.template,
         complexity: req.body.complexity || 'standard',
+        referenceFiles,
         outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
         telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
         signal: controller.signal,

@@ -1361,7 +1361,16 @@ class ApiClient {
   }
 
   async generateDocStream(
-    data: { prompt: string; displayPrompt?: string; chatId?: string; model?: string },
+    data: {
+      prompt: string;
+      displayPrompt?: string;
+      chatId?: string;
+      model?: string;
+      format?: 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'csv' | 'html' | 'md' | 'markdown';
+      template?: string;
+      complexity?: 'simple' | 'standard' | 'high' | 'stress';
+      files?: string[];
+    },
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {

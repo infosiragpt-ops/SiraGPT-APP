@@ -5,6 +5,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef } f
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { aiService, buildProfessionalCapabilityPrompt, type ChatIntent } from "./ai-service"
+import { buildDocumentChatRequest } from "./document-chat-request"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 
@@ -610,8 +611,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             });
           };
           try {
+            const docRequest = buildDocumentChatRequest({
+              prompt: content,
+              chatId: activeChat.id,
+              model: selectedModel,
+              fileIds: normalizedFileIds,
+            });
             await apiClient.generateDocStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
+              docRequest,
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {

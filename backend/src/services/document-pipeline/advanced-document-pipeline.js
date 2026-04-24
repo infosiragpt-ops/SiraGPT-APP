@@ -105,8 +105,26 @@ function titleFromPrompt(prompt, fallback = 'Documento profesional') {
   return clean.charAt(0).toUpperCase() + clean.slice(1, 90);
 }
 
-function buildPlan({ prompt, format, template, complexity = 'standard' }) {
+function normalizeReferenceFiles(referenceFiles = []) {
+  return (Array.isArray(referenceFiles) ? referenceFiles : [])
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((file) => {
+      const extractedText = String(file.extractedText || '').trim();
+      return {
+        id: String(file.id || ''),
+        name: String(file.originalName || file.name || 'archivo'),
+        mimeType: String(file.mimeType || file.type || 'application/octet-stream'),
+        size: Number(file.size || 0),
+        extractedChars: extractedText.length,
+        excerpt: extractedText.slice(0, 600),
+      };
+    });
+}
+
+function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [] }) {
   const title = titleFromPrompt(prompt, template === 'academic' ? 'Informe académico profesional' : 'Documento profesional');
+  const normalizedReferenceFiles = normalizeReferenceFiles(referenceFiles);
   const baseSections = {
     academic: ['Portada', 'Resumen ejecutivo', 'Marco conceptual', 'Metodología', 'Resultados', 'Discusión', 'Conclusiones', 'Referencias APA 7', 'Anexos'],
     legal: ['Identificación de partes', 'Objeto', 'Obligaciones', 'Confidencialidad', 'Vigencia', 'Resolución de controversias', 'Firmas'],
@@ -114,12 +132,19 @@ function buildPlan({ prompt, format, template, complexity = 'standard' }) {
     education: ['Objetivos', 'Competencias', 'Contenido', 'Actividades', 'Evaluación', 'Recursos', 'Cierre'],
     premium: ['Resumen', 'Contexto', 'Desarrollo', 'Hallazgos', 'Recomendaciones', 'Anexos'],
   };
+  const sections = baseSections[template] || baseSections.premium;
   return {
     title,
     format,
     template,
     complexity,
-    sections: baseSections[template] || baseSections.premium,
+    sections: normalizedReferenceFiles.length > 0
+      ? Array.from(new Set([...sections, 'Material de referencia incorporado']))
+      : sections,
+    referenceFiles: normalizedReferenceFiles.map(({ excerpt, ...file }) => file),
+    referenceBriefs: normalizedReferenceFiles
+      .filter((file) => file.excerpt)
+      .map((file) => ({ name: file.name, excerpt: file.excerpt })),
     requiresResearch: /\b(real|doi|actual|fuentes|investiga|web|scopus|wos|openalex)\b/i.test(prompt),
     qualityTargets: {
       minTechnicalScore: MIN_TECHNICAL_SCORE,
@@ -426,6 +451,16 @@ async function buildDocx(plan, outputPath) {
     new Paragraph({ text: plan.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
     new Paragraph({ text: 'Documento generado por el pipeline documental multiagente de siraGPT.', alignment: AlignmentType.CENTER }),
     new Paragraph({ children: [new ImageRun({ data: TINY_PNG, transformation: { width: 96, height: 96 } })], alignment: AlignmentType.CENTER }),
+    ...(plan.referenceFiles?.length ? [
+      new Paragraph({ text: 'Material de referencia incorporado', heading: HeadingLevel.HEADING_1 }),
+      new Paragraph(`Se registraron ${plan.referenceFiles.length} archivo(s) de referencia con verificación de propiedad y metadatos técnicos.`),
+      ...plan.referenceBriefs.map((ref) => new Paragraph({
+        children: [
+          new TextRun({ text: `${ref.name}: `, bold: true }),
+          new TextRun(ref.excerpt),
+        ],
+      })),
+    ] : []),
     ...plan.sections.flatMap((section, index) => [
       new Paragraph({ text: section, heading: index === 0 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 }),
       new Paragraph({
@@ -467,6 +502,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 OUT_PATH = ${JSON.stringify(outputPath)}
+REFS = ${JSON.stringify((plan.referenceBriefs || []).map((ref) => ({ name: ref.name, excerpt: ref.excerpt })))}
 wb = Workbook()
 ws = wb.active
 ws.title = "Datos"
@@ -518,6 +554,15 @@ meta.append(["Campo", "Valor"])
 meta.append(["Pipeline", "multiagente"])
 meta.append(["Plantilla", ${JSON.stringify(plan.template)}])
 meta.append(["Formato", "xlsx"])
+if REFS:
+    refs = wb.create_sheet("Referencias")
+    refs.append(["Archivo", "Extracto usado"])
+    for ref in REFS:
+        refs.append([ref.get("name", "archivo"), ref.get("excerpt", "")])
+    for cell in refs[1]:
+        cell.fill = PatternFill("solid", fgColor="1E293B")
+        cell.font = Font(color="FFFFFF", bold=True)
+    refs.freeze_panes = "A2"
 wb.save(OUT_PATH)
 with open(OUT_PATH, "rb") as f:
     print("__B64__" + base64.b64encode(f.read()).decode("ascii"))
@@ -576,6 +621,16 @@ async function buildPptx(plan, outputPath) {
   });
   slide.addNotes('Explicar la ruta de navegación de la presentación.');
 
+  if (plan.referenceFiles?.length) {
+    slide = pptx.addSlide();
+    addTitle(slide, 'Material de referencia', 'Archivos adjuntos considerados en la planificación');
+    plan.referenceBriefs.slice(0, 5).forEach((ref, i) => {
+      slide.addText(`${i + 1}. ${ref.name}`, { x: 0.9, y: 2.0 + i * 0.72, w: 4.1, h: 0.28, fontSize: 14, bold: true, color: palette.dark });
+      slide.addText(ref.excerpt || 'Sin texto extraído disponible.', { x: 4.95, y: 1.95 + i * 0.72, w: 6.8, h: 0.42, fontSize: 10, color: palette.muted, fit: 'shrink' });
+    });
+    slide.addNotes('Confirmar qué archivos adjuntos fueron usados como referencia.');
+  }
+
   for (const [i, section] of plan.sections.slice(0, 6).entries()) {
     slide = pptx.addSlide();
     addTitle(slide, section, `Bloque ${i + 1} · ${plan.template}`);
@@ -614,6 +669,15 @@ async function buildPdf(plan, outputPath) {
     doc.moveDown();
     doc.fontSize(12).fillColor('#475569').text('Reporte profesional generado con validación técnica, diseño documental y trazabilidad multiagente.', { lineGap: 5 });
     doc.moveDown();
+    if (plan.referenceFiles?.length) {
+      doc.fontSize(16).fillColor('#111827').text('Material de referencia incorporado');
+      doc.moveDown(0.35);
+      for (const ref of plan.referenceBriefs.slice(0, 5)) {
+        doc.fontSize(10.5).fillColor('#374151').text(`${ref.name}: ${ref.excerpt || 'Sin texto extraído disponible.'}`, { align: 'justify', lineGap: 3 });
+        doc.moveDown(0.35);
+      }
+      doc.moveDown(0.5);
+    }
     for (const [i, section] of plan.sections.entries()) {
       if (i === 4) doc.addPage();
       doc.fontSize(16).fillColor('#111827').text(`${i + 1}. ${section}`);
@@ -636,12 +700,17 @@ async function buildText(plan, outputPath, format) {
   if (format === 'csv') {
     text = [
       'Seccion,Objetivo,Estado,Score',
+      ...(plan.referenceFiles?.length ? plan.referenceFiles.map((file) => `"Referencia ${file.name}","Archivo adjunto verificado","OK",92`) : []),
       ...plan.sections.map((section, i) => `"${section}","Validar estructura ${i + 1}","OK",${90 + (i % 7)}`),
     ].join('\n');
   } else if (format === 'html') {
-    text = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${plan.title}</title><style>body{font-family:Inter,system-ui;margin:0;background:#f8fafc;color:#0f172a}.wrap{max-width:980px;margin:auto;padding:48px}h1{font-size:48px;line-height:1}.card{background:white;border:1px solid #e2e8f0;border-radius:22px;padding:24px;margin:18px 0;box-shadow:0 20px 60px #0f172a14}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #e2e8f0;padding:10px;text-align:left}</style></head><body><main class="wrap"><h1>${plan.title}</h1><p>Documento HTML semántico con diseño premium, tabla y enlaces verificables.</p><a href="https://siragpt.com">Referencia de producto</a>${plan.sections.map((s, i) => `<section class="card"><h2>${i + 1}. ${s}</h2><p>Contenido profesional para ${s.toLowerCase()}.</p></section>`).join('')}<table><tr><th>Métrica</th><th>Estado</th></tr><tr><td>Integridad</td><td>OK</td></tr><tr><td>Diseño</td><td>OK</td></tr></table></main></body></html>`;
+    const refs = plan.referenceFiles?.length ? `<section class="card"><h2>Material de referencia</h2>${plan.referenceBriefs.map((ref) => `<p><strong>${ref.name}</strong>: ${ref.excerpt}</p>`).join('')}</section>` : '';
+    text = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${plan.title}</title><style>body{font-family:Inter,system-ui;margin:0;background:#f8fafc;color:#0f172a}.wrap{max-width:980px;margin:auto;padding:48px}h1{font-size:48px;line-height:1}.card{background:white;border:1px solid #e2e8f0;border-radius:22px;padding:24px;margin:18px 0;box-shadow:0 20px 60px #0f172a14}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #e2e8f0;padding:10px;text-align:left}</style></head><body><main class="wrap"><h1>${plan.title}</h1><p>Documento HTML semántico con diseño premium, tabla y enlaces verificables.</p><a href="https://siragpt.com">Referencia de producto</a>${refs}${plan.sections.map((s, i) => `<section class="card"><h2>${i + 1}. ${s}</h2><p>Contenido profesional para ${s.toLowerCase()}.</p></section>`).join('')}<table><tr><th>Métrica</th><th>Estado</th></tr><tr><td>Integridad</td><td>OK</td></tr><tr><td>Diseño</td><td>OK</td></tr></table></main></body></html>`;
   } else {
-    text = [`# ${plan.title}`, '', 'Documento Markdown estructurado con tabla, enlaces y secciones profesionales.', '', '[Referencia siraGPT](https://siragpt.com)', '', '| Métrica | Estado |', '|---|---|', '| Integridad | OK |', '| Diseño | OK |', '', ...plan.sections.flatMap((s, i) => [`## ${i + 1}. ${s}`, `Contenido profesional para ${s.toLowerCase()} con criterios verificables.`, ''])].join('\n');
+    const refs = plan.referenceFiles?.length
+      ? ['## Material de referencia', '', ...plan.referenceBriefs.flatMap((ref) => [`- **${ref.name}:** ${ref.excerpt}`, '']), '']
+      : [];
+    text = [`# ${plan.title}`, '', 'Documento Markdown estructurado con tabla, enlaces y secciones profesionales.', '', '[Referencia siraGPT](https://siragpt.com)', '', ...refs, '| Métrica | Estado |', '|---|---|', '| Integridad | OK |', '| Diseño | OK |', '', ...plan.sections.flatMap((s, i) => [`## ${i + 1}. ${s}`, `Contenido profesional para ${s.toLowerCase()} con criterios verificables.`, ''])].join('\n');
   }
   await fsp.writeFile(outputPath, text, 'utf8');
   return Buffer.from(text, 'utf8');
@@ -678,6 +747,7 @@ async function writeTelemetry(record, telemetryDir) {
   const file = path.join(telemetryDir, `${record.taskId}.json`);
   const scrubbed = {
     ...record,
+    plan: record.plan ? { ...record.plan, referenceBriefs: undefined } : record.plan,
     prompt: undefined,
     promptLength: String(record.prompt || '').length,
   };
@@ -694,6 +764,7 @@ async function runAdvancedDocumentPipeline({
   telemetryDir,
   maxRepairAttempts = 1,
   signal,
+  referenceFiles = [],
 } = {}) {
   assertNotAborted(signal);
   const startedAt = Date.now();
@@ -705,7 +776,7 @@ async function runAdvancedDocumentPipeline({
   const detectedTemplate = detectTemplate(promptText, template);
   emit(events, 'orchestrator', 'complete', `Formato detectado: ${detectedFormat}`, { format: detectedFormat });
   emit(events, 'research', 'complete', 'Investigación contextual evaluada', { requiresResearch: /\b(real|doi|actual|fuentes|investiga)\b/i.test(promptText) });
-  let plan = buildPlan({ prompt: promptText, format: detectedFormat, template: detectedTemplate, complexity });
+  let plan = buildPlan({ prompt: promptText, format: detectedFormat, template: detectedTemplate, complexity, referenceFiles });
   emit(events, 'document_design', 'complete', 'Plantilla premium seleccionada', { template: detectedTemplate, palette: plan.qualityTargets.palette });
   emit(events, 'content_generation', 'complete', 'Plan estructural creado', { sections: plan.sections.length });
 
