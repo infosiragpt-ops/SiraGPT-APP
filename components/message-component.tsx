@@ -67,6 +67,7 @@ import MessageActionRail from "./MessageActionRail"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
+import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
 const truncateUrl = (url: string, maxLength: number = 30) => {
@@ -1444,10 +1445,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
     // Check if this is an image-only message
     const isImageOnlyMessage = () => {
-        const hasImageFiles = Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some((f: any) => f.type === 'image');
-        const hasImageUrl = message.role === "ASSISTANT" && message.content.startsWith('http') &&
-            (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/'));
-        return hasImageFiles || hasImageUrl;
+        return isImageOnlyMessageForRender(message, parsedFiles);
     };
 
     // Check if this message contains computer use extracted data
