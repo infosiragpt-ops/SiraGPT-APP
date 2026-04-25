@@ -51,6 +51,14 @@ const { createIntegrationStack } = require("../services/ai-product-os/integratio
 const ciraEngine = require("../services/cira/engine");
 const ciraTaxonomy = require("../services/cira/intent-taxonomy");
 const ciraSchema = require("../services/cira/task-envelope-schema");
+const ciraToolRegistryFactory = require("../services/cira/tool-registry");
+const ciraValidatorEngine = require("../services/cira/validator-engine");
+const ciraPrompts = require("../services/cira/intent-prompts");
+const ciraRuntime = require("../services/cira/runtime");
+
+// Single Cira tool registry shared across requests.
+// Production extends this via ciraSharedToolRegistry.register({...}) at boot.
+const ciraSharedToolRegistry = ciraToolRegistryFactory.createDefaultRegistry();
 
 // Single in-memory facade for the local memory tier. Production binds
 // a Qdrant / pgvector adapter via createMemory({ adapter }).
@@ -807,6 +815,75 @@ router.post(
       ok(res, ciraEngine.snapshot(r));
     } catch (err) {
       fail(res, 500, err.message || "cira envelope failed");
+    }
+  }
+);
+
+// ─── Cira Tool Registry + Runtime ──────────────────────────────────────
+
+router.get("/cira/tools", authenticateToken, (req, res) => {
+  const category = typeof req.query.category === "string" ? req.query.category : null;
+  const tools = category ? ciraSharedToolRegistry.byCategory(category) : ciraSharedToolRegistry.list();
+  ok(res, {
+    integrity: ciraSharedToolRegistry.integrity(),
+    tools: tools.map(t => ({
+      name: t.name, displayName: t.displayName, description: t.description,
+      category: t.category, riskLevel: t.riskLevel,
+      permissionsRequired: [...t.permissionsRequired],
+      timeoutMs: t.timeoutMs, retryable: t.retryable,
+      requiresHumanConfirmation: t.requiresHumanConfirmation,
+    })),
+  });
+});
+
+router.get("/cira/prompts", authenticateToken, (_req, res) => {
+  ok(res, {
+    intent_engine: ciraPrompts.CIRA_INTENT_ENGINE_SYSTEM_PROMPT,
+    planner: ciraPrompts.CIRA_PLANNER_SYSTEM_PROMPT,
+    validator: ciraPrompts.CIRA_VALIDATOR_SYSTEM_PROMPT,
+  });
+});
+
+router.post(
+  "/cira/run",
+  authenticateToken,
+  [
+    body("text").isString().isLength({ min: 1, max: 8000 }),
+    body("attachments").optional().isArray(),
+    body("history").optional().isArray(),
+    body("user_plan").optional().isString(),
+    body("dry_run").optional().isBoolean(),
+    body("permissions").optional().isArray(),
+    body("tool_args").optional().isObject(),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const dryRun = req.body.dry_run !== false;
+      // Step 1-2: build envelope via the engine (already in dryRun)
+      const bundle = await ciraEngine.runUserMessage({
+        text: req.body.text,
+        attachments: req.body.attachments,
+        history: req.body.history,
+        userPlan: req.body.user_plan || req.user?.plan || "FREE",
+        userId: req.user?.id || req.user?.userId || null,
+        dryRun: true,
+      });
+      // Step 3-5: drive the workflow_graph through the runtime
+      const runtimeResult = await ciraRuntime.runWorkflow({
+        envelope: bundle.envelope,
+        registry: ciraSharedToolRegistry,
+        permissions: req.body.permissions || ciraRuntime.DEFAULT_PERMISSIONS.slice(),
+        toolArgs: req.body.tool_args || {},
+        dryRun,
+      });
+      ok(res, {
+        bundle: ciraEngine.snapshot(bundle),
+        runtime: runtimeResult,
+      });
+    } catch (err) {
+      fail(res, 500, err.message || "cira run failed");
     }
   }
 );
