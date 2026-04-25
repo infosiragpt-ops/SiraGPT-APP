@@ -170,7 +170,7 @@ export default function SubscriptionManager() {
   if (currentPlan === 'FREE') {
     // For free users: monthlyCallLimit is remaining calls (countdown)
     totalLimit = 3
-    remainingAmount = user.monthlyCallLimit || 0
+    remainingAmount = user.monthlyLimit || 0
     usedAmount = totalLimit - remainingAmount
     usagePercentage = totalLimit > 0 ? (usedAmount / totalLimit) * 100 : 0
   } else {

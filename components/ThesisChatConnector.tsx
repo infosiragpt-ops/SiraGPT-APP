@@ -80,8 +80,7 @@ const ThesisChatConnector: React.FC<ThesisChatConnectorProps> = ({ onComplete })
                 value={topic}
                 onChange={(e) => updateTopic(index, e.target.value)}
                 className="flex-1 text-sm"
-                size="sm"
-              />
+                />
               {topics.length > 2 && (
                 <Button
                   variant="outline"

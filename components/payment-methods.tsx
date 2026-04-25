@@ -87,18 +87,6 @@ export default function PaymentMethods() {
     }
   }
 
-  const handleUpdateBillingAddress = async () => {
-    if (!billingAddress) return
-
-    try {
-      // API call to update billing address
-      setShowEditBilling(false)
-      toast.success('Billing address updated')
-    } catch (error) {
-      toast.error('Failed to update billing address')
-    }
-  }
-
   const getPaymentMethodIcon = (brand?: string) => {
     switch (brand?.toLowerCase()) {
       case 'visa':

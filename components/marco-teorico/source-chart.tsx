@@ -67,7 +67,7 @@ export function SourceChart({ sources, label = "Fuentes por año", height = 140 
               borderRadius: 6,
               fontSize: 12,
             }}
-            formatter={(v: number) => [`${v}`, "fuentes"]}
+            formatter={(value) => [`${value ?? 0}`, "fuentes"]}
             labelFormatter={(y) => `Año ${y}`}
           />
           <Bar dataKey="count" radius={[3, 3, 0, 0]}>

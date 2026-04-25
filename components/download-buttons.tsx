@@ -89,7 +89,7 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
           } catch (backendError) {
             console.warn('Backend Word failed, using frontend:', backendError);
             // Fallback to frontend generation
-            await downloadWord(content, `${baseFilename}.docx`, tableData);
+            await downloadWord(content, `${baseFilename}.docx`, tableData ?? undefined);
             toast.success('Word document downloaded successfully!');
           }
           break;
@@ -103,7 +103,7 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
           } catch (backendError) {
             console.warn('Backend PowerPoint failed, using HTML presentation:', backendError);
             // Fallback to HTML presentation
-            downloadHTMLPresentation(content, `${baseFilename}.html`, tableData);
+            downloadHTMLPresentation(content, `${baseFilename}.html`, tableData ?? undefined);
             toast.success('HTML presentation downloaded successfully! (PowerPoint fallback)');
           }
           break;

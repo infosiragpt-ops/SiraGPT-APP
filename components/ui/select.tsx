@@ -9,6 +9,7 @@ interface SelectContextType {
   onValueChange: (value: string) => void
   open: boolean
   setOpen: (open: boolean) => void
+  disabled: boolean
 }
 
 const SelectContext = React.createContext<SelectContextType | undefined>(undefined)
@@ -25,13 +26,14 @@ interface SelectProps {
   value?: string
   onValueChange?: (value: string) => void
   children: React.ReactNode
+  disabled?: boolean
 }
 
-const Select = ({ value = "", onValueChange = () => {}, children }: SelectProps) => {
+const Select = ({ value = "", onValueChange = () => {}, children, disabled = false }: SelectProps) => {
   const [open, setOpen] = React.useState(false)
 
   return (
-    <SelectContext.Provider value={{ value, onValueChange, open, setOpen }}>
+    <SelectContext.Provider value={{ value, onValueChange, open, setOpen, disabled }}>
       <div className="relative">{children}</div>
     </SelectContext.Provider>
   )
@@ -42,8 +44,9 @@ interface SelectTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 const SelectTrigger = React.forwardRef<HTMLButtonElement, SelectTriggerProps>(
-  ({ className, children, ...props }, ref) => {
-    const { open, setOpen } = useSelect()
+  ({ className, children, disabled: triggerDisabled, ...props }, ref) => {
+    const { open, setOpen, disabled } = useSelect()
+    const isDisabled = disabled || !!triggerDisabled
 
     return (
       <button
@@ -53,7 +56,11 @@ const SelectTrigger = React.forwardRef<HTMLButtonElement, SelectTriggerProps>(
           "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
-        onClick={() => setOpen(!open)}
+        disabled={isDisabled}
+        onClick={() => {
+          if (isDisabled) return
+          setOpen(!open)
+        }}
         {...props}
       >
         {children}
