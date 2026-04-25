@@ -22,6 +22,10 @@ const {
 const { buildToolRuntimePlan } = require('./enterprise-tool-gateway');
 const { buildAgenticQaBoardReview } = require('./agentic-qa-board');
 const { buildAgenticOperatingCore } = require('./agentic-operating-core');
+const {
+  buildCiraCognitiveTaskEnvelope,
+  validateCiraCognitiveTaskEnvelope,
+} = require('./cira-cognitive-task-envelope');
 const productModelRouter = require('../ai-product-os/model-router');
 const productSkillSystem = require('../ai-product-os/skill-system');
 const productPlanner = require('../ai-product-os/planner-agent');
@@ -530,6 +534,21 @@ function buildSemanticIntentAnalysis({
     needsClarification,
     fileIds,
   });
+  const ciraTaskEnvelope = buildCiraCognitiveTaskEnvelope({
+    rawUserRequest: prompt,
+    conversationHistory,
+    files,
+    userId,
+    chatId,
+    contract,
+    graph,
+    toolRuntimePlan,
+    qaBoardReview,
+    semanticProfile,
+    structuredIntent: enrichedProductOsDecision,
+    modelRouting,
+  });
+  const ciraTaskEnvelopeValidation = validateCiraCognitiveTaskEnvelope(ciraTaskEnvelope);
 
   if (!VALID_CHAT_INTENTS.has(intent)) {
     throw new Error(`Semantic router produced invalid chat intent: ${intent}`);
@@ -549,6 +568,13 @@ function buildSemanticIntentAnalysis({
     operating_core: operatingCore,
     runtime_profile: runtimeProfile,
     semantic_profile: semanticProfile,
+    cira_task_envelope: ciraTaskEnvelope,
+    cira_task_envelope_validation: ciraTaskEnvelopeValidation,
+    intent_frame: ciraTaskEnvelope.frames.intent_frame,
+    plan_frame: ciraTaskEnvelope.frames.plan_frame,
+    tool_call_frame: ciraTaskEnvelope.frames.tool_call_frame,
+    artifact_frame: ciraTaskEnvelope.frames.artifact_frame,
+    validation_frame: ciraTaskEnvelope.frames.validation_frame,
     structured_intent: enrichedProductOsDecision,
     skill_plan: skillPlan,
     model_routing: modelRouting,
@@ -570,6 +596,9 @@ function buildSemanticIntentAnalysis({
       selected_model: modelRouting.selection?.model?.id || null,
       selected_skills: skillPlan.selected_skills.map((skill) => skill.id),
       product_os_plan_node_count: productOsPlan.plan.nodes.length,
+      cira_envelope_version: ciraTaskEnvelope.schema_version,
+      cira_primary_intent: ciraTaskEnvelope.intent_analysis.primary_intent.id,
+      cira_artifact_count: ciraTaskEnvelope.frames.artifact_frame.artifacts.length,
     },
   };
 }
