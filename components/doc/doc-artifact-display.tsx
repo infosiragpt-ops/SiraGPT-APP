@@ -13,7 +13,7 @@
  *                  sheet, also inside an iframe.
  *        · pdf   — native <embed type="application/pdf"/>.
  *        · svg   — <img src={dataUrl}/> (SVG renders as picture).
- *        · pptx  — no pure-JS renderer available; download only.
+ *        · pptx  — render-agent HTML preview + native PPTX download.
  *   3. A collapsible "Ver código" panel showing the Python snippet
  *      that produced the file.
  *
@@ -31,6 +31,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import type { DocumentPreviewTarget } from "@/components/document-preview"
 
 interface DocFile {
   type: "doc"
@@ -63,7 +64,7 @@ function formatBytes(n?: number) {
 
 export function DocArtifactDisplay({ files, onDocumentPreview }: {
   files: any[]
-  onDocumentPreview?: (url: string) => void
+  onDocumentPreview?: (target: DocumentPreviewTarget) => void
 }) {
   const docs = React.useMemo<DocFile[]>(
     () => (Array.isArray(files) ? files.filter((f: any) => f?.type === "doc") : []),
@@ -77,7 +78,11 @@ export function DocArtifactDisplay({ files, onDocumentPreview }: {
   )
 }
 
-function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?: (url: string) => void }) {
+function htmlPreviewDataUrl(html: string) {
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+}
+
+function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?: (target: DocumentPreviewTarget) => void }) {
   const meta = FORMAT_META[doc.format] || FORMAT_META.docx
   const available = !!doc.dataUrl && doc.dataUrl.startsWith("data:")
   const hasHtmlPreview = !!doc.htmlPreview && doc.htmlPreview.length > 0
@@ -92,8 +97,20 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
   const [codeOpen, setCodeOpen] = React.useState(false)
 
   function preview() {
+    if (onDocumentPreview && hasHtmlPreview) {
+      onDocumentPreview({
+        url: htmlPreviewDataUrl(doc.htmlPreview as string),
+        downloadUrl: available ? (doc.dataUrl as string) : undefined,
+        filename: doc.filename,
+      })
+      return
+    }
     if (onDocumentPreview && available) {
-      onDocumentPreview(doc.dataUrl as string)
+      onDocumentPreview({
+        url: doc.dataUrl as string,
+        downloadUrl: doc.dataUrl as string,
+        filename: doc.filename,
+      })
       return
     }
     if (anyPreview) setPreviewOpen(v => !v)

@@ -1341,7 +1341,8 @@ router.post(
           console.log(`📄 Creating document: ${filename} (${chatContent.length} chars)`);
 
           try {
-            const { filePath, safeFilename } = await documentService.createDocument(userId, filename, chatContent);
+            const createdDocument = await documentService.createDocument(userId, filename, chatContent);
+            const { filePath, safeFilename } = createdDocument;
 
             const newFileRecord = await prisma.file.create({
               data: {
@@ -1364,6 +1365,10 @@ router.post(
               filename: newFileRecord.filename,
               mimeType: newFileRecord.mimeType,
               downloadUrl: fileUrl,
+              format: createdDocument.format || null,
+              htmlPreview: createdDocument.htmlPreview || null,
+              slideCount: createdDocument.slideCount || null,
+              renderAgent: createdDocument.renderAgent || null,
               path: newFileRecord.path,
             });
 

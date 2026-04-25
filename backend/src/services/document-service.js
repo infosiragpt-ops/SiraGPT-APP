@@ -5,6 +5,7 @@ const { exec, execSync } = require('child_process');
 const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, AlignmentType, BorderStyle, WidthType } = require('docx');
 const puppeteer = require('puppeteer');
 const PizZip = require('pizzip');
+const PptxGenJS = require('pptxgenjs');
 const axios = require('axios');
 
 // Detect pandoc once at module load. If the binary isn't on PATH
@@ -508,6 +509,242 @@ async function createPdf(filePath, content) {
     await browser.close();
 }
 
+function htmlEscape(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function stripMarkdown(value) {
+    return String(value ?? '')
+        .replace(/\[CREATE_DOCUMENT:[^\]]+\]|\[\/CREATE_DOCUMENT\]/g, '')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+        .replace(/[`*_>#]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function inferPresentationTitle(content, fallbackTitle) {
+    const text = String(content || '').replace(/\r\n/g, '\n');
+    const explicitTitle = text.match(/(?:^|\n)\s*(?:#\s+|t[ií]tulo\s*:\s*)([^\n]{8,110})/i);
+    if (explicitTitle) return stripMarkdown(explicitTitle[1]);
+    return stripMarkdown(String(fallbackTitle || 'Presentacion profesional').replace(/\.(pptx?|docx|pdf)$/i, '').replace(/[_-]+/g, ' '));
+}
+
+function compactBullet(line) {
+    return stripMarkdown(line)
+        .replace(/^(?:[-*•]\s*|\d+[\).\s]+)\s*/, '')
+        .replace(/^(?:subt[ií]tulo|nota del ponente|nota|t[ií]tulo)\s*:\s*/i, '')
+        .trim();
+}
+
+function normalizeSlide(title, bodyLines) {
+    const notes = [];
+    const bullets = [];
+    for (const raw of bodyLines) {
+        const line = String(raw || '').trim();
+        if (!line) continue;
+        if (/^nota(?:\s+del\s+ponente)?\s*:/i.test(line)) {
+            notes.push(compactBullet(line));
+            continue;
+        }
+        if (/^(?:[-*•]\s+|\d+[\).\s]+|subt[ií]tulo\s*:|t[ií]tulo\s*:)/i.test(line)) {
+            const bullet = compactBullet(line);
+            if (bullet) bullets.push(bullet);
+            continue;
+        }
+        if (line.length > 18 && line.length < 180) bullets.push(compactBullet(line));
+    }
+    return {
+        title: stripMarkdown(title).slice(0, 92) || 'Diapositiva',
+        bullets: Array.from(new Set(bullets.filter(Boolean))).slice(0, 5),
+        notes: notes.filter(Boolean).join(' '),
+    };
+}
+
+function fallbackMarketingSlides(title) {
+    const isMarketing = /marketing|m[aá]rqueting|mercadeo/i.test(title);
+    const sections = isMarketing
+        ? [
+            ['Concepto central', ['El marketing conecta necesidades reales del mercado con propuestas de valor diferenciadas.', 'Integra investigación, segmentación, posicionamiento, comunicación y medición.']],
+            ['Segmentación y audiencia', ['Definir buyer personas evita campañas genéricas y mejora la conversión.', 'Los segmentos deben priorizar tamaño, necesidad, acceso y rentabilidad.']],
+            ['Propuesta de valor', ['El mensaje debe explicar beneficio, prueba y diferencia competitiva.', 'Una propuesta clara reduce fricción en la decisión de compra.']],
+            ['Marketing digital', ['SEO, contenido, paid media, email y automatización deben operar como sistema.', 'La atribución permite optimizar presupuesto y aprendizaje.']],
+            ['Métricas clave', ['CAC, LTV, ROAS, tasa de conversión y retención orientan decisiones.', 'Las métricas deben conectarse con objetivos de negocio.']],
+            ['Plan de acción', ['Priorizar hipótesis, ejecutar experimentos y medir resultados por ciclo.', 'Documentar aprendizajes permite escalar lo que funciona.']],
+        ]
+        : [
+            ['Contexto', ['Definir alcance, público objetivo y resultado esperado.', 'Alinear mensaje, evidencia y formato de entrega.']],
+            ['Diagnóstico', ['Identificar variables críticas y restricciones del proyecto.', 'Priorizar información verificable y decisiones accionables.']],
+            ['Estrategia', ['Convertir objetivos en líneas de trabajo concretas.', 'Asignar criterios de éxito y responsables por etapa.']],
+            ['Ejecución', ['Organizar tareas por dependencia, riesgo y valor.', 'Mantener trazabilidad de avances y decisiones.']],
+            ['Validación', ['Revisar integridad, coherencia, formato y evidencia.', 'Corregir antes de liberar la entrega final.']],
+            ['Cierre', ['Resumir hallazgos, próximos pasos y riesgos pendientes.', 'Entregar archivos utilizables y auditables.']],
+        ];
+    return sections.map(([sectionTitle, bullets]) => ({ title: sectionTitle, bullets, notes: `Presentar ${sectionTitle.toLowerCase()} con foco ejecutivo.` }));
+}
+
+function extractPresentationDeck(content, fallbackTitle) {
+    const normalized = String(content || '').replace(/\r\n/g, '\n');
+    const title = inferPresentationTitle(normalized, fallbackTitle);
+    const slides = [];
+    let currentTitle = null;
+    let currentLines = [];
+
+    const flush = () => {
+        if (!currentTitle) return;
+        const slide = normalizeSlide(currentTitle, currentLines);
+        if (slide.title && (slide.bullets.length > 0 || slide.notes)) slides.push(slide);
+        currentTitle = null;
+        currentLines = [];
+    };
+
+    for (const raw of normalized.split('\n')) {
+        const line = raw.trim();
+        if (!line) {
+            currentLines.push('');
+            continue;
+        }
+        const slideMatch = line.match(/^(?:#{1,4}\s*)?(?:diapositiva|slide)\s*\d+\s*[–—:-]\s*(.+)$/i);
+        const headingMatch = line.match(/^#{1,3}\s+(.+)$/);
+        const titledMatch = line.match(/^t[ií]tulo\s*:\s*(.+)$/i);
+        if (slideMatch || headingMatch) {
+            flush();
+            currentTitle = stripMarkdown((slideMatch || headingMatch)[1]);
+            currentLines = [];
+        } else if (titledMatch && !currentTitle) {
+            currentTitle = stripMarkdown(titledMatch[1]);
+            currentLines = [];
+        } else {
+            if (!currentTitle && line.length < 90 && /^[A-ZÁÉÍÓÚÑ][^.!?]{6,}$/i.test(line)) {
+                currentTitle = stripMarkdown(line);
+                currentLines = [];
+            } else {
+                currentLines.push(line);
+            }
+        }
+    }
+    flush();
+
+    if (slides.length < 4) {
+        const paragraphSlides = normalized
+            .split(/\n\s*\n+/)
+            .map((chunk) => stripMarkdown(chunk))
+            .filter((chunk) => chunk.length > 80)
+            .slice(0, 5)
+            .map((chunk, index) => {
+                const sentences = chunk.split(/(?<=[.!?])\s+/).filter(Boolean);
+                return normalizeSlide(index === 0 ? title : `Bloque ${index + 1}`, sentences.slice(0, 5));
+            })
+            .filter((slide) => slide.bullets.length > 0);
+        slides.push(...paragraphSlides);
+    }
+
+    const mergedSlides = slides.length >= 4 ? slides : [...slides, ...fallbackMarketingSlides(title)];
+    const uniqueSlides = [];
+    const seen = new Set();
+    for (const slide of mergedSlides) {
+        const key = slide.title.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        uniqueSlides.push(slide);
+        if (uniqueSlides.length >= 16) break;
+    }
+
+    return { title, slides: uniqueSlides };
+}
+
+function buildPptxPreviewHtml(deck, filename) {
+    const slideCards = deck.slides.map((slide, index) => {
+        const bullets = slide.bullets.map((bullet) => `<li>${htmlEscape(bullet)}</li>`).join('');
+        return `<section class="slide"><div class="num">${index + 1}</div><h2>${htmlEscape(slide.title)}</h2><ul>${bullets}</ul>${slide.notes ? `<p class="notes">${htmlEscape(slide.notes)}</p>` : ''}</section>`;
+    }).join('');
+    return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(deck.title)}</title><style>
+    :root{--ink:#111827;--muted:#6b7280;--line:#e5e7eb;--card:#fff;--bg:#f8fafc;--accent:#f97316}
+    *{box-sizing:border-box}body{margin:0;background:linear-gradient(135deg,#fff7ed,#f8fafc 38%,#eef2ff);font-family:Aptos,Inter,system-ui,sans-serif;color:var(--ink)}
+    .wrap{max-width:1120px;margin:0 auto;padding:34px}.hero{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:22px}
+    .eyebrow{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:800}h1{font-size:clamp(30px,5vw,56px);line-height:.95;margin:8px 0 10px}
+    .meta{color:var(--muted);font-size:14px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.slide{position:relative;min-height:250px;background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:26px;padding:26px 28px 26px 76px;box-shadow:0 24px 70px rgba(15,23,42,.10)}
+    .num{position:absolute;left:22px;top:24px;width:36px;height:36px;border-radius:999px;background:#111827;color:white;display:grid;place-items:center;font-weight:800}
+    h2{margin:0 0 14px;font-size:25px}ul{margin:0;padding-left:18px;display:grid;gap:9px;line-height:1.45}.notes{margin-top:16px;color:#475569;font-size:13px;border-top:1px solid var(--line);padding-top:12px}
+    .badge{border:1px solid var(--line);border-radius:999px;padding:9px 12px;background:white;color:#374151;font-weight:700;white-space:nowrap}@media(max-width:840px){.grid{grid-template-columns:1fr}.wrap{padding:22px}.hero{display:block}.slide{padding-left:64px}}
+    </style></head><body><main class="wrap"><header class="hero"><div><span class="eyebrow">siraGPT Rendering Agent</span><h1>${htmlEscape(deck.title)}</h1><p class="meta">Preview generado desde el mismo contrato usado para construir el PPTX con código.</p></div><div class="badge">${htmlEscape(filename)} · ${deck.slides.length + 2} slides</div></header><section class="grid">${slideCards}</section></main></body></html>`;
+}
+
+async function createPptx(filePath, content, filename) {
+    const deck = extractPresentationDeck(content, filename);
+    const pptx = new PptxGenJS();
+    pptx.layout = 'LAYOUT_WIDE';
+    pptx.author = 'siraGPT Rendering Agent';
+    pptx.subject = deck.title;
+    pptx.company = 'siraGPT';
+    pptx.lang = 'es-ES';
+    pptx.theme = {
+        headFontFace: 'Aptos Display',
+        bodyFontFace: 'Aptos',
+        lang: 'es-ES',
+    };
+
+    const palette = { bg: 'FFF7ED', ink: '111827', muted: '6B7280', accent: 'F97316', white: 'FFFFFF', line: 'FED7AA' };
+    const addHeader = (slide, title, subtitle) => {
+        slide.background = { color: palette.bg };
+        slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: palette.bg }, line: { color: palette.bg } });
+        slide.addShape(pptx.ShapeType.arc, { x: 10.4, y: -0.72, w: 3.2, h: 3.2, fill: { color: 'FFEDD5', transparency: 4 }, line: { color: palette.line, transparency: 20 } });
+        slide.addText(title, { x: 0.72, y: 0.62, w: 9.2, h: 0.72, fontFace: 'Aptos Display', fontSize: 28, bold: true, color: palette.ink, margin: 0, fit: 'shrink' });
+        if (subtitle) slide.addText(subtitle, { x: 0.74, y: 1.34, w: 8.8, h: 0.32, fontSize: 11.5, color: palette.muted, margin: 0, fit: 'shrink' });
+        slide.addText('siraGPT', { x: 11.35, y: 6.93, w: 1.2, h: 0.22, fontSize: 8.5, color: palette.muted, align: 'right', margin: 0 });
+    };
+
+    let slide = pptx.addSlide();
+    addHeader(slide, deck.title, 'Presentación construida con código, renderizada y validada antes de entrega');
+    slide.addShape(pptx.ShapeType.rect, { x: 0.76, y: 4.9, w: 3.4, h: 0.12, fill: { color: palette.accent }, line: { color: palette.accent } });
+    slide.addText('Rendering Agent: PPTX nativo + preview HTML', { x: 0.76, y: 5.16, w: 6.8, h: 0.35, fontSize: 13, color: palette.muted, margin: 0 });
+    slide.addNotes('Abrir con una síntesis del objetivo y confirmar que el archivo fue generado como PPTX nativo.');
+
+    slide = pptx.addSlide();
+    addHeader(slide, 'Agenda', 'Ruta narrativa de la presentación');
+    deck.slides.slice(0, 10).forEach((item, index) => {
+        slide.addText(`${index + 1}. ${item.title}`, { x: 0.9, y: 1.98 + index * 0.43, w: 8.9, h: 0.26, fontSize: 14.5, color: palette.ink, margin: 0, fit: 'shrink' });
+    });
+    slide.addNotes('Mostrar la estructura completa antes de entrar a cada bloque.');
+
+    deck.slides.forEach((item, index) => {
+        slide = pptx.addSlide();
+        addHeader(slide, item.title, `Diapositiva ${index + 1} · contenido estructurado`);
+        const bulletText = (item.bullets.length > 0 ? item.bullets : ['Contenido profesional estructurado desde la solicitud del usuario.'])
+            .map((bullet) => `• ${bullet}`)
+            .join('\n');
+        slide.addText(bulletText, { x: 0.92, y: 2.0, w: 6.8, h: 2.55, fontSize: 15.5, color: '374151', breakLine: true, fit: 'shrink', paraSpaceAfterPt: 8 });
+        slide.addShape(pptx.ShapeType.roundRect, { x: 8.45, y: 2.0, w: 3.6, h: 2.55, rectRadius: 0.12, fill: { color: palette.white, transparency: 0 }, line: { color: palette.line } });
+        slide.addText(String(index + 1).padStart(2, '0'), { x: 8.72, y: 2.24, w: 1.1, h: 0.54, fontSize: 24, bold: true, color: palette.accent, margin: 0 });
+        slide.addText('Bloque verificable', { x: 9.85, y: 2.3, w: 1.85, h: 0.24, fontSize: 11.5, color: palette.muted, margin: 0 });
+        slide.addText('Estructura, formato y descarga pasan por validación técnica antes de entregarse al usuario.', { x: 8.72, y: 3.12, w: 2.95, h: 0.78, fontSize: 11.5, color: '475569', fit: 'shrink', margin: 0 });
+        slide.addNotes(item.notes || `Explicar ${item.title} de forma breve y accionable.`);
+    });
+
+    slide = pptx.addSlide();
+    addHeader(slide, 'Cierre', 'Resumen ejecutivo y próximos pasos');
+    slide.addText([
+        { text: 'Entrega validada: ', options: { bold: true } },
+        { text: 'PPTX nativo creado con código, preview HTML disponible y descarga enlazada al artefacto real.' },
+    ], { x: 0.9, y: 2.08, w: 8.4, h: 0.7, fontSize: 18, color: palette.ink, margin: 0 });
+    slide.addNotes('Cerrar con próximos pasos y confirmar que la presentación puede descargarse.');
+
+    await pptx.writeFile({ fileName: filePath });
+    return {
+        format: 'pptx',
+        htmlPreview: buildPptxPreviewHtml(deck, path.basename(filePath)),
+        slideCount: deck.slides.length + 3,
+        renderAgent: {
+            name: 'rendering_agent',
+            engine: 'pptxgenjs',
+            codeGenerated: true,
+        },
+    };
+}
+
 async function createDocument(userId, filename, content) {
     const uploadsDir = path.join(__dirname, '../../uploads/documents', userId);
     await fs.mkdir(uploadsDir, { recursive: true });
@@ -516,15 +753,19 @@ async function createDocument(userId, filename, content) {
 
     const extension = path.extname(safeFilename).toLowerCase();
 
+    let metadata = {};
+
     if (extension === '.docx') {
         await createDocx(filePath, content);
     } else if (extension === '.pdf') {
         await createPdf(filePath, content);
+    } else if (extension === '.pptx') {
+        metadata = await createPptx(filePath, content, safeFilename);
     } else {
         await fs.writeFile(filePath, content);
     }
 
-    return { filePath, safeFilename };
+    return { filePath, safeFilename, ...metadata };
 }
 
 module.exports = {

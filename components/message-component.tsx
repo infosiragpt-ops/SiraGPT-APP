@@ -18,7 +18,7 @@ import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
     Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
-    Sparkles, Eye,
+    Sparkles, Eye, Presentation as PresentationIcon,
     ExternalLink, Mail, X, Brush, Maximize2
 } from "lucide-react"
 import {
@@ -159,6 +159,14 @@ function backendUrl(pathOrUrl: string) {
     if (/^(https?:|data:|blob:)/i.test(pathOrUrl)) return pathOrUrl;
     const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || "http://localhost:5000";
     return `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+}
+
+function escapeHtml(value: unknown) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
 }
 
 function textLines(value: unknown): string[] {
@@ -2146,19 +2154,41 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 return file.type === 'document';
                             })
                             .map((file: any, index: number) => {
+                                const fileName = String(file.name || file.filename || 'documento');
+                                const fileNameLower = fileName.toLowerCase();
+                                const extension = fileNameLower.split('.').pop() || '';
+                                const isPowerPoint = extension === 'pptx' || extension === 'ppt' || file.format === 'pptx';
+                                const rawDownloadUrl = String(file.dataUrl || file.downloadUrl || file.url || '');
+                                const resolvedDownloadUrl = rawDownloadUrl ? backendUrl(rawDownloadUrl) : '';
+                                const fallbackPresentationPreview = isPowerPoint
+                                    ? `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(fileName)}</title><style>body{margin:0;background:linear-gradient(135deg,#fff7ed,#f8fafc);font-family:Aptos,Inter,system-ui,sans-serif;color:#111827}.wrap{max-width:980px;margin:auto;padding:32px}.card{border:1px solid #e5e7eb;background:white;border-radius:24px;padding:28px;box-shadow:0 20px 60px rgba(15,23,42,.1)}.eyebrow{color:#ea580c;font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:800}h1{font-size:42px;line-height:1;margin:10px 0}.muted{color:#6b7280;line-height:1.6}.content{white-space:pre-wrap;margin-top:20px;border-top:1px solid #e5e7eb;padding-top:18px}</style></head><body><main class="wrap"><section class="card"><span class="eyebrow">siraGPT Rendering Agent</span><h1>${escapeHtml(fileName)}</h1><p class="muted">Preview reconstruido para abrir el panel dividido. Las nuevas presentaciones se renderizan desde código con preview HTML estructurado y descarga PPTX nativa.</p><div class="content">${escapeHtml(String(message.content || '').slice(0, 1800))}</div></section></main></body></html>`
+                                    : null;
+                                const htmlPreview = typeof file.htmlPreview === 'string' && file.htmlPreview.length > 0
+                                    ? file.htmlPreview
+                                    : fallbackPresentationPreview;
+                                const previewUrl = htmlPreview
+                                    ? `data:text/html;charset=utf-8,${encodeURIComponent(htmlPreview)}`
+                                    : resolvedDownloadUrl;
+                                const canPreviewFile = !!onDocumentPreview && !!previewUrl && (
+                                    Boolean(htmlPreview) ||
+                                    ['docx', 'doc', 'pdf', 'html', 'htm'].includes(extension)
+                                );
                                 const getFileIcon = () => {
-                                    if (file.name.endsWith('.pdf')) {
+                                    if (fileNameLower.endsWith('.pdf')) {
                                         return <img src="/icons/pdf.png" alt="PDF" className="h-10 w-10" />;
-                                    } else if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
+                                    } else if (fileNameLower.endsWith('.docx') || fileNameLower.endsWith('.doc')) {
                                         return <img src="/icons/Word.png" alt="Word" className="h-10 w-10" />;
+                                    } else if (isPowerPoint) {
+                                        return <PresentationIcon className="h-10 w-10 text-orange-600" />;
                                     }
                                     return <FileText className="h-10 w-10 text-primary" />;
                                 };
 
                                 const getFileTypeLabel = () => {
-                                    if (file.name.endsWith('.pdf')) return 'PDF Document';
-                                    if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) return 'Word Document';
-                                    return 'Document';
+                                    if (fileNameLower.endsWith('.pdf')) return 'PDF';
+                                    if (fileNameLower.endsWith('.docx') || fileNameLower.endsWith('.doc')) return 'Word';
+                                    if (isPowerPoint) return 'PowerPoint';
+                                    return 'Documento';
                                 };
 
                                 const formatFileSize = (bytes: number) => {
@@ -2177,7 +2207,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             <div className="flex-1 min-w-0 space-y-3">
                                                 <div>
                                                     <div className="flex items-center gap-2 mb-1">
-                                                        <h4 className="font-semibold text-base truncate">{file.name}</h4>
+                                                        <h4 className="font-semibold text-base truncate">{fileName}</h4>
                                                         <Badge variant="secondary" className="text-xs font-medium">
                                                             {getFileTypeLabel()}
                                                         </Badge>
@@ -2195,38 +2225,68 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                         size="sm"
                                                         onClick={async () => {
                                                             try {
-                                                                // Fetch the file as blob for proper download
-                                                                const response = await fetch(file.downloadUrl);
+                                                                if (!resolvedDownloadUrl) throw new Error('Missing download URL');
+                                                                if (resolvedDownloadUrl.startsWith('data:') || resolvedDownloadUrl.startsWith('blob:')) {
+                                                                    const a = document.createElement('a');
+                                                                    a.href = resolvedDownloadUrl;
+                                                                    a.download = fileName;
+                                                                    document.body.appendChild(a);
+                                                                    a.click();
+                                                                    document.body.removeChild(a);
+                                                                    toast.success('Descarga iniciada');
+                                                                    return;
+                                                                }
+                                                                const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+                                                                const response = await fetch(resolvedDownloadUrl, {
+                                                                    credentials: 'include',
+                                                                    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                                                                });
+                                                                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                                                                 const blob = await response.blob();
                                                                 const url = window.URL.createObjectURL(blob);
                                                                 const a = document.createElement('a');
                                                                 a.href = url;
-                                                                a.download = file.name;
+                                                                a.download = fileName;
                                                                 document.body.appendChild(a);
                                                                 a.click();
                                                                 window.URL.revokeObjectURL(url);
                                                                 document.body.removeChild(a);
-                                                                toast.success('Download started!');
+                                                                toast.success('Descarga iniciada');
                                                             } catch (error) {
                                                                 console.error('Download error:', error);
-                                                                toast.error('Download failed');
+                                                                if (resolvedDownloadUrl) {
+                                                                    const a = document.createElement('a');
+                                                                    a.href = resolvedDownloadUrl;
+                                                                    a.download = fileName;
+                                                                    a.target = '_blank';
+                                                                    a.rel = 'noopener';
+                                                                    document.body.appendChild(a);
+                                                                    a.click();
+                                                                    document.body.removeChild(a);
+                                                                } else {
+                                                                    toast.error('No se pudo descargar');
+                                                                }
                                                             }
                                                         }}
                                                         className="h-9 px-4 font-medium hover:bg-primary/10"
                                                     >
                                                         <Download className="h-4 w-4 mr-2" />
-                                                        Download
+                                                        Descargar
                                                     </Button>
 
-                                                    {(file.name.endsWith('.docx') || file.name.endsWith('.doc') || file.name.endsWith('.pdf')) && (
+                                                    {canPreviewFile && (
                                                         <Button
                                                             variant="default"
                                                             size="sm"
-                                                            onClick={() => onDocumentPreview && onDocumentPreview(file.downloadUrl)}
+                                                            onClick={() => onDocumentPreview && onDocumentPreview({
+                                                                url: previewUrl,
+                                                                downloadUrl: resolvedDownloadUrl || undefined,
+                                                                filename: fileName,
+                                                            })}
                                                             className="h-9 px-4 font-medium shadow-sm hover:shadow-md"
                                                         >
                                                             <Eye className="h-4 w-4 mr-2" />
-                                                            Preview in Chat
+                                                            Previsualizar
                                                         </Button>
                                                     )}
                                                 </div>
