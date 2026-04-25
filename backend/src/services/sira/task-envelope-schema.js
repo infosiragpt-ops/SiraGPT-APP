@@ -325,6 +325,7 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
         log_validation_scores: { type: "boolean" },
         redact_sensitive_data_in_logs: { type: "boolean" },
         metrics: { type: "array", items: { type: "string" } },
+        request_intelligence: { type: ["object", "null"] },
       },
     },
 

@@ -30,6 +30,7 @@ const productModelRouter = require('../ai-product-os/model-router');
 const productSkillSystem = require('../ai-product-os/skill-system');
 const productPlanner = require('../ai-product-os/planner-agent');
 const productIntentRouter = require('../ai-product-os/semantic-intent-router');
+const { analyzeRequestTokens } = require('./request-token-intelligence');
 
 const VALID_CHAT_INTENTS = new Set([
   'gmail',
@@ -79,7 +80,7 @@ function shouldAnswerFromExistingDocument(rawUserRequest) {
   return EXISTING_DOCUMENT_REFERENCE_RE.test(n) && DOCUMENT_UNDERSTANDING_RE.test(n);
 }
 
-function buildDomainSignals(rawUserRequest) {
+function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
   const n = normalizeText(rawUserRequest);
   return {
     gmail: matchAny(n, [
@@ -93,10 +94,10 @@ function buildDomainSignals(rawUserRequest) {
       /\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b/i,
       /\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
     ]),
-    math: matchAny(n, [
+    math: Boolean(tokenAnalysis?.context?.has_math_work) || matchAny(n, [
       /\b(integral|derivada|ecuacion|cronbach|spearman|anova|regresion|chi cuadrado|p valor|probabilidad|matriz|autovalor|estadistica|likert|varianza|desviacion|sistema de ecuaciones|fisica|quimica)\b/i,
     ]),
-    viz: matchAny(n, [
+    viz: Boolean(tokenAnalysis?.context?.has_visual_work) || matchAny(n, [
       /\b(grafica|grafico|chart|plot|histograma|pareto|ishikawa|boxplot|scatter|dispersion|curva s|gantt|sankey|treemap|heatmap|diagrama er|mermaid|uml|dashboard|visualizacion)\b/i,
     ]),
     artifact: matchAny(n, [
@@ -109,20 +110,20 @@ function buildDomainSignals(rawUserRequest) {
     figma: matchAny(n, [
       /\b(figma|wireframe|user flow|design system|prototipo navegable|diagrama de producto)\b/i,
     ]),
-    webdev: matchAny(n, [
+    webdev: Boolean(tokenAnalysis?.context?.has_web_build) || matchAny(n, [
       /\b(crea|crear|creame|haz|hazme|genera|desarrolla|programa|construye|implementa|disena|diseña)\b.*\b(web|website|pagina web|sitio web|landing|frontend|react|next\.?js|web app|tienda online|ecommerce|dashboard web|saas)\b/i,
       /\b(web|website|pagina web|sitio web|landing|frontend|react|next\.?js|web app|tienda online|ecommerce|dashboard web|saas)\b.*\b(crea|crear|haz|genera|desarrolla|programa|construye|implementa|disena|diseña)\b/i,
     ]),
     video: matchAny(n, [
       /\b(video|clip|animacion|veo3|veo 3|sora)\b/i,
     ]),
-    longRunning: matchAny(n, [
+    longRunning: Boolean(tokenAnalysis?.context?.has_long_running_signal) || matchAny(n, [
       /\b(30 minutos|60 minutos|2 horas|dos horas|una hora|sin detenerse|sin parar|autonomo|autonoma|auto corrige|autocorrige|verifica y corrige|ejecuta pruebas)\b/i,
     ]),
-    dataWork: matchAny(n, [
+    dataWork: Boolean(tokenAnalysis?.context?.has_data_work) || matchAny(n, [
       /\b(analiza datos|procesa datos|limpia datos|dataset|base de datos|tabla|formula|formulas|csv|registros|filas|dashboard|cronbach|spearman)\b/i,
     ]),
-    codeWork: matchAny(n, [
+    codeWork: Boolean(tokenAnalysis?.context?.has_code_work) || matchAny(n, [
       /\b(codigo|código|script|api|backend|frontend|debug|bug|test|tests|lint|build|repositorio|github|despliegue|deploy)\b/i,
     ]),
   };
@@ -287,12 +288,13 @@ function productIntentForContract(contract, signals, fallback) {
 }
 
 function productSecondaryIntents(contract, rawDecision) {
+  const raw = contract?.raw_user_request || '';
   const items = [
     ...(rawDecision.intent_secondary || []),
     ...(contract?.secondary_intents || []),
   ];
   if (contract?.source_requirements?.required) items.push('scientific_research', 'multi_provider_search', 'citation_grounding');
-  if (contract?.source_requirements?.doi_required) items.push('doi_validation');
+  if (contract?.source_requirements?.doi_required || /\bdoi\b/i.test(raw)) items.push('doi_validation');
   if (contract?.citations_required) items.push('apa7_citation');
   if (contract?.required_extension === '.docx') items.push('docx_export');
   if (contract?.required_extension === '.xlsx') items.push('spreadsheet_export', 'excel_analysis');
@@ -372,6 +374,7 @@ function semanticPrimaryIntent(contract, structuredIntent) {
 }
 
 function semanticSecondaryIntents(contract, structuredIntent) {
+  const raw = contract?.raw_user_request || '';
   const items = [
     ...(structuredIntent?.intent_secondary || []),
     ...(contract?.secondary_intents || []),
@@ -385,6 +388,7 @@ function semanticSecondaryIntents(contract, structuredIntent) {
   if (contract?.required_extension === '.csv') items.push('csv_export');
   if (contract?.required_extension === '.html') items.push('html_export');
   if (contract?.required_extension === '.svg') items.push('svg_export');
+  if (/\bdoi\b/i.test(raw)) items.push('doi_validation');
   if (contract?.grounding_required && contract?.pipeline === 'RAGDocumentUnderstandingPipeline') items.push('private_document_grounding');
   return [...new Set(items)].slice(0, 16);
 }
@@ -489,9 +493,15 @@ function buildSemanticIntentAnalysis({
   const prompt = String(rawUserRequest || '').trim();
   const traceId = `trace_${crypto.createHash('sha256').update(`${prompt}:${Date.now()}`).digest('hex').slice(0, 16)}`;
   const fileIds = extractFileIds(files, conversationHistory);
+  const tokenIntelligence = analyzeRequestTokens({
+    rawUserRequest: prompt,
+    fileIds,
+    conversationHistory,
+  });
   const contract = buildUniversalTaskContract({
     rawUserRequest: prompt,
     fileIds,
+    tokenAnalysis: tokenIntelligence,
   });
   const graph = buildEnterpriseExecutionGraph({
     contract,
@@ -513,8 +523,9 @@ function buildSemanticIntentAnalysis({
     qaBoardReview,
   });
   const runtimeProfile = buildEnterpriseRuntimeProfile(contract, graph);
-  const signals = buildDomainSignals(prompt);
-  const documentUnderstandingOverride = shouldAnswerFromExistingDocument(prompt);
+  const signals = buildDomainSignals(prompt, tokenIntelligence);
+  const documentUnderstandingOverride = shouldAnswerFromExistingDocument(prompt)
+    || Boolean(tokenIntelligence.context?.asks_existing_document_question);
   const intent = documentUnderstandingOverride ? 'text' : mapContractToChatIntent(contract, signals);
   const finalOutput = documentUnderstandingOverride ? 'chat_answer' : finalOutputForContract(contract, intent);
   const productOsDecision = buildProductOsDecisionFromContract(contract, signals, fileIds);
@@ -568,6 +579,18 @@ function buildSemanticIntentAnalysis({
     operating_core: operatingCore,
     runtime_profile: runtimeProfile,
     semantic_profile: semanticProfile,
+    request_intelligence: {
+      version: tokenIntelligence.version,
+      token_count: tokenIntelligence.token_count,
+      primary_intent: tokenIntelligence.primary_intent,
+      pipeline: tokenIntelligence.pipeline,
+      confidence: tokenIntelligence.confidence,
+      ambiguity_score: tokenIntelligence.ambiguity_score,
+      requested_formats: tokenIntelligence.requested_formats,
+      excluded_formats: tokenIntelligence.excluded_formats,
+      top_intent_scores: tokenIntelligence.intent_scores.slice(0, 5),
+      context: tokenIntelligence.context,
+    },
     cira_task_envelope: ciraTaskEnvelope,
     cira_task_envelope_validation: ciraTaskEnvelopeValidation,
     intent_frame: ciraTaskEnvelope.frames.intent_frame,
@@ -588,6 +611,15 @@ function buildSemanticIntentAnalysis({
       required_agents: contract.execution_plan.map((step) => step.agent_role),
       required_tools: contract.required_tools,
       domain_signals: signals,
+      token_intelligence: {
+        version: tokenIntelligence.version,
+        primary_intent: tokenIntelligence.primary_intent,
+        pipeline: tokenIntelligence.pipeline,
+        confidence: tokenIntelligence.confidence,
+        token_count: tokenIntelligence.token_count,
+        requested_formats: tokenIntelligence.requested_formats.map((format) => format.extension),
+        top_scores: tokenIntelligence.intent_scores.slice(0, 3),
+      },
       release_decision: qaBoardReview.summary?.decision || 'unknown',
       validation_gate_count: contract.validation_plan.length,
       graph_node_count: graph.nodes.length,
@@ -615,5 +647,6 @@ module.exports = {
     buildSemanticProfile,
     buildModelRouting,
     shouldAnswerFromExistingDocument,
+    analyzeRequestTokens,
   },
 };

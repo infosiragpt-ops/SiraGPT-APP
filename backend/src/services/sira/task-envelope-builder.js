@@ -26,6 +26,7 @@ const { getIntent, TAXONOMY } = require("./intent-taxonomy");
 const intentRouter = require("../ai-product-os/semantic-intent-router");
 const skillSystem = require("../ai-product-os/skill-system");
 const planner = require("../ai-product-os/planner-agent");
+const { analyzeRequestTokens } = require("../agents/request-token-intelligence");
 
 const SIRA_EXECUTION_LAW = Object.freeze({
   do_not_answer_freely: true,
@@ -77,6 +78,11 @@ async function buildEnvelope({
   const cleanText = normaliseText(text);
   const detectedLanguage = detectLanguage(text);
   const normalizedAttachments = (attachments || []).map(normaliseAttachment);
+  const requestIntelligence = analyzeRequestTokens({
+    rawUserRequest: text,
+    fileIds: normalizedAttachments.map(a => a.file_id),
+    conversationHistory: history,
+  });
 
   // ── 2. Run the intent router (LLM-primary + regex fallback) ──────
   const decision = await intentRouter.classifyIntent({
@@ -87,25 +93,27 @@ async function buildEnvelope({
       attachment_kinds: normalizedAttachments.map(a => a.detected_type).filter(Boolean),
       locale: detectedLanguage,
       user_role: userProfile.role || null,
+      request_intelligence: compactRequestIntelligence(requestIntelligence),
     },
     llmClient,
   });
+  const tokenAwareDecision = mergeDecisionWithRequestIntelligence(decision, requestIntelligence, text, normalizedAttachments);
 
   // Map the router's primary_intent (e.g. "complex_academic_document_generation")
   // to the universal taxonomy id (e.g. "academic_document"). Keeps both ids
   // available so downstream code can pick whichever it prefers.
-  const taxonomyIntent = mapRouterIntentToTaxonomy(decision.intent_primary, normalizedAttachments, text);
+  const taxonomyIntent = mapRouterIntentToTaxonomy(tokenAwareDecision.intent_primary, normalizedAttachments, text, requestIntelligence);
 
   // ── 3. Resolve the skill bundle ──────────────────────────────────
-  const skill = skillSystem.resolveSkillForIntent(decision, { userPlan });
-  const enrichedDecision = skillSystem.mergeDecisionWithSkill(decision, skill);
+  const skill = skillSystem.resolveSkillForIntent(tokenAwareDecision, { userPlan });
+  const enrichedDecision = skillSystem.mergeDecisionWithSkill(tokenAwareDecision, skill);
 
   // ── 4. Build the planner graph (the workflow_graph) ──────────────
   const requestId = `req_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
   const { plan, validation: planValidation } = planner.buildAndValidate(enrichedDecision, {
     contract_id: requestId,
   });
-  const targetFormat = inferTargetFormatFromDecision(enrichedDecision, taxonomyIntent);
+  const targetFormat = inferTargetFormatFromDecision(enrichedDecision, taxonomyIntent, requestIntelligence);
   const siraToolPlan = deriveToolPlan(enrichedDecision, taxonomyIntent, targetFormat);
   const workflowGraph = deriveWorkflowGraph(
     plan,
@@ -113,6 +121,7 @@ async function buildEnvelope({
     taxonomyIntent,
     siraToolPlan.required_tools.map(t => t.tool_name),
     targetFormat,
+    requestIntelligence,
   );
 
   // ── 5. Compose the envelope ──────────────────────────────────────
@@ -148,30 +157,30 @@ async function buildEnvelope({
       primary_intent: {
         id: taxonomyIntent.id,
         label: taxonomyIntent.label,
-        confidence: clamp01(decision.confidence ?? 0.6),
+        confidence: clamp01(Math.max(tokenAwareDecision.confidence ?? 0.6, Number(requestIntelligence.confidence || 0))),
       },
-      secondary_intents: (decision.intent_secondary || []).slice(0, 8).map(s => ({ id: s, label: humanise(s), confidence: 0.7 })),
+      secondary_intents: (enrichedDecision.intent_secondary || []).slice(0, 8).map(s => ({ id: s, label: humanise(s), confidence: 0.7 })),
       excluded_intents: deriveExcludedIntents(taxonomyIntent),
       task_family: taxonomyIntent.family,
       task_domain: inferDomain(text, taxonomyIntent),
       complexity_level: taxonomyIntent.default_complexity,
-      ambiguity_level: decision.needs_clarification ? "high" : "low",
+      ambiguity_level: tokenAwareDecision.needs_clarification ? "high" : ambiguityFromScore(requestIntelligence.ambiguity_score),
       novelty_level: "medium",
       user_effort_expected: "low",
-      system_autonomy_expected: decision.confidence >= 0.8 ? "high" : "medium",
+      system_autonomy_expected: tokenAwareDecision.confidence >= 0.8 ? "high" : "medium",
     },
 
     goal_model: deriveGoalModel(text, taxonomyIntent, normalizedAttachments),
 
-    task_classification: deriveTaskClassification(taxonomyIntent, decision, normalizedAttachments),
+    task_classification: deriveTaskClassification(taxonomyIntent, enrichedDecision, normalizedAttachments, requestIntelligence),
 
-    entities: deriveEntities(text, taxonomyIntent, normalizedAttachments),
+    entities: deriveEntities(text, taxonomyIntent, normalizedAttachments, requestIntelligence),
 
-    context_requirements: deriveContextRequirements(taxonomyIntent, normalizedAttachments),
+    context_requirements: deriveContextRequirements(taxonomyIntent, normalizedAttachments, requestIntelligence),
 
-    data_ingestion_plan: deriveDataIngestionPlan(normalizedAttachments, taxonomyIntent),
+    data_ingestion_plan: deriveDataIngestionPlan(normalizedAttachments, taxonomyIntent, requestIntelligence),
 
-    output_contract: deriveOutputContract(taxonomyIntent, text),
+    output_contract: deriveOutputContract(taxonomyIntent, text, targetFormat, requestIntelligence),
 
     model_execution_context: deriveModelExecutionContext(modelChoice, taxonomyIntent),
 
@@ -182,17 +191,17 @@ async function buildEnvelope({
     workflow_graph: workflowGraph,
 
     clarification_policy: {
-      needs_clarification: Boolean(decision.needs_clarification),
-      clarification_reason: decision.needs_clarification ? "input_under_specified" : null,
-      questions: decision.needs_clarification ? deriveClarifyingQuestions(text, taxonomyIntent) : [],
-      auto_assumptions_allowed: !decision.needs_clarification,
+      needs_clarification: Boolean(tokenAwareDecision.needs_clarification),
+      clarification_reason: tokenAwareDecision.needs_clarification ? "input_under_specified" : null,
+      questions: tokenAwareDecision.needs_clarification ? deriveClarifyingQuestions(text, taxonomyIntent) : [],
+      auto_assumptions_allowed: !tokenAwareDecision.needs_clarification,
       act_without_clarification_if_confidence_above: 0.82,
       ask_user_if_confidence_below: 0.55,
     },
 
     safety_and_permissions: deriveSafety(taxonomyIntent, enrichedDecision),
 
-    quality_plan: deriveQualityPlan(taxonomyIntent, enrichedDecision),
+    quality_plan: deriveQualityPlan(taxonomyIntent, enrichedDecision, requestIntelligence),
 
     ui_response_plan: deriveUiPlan(plan, taxonomyIntent),
 
@@ -208,6 +217,7 @@ async function buildEnvelope({
       log_validation_scores: true,
       redact_sensitive_data_in_logs: true,
       metrics: ["latency", "tool_success_rate", "artifact_success_rate", "source_validation_rate", "user_satisfaction_signal", "cost_estimate"],
+      request_intelligence: compactRequestIntelligence(requestIntelligence),
     },
 
     execution_law: { ...SIRA_EXECUTION_LAW },
@@ -224,6 +234,8 @@ async function buildEnvelope({
     envelope,
     validation,
     decision,
+    token_aware_decision: tokenAwareDecision,
+    request_intelligence: requestIntelligence,
     skill,
     plan,
     plan_validation: planValidation,
@@ -232,10 +244,21 @@ async function buildEnvelope({
 
 // ── Mappers + derivers ──────────────────────────────────────────────
 
-function mapRouterIntentToTaxonomy(routerIntent, attachments, rawText = "") {
-  if (/\bsvg\b/i.test(rawText) && /\b(crea|crear|creame|créame|genera|generar|haz|hazme|dibuja|diseña|disena|build|make|create)\b/i.test(rawText)) {
+function mapRouterIntentToTaxonomy(routerIntent, attachments, rawText = "", requestIntelligence = null) {
+  const requestedExtensions = requestedExtensionsFromIntelligence(requestIntelligence);
+  if (requestedExtensions.includes(".svg") && requestIntelligence?.pipeline !== "RAGDocumentUnderstandingPipeline") {
     return getIntent("svg_generation");
   }
+  if (requestIntelligence?.context?.asks_existing_document_question) {
+    return getIntent("general_question");
+  }
+  if (requestedExtensions.includes(".docx")) {
+    if (requestIntelligence?.context?.has_research_requirement || requestIntelligence?.evidence?.research?.present) return getIntent("academic_document");
+    return getIntent("report_generation");
+  }
+  if (requestedExtensions.includes(".pdf")) return getIntent("pdf_generation");
+  if (requestedExtensions.includes(".xlsx")) return getIntent("xlsx_generation");
+  if (requestedExtensions.includes(".pptx")) return getIntent("pptx_generation");
   if (
     routerIntent === "spreadsheet_generation"
     && spreadsheetMentionIsInputContext(rawText, attachments)
@@ -277,6 +300,154 @@ function mapRouterIntentToTaxonomy(routerIntent, attachments, rawText = "") {
   return getIntent("general_question");
 }
 
+function mergeDecisionWithRequestIntelligence(decision, requestIntelligence, rawText = "", attachments = []) {
+  const tokenPrimary = routerIntentFromRequestIntelligence(requestIntelligence, rawText, attachments);
+  const useTokenPrimary = Boolean(tokenPrimary)
+    && Number(requestIntelligence?.confidence || 0) >= 0.55
+    && (
+      !decision?.intent_primary
+      || decision.intent_primary === "unknown"
+      || decision.intent_primary === "text_answer"
+      || requestIntelligence?.context?.asks_existing_document_question
+      || requestedExtensionsFromIntelligence(requestIntelligence).length > 0
+      || requestIntelligence?.context?.has_web_build
+    );
+  const primary = useTokenPrimary ? tokenPrimary : decision.intent_primary;
+  const secondary = new Set([...(decision.intent_secondary || []), ...secondaryIntentsFromRequestIntelligence(requestIntelligence)]);
+  const tools = new Set([...(decision.required_tools || []), ...toolsFromRequestIntelligence(requestIntelligence, primary)]);
+  const agents = new Set([...(decision.required_agents || []), ...agentsFromRequestIntelligence(requestIntelligence, primary)]);
+  const finalOutput = outputFromRequestIntelligence(requestIntelligence, decision.final_output);
+  return {
+    ...decision,
+    intent_primary: primary,
+    intent_secondary: Array.from(secondary).slice(0, 12),
+    required_tools: Array.from(tools).slice(0, 16),
+    required_agents: Array.from(agents).slice(0, 16),
+    confidence: clamp01(Math.max(Number(decision.confidence || 0), Number(requestIntelligence?.confidence || 0), useTokenPrimary ? 0.82 : 0)),
+    needs_clarification: Boolean(decision.needs_clarification) || Number(requestIntelligence?.ambiguity_score || 0) >= 0.8,
+    final_output: finalOutput,
+    tier: `${decision.tier || "deterministic"}+token_intelligence`,
+    trace: {
+      ...(decision.trace || {}),
+      request_intelligence_version: requestIntelligence?.version || null,
+      token_primary_intent: requestIntelligence?.primary_intent || null,
+      token_pipeline: requestIntelligence?.pipeline || null,
+      token_confidence: requestIntelligence?.confidence || null,
+    },
+  };
+}
+
+function routerIntentFromRequestIntelligence(requestIntelligence, rawText = "", attachments = []) {
+  if (!requestIntelligence) return null;
+  if (requestIntelligence.context?.asks_existing_document_question) return "text_answer";
+  const requested = requestedExtensionsFromIntelligence(requestIntelligence);
+  if (requested.includes(".docx")) return "complex_academic_document_generation";
+  if (requested.includes(".pdf")) return "pdf_report_generation";
+  if (requested.includes(".xlsx") || requested.includes(".csv")) return "spreadsheet_generation";
+  if (requested.includes(".pptx")) return "presentation_generation";
+  if (requested.includes(".svg")) return "viz_generation";
+  if (requestIntelligence.context?.has_web_build) return "web_app_build";
+  if (requestIntelligence.primary_intent === "code_generation") return "code_generation";
+  if (requestIntelligence.primary_intent === "research_grounding") return "research_question";
+  if (requestIntelligence.primary_intent === "image_generation" || requestIntelligence.pipeline === "ImagePipeline") return "image_generation";
+  if (requestIntelligence.primary_intent === "external_action") {
+    if (/\b(calendario|calendar|agenda|reunion|meeting|evento)\b/i.test(rawText)) return "calendar_action";
+    if (/\b(correo|email|gmail)\b/i.test(rawText)) return "email_send";
+    return "agent_long_running_task";
+  }
+  if (
+    requestIntelligence.primary_intent === "spreadsheet_generation"
+    && spreadsheetMentionIsInputContext(rawText, attachments)
+    && documentOutputIsExplicit(rawText)
+  ) {
+    return "complex_academic_document_generation";
+  }
+  return null;
+}
+
+function requestedExtensionsFromIntelligence(requestIntelligence) {
+  return (requestIntelligence?.requested_formats || []).map(f => f.extension).filter(Boolean);
+}
+
+function secondaryIntentsFromRequestIntelligence(requestIntelligence) {
+  if (!requestIntelligence) return [];
+  const out = [];
+  if (requestIntelligence.context?.has_research_requirement) out.push("scientific_research", "source_validation");
+  if (requestIntelligence.evidence?.strict?.matches?.includes("doi") || requestIntelligence.evidence?.research?.matches?.includes("doi")) out.push("doi_validation");
+  for (const format of requestIntelligence.requested_formats || []) {
+    if (format.extension === ".docx") out.push("docx_export");
+    if (format.extension === ".xlsx") out.push("excel_export");
+    if (format.extension === ".pptx") out.push("pptx_export");
+    if (format.extension === ".svg") out.push("svg_export");
+    if (format.extension === ".pdf") out.push("pdf_export");
+  }
+  if (requestIntelligence.context?.has_code_work) out.push("code_generation");
+  if (requestIntelligence.context?.has_data_work) out.push("data_analysis");
+  return out;
+}
+
+function toolsFromRequestIntelligence(requestIntelligence, primaryIntent) {
+  if (!requestIntelligence) return [];
+  const out = [];
+  if (requestIntelligence.context?.has_research_requirement) out.push("scientific_search", "doi_validator", "citation_formatter", "evidence_grounding");
+  if (requestIntelligence.context?.has_data_work) out.push("data_analysis_sandbox");
+  if (requestIntelligence.context?.has_code_work || primaryIntent === "web_app_build") out.push("code_project_generator", "run_tests", "artifact_validator");
+  for (const format of requestIntelligence.requested_formats || []) {
+    if (format.extension === ".docx") out.push("create_docx");
+    if (format.extension === ".xlsx") out.push("create_xlsx");
+    if (format.extension === ".pptx") out.push("create_pptx");
+    if (format.extension === ".pdf") out.push("render_pdf_from_html");
+    if (format.extension === ".svg") out.push("create_svg");
+  }
+  if (requestIntelligence.context?.asks_existing_document_question) out.push("evidence_grounding");
+  return out;
+}
+
+function agentsFromRequestIntelligence(requestIntelligence, primaryIntent) {
+  const out = ["intent-compiler"];
+  if (!requestIntelligence) return out;
+  if (requestIntelligence.context?.has_research_requirement) out.push("research-verifier", "document-analyst");
+  if (requestIntelligence.context?.has_data_work) out.push("bi-analyst");
+  if (requestIntelligence.context?.has_code_work || primaryIntent === "web_app_build") out.push("code-architect", "frontend-engineer", "qa-regression");
+  if (requestIntelligence.requested_formats?.length) out.push("constraint-extractor", "planner", "qa-regression", "release-manager");
+  return out;
+}
+
+function outputFromRequestIntelligence(requestIntelligence, fallback) {
+  const first = requestIntelligence?.requested_formats?.[0]?.extension;
+  if (first === ".docx") return "word_document";
+  if (first === ".xlsx") return "xlsx_document";
+  if (first === ".csv") return "csv_document";
+  if (first === ".pptx") return "pptx_document";
+  if (first === ".pdf") return "pdf_document";
+  if (first === ".svg") return "svg_artifact";
+  if (requestIntelligence?.context?.has_web_build) return "web_app";
+  return fallback || "text";
+}
+
+function compactRequestIntelligence(requestIntelligence) {
+  if (!requestIntelligence) return null;
+  return {
+    version: requestIntelligence.version,
+    primary_intent: requestIntelligence.primary_intent,
+    pipeline: requestIntelligence.pipeline,
+    confidence: requestIntelligence.confidence,
+    ambiguity_score: requestIntelligence.ambiguity_score,
+    token_count: requestIntelligence.token_count,
+    requested_formats: (requestIntelligence.requested_formats || []).map(f => f.extension),
+    excluded_formats: (requestIntelligence.excluded_formats || []).map(f => f.extension),
+    context: requestIntelligence.context,
+    top_scores: (requestIntelligence.intent_scores || []).slice(0, 5),
+  };
+}
+
+function ambiguityFromScore(score) {
+  const value = Number(score || 0);
+  if (value >= 0.8) return "high";
+  if (value >= 0.45) return "medium";
+  return "low";
+}
+
 function deriveExcludedIntents(taxonomyIntent) {
   const out = [];
   if (taxonomyIntent.id !== "image_generation") out.push({ id: "image_generation", reason: "El usuario no pidió crear imágenes." });
@@ -314,13 +485,13 @@ function deriveAssumptions(taxonomyIntent) {
   return out;
 }
 
-function deriveTaskClassification(taxonomyIntent, decision, attachments) {
+function deriveTaskClassification(taxonomyIntent, decision, attachments, requestIntelligence = null) {
   const wantsTools = (decision.required_tools || []).length > 0;
-  const wantsResearch = taxonomyIntent.default_required_capabilities.includes("research");
-  const wantsCode = taxonomyIntent.default_required_capabilities.includes("code");
-  const wantsVision = taxonomyIntent.default_required_capabilities.includes("vision") || taxonomyIntent.family === "image";
+  const wantsResearch = taxonomyIntent.default_required_capabilities.includes("research") || Boolean(requestIntelligence?.context?.has_research_requirement);
+  const wantsCode = taxonomyIntent.default_required_capabilities.includes("code") || Boolean(requestIntelligence?.context?.has_code_work);
+  const wantsVision = taxonomyIntent.default_required_capabilities.includes("vision") || taxonomyIntent.family === "image" || Boolean(requestIntelligence?.context?.has_visual_work);
   return {
-    task_type: taxonomyIntent.family === "conversation" ? "single_step_text" : "multi_step_agentic_workflow",
+    task_type: taxonomyIntent.family === "conversation" && !requestIntelligence?.context?.has_files ? "single_step_text" : "multi_step_agentic_workflow",
     execution_category: taxonomyIntent.family,
     output_category: taxonomyIntent.default_output_kind === "text"
       ? "text"
@@ -334,19 +505,23 @@ function deriveTaskClassification(taxonomyIntent, decision, attachments) {
     requires_code_execution: wantsCode || taxonomyIntent.id === "data_analysis",
     requires_visual_generation: wantsVision || taxonomyIntent.family === "design_visual",
     requires_human_approval: taxonomyIntent.default_risk === "critical" || taxonomyIntent.family === "high_risk_domains",
-    can_answer_directly: taxonomyIntent.family === "conversation",
+    can_answer_directly: taxonomyIntent.family === "conversation" && !requestIntelligence?.context?.has_files,
   };
 }
 
-function deriveEntities(text, taxonomyIntent, attachments) {
-  const requestedFormats = [];
-  if (/\bword\b|\bdocx\b|\.docx\b/i.test(text)) requestedFormats.push("docx");
-  if (/\bpdf\b|\.pdf\b/i.test(text)) requestedFormats.push("pdf");
-  if (/\bexcel\b|\bxlsx\b|hoja de c[aá]lculo|spreadsheet/i.test(text) && !spreadsheetMentionIsInputContext(text, attachments)) requestedFormats.push("xlsx");
-  if (/\bpptx?\b|powerpoint|presentaci[oó]n/i.test(text)) requestedFormats.push("pptx");
-  if (/\bsvg\b/i.test(text)) requestedFormats.push("svg");
+function deriveEntities(text, taxonomyIntent, attachments, requestIntelligence = null) {
+  const requestedFormats = requestedExtensionsFromIntelligence(requestIntelligence).map(ext => ext.replace(/^\./, ""));
+  if (requestedFormats.length === 0) {
+    if (/\bword\b|\bdocx\b|\.docx\b/i.test(text)) requestedFormats.push("docx");
+    if (/\bpdf\b|\.pdf\b/i.test(text)) requestedFormats.push("pdf");
+    if (/\bexcel\b|\bxlsx\b|hoja de c[aá]lculo|spreadsheet/i.test(text) && !spreadsheetMentionIsInputContext(text, attachments)) requestedFormats.push("xlsx");
+    if (/\bpptx?\b|powerpoint|presentaci[oó]n/i.test(text)) requestedFormats.push("pptx");
+    if (/\bsvg\b/i.test(text)) requestedFormats.push("svg");
+  }
   return {
     requested_formats: requestedFormats.length > 0 ? requestedFormats : [taxonomyIntent.default_output_kind.replace(/^file:|^image:/, "")],
+    excluded_formats: (requestIntelligence?.excluded_formats || []).map(f => f.extension.replace(/^\./, "")),
+    request_intelligence: compactRequestIntelligence(requestIntelligence),
     document_type: taxonomyIntent.id,
     citation_style: /apa\s*7|apa septima/i.test(text) ? { value: "APA7", source: "user_specified", confidence: 0.95 } : { value: "APA7", source: "default_inferred", confidence: 0.65 },
     topic: { value: null, source: "not_provided", confidence: 0 },
@@ -371,28 +546,29 @@ function spreadsheetMentionIsInputContext(text, attachments = []) {
   return hasSpreadsheetAttachment && explicitInput;
 }
 
-function deriveContextRequirements(taxonomyIntent, attachments) {
+function deriveContextRequirements(taxonomyIntent, attachments, requestIntelligence = null) {
   const caps = taxonomyIntent.default_required_capabilities;
+  const ctx = requestIntelligence?.context || {};
   return {
     needs_conversation_history: true,
     needs_user_profile: true,
-    needs_project_memory: false,
-    needs_uploaded_files: attachments.length > 0,
-    needs_web_search: caps.includes("research"),
-    needs_scientific_apis: taxonomyIntent.id === "scientific_research" || taxonomyIntent.id === "academic_document",
-    needs_database_access: taxonomyIntent.id === "database_query",
-    needs_browser_automation: taxonomyIntent.id === "web_scraping" || taxonomyIntent.id === "browser_automation",
-    needs_code_sandbox: caps.includes("sandbox") || caps.includes("code"),
-    freshness_required: caps.includes("research") ? "medium" : "none",
-    minimum_source_quality: caps.includes("research") ? "scientific_or_institutional" : "any",
-    citation_required: caps.includes("research"),
-    source_validation_required: caps.includes("research"),
+    needs_project_memory: true,
+    needs_uploaded_files: attachments.length > 0 || Boolean(ctx.has_files),
+    needs_web_search: caps.includes("research") || Boolean(ctx.has_research_requirement),
+    needs_scientific_apis: taxonomyIntent.id === "scientific_research" || taxonomyIntent.id === "academic_document" || Boolean(ctx.has_research_requirement),
+    needs_database_access: taxonomyIntent.id === "database_query" || /\bsql|database|base de datos|postgres|mysql\b/i.test(requestIntelligence?.normalized_request || ""),
+    needs_browser_automation: taxonomyIntent.id === "web_scraping" || taxonomyIntent.id === "browser_automation" || Boolean(ctx.has_external_action),
+    needs_code_sandbox: caps.includes("sandbox") || caps.includes("code") || Boolean(ctx.has_code_work || ctx.has_data_work),
+    freshness_required: caps.includes("research") || ctx.has_research_requirement ? "medium" : "none",
+    minimum_source_quality: caps.includes("research") || ctx.has_research_requirement ? "scientific_or_institutional" : "any",
+    citation_required: caps.includes("research") || Boolean(requestIntelligence?.evidence?.research?.matches?.includes("citas")),
+    source_validation_required: caps.includes("research") || Boolean(ctx.has_research_requirement),
   };
 }
 
-function deriveDataIngestionPlan(attachments, taxonomyIntent) {
+function deriveDataIngestionPlan(attachments, taxonomyIntent, requestIntelligence = null) {
   const externalSources = [];
-  if (taxonomyIntent.default_required_capabilities.includes("research")) {
+  if (taxonomyIntent.default_required_capabilities.includes("research") || requestIntelligence?.context?.has_research_requirement) {
     externalSources.push(
       { source: "scopus", purpose: "scientific_literature", required: true },
       { source: "openalex", purpose: "scientific_literature", required: true },
@@ -419,7 +595,7 @@ function deriveDataIngestionPlan(attachments, taxonomyIntent) {
   };
 }
 
-function deriveOutputContract(taxonomyIntent, text) {
+function deriveOutputContract(taxonomyIntent, text, targetFormat = null, requestIntelligence = null) {
   const kind = taxonomyIntent.default_output_kind;
   if (kind === "text") {
     return {
@@ -428,12 +604,13 @@ function deriveOutputContract(taxonomyIntent, text) {
     };
   }
   if (kind.startsWith("file:")) {
-    let fmt = kind.split(":")[1];
+    let fmt = targetFormat || kind.split(":")[1];
     if (taxonomyIntent.family === "document_artifacts" && /\b(pdf|\.pdf)\b/i.test(text) && !/\b(word|docx|\.docx)\b/i.test(text)) {
       fmt = "pdf";
     }
     const secondary = [];
-    if (/pdf/i.test(text) && fmt !== "pdf") secondary.push({ type: "file", format: "pdf", required: true });
+    const requestedFormats = requestedExtensionsFromIntelligence(requestIntelligence).map(ext => ext.replace(/^\./, ""));
+    if ((/pdf/i.test(text) || requestedFormats.includes("pdf")) && fmt !== "pdf") secondary.push({ type: "file", format: "pdf", required: true });
     if (taxonomyIntent.family === "document_artifacts") secondary.push({ type: "inline_summary", format: "markdown", required: true });
     return {
       primary_output: { type: "file", format: fmt, filename_suggestion: `${slug(taxonomyIntent.id)}.${fmt}`, required: true },
@@ -558,7 +735,7 @@ function deriveAgentPlan(decision) {
   return out;
 }
 
-function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames = [], targetFormat = null) {
+function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames = [], targetFormat = null, requestIntelligence = null) {
   const nodes = (plan.nodes || []).map(n => ({
     id: n.id,
     label: humanise(n.id),
@@ -640,6 +817,16 @@ function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames =
     evidence_ledger: [],
     audit_trace: [
       {
+        event: "request_intelligence_completed",
+        at: new Date().toISOString(),
+        source: "cira.request-token-intelligence",
+        primary_intent: requestIntelligence?.primary_intent || null,
+        pipeline: requestIntelligence?.pipeline || null,
+        confidence: requestIntelligence?.confidence || null,
+        token_count: requestIntelligence?.token_count || 0,
+        requested_formats: requestedExtensionsFromIntelligence(requestIntelligence),
+      },
+      {
         event: "contract_created",
         at: new Date().toISOString(),
         source: "cira.task-envelope-builder",
@@ -717,7 +904,9 @@ function artifactToolsForFormat(format, taxonomyIntent) {
   return ["create_document"];
 }
 
-function inferTargetFormatFromDecision(decision, taxonomyIntent) {
+function inferTargetFormatFromDecision(decision, taxonomyIntent, requestIntelligence = null) {
+  const tokenFormat = requestIntelligence?.requested_formats?.[0]?.extension;
+  if (tokenFormat) return tokenFormat.replace(/^\./, "");
   const finalOutput = String(decision?.final_output || decision?.output_format || "").toLowerCase();
   if (/\b(pdf|pdf_document)\b/.test(finalOutput)) return "pdf";
   if (/\b(docx|word|word_document)\b/.test(finalOutput)) return "docx";
@@ -779,9 +968,9 @@ function deriveSafety(taxonomyIntent, decision) {
   };
 }
 
-function deriveQualityPlan(taxonomyIntent, decision) {
+function deriveQualityPlan(taxonomyIntent, decision, requestIntelligence = null) {
   const validators = [{ name: "intent_fulfillment_validator", checks: ["all_requested_outputs_created", "user_goal_satisfied"] }];
-  if (taxonomyIntent.default_required_capabilities.includes("research")) {
+  if (taxonomyIntent.default_required_capabilities.includes("research") || requestIntelligence?.context?.has_research_requirement) {
     validators.push({ name: "source_validator", checks: ["no_fake_references", "doi_or_url_present_when_available", "sources_match_claims", "citation_style_correct"] });
   }
   if (taxonomyIntent.family === "document_artifacts" || taxonomyIntent.family === "spreadsheet_artifacts" || taxonomyIntent.family === "presentation_artifacts") {

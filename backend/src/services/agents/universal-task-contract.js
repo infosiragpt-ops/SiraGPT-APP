@@ -11,6 +11,7 @@
 
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
+const { analyzeRequestTokens } = require('./request-token-intelligence');
 
 const CONTRACT_VERSION = 'universal-task-contract-2026-04';
 
@@ -570,10 +571,16 @@ function detectRequestedOutputFormats(raw) {
   return formats;
 }
 
-function inferExplicitExtension(raw) {
+function inferExplicitExtension(raw, tokenAnalysis = null) {
+  if (Array.isArray(tokenAnalysis?.requested_formats) && tokenAnalysis.requested_formats.length > 0) {
+    return tokenAnalysis.requested_formats[0].extension;
+  }
+  const excludedExtensions = new Set((tokenAnalysis?.excluded_formats || []).map((item) => item.extension));
   const n = normalize(raw);
   const requestedFormats = detectRequestedOutputFormats(raw);
-  if (requestedFormats.length > 0) return requestedFormats[0].ext;
+  const allowedRegexFormats = requestedFormats.filter((item) => !excludedExtensions.has(item.ext));
+  if (allowedRegexFormats.length > 0) return allowedRegexFormats[0].ext;
+  if (requestedFormats.length > 0 && excludedExtensions.size > 0) return null;
 
   const looksLikeInputFileReference =
     /\b(este|esta|el|la|mi|mis)\s+(archivo|documento|pdf|word|docx|excel|xlsx|ppt|pptx)\b/.test(n) ||
@@ -617,7 +624,7 @@ function extractCountConstraints(raw) {
   return Array.from(new Set(constraints));
 }
 
-function extractSourceRequirements(raw) {
+function extractSourceRequirements(raw, tokenAnalysis = null) {
   const n = normalize(raw);
   const providers = [];
   if (/\b(scopus)\b/.test(n)) providers.push('Scopus');
@@ -629,10 +636,11 @@ function extractSourceRequirements(raw) {
   if (/\b(scielo)\b/.test(n)) providers.push('SciELO');
   if (/\b(semantic scholar|semantic)\b/.test(n)) providers.push('Semantic Scholar');
 
-  const sourceRequired = matchAny(raw, [
+  const tokenResearch = Boolean(tokenAnalysis?.context?.has_research_requirement || tokenAnalysis?.evidence?.research?.present);
+  const sourceRequired = tokenResearch || matchAny(raw, [
     /\b(busca|buscar|investiga|investigar|fuentes|referencias|citas|art[ií]culos?|papers?|doi|scopus|wos|openalex|crossref|pubmed|doaj|scielo|cient[ií]fic[oa]s?|acad[eé]mic[oa]s?)\b/i,
   ]);
-  const strict = matchAny(raw, [/\b(100%|reales|verifica|validar|doi|open access|acceso abierto|no invent|precis[ao]|art[ií]culos cient[ií]ficos)\b/i]);
+  const strict = Boolean(tokenAnalysis?.evidence?.strict?.present) || matchAny(raw, [/\b(100%|reales|verifica|validar|doi|open access|acceso abierto|no invent|precis[ao]|art[ií]culos cient[ií]ficos)\b/i]);
   const exclusions = [];
   if (/\b(no incluir libros|sin libros|no libros)\b/.test(n)) exclusions.push('books');
   if (/\b(no revisiones|sin revisiones|no review|no meta)\b/.test(n)) exclusions.push('reviews_or_meta_synthesis');
@@ -648,11 +656,11 @@ function extractSourceRequirements(raw) {
   };
 }
 
-function inferIntentAndPipeline({ raw, fileIds = [] }) {
+function inferIntentAndPipeline({ raw, fileIds = [], tokenAnalysis = null }) {
   const n = normalize(raw);
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
-  const explicitExt = inferExplicitExtension(raw);
-  const research = extractSourceRequirements(raw).required;
+  const explicitExt = inferExplicitExtension(raw, tokenAnalysis);
+  const research = extractSourceRequirements(raw, tokenAnalysis).required;
   const action = matchAny(raw, [/\b(envia|enviar|correo|email|gmail|calendario|calendar|reserva|reservar|whatsapp|telegram|navegador|browser|agenda|programa una reunion)\b/i]);
   const editImage = matchAny(raw, [/\b(edita|editar|modifica|retoca|inpaint|pincel|mascara|mask)\b/i]) && matchAny(raw, [/\b(imagen|foto|png|jpg|jpeg|webp)\b/i]);
   const image = !editImage && matchAny(raw, [/\b(genera una imagen|crear imagen|imagen de|foto de|png|jpg|jpeg|webp)\b/i]);
@@ -665,12 +673,17 @@ function inferIntentAndPipeline({ raw, fileIds = [] }) {
   const translate = matchAny(raw, [/\b(traduce|traducir|translate)\b/i]);
   const privateFile = hasFiles || matchAny(raw, [/\b(este archivo|este documento|adjunto|cargado|pdf|docx|xlsx|pptx|segun mis archivos|según mis archivos)\b/i]);
 
-  if (explicitExt === '.svg') return { primary_intent: code && /\bcodigo|código|source|xml\b/i.test(n) ? 'code_generation' : 'visual_artifact', pipeline: 'VisualArtifactPipeline' };
+  if (explicitExt === '.svg') {
+    const svgAsCode = code && /\bcodigo|código|source|xml\b/i.test(n);
+    return { primary_intent: svgAsCode ? 'code_generation' : 'visual_artifact', pipeline: svgAsCode ? 'CodePipeline' : 'VisualArtifactPipeline' };
+  }
   if (explicitExt === '.docx') return { primary_intent: 'document_generation', pipeline: 'DocumentPipeline' };
   if (explicitExt === '.xlsx' || explicitExt === '.csv') return { primary_intent: 'spreadsheet_generation', pipeline: 'SpreadsheetPipeline' };
   if (explicitExt === '.pptx') return { primary_intent: 'slide_generation', pipeline: 'SlidePipeline' };
   if (explicitExt === '.pdf') return { primary_intent: 'document_generation', pipeline: 'DocumentPipeline' };
   if (explicitExt === '.html' || explicitExt === '.md' || explicitExt === '.json') return { primary_intent: code ? 'code_generation' : 'document_generation', pipeline: code ? 'CodePipeline' : 'DocumentPipeline' };
+  const tokenRoute = inferRouteFromTokenAnalysis(tokenAnalysis);
+  if (tokenRoute) return tokenRoute;
   if (editImage) return { primary_intent: 'image_editing', pipeline: 'ImagePipeline' };
   if (image) return { primary_intent: 'image_generation', pipeline: 'ImagePipeline' };
   if (webBuild) return { primary_intent: 'code_generation', pipeline: 'CodePipeline' };
@@ -682,6 +695,22 @@ function inferIntentAndPipeline({ raw, fileIds = [] }) {
   if (summarize) return { primary_intent: 'summarization', pipeline: 'DirectAnswerPipeline' };
   if (/\b(hola|hello|gracias|thanks|que tal|qué tal)\b/i.test(n) && n.length < 80) return { primary_intent: 'direct_answer', pipeline: 'DirectAnswerPipeline' };
   return { primary_intent: 'direct_answer', pipeline: 'DirectAnswerPipeline' };
+}
+
+function inferRouteFromTokenAnalysis(tokenAnalysis) {
+  if (!tokenAnalysis || Number(tokenAnalysis.confidence || 0) < 0.55) return null;
+  if (tokenAnalysis.context?.asks_existing_document_question) {
+    return { primary_intent: 'document_understanding', pipeline: 'RAGDocumentUnderstandingPipeline' };
+  }
+  if (Array.isArray(tokenAnalysis.requested_formats) && tokenAnalysis.requested_formats.length > 1) {
+    return { primary_intent: 'unknown', pipeline: 'MultiIntentPipeline' };
+  }
+  const intent = tokenAnalysis.primary_intent;
+  const pipeline = tokenAnalysis.pipeline;
+  if (PRIMARY_INTENTS.includes(intent) && PIPELINES.includes(pipeline) && intent !== 'direct_answer') {
+    return { primary_intent: intent, pipeline };
+  }
+  return null;
 }
 
 function inferSecondaryIntents(raw, primary) {
@@ -696,13 +725,16 @@ function inferSecondaryIntents(raw, primary) {
   return Array.from(out).slice(0, 12);
 }
 
-function inferRequestedArtifacts(raw) {
+function inferRequestedArtifacts(raw, tokenAnalysis = null) {
+  if (Array.isArray(tokenAnalysis?.requested_formats) && tokenAnalysis.requested_formats.length > 0) {
+    return tokenAnalysis.requested_formats.map(({ extension, pipeline, intent }) => ({ ext: extension, pipeline, intent }));
+  }
   return detectRequestedOutputFormats(raw).map(({ ext, pipeline, intent }) => ({ ext, pipeline, intent }));
 }
 
-function buildMultiIntentDag({ raw, primaryPipeline, primaryIntent, requiredExtension }) {
-  const sourceReq = extractSourceRequirements(raw);
-  const artifacts = inferRequestedArtifacts(raw);
+function buildMultiIntentDag({ raw, primaryPipeline, primaryIntent, requiredExtension, tokenAnalysis = null }) {
+  const sourceReq = extractSourceRequirements(raw, tokenAnalysis);
+  const artifacts = inferRequestedArtifacts(raw, tokenAnalysis);
   const needsDag = sourceReq.required || artifacts.length > 1 || /\b(luego|despues|después|and then|then)\b/i.test(normalize(raw));
   const nodes = [];
   const edges = [];
@@ -895,13 +927,14 @@ function buildUserConstraints(raw, requiredExtension, sourceRequirements) {
   return Array.from(new Set(constraints));
 }
 
-function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Date() } = {}) {
+function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Date(), tokenAnalysis = null } = {}) {
   const raw = String(rawUserRequest || '');
   const normalized = normalize(raw);
-  const sourceRequirements = extractSourceRequirements(raw);
+  const requestTokenAnalysis = tokenAnalysis || analyzeRequestTokens({ rawUserRequest: raw, fileIds });
+  const sourceRequirements = extractSourceRequirements(raw, requestTokenAnalysis);
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
-  const explicitExt = inferExplicitExtension(raw);
-  const route = inferIntentAndPipeline({ raw, fileIds });
+  const explicitExt = inferExplicitExtension(raw, requestTokenAnalysis);
+  const route = inferIntentAndPipeline({ raw, fileIds, tokenAnalysis: requestTokenAnalysis });
 
   let requiredExtension = explicitExt;
   let mimeType = null;
@@ -930,7 +963,7 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
     deliveryMode = 'both';
   }
 
-  const artifacts = inferRequestedArtifacts(raw);
+  const artifacts = inferRequestedArtifacts(raw, requestTokenAnalysis);
   const isMultiArtifact = artifacts.length > 1;
   const primaryPipeline = isMultiArtifact ? 'MultiIntentPipeline' : route.pipeline;
   if (isMultiArtifact) {
@@ -1010,6 +1043,7 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
     final_delivery_rules: buildFinalDeliveryRules({ requiredExtension, artifactRequired, sourceRequirements, primaryPipeline }),
     evidence_log: [
       { event: 'request_received', status: 'ok', detail: 'Raw user request captured.', timestamp: now.toISOString() },
+      { event: 'token_intelligence_completed', status: 'ok', detail: `tokens=${requestTokenAnalysis.token_count}; intent=${requestTokenAnalysis.primary_intent}; confidence=${requestTokenAnalysis.confidence}.`, timestamp: now.toISOString() },
       { event: 'contract_created', status: 'ok', detail: `Pipeline=${primaryPipeline}; extension=${requiredExtension || 'none'}.`, timestamp: now.toISOString() },
     ],
     multi_intent_dag: buildMultiIntentDag({
@@ -1017,6 +1051,7 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
       primaryPipeline,
       primaryIntent,
       requiredExtension,
+      tokenAnalysis: requestTokenAnalysis,
     }),
   };
   contract.execution_plan = buildExecutionPlan({
@@ -1311,6 +1346,7 @@ module.exports = {
     inferExplicitExtension,
     inferIntentAndPipeline,
     extractSourceRequirements,
+    inferRouteFromTokenAnalysis,
     buildMultiIntentDag,
     buildValidationPlan,
     buildRequiredTools,
