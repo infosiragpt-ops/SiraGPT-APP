@@ -779,13 +779,35 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     // For Share Functionality - Individual Message
     const handleShare = async () => {
         try {
+            if (!message.id || !message.chatId) {
+                throw new Error("Mensaje sin id de chat — no se puede compartir.");
+            }
             const response = await apiClient.shareMessage(message.id, message.chatId);
-            const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
-            let url = `${baseUrl}/share/message/${response.shareableLink}`;
-            navigator.clipboard.writeText(url);
-            toast.success("Message link copied to clipboard!");
-        } catch (error) {
-            toast.error(`Failed to create message share link. ${error}`);
+            const shareId = response?.shareableLink;
+            if (!shareId) throw new Error("La respuesta del servidor no incluyó el shareableLink.");
+            const baseUrl = (typeof window !== "undefined" && window.location?.origin)
+                || process.env.NEXT_PUBLIC_URL
+                || `http://localhost:${process.env.PORT || 3000}`;
+            const url = `${baseUrl}/share/message/${shareId}`;
+            // Best-effort copy; if clipboard fails we still show the URL in the toast.
+            try {
+                if (typeof navigator !== "undefined" && navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(url);
+                    toast.success("Enlace copiado al portapapeles.");
+                } else {
+                    toast.success(`Enlace: ${url}`);
+                }
+            } catch {
+                toast.success(`Enlace: ${url}`);
+            }
+        } catch (err: any) {
+            const status = err?.status || err?.statusCode;
+            const detail = err?.errorData?.error || err?.message || "error desconocido";
+            console.error("[share] failed:", { status, detail, messageId: message.id, chatId: message.chatId });
+            if (status === 401) toast.error("Tu sesión expiró. Inicia sesión de nuevo.");
+            else if (status === 404) toast.error("Chat o mensaje no encontrado (¿es tuyo?).");
+            else toast.error(`No se pudo crear el enlace: ${detail}`);
+            throw err;
         }
     };
 
@@ -807,22 +829,61 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     };
 
-    const handleGlobalCopy = () => {
-        navigator.clipboard.writeText(message.content).then(() => {
+    // Robust copy: always returns a Promise (so MessageActionRail's
+    // success/error pulse fires correctly), uses navigator.clipboard
+    // when allowed, falls back to a hidden textarea + execCommand
+    // when permissions are denied or the API is missing, and surfaces
+    // a real toast on failure instead of silently swallowing errors.
+    const handleGlobalCopy = async () => {
+        const text = String(message.content || "");
+        if (!text) {
+            toast.error("Nada que copiar.");
+            throw new Error("empty_content");
+        }
+        try {
+            if (typeof navigator !== "undefined" && navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                // Legacy fallback for non-secure contexts / older browsers.
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.setAttribute("readonly", "");
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.select();
+                const ok = document.execCommand("copy");
+                document.body.removeChild(ta);
+                if (!ok) throw new Error("execCommand_copy_failed");
+            }
             setIsCopied(true);
             setTimeout(() => setIsCopied(false), 2000);
-        });
+            toast.success("Copiado al portapapeles");
+        } catch (err: any) {
+            console.error("[copy] failed:", err);
+            toast.error(`No se pudo copiar: ${err?.message || "error desconocido"}`);
+            throw err;
+        }
     };
 
     const handleFeedback = async (feedbackType: 'liked' | 'disliked') => {
-        if (feedbackSent) return;
-
+        if (feedbackSent === feedbackType) {
+            // Toggling off — for now we keep the local pulse but skip the API
+            // call (backend has no DELETE endpoint for feedback).
+            return;
+        }
         try {
             await apiClient.handleFeedbackLikeDislike(message.id, feedbackType);
             setFeedbackSent(feedbackType);
-            toast.success("Feedback submitted!");
-        } catch (error) {
-            toast.error("Could not submit feedback.");
+            toast.success(feedbackType === "liked" ? "¡Gracias por tu feedback!" : "Feedback registrado");
+        } catch (err: any) {
+            const status = err?.status || err?.statusCode;
+            const detail = err?.errorData?.error || err?.message || "error desconocido";
+            console.error("[feedback] failed:", { status, detail, messageId: message.id });
+            if (status === 401) toast.error("Tu sesión expiró. Inicia sesión de nuevo.");
+            else if (status === 404) toast.error("Mensaje no encontrado o no es tuyo.");
+            else toast.error(`No se pudo enviar feedback: ${detail}`);
+            throw err;
         }
     };
 
