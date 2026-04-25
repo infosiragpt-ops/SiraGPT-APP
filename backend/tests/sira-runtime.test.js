@@ -13,6 +13,7 @@ const {
 const validators = require("../src/services/sira/validator-engine");
 const prompts = require("../src/services/sira/intent-prompts");
 const runtime = require("../src/services/sira/runtime");
+const ciraEngine = require("../src/services/sira/engine");
 const { buildEnvelope } = require("../src/services/sira/task-envelope-builder");
 
 function expect(actual) {
@@ -284,6 +285,74 @@ describe("cira runtime", () => {
     const xlsxResult = r.tool_results.find(t => t.tool === "create_xlsx");
     expect(xlsxResult).toBeTruthy();
     expect(xlsxResult.status).toBe("success");
+  });
+
+  test("format sovereignty routes SVG requests to a real SVG artifact", async () => {
+    const { envelope, validation } = await buildEnvelope({
+      text: "Crea un SVG de una casa minimalista",
+      userPlan: "PRO",
+      userId: "test-user",
+      conversationId: "test-conversation",
+    });
+    expect(validation.ok).toBe(true);
+    expect(envelope.intent_analysis.primary_intent.id).toBe("svg_generation");
+    expect(envelope.output_contract.primary_output.format).toBe("svg");
+    expect(envelope.tool_plan.required_tools.map(t => t.tool_name)).toContain("create_svg");
+
+    const reg = createDefaultRegistry();
+    for (const tool of envelope.workflow_graph.nodes.flatMap(n => n.tools || [])) {
+      expect(reg.has(tool)).toBe(true);
+    }
+
+    const r = await runtime.runWorkflow({
+      envelope,
+      registry: reg,
+      dryRun: false,
+      permissions: ["write_artifact"],
+    });
+    const readySvgs = r.artifact_frame.artifacts.filter(a => a.format === "svg" && a.status === "ready");
+    expect(readySvgs.length).toBe(1);
+    expect(readySvgs[0].download_url).toMatch(/\/api\/agent\/artifact\//);
+    expect(readySvgs[0].mime).toBe("image/svg+xml");
+    expect(r.validation_frame.ready_to_deliver).toBe(true);
+  });
+
+  test("format sovereignty routes PDF requests to PDF renderer only", async () => {
+    const { envelope, validation } = await buildEnvelope({
+      text: "Crea un PDF con un resumen profesional",
+      userPlan: "PRO",
+    });
+    expect(validation.ok).toBe(true);
+    expect(envelope.output_contract.primary_output.format).toBe("pdf");
+    const tools = envelope.tool_plan.required_tools.map(t => t.tool_name);
+    expect(tools).toContain("render_pdf_from_html");
+    expect(tools.includes("create_docx")).toBe(false);
+  });
+
+  test("final response exposes artifact cards without leaking internal frames", async () => {
+    const { envelope } = await buildEnvelope({
+      text: "Crea un SVG de una casa minimalista",
+      userPlan: "PRO",
+      userId: "test-user",
+      conversationId: "test-conversation",
+    });
+    const r = await runtime.runWorkflow({
+      envelope,
+      dryRun: false,
+      permissions: ["write_artifact"],
+    });
+    const final = ciraEngine.buildFinalResponse({
+      envelope,
+      runtime: r,
+      validation: r.validation_frame,
+    });
+    expect(final.ready_to_deliver).toBe(true);
+    expect(final.artifacts.length).toBeGreaterThanOrEqual(1);
+    expect(final.artifacts[0].downloadUrl).toMatch(/\/api\/agent\/artifact\//);
+    const serialized = JSON.stringify(final);
+    expect(serialized.includes("workflow_graph")).toBe(false);
+    expect(serialized.includes("execution_law")).toBe(false);
+    expect(serialized.includes("raw_input")).toBe(false);
   });
 
   test("derivePlannedArtifacts always produces at least one artefact", async () => {

@@ -52,6 +52,12 @@ const TOOL_CATEGORIES = Object.freeze([
   "validator", "storage", "custom",
 ]);
 
+let artifactEngine = null;
+function getArtifactEngine() {
+  if (!artifactEngine) artifactEngine = require("./artifact-engine");
+  return artifactEngine;
+}
+
 class SiraToolRegistry {
   constructor() {
     this.tools = new Map();
@@ -302,6 +308,7 @@ function countBy(arr, key) {
 
 const DEFAULTS = [
   // Document
+  d("create_document", "document", "low", ["write_artifact"], "Genera el artefacto solicitado respetando el output_contract del envelope."),
   d("create_docx", "document", "low", ["write_artifact"], "Genera Word profesional desde un outline estructurado."),
   d("render_docx_from_outline", "document", "low", ["write_artifact"], "Render Word desde sections/headings/charts/tables."),
   d("render_docx_from_markdown", "document", "low", ["write_artifact"], "Markdown → DOCX preservando títulos, listas y tablas."),
@@ -420,6 +427,10 @@ function d(name, category, riskLevel, permissionsRequired, description) {
       outputSchema: { type: "object", additionalProperties: true },
     }),
     async execute(input, context) {
+      const engine = getArtifactEngine();
+      if (engine.canHandleTool(name)) {
+        return engine.executeArtifactTool(name, input, context);
+      }
       return {
         status: "success",
         output: {

@@ -51,6 +51,7 @@ async function runWorkflow({
     userId: context.userId || envelope.user_id || null,
     conversationId: context.conversationId || envelope.conversation_id || null,
     selectedModel: context.selectedModel || envelope.model_execution_context?.selected_model || { provider: "user_selected", modelId: "selected_by_user", modality: "text" },
+    envelope,
     permissions,
     files: context.files || [],
     memory: context.memory || {},
@@ -108,7 +109,13 @@ async function runWorkflow({
   // ── Always emit at least the planned artefacts ───────────────────
   const plannedArtifacts = derivePlannedArtifacts(envelope);
   for (const p of plannedArtifacts) {
-    if (!artifacts.some(a => a.artifact_id === p.artifact_id)) artifacts.push(p);
+    const alreadyCovered = artifacts.some(a => (
+      a.artifact_id === p.artifact_id ||
+      (a.type === p.type && a.format && p.format && a.format === p.format && (a.download_url || a.status === "ready"))
+    ));
+    if (!alreadyCovered) {
+      artifacts.push(p);
+    }
   }
 
   const artifact_frame = Object.freeze({
@@ -119,10 +126,13 @@ async function runWorkflow({
       type: a.type,
       format: a.format,
       filename: a.filename,
+      mime: a.mime || null,
+      size_bytes: a.size_bytes || a.sizeBytes || null,
       status: a.status || (dryRun ? "planned" : (a.download_url ? "ready" : "planned")),
       download_url: a.download_url || null,
       preview_url: a.preview_url || null,
       validation_status: a.validation_status || "pending",
+      source_tool: a.source_tool || null,
     })),
   });
 
@@ -188,15 +198,24 @@ function deriveValidatorReports(envelope, artifacts, toolResults) {
     reports.push(r);
   }
   if (validatorNames.has("source_validator") || envelope.context_requirements?.citation_required) {
-    reports.push(validateSources({ claims: [], sources: [], citation_style: "APA7" }));
+    const sourceOutputs = toolResults
+      .flatMap(r => r.output?.sources || r.result?.sources || [])
+      .filter(Boolean);
+    reports.push(validateSources({
+      claims: [],
+      sources: sourceOutputs,
+      citation_style: "APA7",
+      required: Boolean(envelope.context_requirements?.source_validation_required),
+    }));
   }
   if (validatorNames.has("code_validator") || envelope.task_classification?.requires_code_execution) {
     reports.push(validateCode({ source: "", language: "javascript" }));
   }
   if (validatorNames.has("document_validator") || envelope.intent_analysis?.task_family === "artifact_creation") {
+    const preview = artifacts.find(a => a.content_preview)?.content_preview || "";
     reports.push(validateDocument({
       html: "",
-      markdown: "",
+      markdown: preview,
       expected: envelope.output_contract?.document_specification ? {
         cover_page: envelope.output_contract.document_specification.include_cover_page,
         toc: envelope.output_contract.document_specification.include_table_of_contents,

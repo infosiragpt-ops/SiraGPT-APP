@@ -105,6 +105,15 @@ async function buildEnvelope({
   const { plan, validation: planValidation } = planner.buildAndValidate(enrichedDecision, {
     contract_id: requestId,
   });
+  const targetFormat = inferTargetFormatFromDecision(enrichedDecision, taxonomyIntent);
+  const siraToolPlan = deriveToolPlan(enrichedDecision, taxonomyIntent, targetFormat);
+  const workflowGraph = deriveWorkflowGraph(
+    plan,
+    enrichedDecision,
+    taxonomyIntent,
+    siraToolPlan.required_tools.map(t => t.tool_name),
+    targetFormat,
+  );
 
   // ── 5. Compose the envelope ──────────────────────────────────────
   const envelope = {
@@ -166,11 +175,11 @@ async function buildEnvelope({
 
     model_execution_context: deriveModelExecutionContext(modelChoice, taxonomyIntent),
 
-    tool_plan: deriveToolPlan(enrichedDecision, taxonomyIntent),
+    tool_plan: siraToolPlan,
 
     agent_plan: deriveAgentPlan(enrichedDecision),
 
-    workflow_graph: deriveWorkflowGraph(plan, enrichedDecision),
+    workflow_graph: workflowGraph,
 
     clarification_policy: {
       needs_clarification: Boolean(decision.needs_clarification),
@@ -224,6 +233,9 @@ async function buildEnvelope({
 // ── Mappers + derivers ──────────────────────────────────────────────
 
 function mapRouterIntentToTaxonomy(routerIntent, attachments, rawText = "") {
+  if (/\bsvg\b/i.test(rawText) && /\b(crea|crear|creame|créame|genera|generar|haz|hazme|dibuja|diseña|disena|build|make|create)\b/i.test(rawText)) {
+    return getIntent("svg_generation");
+  }
   if (
     routerIntent === "spreadsheet_generation"
     && spreadsheetMentionIsInputContext(rawText, attachments)
@@ -416,7 +428,10 @@ function deriveOutputContract(taxonomyIntent, text) {
     };
   }
   if (kind.startsWith("file:")) {
-    const fmt = kind.split(":")[1];
+    let fmt = kind.split(":")[1];
+    if (taxonomyIntent.family === "document_artifacts" && /\b(pdf|\.pdf)\b/i.test(text) && !/\b(word|docx|\.docx)\b/i.test(text)) {
+      fmt = "pdf";
+    }
     const secondary = [];
     if (/pdf/i.test(text) && fmt !== "pdf") secondary.push({ type: "file", format: "pdf", required: true });
     if (taxonomyIntent.family === "document_artifacts") secondary.push({ type: "inline_summary", format: "markdown", required: true });
@@ -509,8 +524,12 @@ function deriveModelExecutionContext(modelChoice, taxonomyIntent) {
   };
 }
 
-function deriveToolPlan(decision, taxonomyIntent) {
-  const required = (decision.required_tools || []).map(toolName => ({
+function deriveToolPlan(decision, taxonomyIntent, targetFormat = null) {
+  const requiredToolNames = normaliseSiraTools([
+    ...(decision.required_tools || []),
+    ...defaultToolsForIntent(taxonomyIntent, targetFormat),
+  ], taxonomyIntent, targetFormat);
+  const required = requiredToolNames.map(toolName => ({
     tool_name: toolName,
     tool_type: "registry",
     reason: `Resolves intent ${taxonomyIntent.id} per skill bundle.`,
@@ -539,15 +558,31 @@ function deriveAgentPlan(decision) {
   return out;
 }
 
-function deriveWorkflowGraph(plan, decision) {
+function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames = [], targetFormat = null) {
   const nodes = (plan.nodes || []).map(n => ({
     id: n.id,
     label: humanise(n.id),
     agent: n.agent || "intent-compiler",
-    tools: n.tool ? [n.tool] : [],
+    tools: n.tool ? normaliseSiraTools([n.tool], taxonomyIntent, targetFormat) : [],
     depends_on: n.depends_on || [],
     status: "pending",
   }));
+  const existingTools = new Set(nodes.flatMap(n => n.tools || []));
+  let lastNodeId = nodes.length > 0 ? nodes[nodes.length - 1].id : null;
+  for (const toolName of requiredToolNames) {
+    if (existingTools.has(toolName)) continue;
+    const nodeId = `tool.${toolName}`;
+    nodes.push({
+      id: nodeId,
+      label: humanise(toolName),
+      agent: agentForSiraTool(toolName),
+      tools: [toolName],
+      depends_on: lastNodeId ? [lastNodeId] : [],
+      status: "pending",
+    });
+    existingTools.add(toolName);
+    lastNodeId = nodeId;
+  }
   const edges = [];
   for (const node of nodes) {
     for (const dep of node.depends_on || []) {
@@ -623,6 +658,101 @@ function deriveWorkflowGraph(plan, decision) {
       if_chart_generation_fails: "generate_tables_only_and_report_limitation",
     },
   };
+}
+
+function normaliseSiraTools(toolNames, taxonomyIntent, targetFormat = null) {
+  const out = [];
+  for (const raw of toolNames || []) {
+    for (const mapped of mapToolToSiraRegistry(raw, taxonomyIntent, targetFormat)) {
+      if (mapped && !out.includes(mapped)) out.push(mapped);
+    }
+  }
+  return out;
+}
+
+function mapToolToSiraRegistry(rawToolName, taxonomyIntent, targetFormat = null) {
+  const name = String(rawToolName || "");
+  const fmt = targetFormat || (taxonomyIntent.default_output_kind.startsWith("file:")
+    ? taxonomyIntent.default_output_kind.split(":")[1]
+    : taxonomyIntent.default_output_kind === "image:svg"
+      ? "svg"
+      : taxonomyIntent.default_output_kind);
+  const direct = new Set([
+    "create_docx", "render_docx_from_outline", "render_docx_from_markdown",
+    "create_xlsx", "create_xlsx_dashboard", "create_pptx", "render_pdf_from_html",
+    "create_svg", "create_infographic_svg", "create_chart", "scientific_search",
+    "doi_validator", "citation_formatter", "source_ranker", "bibliography_generator",
+    "web_search", "evidence_grounding", "contradiction_detector", "data_analysis_sandbox",
+    "code_project_generator", "create_app_project", "run_frontend_build", "run_tests",
+    "artifact_validator", "validate_docx", "validate_xlsx", "validate_pptx", "validate_pdf",
+    "validate_svg", "validate_accessibility", "validate_responsive_design",
+  ]);
+  if (direct.has(name)) return [name];
+  if (name === "create_document" || /create_document|renderer|artifact/i.test(name)) return artifactToolsForFormat(fmt, taxonomyIntent);
+  if (/verify_artifact|artifact_validator|format/i.test(name)) return ["artifact_validator"];
+  if (/research|search|openalex|scielo|scopus|pubmed|crossref|agenticBatch/i.test(name)) return ["scientific_search"];
+  if (/doi/i.test(name)) return ["doi_validator"];
+  if (/citation|apa/i.test(name)) return ["citation_formatter"];
+  if (/docintel\.ground|evidence|ground/i.test(name)) return ["evidence_grounding"];
+  if (/contradiction/i.test(name)) return ["contradiction_detector"];
+  if (/spreadsheet|semanticModel|bi\./i.test(name)) return ["create_xlsx"];
+  if (/sandbox|analysis/i.test(name)) return ["data_analysis_sandbox"];
+  if (/test/i.test(name)) return ["run_tests"];
+  return [];
+}
+
+function artifactToolsForFormat(format, taxonomyIntent) {
+  if (format === "docx") {
+    const tools = ["create_docx"];
+    if (taxonomyIntent.default_required_capabilities.includes("research")) {
+      tools.unshift("scientific_search", "doi_validator", "citation_formatter", "evidence_grounding");
+    }
+    return tools;
+  }
+  if (format === "xlsx") return ["create_xlsx"];
+  if (format === "pptx") return ["create_pptx"];
+  if (format === "pdf") return ["render_pdf_from_html"];
+  if (format === "svg") return ["create_svg"];
+  if (taxonomyIntent.default_output_kind === "code_artifact") return ["create_app_project", "run_tests", "artifact_validator"];
+  return ["create_document"];
+}
+
+function inferTargetFormatFromDecision(decision, taxonomyIntent) {
+  const finalOutput = String(decision?.final_output || decision?.output_format || "").toLowerCase();
+  if (/\b(pdf|pdf_document)\b/.test(finalOutput)) return "pdf";
+  if (/\b(docx|word|word_document)\b/.test(finalOutput)) return "docx";
+  if (/\b(xlsx|excel|spreadsheet)\b/.test(finalOutput)) return "xlsx";
+  if (/\b(pptx|powerpoint|presentation|slide)\b/.test(finalOutput)) return "pptx";
+  if (/\b(svg|vector)\b/.test(finalOutput)) return "svg";
+  if (taxonomyIntent.default_output_kind === "image:svg") return "svg";
+  if (taxonomyIntent.default_output_kind.startsWith("file:")) {
+    return taxonomyIntent.default_output_kind.split(":")[1];
+  }
+  return null;
+}
+
+function defaultToolsForIntent(taxonomyIntent, targetFormat = null) {
+  const kind = taxonomyIntent.default_output_kind;
+  const tools = [];
+  if (targetFormat) tools.push(...artifactToolsForFormat(targetFormat, taxonomyIntent));
+  else if (kind.startsWith("file:")) tools.push(...artifactToolsForFormat(kind.split(":")[1], taxonomyIntent));
+  if (kind === "image:svg") tools.push("create_svg");
+  if (taxonomyIntent.id === "infographic") tools.push("create_infographic_svg");
+  if (taxonomyIntent.id === "chart_generation") tools.push("create_chart");
+  if (taxonomyIntent.default_required_capabilities.includes("research")) {
+    tools.push("scientific_search", "doi_validator", "citation_formatter", "evidence_grounding");
+  }
+  if (taxonomyIntent.default_required_capabilities.includes("code")) tools.push("data_analysis_sandbox");
+  if (kind !== "text") tools.push("artifact_validator");
+  return tools;
+}
+
+function agentForSiraTool(toolName) {
+  if (/search|doi|citation|source|evidence|contradiction/i.test(toolName)) return "research_verifier_agent";
+  if (/xlsx|spreadsheet|analysis/i.test(toolName)) return "data_analyst_agent";
+  if (/docx|pdf|pptx|svg|artifact|chart/i.test(toolName)) return "artifact_agent";
+  if (/code|test|build/i.test(toolName)) return "code_agent";
+  return "tool_router_agent";
 }
 
 function deriveSafety(taxonomyIntent, decision) {

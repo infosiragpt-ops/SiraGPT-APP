@@ -104,8 +104,11 @@ function validateArtifact({ artifact = null, expected = {}, buffer = null, conte
 
 // ── Source validator ────────────────────────────────────────────────
 
-function validateSources({ claims = [], sources = [], citation_style = "APA7" } = {}) {
+function validateSources({ claims = [], sources = [], citation_style = "APA7", required = false } = {}) {
   const checks = [];
+  if (required && sources.length === 0) {
+    checks.push(check("sources_required", "failed", "source validation required but no sources were provided"));
+  }
 
   // every claim must reference at least one source id
   if (claims.length > 0) {

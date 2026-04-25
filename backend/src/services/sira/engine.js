@@ -21,6 +21,7 @@
 const { buildEnvelope } = require("./task-envelope-builder");
 const { buildIntentFrame, buildPlanFrame, buildToolCallFrame, buildArtifactFrame, buildValidationFrame, buildFinalResponseFrame } = require("./frames");
 const { validateEnvelope } = require("./task-envelope-schema");
+const responseBuilder = require("./response-builder");
 
 /**
  * @param {object} args
@@ -156,23 +157,21 @@ function validatorPassed(validator, { envelope, dryRun }) {
 }
 
 function buildResponse({ envelope, validationFrame, finalResponseFrame, artifactResults, dryRun }) {
-  const summary = `${envelope.intent_analysis.primary_intent.label || envelope.intent_analysis.primary_intent.id} preparado.`;
-  const artifacts = (artifactResults || []).map(a => ({
-    name: a.artifact.name,
-    type: a.artifact.type,
-    format: a.artifact.format,
-    ok: a.ok,
-  }));
-  return {
-    summary,
-    delivery_mode: envelope.final_answer_contract.delivery_mode,
-    must_include: envelope.final_answer_contract.must_include,
-    artifacts,
-    ready_to_deliver: validationFrame.ready_to_deliver,
-    release_decision: finalResponseFrame.release_decision,
-    user_visible_summary: finalResponseFrame.user_visible_summary,
-    dry_run: dryRun,
-  };
+  return responseBuilder.buildFinalResponse({
+    envelope,
+    runtime: {
+      artifact_frame: {
+        artifacts: (artifactResults || []).map(a => ({
+          ...(a.artifact || {}),
+          ...(a.result || {}),
+          validation_status: a.ok ? "passed" : "failed",
+        })),
+      },
+      validation_frame: validationFrame,
+    },
+    validation: validationFrame,
+    warnings: dryRun ? ["dry_run_no_artifact_rendered"] : [],
+  });
 }
 
 /**
@@ -188,4 +187,5 @@ module.exports = {
   runUserMessage,
   snapshot,
   validateEnvelope,
+  buildFinalResponse: responseBuilder.buildFinalResponse,
 };
