@@ -60,6 +60,10 @@ const ciraPolicies = require("../services/sira/policies");
 const ciraResearch = require("../services/sira/research-engine");
 const ciraStorage = require("../services/sira/storage-schema");
 const ciraChat = require("../services/sira/chat-controller");
+const ciraHybridRetrieval = require("../services/sira/hybrid-retrieval");
+const ciraDocPipeline = require("../services/sira/document-pipeline-registry");
+const ciraObservability = require("../services/sira/llm-observability");
+const ciraEvalHarness = require("../services/sira/eval-harness");
 
 // Single Sira tool registry shared across requests.
 // Production extends this via ciraSharedToolRegistry.register({...}) at boot.
@@ -72,6 +76,11 @@ const ciraSharedStorage = ciraStorage.createSiraStorage();
 // Single in-memory facade for the local memory tier. Production binds
 // a Qdrant / pgvector adapter via createMemory({ adapter }).
 const sharedMemory = memoryLayer.createMemory();
+
+// Single observability hub backing /sira/observability/*. Production
+// adds Langfuse/Phoenix/OTel sinks via createLangfuseSink({ client }).
+const ciraObservabilitySink = ciraObservability.createInMemorySink({ capacity: 5000 });
+const ciraObservabilityHub = ciraObservability.createObservabilityHub({ sinks: [ciraObservabilitySink] });
 
 // Single integration-stack instance with stub adapters for every
 // layer. Production deploys swap providers via createIntegrationStack
@@ -1042,6 +1051,143 @@ router.get(
 router.get("/sira/storage/schema", authenticateToken, (_req, res) => {
   ok(res, { tables: ciraStorage.TABLES, ddl: ciraStorage.SCHEMA_DDL });
 });
+
+// ─── Sira / Hybrid Retrieval (BM25 + dense + RRF + rerank + filters) ──
+
+router.get("/sira/retrieval/info", authenticateToken, (_req, res) => {
+  ok(res, {
+    schema_version: "sira.retrieval.v1",
+    constants: { RRF_K: 60, BM25_K1: 1.5, BM25_B: 0.75 },
+    modes: ["sparse", "dense", "hybrid"],
+    supports: ["filters", "recency", "rerank", "citation_grounding"],
+  });
+});
+
+router.post(
+  "/sira/retrieval/search",
+  authenticateToken,
+  body("chunks").isArray({ min: 1 }),
+  body("query").isString().notEmpty(),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return fail(res, 400, errors.array());
+    try {
+      const { chunks, query, queryEmbedding, mode, topK, filters, recency } = req.body;
+      const index = ciraHybridRetrieval.buildIndex(chunks);
+      const result = await ciraHybridRetrieval.search(index, {
+        query, queryEmbedding, mode, topK, filters, recency,
+      });
+      ok(res, result);
+    } catch (err) {
+      fail(res, 500, err.message || "sira retrieval failed");
+    }
+  },
+);
+
+router.post(
+  "/sira/retrieval/ground",
+  authenticateToken,
+  body("answer").isString().notEmpty(),
+  body("hits").isArray(),
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return fail(res, 400, errors.array());
+    ok(res, ciraHybridRetrieval.groundCitations(req.body));
+  },
+);
+
+// ─── Sira / Document Pipeline Registry ────────────────────────────────
+
+router.get("/sira/parsers", authenticateToken, (_req, res) => {
+  ok(res, { parsers: ciraDocPipeline.PARSERS, integrity: ciraDocPipeline.integrity() });
+});
+
+router.get("/sira/generators", authenticateToken, (_req, res) => {
+  ok(res, { generators: ciraDocPipeline.GENERATORS });
+});
+
+router.post("/sira/parsers/choose", authenticateToken, (req, res) => {
+  try {
+    ok(res, ciraDocPipeline.chooseParsers(req.body || {}));
+  } catch (err) {
+    fail(res, 400, err.message || "chooseParsers failed");
+  }
+});
+
+router.post("/sira/generators/choose", authenticateToken, (req, res) => {
+  try {
+    ok(res, ciraDocPipeline.chooseGenerators(req.body || {}));
+  } catch (err) {
+    fail(res, 400, err.message || "chooseGenerators failed");
+  }
+});
+
+// ─── Sira / LLM Observability (Langfuse-shaped) ───────────────────────
+
+router.get("/sira/observability/vocabulary", authenticateToken, (_req, res) => {
+  ok(res, {
+    schema_version: ciraObservability.SCHEMA_VERSION,
+    span_kinds: ciraObservability.SPAN_KINDS,
+    score_ranges: ciraObservability.SCORE_RANGES,
+  });
+});
+
+router.get("/sira/observability/snapshot", authenticateToken, (_req, res) => {
+  ok(res, {
+    counts: ciraObservabilitySink.countByKind(),
+    records: ciraObservabilitySink.snapshot().slice(-200),
+  });
+});
+
+router.post(
+  "/sira/observability/emit",
+  authenticateToken,
+  body("kind").isString().notEmpty(),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return fail(res, 400, errors.array());
+    try {
+      const safe = await ciraObservabilityHub.emit(req.body);
+      ok(res, { emitted: safe });
+    } catch (err) {
+      fail(res, 500, err.message || "observability emit failed");
+    }
+  },
+);
+
+// ─── Sira / Eval Harness (Promptfoo / DeepEval / Ragas-shaped) ────────
+
+router.get("/sira/evals/metrics", authenticateToken, (_req, res) => {
+  ok(res, {
+    all: ciraEvalHarness.ALL_METRICS,
+    rag: ciraEvalHarness.RAG_METRICS,
+    agent: ciraEvalHarness.AGENT_METRICS,
+    safety: ciraEvalHarness.SAFETY_METRICS,
+    quality: ciraEvalHarness.QUALITY_METRICS,
+    thresholds: ciraEvalHarness.DEFAULT_THRESHOLDS,
+    lower_is_better: Array.from(ciraEvalHarness.LOWER_IS_BETTER),
+  });
+});
+
+router.post(
+  "/sira/evals/run",
+  authenticateToken,
+  body("metrics").optional().isArray(),
+  body("args").isObject(),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return fail(res, 400, errors.array());
+    try {
+      const result = await ciraEvalHarness.evaluateSuite({
+        metrics: req.body.metrics,
+        args: req.body.args,
+      });
+      ok(res, result);
+    } catch (err) {
+      fail(res, 500, err.message || "sira evals failed");
+    }
+  },
+);
 
 // ─── Observability demo (for wiring tests / debug) ─────────────────────
 
