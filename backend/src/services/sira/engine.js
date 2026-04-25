@@ -24,6 +24,7 @@ const { validateEnvelope } = require("./task-envelope-schema");
 const responseBuilder = require("./response-builder");
 const { runCiraAgentRuntime } = require("../agent-runtime");
 const { createDefaultRegistry } = require("./tool-registry");
+const { createIntegrationStack } = require("../ai-product-os/integration-stack");
 
 /**
  * @param {object} args
@@ -61,6 +62,8 @@ async function runUserMessage(args = {}) {
   });
   const envelope = envelopeBundle.envelope;
   const envelopeValidation = envelopeBundle.validation;
+  const integrationStack = args.integrationStack || createIntegrationStack();
+  const integrationPlan = integrationStack.resolveExecutionStack({ envelope });
 
   if (!envelopeValidation.ok) {
     return {
@@ -68,6 +71,7 @@ async function runUserMessage(args = {}) {
       stage: "envelope",
       errors: envelopeValidation.errors,
       envelope,
+      integration_plan: integrationPlan,
     };
   }
 
@@ -81,6 +85,7 @@ async function runUserMessage(args = {}) {
       ok: true,
       stage: "needs_clarification",
       envelope,
+      integration_plan: integrationPlan,
       intent_frame: intentFrame,
       plan_frame: planFrame,
       clarifying_questions: envelope.clarification_policy.questions,
@@ -149,6 +154,7 @@ async function runUserMessage(args = {}) {
     ok: true,
     stage: validationFrame.ready_to_deliver ? "delivered" : "needs_repair",
     envelope,
+    integration_plan: integrationPlan,
     intent_frame: intentFrame,
     plan_frame: planFrame,
     tool_call_frame: toolCallFrame,

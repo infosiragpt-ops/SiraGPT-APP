@@ -1,6 +1,6 @@
 /**
- * integration-stack — deterministic tests for the 7-adapter
- * professional-stack contracts plus the integration manifest.
+ * integration-stack — deterministic tests for the adapter contracts
+ * plus the backend capability registry.
  */
 
 const { describe, test } = require("node:test");
@@ -310,16 +310,17 @@ describe("eval-adapter", () => {
 // ── Integration Stack ───────────────────────────────────────────────
 
 describe("integration-stack", () => {
-  test("manifest covers 8 layers", () => {
-    expect(LAYERS.length).toBe(8);
+  test("manifest covers the full backend capability registry", () => {
+    expect(LAYERS.length).toBeGreaterThanOrEqual(26);
     const ids = LAYERS.map(l => l.id);
-    for (const expected of ["agent-sdk", "orchestration", "rag", "document", "browser", "sandbox", "mcp", "eval"]) {
+    for (const expected of ["model-gateway", "agent-sdk", "orchestration", "rag", "document", "docx-generation", "spreadsheet-generation", "presentation-generation", "pdf-generation", "browser", "database", "sandbox", "mcp", "eval", "observability", "security-governance"]) {
       expect(ids.includes(expected)).toBe(true);
     }
   });
 
   test("createIntegrationStack returns one adapter per layer", () => {
     const s = createIntegrationStack();
+    expect(s.modelGateway).toBeTruthy();
     expect(s.agentSdk).toBeTruthy();
     expect(s.orchestration).toBeTruthy();
     expect(s.rag).toBeTruthy();
@@ -333,7 +334,7 @@ describe("integration-stack", () => {
   test("status() flags every adapter as stub by default", () => {
     const s = createIntegrationStack();
     const st = s.status();
-    expect(st.layers.length).toBe(8);
+    expect(st.layers.length).toBeGreaterThanOrEqual(26);
     const stubLayers = st.layers.filter(l => l.adapter && l.adapter.stub === true);
     expect(stubLayers.length).toBeGreaterThanOrEqual(6); // mcp doesn't expose adapter
   });
@@ -342,8 +343,8 @@ describe("integration-stack", () => {
     const s = createIntegrationStack();
     const r = s.integrity();
     expect(r.ok).toBe(true);
-    expect(r.layer_count).toBe(8);
-    expect(r.library_count).toBeGreaterThanOrEqual(28);
+    expect(r.layer_count).toBeGreaterThanOrEqual(26);
+    expect(r.library_count).toBeGreaterThanOrEqual(180);
   });
 
   test("manifest entries are deep-clones (mutating doesn't pollute)", () => {
@@ -352,5 +353,36 @@ describe("integration-stack", () => {
     m[0].libraries.push({ id: "polluted" });
     const fresh = s.manifest();
     expect(fresh[0].libraries.some(l => l.id === "polluted")).toBe(false);
+  });
+
+  test("resolveExecutionStack maps academic Word/PDF research to the correct backend layers", () => {
+    const s = createIntegrationStack();
+    const plan = s.resolveExecutionStack({
+      primaryIntent: "professional_document_generation",
+      secondaryIntents: ["scientific_research", "doi_validation"],
+      outputFormats: ["docx", "pdf"],
+      requiredTools: ["web_search", "doi_validator", "docx_renderer", "pdf_renderer"],
+    });
+    const ids = plan.layers.map(l => l.id);
+    for (const expected of ["model-gateway", "structured-outputs", "rag", "document", "docx-generation", "pdf-generation", "scientific-typesetting", "mcp", "eval", "observability"]) {
+      expect(ids.includes(expected)).toBe(true);
+    }
+    expect(plan.validation_gates.includes("citation_grounding")).toBe(true);
+    expect(plan.release_gate.never_fake_artifacts).toBe(true);
+  });
+
+  test("resolveExecutionStack maps app generation to web builder, sandbox and security", () => {
+    const s = createIntegrationStack();
+    const plan = s.resolveExecutionStack({
+      primaryIntent: "web_app_generation",
+      outputFormats: ["zip"],
+      requiredTools: ["code_project_generator", "run_frontend_build", "playwright_tester"],
+      requiresCode: true,
+    });
+    const ids = plan.layers.map(l => l.id);
+    for (const expected of ["fullstack-web-builder", "sandbox", "security-governance", "cloud-native", "eval"]) {
+      expect(ids.includes(expected)).toBe(true);
+    }
+    expect(plan.security_gates.includes("secret_scan")).toBe(true);
   });
 });
