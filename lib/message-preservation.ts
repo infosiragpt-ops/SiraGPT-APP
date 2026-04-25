@@ -60,21 +60,43 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
   }
 
   // Pass 1 - preserve content of user messages that survived the server round-trip.
+  // Hardened against the "text shrinks to empty" regression: when looking for
+  // a local match we now also try matching by content prefix (recovers across
+  // a re-issued chat object where the optimistic id was lost) AND we always
+  // pick the LONGER of incoming.content vs localMatch.content for user turns
+  // - user input is immutable from the user's POV, so the most-detailed
+  // version we ever rendered must survive.
   let userOrdinal = -1;
   const enriched: TMessage[] = incomingMessages.map((incoming) => {
     if (!isUserMessage(incoming)) return incoming;
 
     userOrdinal += 1;
-    const localMatch =
+    let localMatch: TMessage | undefined =
       (incoming.id ? localById.get(incoming.id) : undefined) ||
       localUsersByOrdinal[userOrdinal];
+
+    // Extra match attempt: same-content user message anywhere in local.
+    // Catches the case where ordinal alignment is off because the server
+    // returned more or fewer user messages than the local snapshot.
+    if (!localMatch) {
+      const incomingText = asText(incoming.content).trim();
+      if (incomingText) {
+        localMatch = localUsersByOrdinal.find(l => sameUserContent(l, incoming));
+      }
+    }
 
     if (!localMatch) return incoming;
 
     const next: TMessage = { ...incoming };
 
-    if (!hasText(next.content) && hasText(localMatch.content)) {
-      next.content = asText(localMatch.content) as TMessage['content'];
+    const incomingText = asText(next.content);
+    const localText = asText(localMatch.content);
+    // Defensive: pick the LONGER non-empty content. This prevents the
+    // "text disappears after assistant responds" regression where a
+    // server refresh returned the same user turn with content="" while
+    // local still had the original text.
+    if (hasText(localText) && (!hasText(incomingText) || localText.length > incomingText.length)) {
+      next.content = localText as TMessage['content'];
     }
 
     if (!hasFiles(next.files) && hasFiles(localMatch.files)) {

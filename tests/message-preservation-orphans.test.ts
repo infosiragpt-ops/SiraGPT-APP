@@ -139,6 +139,52 @@ describe("mergeMessagesPreservingUserContent - never drops local user messages",
     assert.equal(users[1].content, "second question")
   })
 
+  it("text NEVER shrinks to empty when server returns same id with content=''", () => {
+    // The "transcirbir" regression: user uploads image + types short text.
+    // Server returns the user turn with content="" (vision pipeline rewrote
+    // the row). Old merge wrote "" over local content because the explicit
+    // emptiness check only handled null/undefined, not stale equal-length
+    // empty strings paired by ordinal.
+    const local = [
+      { id: "real_user_id", role: "USER", content: "transcirbir", files: [{ id: "f1" }] },
+      { id: "asst_real", role: "ASSISTANT", content: "stub" },
+    ]
+    const incoming = [
+      { id: "real_user_id", role: "USER", content: "", files: [{ id: "f1" }] },
+      { id: "asst_real", role: "ASSISTANT", content: "answer" },
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    const u = merged.find(m => String(m.role).toUpperCase() === "USER") as any
+    assert.equal(u.content, "transcirbir", "user text must not shrink to empty")
+  })
+
+  it("longer local content wins over shorter incoming for the same user turn", () => {
+    const local = [
+      { id: "u1", role: "USER", content: "explica este screenshot por favor" },
+      { id: "asst", role: "ASSISTANT", content: "answer" },
+    ]
+    const incoming = [
+      { id: "u1", role: "USER", content: "explica" },
+      { id: "asst", role: "ASSISTANT", content: "answer" },
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    const u = merged.find(m => String(m.role).toUpperCase() === "USER") as any
+    assert.equal(u.content, "explica este screenshot por favor", "longer local must win")
+  })
+
+  it("matches local user message by content when no id alignment is possible", () => {
+    const local: any[] = [
+      { id: "msg-user-temp", role: "USER", content: "hola", files: [{ id: "f1" }] },
+    ]
+    const incoming: any[] = [
+      { id: "u-real", role: "USER", content: "hola", files: undefined },
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    const u = merged.find(m => String(m.role).toUpperCase() === "USER") as any
+    assert.equal(u.content, "hola")
+    assert.ok(Array.isArray(u.files) && u.files.length === 1, "files recovered via content match")
+  })
+
   it("mergeChatPreservingUserMessages preserves orphans on full chat object", () => {
     const local = {
       id: "chat_1",

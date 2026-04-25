@@ -17,6 +17,7 @@
     "../lib/auth/auth-guard-rules.ts",
     "../lib/app-wrapper-routes.ts",
     "../lib/long-paste.ts",
-    "../lib/message-preservation.ts"
+    "../lib/message-preservation.ts",
+    "../lib/attachment-url.ts"
   ]
 }

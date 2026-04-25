@@ -66,6 +66,7 @@ import { ThinkingPlaceholder } from "./thinking-placeholder"
 import MessageActionRail from "./MessageActionRail"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
+import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
 const truncateUrl = (url: string, maxLength: number = 30) => {
@@ -2298,16 +2299,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         }
                     </div>
                 )}
-                {((Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some(isRenderableImageAttachment)) ||
+                {/* Image gallery - ASSISTANT-only. USER messages render
+                    their image attachments via the dedicated block below
+                    (which already handles file.path -> backend URL). Running
+                    BOTH for USER caused a duplicate render that surfaced
+                    "Failed to load image" because this branch did not have
+                    the file.path fallback. */}
+                {((message.role === "ASSISTANT" && Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some(isRenderableImageAttachment)) ||
                     (message.role === "ASSISTANT" && message.content.startsWith('http') &&
                         (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
                         <div className="mt-4 flex flex-wrap items-start gap-3">
                             {Array.isArray(parsedFiles) && parsedFiles.filter(isRenderableImageAttachment).map((file: any, index: number) => {
-                                const rawImageUrl = String(file.imageUrl || file.url || file.base64 || '');
-                                const src =
-                                    rawImageUrl.startsWith('data:image') || rawImageUrl.startsWith('http') || rawImageUrl.startsWith('/api/images/')
-                                        ? rawImageUrl
-                                        : `data:image/jpeg;base64,${rawImageUrl}`;
+                                const src = resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL);
 
                                 const handleDownloadImage = () => {
                                     try {
@@ -2436,18 +2439,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             {parsedFiles
                                 .filter(isRenderableImageAttachment)
                                 .map((file: any, index: number) => {
-                                    let imageUrl = file.imageUrl || file.url || file.base64;
-                                    if (!imageUrl && file.path) {
-                                        const normalizedPath = file.path.replace(/\\/g, '/');
-                                        const relativePath = normalizedPath.split('uploads/')[1];
-                                        if (relativePath) {
-                                            const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000';
-                                            imageUrl = `${baseUrl}/uploads/${relativePath}`;
-                                        }
-                                    }
-                                    if (imageUrl?.includes("localhost:3000") || imageUrl?.startsWith("/uploads")) {
-                                        imageUrl = `${process.env.NEXT_PUBLIC_IMAGE_URL}${imageUrl.replace("http://localhost:5000", "")}`;
-                                    }
+                                    const imageUrl = resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL);
                                     return (
                                         <img
                                             key={`img-${index}`}

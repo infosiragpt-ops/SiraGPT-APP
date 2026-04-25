@@ -55,6 +55,49 @@ function providerForModel(model) {
     return 'OpenAI';
 }
 
+function modelSupportsVision(provider, model) {
+    const normalizedProvider = String(provider || '').toLowerCase();
+    const normalizedModel = String(model || '').toLowerCase();
+
+    if (normalizedProvider === 'deepseek') return false;
+    if (normalizedProvider === 'gemini') return /^gemini/.test(normalizedModel);
+    if (normalizedProvider === 'openai') {
+        return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/i.test(normalizedModel);
+    }
+    if (normalizedProvider === 'openrouter') {
+        return /(gpt-4o|gpt-4\.1|gpt-5|gemini|claude|qwen.*vl|vision|llava|pixtral)/i.test(normalizedModel);
+    }
+    return false;
+}
+
+function selectVisionRuntime(provider, model) {
+    if (modelSupportsVision(provider, model)) {
+        return { provider, model, switched: false };
+    }
+    if (process.env.OPENAI_API_KEY) {
+        return {
+            provider: 'OpenAI',
+            model: process.env.VISION_MODEL || 'gpt-4o-mini',
+            switched: true,
+        };
+    }
+    if (process.env.GEMINI_API_KEY) {
+        return {
+            provider: 'Gemini',
+            model: process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
+            switched: true,
+        };
+    }
+    if (process.env.OPENROUTER_API_KEY) {
+        return {
+            provider: 'OpenRouter',
+            model: process.env.OPENROUTER_VISION_MODEL || 'openai/gpt-4o-mini',
+            switched: true,
+        };
+    }
+    return { provider, model, switched: false };
+}
+
 /**
  * Classify a provider error as transient (safe to retry) vs terminal.
  * Transient: rate limits (429), request timeouts (408), server errors
@@ -247,8 +290,12 @@ class AIService {
                         ? lastMessage.content
                         : lastMessage.content.find(item => item.type === 'text')?.text || '';
 
-                    // ✅ NEW: Add LaTeX formatting instruction for math content in images
+                    // Add hard vision instructions so text-only fallback answers
+                    // never claim the uploaded image cannot be processed.
                     const mathInstructionText = textContent +
+                        '\n\nIMAGE PROCESSING CONTRACT: The uploaded image(s) are attached to this same message as vision inputs. ' +
+                        'Inspect those image inputs directly. If the user asks to transcribe, return the visible text exactly and preserve line breaks when useful. ' +
+                        'Do not say that images cannot be processed unless every image attachment failed to load server-side.' +
                         '\n\nIMPORTANT: If the uploaded image(s) contain mathematical equations, formulas, or expressions, ' +
                         'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
                         'and double dollar signs ($$...$$) for display math. For example: ' +
@@ -277,6 +324,15 @@ class AIService {
                     }
 
                     lastMessage.content = contentArray;
+
+                    if (contentArray.some(part => part.type === 'image_url')) {
+                        const visionRuntime = selectVisionRuntime(provider, model);
+                        if (visionRuntime.switched) {
+                            console.log(`[vision] Routing image turn through vision-capable runtime: ${provider}:${model} -> ${visionRuntime.provider}:${visionRuntime.model}`);
+                            provider = visionRuntime.provider;
+                            model = visionRuntime.model;
+                        }
+                    }
                 }
             }
 
@@ -985,4 +1041,10 @@ You are a professional developer; I will give you a scenario, you understand tha
     }
 }
 
-module.exports = new AIService();
+const service = new AIService();
+service.__test = {
+    modelSupportsVision,
+    selectVisionRuntime,
+};
+
+module.exports = service;
