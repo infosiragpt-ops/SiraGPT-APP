@@ -10,7 +10,7 @@ const siraEngine = require(path.join(
   process.cwd(),
   "backend/src/services/sira/engine.js",
 ))
-const { createDefaultRegistry } = require(path.join(
+const { createDefaultRegistry, SiraToolRegistry } = require(path.join(
   process.cwd(),
   "backend/src/services/sira/tool-registry.js",
 ))
@@ -296,5 +296,75 @@ describe("sira engine · agent runtime integration", () => {
     assert.equal(denied.status, "error")
     assert.equal(denied.error.code, "tool_policy_denied")
     assert.ok(result.audit_trace.some((event: any) => event.event === "tool_policy_denied"))
+  })
+
+  it("deduplicates repeated side-effecting tool invocations in the concrete workflow executor", async () => {
+    let executionCount = 0
+    const registry = new SiraToolRegistry()
+    registry.register({
+      name: "write_once",
+      displayName: "Write Once",
+      description: "Creates a deterministic artifact once per idempotency key.",
+      category: "document",
+      riskLevel: "low",
+      permissionsRequired: ["write_artifact"],
+      timeoutMs: 30000,
+      async execute(input: any) {
+        executionCount += 1
+        return {
+          status: "success",
+          output: { executionCount, input },
+          artifacts: [{
+            artifact_id: "artifact.write_once",
+            type: "file",
+            format: "docx",
+            filename: "write_once.docx",
+            status: "ready",
+            download_url: "/artifacts/write_once.docx",
+          }],
+          metadata: { executor: "test" },
+        }
+      },
+    })
+    const base = await siraEngine.runUserMessage({
+      text: "crea un documento word profesional",
+      attachments: [],
+      dryRun: true,
+    })
+    const envelope = structuredClone(base.envelope)
+    envelope.workflow_graph.idempotency_key = "test:write-once"
+    envelope.workflow_graph.nodes = [
+      {
+        id: "n1",
+        label: "Write once",
+        agent: "artifact_agent",
+        tools: ["write_once"],
+        depends_on: [],
+        status: "pending",
+      },
+      {
+        id: "n2",
+        label: "Write once duplicate",
+        agent: "artifact_agent",
+        tools: ["write_once"],
+        depends_on: ["n1"],
+        status: "pending",
+      },
+    ]
+
+    const result = await siraWorkflowRuntime.runWorkflow({
+      envelope,
+      registry,
+      toolArgs: { write_once: { title: "same input" } },
+      dryRun: false,
+    })
+
+    assert.equal(executionCount, 1)
+    assert.equal(result.tool_results.length, 2)
+    assert.equal(result.tool_results[0].metadata.idempotency.cache_hit, false)
+    assert.equal(result.tool_results[1].metadata.idempotency.cache_hit, true)
+    assert.equal(result.tool_results[1].metadata.idempotency.deduped_from_node, "n1")
+    assert.equal(result.summary.idempotency_guard.guarded_invocations, 1)
+    assert.ok(result.audit_trace.some((event: any) => event.event === "tool_deduplicated"))
   })
 })

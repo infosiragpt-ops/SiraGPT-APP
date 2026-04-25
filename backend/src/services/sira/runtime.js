@@ -11,6 +11,7 @@
 
 const { createDefaultRegistry } = require("./tool-registry");
 const { evaluateToolPolicy, resolveToolPolicyProfile } = require("./tool-policy");
+const { createRunIdempotencyGuard } = require("./idempotency-guard");
 const { validateArtifact, validateSources, validateCode, validateDocument, validateSafety, composeValidationFrame } = require("./validator-engine");
 
 const DEFAULT_PERMISSIONS = Object.freeze([
@@ -61,6 +62,7 @@ async function runWorkflow({
     toolPolicyProfile: resolveToolPolicyProfile({ envelope, context }),
     trace: context.trace || (() => {}),
   };
+  const idempotencyGuard = createRunIdempotencyGuard({ envelope });
 
   // ── Drive the graph in topological order ─────────────────────────
   while (true) {
@@ -82,6 +84,7 @@ async function runWorkflow({
           continue;
         }
         const tool = reg.get(toolName);
+        const input = toolArgs[toolName] || {};
         const policyDecision = evaluateToolPolicy(tool || { name: toolName }, {
           envelope,
           profile: baseContext.toolPolicyProfile,
@@ -106,7 +109,56 @@ async function runWorkflow({
           });
           continue;
         }
-        const r = await reg.invoke(toolName, toolArgs[toolName] || {}, baseContext);
+        const idempotency = idempotencyGuard.check({ toolName, input, tool });
+        if (idempotency.duplicate) {
+          const previous = idempotency.previous || {};
+          toolResults.push({
+            node: next.id,
+            tool: toolName,
+            status: previous.status || "success",
+            output: previous.output || null,
+            error: previous.error || null,
+            metadata: {
+              ...(previous.metadata || {}),
+              idempotency: {
+                key: idempotency.key,
+                cache_hit: true,
+                deduped_from_node: previous.node || null,
+              },
+            },
+          });
+          auditTrace.push({
+            ts: new Date().toISOString(),
+            event: "tool_deduplicated",
+            node_id: next.id,
+            tool: toolName,
+            idempotency_key: idempotency.key,
+            deduped_from_node: previous.node || null,
+          });
+          continue;
+        }
+        const r = await reg.invoke(toolName, input, baseContext);
+        if (idempotency.guarded) {
+          idempotencyGuard.remember(idempotency.key, {
+            node: next.id,
+            tool: toolName,
+            ...r,
+            metadata: {
+              ...(r.metadata || {}),
+              idempotency: {
+                key: idempotency.key,
+                cache_hit: false,
+              },
+            },
+          });
+          r.metadata = {
+            ...(r.metadata || {}),
+            idempotency: {
+              key: idempotency.key,
+              cache_hit: false,
+            },
+          };
+        }
         toolResults.push({ node: next.id, tool: toolName, ...r });
         auditTrace.push({
           ts: new Date().toISOString(),
@@ -178,6 +230,7 @@ async function runWorkflow({
     summary: {
       nodes_executed: completed.size,
       tools_invoked: toolResults.length,
+      idempotency_guard: idempotencyGuard.snapshot(),
       artifacts_planned: artifact_frame.artifacts.length,
       ready_to_deliver: validation_frame.ready_to_deliver,
     },
