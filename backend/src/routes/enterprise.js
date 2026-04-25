@@ -55,10 +55,19 @@ const ciraToolRegistryFactory = require("../services/sira/tool-registry");
 const ciraValidatorEngine = require("../services/sira/validator-engine");
 const ciraPrompts = require("../services/sira/intent-prompts");
 const ciraRuntime = require("../services/sira/runtime");
+const ciraModelAdapter = require("../services/sira/model-adapter");
+const ciraPolicies = require("../services/sira/policies");
+const ciraResearch = require("../services/sira/research-engine");
+const ciraStorage = require("../services/sira/storage-schema");
+const ciraChat = require("../services/sira/chat-controller");
 
 // Single Sira tool registry shared across requests.
 // Production extends this via ciraSharedToolRegistry.register({...}) at boot.
 const ciraSharedToolRegistry = ciraToolRegistryFactory.createDefaultRegistry();
+
+// Single in-memory storage adapter for the Sira persistence layer.
+// Production binds a Postgres / Prisma adapter via createSiraStorage({ adapter }).
+const ciraSharedStorage = ciraStorage.createSiraStorage();
 
 // Single in-memory facade for the local memory tier. Production binds
 // a Qdrant / pgvector adapter via createMemory({ adapter }).
@@ -874,19 +883,143 @@ router.post(
       const runtimeResult = await ciraRuntime.runWorkflow({
         envelope: bundle.envelope,
         registry: ciraSharedToolRegistry,
+        context: {
+          userId: req.user?.id || req.user?.userId || null,
+          conversationId: req.body.conversation_id || null,
+          selectedModel: bundle.envelope?.model_execution_context?.selected_model || null,
+        },
         permissions: req.body.permissions || ciraRuntime.DEFAULT_PERMISSIONS.slice(),
         toolArgs: req.body.tool_args || {},
         dryRun,
       });
+      const finalResponse = ciraEngine.buildFinalResponse({
+        envelope: bundle.envelope,
+        runtime: runtimeResult,
+        validation: runtimeResult.validation_frame,
+      });
       ok(res, {
         bundle: ciraEngine.snapshot(bundle),
         runtime: runtimeResult,
+        final_response: finalResponse,
       });
     } catch (err) {
       fail(res, 500, err.message || "cira run failed");
     }
   }
 );
+
+// ─── Sira platform — model-adapter / policies / research / chat / status ─
+
+router.get("/sira/policies", authenticateToken, (_req, res) => {
+  ok(res, {
+    clarification_policy: ciraPolicies.SIRA_CLARIFICATION_POLICY,
+    safety_policy: ciraPolicies.SIRA_SAFETY_POLICY,
+  });
+});
+
+router.post(
+  "/sira/policies/evaluate",
+  authenticateToken,
+  [body("envelope").isObject().withMessage("envelope (object) required")],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    ok(res, ciraPolicies.evaluatePolicyForEnvelope(req.body.envelope));
+  }
+);
+
+router.get("/sira/model-adapter/providers", authenticateToken, (_req, res) => {
+  ok(res, {
+    providers: ciraModelAdapter.listSupportedProviders(),
+    modalities: ciraModelAdapter.listSupportedModalities(),
+  });
+});
+
+router.post(
+  "/sira/research",
+  authenticateToken,
+  [
+    body("query").isString().isLength({ min: 3, max: 500 }),
+    body("citation_style").optional().isString(),
+    body("claims").optional().isArray(),
+    body("max_sources").optional().isInt({ min: 1, max: 50 }),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = await ciraResearch.runResearchPipeline({
+        query: req.body.query,
+        citationStyle: req.body.citation_style || "APA7",
+        claims: req.body.claims || [],
+        context: { max_sources: req.body.max_sources },
+      });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "sira research failed");
+    }
+  }
+);
+
+router.post(
+  "/sira/chat",
+  authenticateToken,
+  [
+    body("conversation_id").isString().isLength({ min: 3, max: 80 }),
+    body("user_message").isString().isLength({ min: 1, max: 8000 }),
+    body("attachments").optional().isArray(),
+    body("history").optional().isArray(),
+    body("selected_model").isObject().withMessage("selected_model (object) required — no auto-routing"),
+    body("user_plan").optional().isString(),
+    body("dry_run").optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const userId = req.user?.id || req.user?.userId || req.body.user_id || "anonymous";
+      // Ensure the conversation exists in the storage adapter (idempotent best-effort)
+      try {
+        await ciraSharedStorage.startConversation({ userId, title: "Sira chat" });
+      } catch (_e) { /* ignore — adapter may already have it */ }
+      const r = await ciraChat.handleChatTurn({
+        conversationId: req.body.conversation_id,
+        userId,
+        userMessage: req.body.user_message,
+        attachments: req.body.attachments,
+        history: req.body.history,
+        selectedModel: req.body.selected_model,
+        userPlan: req.body.user_plan || req.user?.plan || "FREE",
+        dryRun: req.body.dry_run !== false,
+      }, { storage: ciraSharedStorage, registry: ciraSharedToolRegistry });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "sira chat failed");
+    }
+  }
+);
+
+router.get(
+  "/sira/tasks/:requestId/status",
+  authenticateToken,
+  [param("requestId").isString().isLength({ min: 4, max: 80 })],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const status = await ciraSharedStorage.getRunStatus(req.params.requestId);
+      const envelope = await ciraSharedStorage.getEnvelope(req.params.requestId);
+      const artifacts = await ciraSharedStorage.listArtifactsForRequest(req.params.requestId);
+      ok(res, { status, envelope, artifacts });
+    } catch (err) {
+      fail(res, 500, err.message || "sira status failed");
+    }
+  }
+);
+
+router.get("/sira/storage/schema", authenticateToken, (_req, res) => {
+  ok(res, { tables: ciraStorage.TABLES, ddl: ciraStorage.SCHEMA_DDL });
+});
 
 // ─── Observability demo (for wiring tests / debug) ─────────────────────
 
