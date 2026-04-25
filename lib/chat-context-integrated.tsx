@@ -6,6 +6,7 @@ import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { aiService, buildProfessionalCapabilityPrompt, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
+import { mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 
@@ -1277,7 +1278,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await apiClient.getChat(chatId)
         const chat = response.chat
-        setCurrentChat(chat)
+        setCurrentChat(prev => mergeChatPreservingUserMessages(chat, prev))
 
         // Update the chats list to ensure consistency and add new chat if needed
         setChats((prev) => {
@@ -1285,7 +1286,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           const existingIndex = prev.findIndex(c => c && c.id === chatId)
           if (existingIndex >= 0) {
             // Update existing chat
-            return prev.filter(c => c && c.id).map((c) => c.id === chatId ? chat : c)
+            return prev.filter(c => c && c.id).map((c) =>
+              c.id === chatId ? mergeChatPreservingUserMessages(chat, c) : c
+            )
           } else {
             // Add new chat at the beginning
             return [chat, ...prev]
@@ -1494,12 +1497,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               // Refresh immediately to ensure we have the latest state
               if (currentChat?.id) {
                 const freshChat = await apiClient.getChat(currentChat.id);
-                setCurrentChat(freshChat.chat);
+                setCurrentChat(prev => mergeChatPreservingUserMessages(freshChat.chat, prev));
 
                 // Also update the chat in the chats list to keep sidebar in sync
                 setChats(prevChats =>
                   prevChats.filter(chat => chat && chat.id).map(chat =>
-                    chat.id === currentChat.id ? freshChat.chat : chat
+                    chat.id === currentChat.id ? mergeChatPreservingUserMessages(freshChat.chat, chat) : chat
                   )
                 );
 
