@@ -22,6 +22,8 @@ const { buildEnvelope } = require("./task-envelope-builder");
 const { buildIntentFrame, buildPlanFrame, buildToolCallFrame, buildArtifactFrame, buildValidationFrame, buildFinalResponseFrame } = require("./frames");
 const { validateEnvelope } = require("./task-envelope-schema");
 const responseBuilder = require("./response-builder");
+const { runCiraAgentRuntime } = require("../agent-runtime");
+const { createDefaultRegistry } = require("./tool-registry");
 
 /**
  * @param {object} args
@@ -130,6 +132,18 @@ async function runUserMessage(args = {}) {
     warnings: validationFrame.ready_to_deliver ? [] : ["validation_failed_release_blocked"],
   });
   const response = buildResponse({ envelope, validationFrame, finalResponseFrame, artifactResults, dryRun });
+  const agentRuntime = await runCiraAgentRuntime({
+    text: args.text,
+    attachments: args.attachments,
+    history: args.history,
+    envelope,
+    validateEnvelope,
+    registry: args.registry || createDefaultRegistry(),
+    metadata: {
+      dry_run: dryRun,
+      selected_model: envelope.model_execution_context?.selected_model || null,
+    },
+  });
 
   return {
     ok: true,
@@ -143,6 +157,7 @@ async function runUserMessage(args = {}) {
     final_response_frame: finalResponseFrame,
     tool_results: toolResults,
     artifact_results: artifactResults,
+    agent_runtime: agentRuntime,
     response,
   };
 }
