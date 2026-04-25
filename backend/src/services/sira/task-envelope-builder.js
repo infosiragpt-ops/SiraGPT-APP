@@ -94,7 +94,7 @@ async function buildEnvelope({
   // Map the router's primary_intent (e.g. "complex_academic_document_generation")
   // to the universal taxonomy id (e.g. "academic_document"). Keeps both ids
   // available so downstream code can pick whichever it prefers.
-  const taxonomyIntent = mapRouterIntentToTaxonomy(decision.intent_primary, normalizedAttachments);
+  const taxonomyIntent = mapRouterIntentToTaxonomy(decision.intent_primary, normalizedAttachments, text);
 
   // ── 3. Resolve the skill bundle ──────────────────────────────────
   const skill = skillSystem.resolveSkillForIntent(decision, { userPlan });
@@ -223,7 +223,17 @@ async function buildEnvelope({
 
 // ── Mappers + derivers ──────────────────────────────────────────────
 
-function mapRouterIntentToTaxonomy(routerIntent, attachments) {
+function mapRouterIntentToTaxonomy(routerIntent, attachments, rawText = "") {
+  if (
+    routerIntent === "spreadsheet_generation"
+    && spreadsheetMentionIsInputContext(rawText, attachments)
+    && documentOutputIsExplicit(rawText)
+  ) {
+    if (/\b(apa\s*7|tesis|monograf[ií]a|art[ií]culo\s+cient[ií]fico|fuentes?\s+(cient[ií]ficas?|reales)|doi|scopus|openalex|crossref)\b/i.test(rawText)) {
+      return getIntent("academic_document");
+    }
+    return getIntent("report_generation");
+  }
   const map = {
     complex_academic_document_generation: "academic_document",
     spreadsheet_generation: "xlsx_generation",
@@ -317,11 +327,10 @@ function deriveTaskClassification(taxonomyIntent, decision, attachments) {
 }
 
 function deriveEntities(text, taxonomyIntent, attachments) {
-  const lowerText = text.toLowerCase();
   const requestedFormats = [];
   if (/\bword\b|\bdocx\b|\.docx\b/i.test(text)) requestedFormats.push("docx");
   if (/\bpdf\b|\.pdf\b/i.test(text)) requestedFormats.push("pdf");
-  if (/\bexcel\b|\bxlsx\b|hoja de c[aá]lculo|spreadsheet/i.test(text)) requestedFormats.push("xlsx");
+  if (/\bexcel\b|\bxlsx\b|hoja de c[aá]lculo|spreadsheet/i.test(text) && !spreadsheetMentionIsInputContext(text, attachments)) requestedFormats.push("xlsx");
   if (/\bpptx?\b|powerpoint|presentaci[oó]n/i.test(text)) requestedFormats.push("pptx");
   if (/\bsvg\b/i.test(text)) requestedFormats.push("svg");
   return {
@@ -335,6 +344,19 @@ function deriveEntities(text, taxonomyIntent, attachments) {
     length_requirement: null,
     style_requirement: taxonomyIntent.family === "document_artifacts" ? "professional_academic" : null,
   };
+}
+
+function documentOutputIsExplicit(text) {
+  return /\b(word|docx|pdf|informe|reporte|documento|tesis|monograf[ií]a|ensayo)\b/i.test(String(text || ""));
+}
+
+function spreadsheetMentionIsInputContext(text, attachments = []) {
+  const hasSpreadsheetAttachment = (attachments || []).some(a => a.detected_type === "spreadsheet");
+  const t = String(text || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  const explicitInput = /\b(?:este|esta|ese|esa|el|la|mi|archivo|adjunto|subido|cargado|datos|dataset)\s+(?:excel|xlsx|xls|csv|spreadsheet|hoja\s+de\s+calculo)\b/.test(t)
+    || /\b(?:excel|xlsx|xls|csv|spreadsheet|hoja\s+de\s+calculo)\s+(?:adjunto|subido|cargado|que\s+subi|que\s+envie|existente|de\s+entrada)\b/.test(t)
+    || /\b(?:analiza|leer|lee|procesa|extrae|usa|utiliza)\b.{0,80}\b(?:excel|xlsx|xls|csv|spreadsheet|hoja\s+de\s+calculo)\b/.test(t);
+  return hasSpreadsheetAttachment && explicitInput;
 }
 
 function deriveContextRequirements(taxonomyIntent, attachments) {

@@ -164,6 +164,23 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.output_contract.spreadsheet_specification).toBeTruthy();
   });
 
+  test("input Excel context does not override explicit Word/PDF output", async () => {
+    const r = await buildEnvelope({
+      text: "Hazme un informe profesional en Word con fuentes reales, analiza este Excel y dame PDF",
+      attachments: [{ filename: "datos.xlsx", mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: 2000 }],
+    });
+    const outputs = [
+      r.envelope.output_contract.primary_output,
+      ...r.envelope.output_contract.secondary_outputs,
+    ].map(o => o.format || o.type);
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.intent_analysis.primary_intent.id).toBe("academic_document");
+    expect(outputs.includes("docx")).toBe(true);
+    expect(outputs.includes("pdf")).toBe(true);
+    expect(outputs.includes("xlsx")).toBe(false);
+    expect(r.envelope.entities.requested_formats.includes("xlsx")).toBe(false);
+  });
+
   test("web app request produces code_project output", async () => {
     const r = await buildEnvelope({
       text: "Construye una landing en Next.js para mi clínica dental",

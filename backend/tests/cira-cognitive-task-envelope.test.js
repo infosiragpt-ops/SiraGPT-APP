@@ -5,7 +5,7 @@ const {
   buildSemanticIntentAnalysis,
 } = require('../src/services/agents/semantic-intent-router');
 const {
-  CIRA_EXECUTION_LAW,
+  SIRA_EXECUTION_LAW,
   UNIVERSAL_INTENT_TAXONOMY,
   validateCiraCognitiveTaskEnvelope,
 } = require('../src/services/agents/cira-cognitive-task-envelope');
@@ -27,7 +27,7 @@ test('Cira envelope compiles complex Word/PDF + Excel analysis into a validated 
 
   const envelope = analysis.cira_task_envelope;
   assert.equal(validateCiraCognitiveTaskEnvelope(envelope).ok, true);
-  assert.equal(envelope.schema_version, 'cira.task_envelope.v1');
+  assert.equal(envelope.schema_version, 'sira.task_envelope.v1');
   assert.equal(envelope.intent_analysis.primary_intent.id, 'complex_academic_document_generation');
   assert.deepEqual(envelope.entities.requested_formats, ['docx', 'pdf']);
   assert.equal(envelope.raw_input.attachments[0].detected_type, 'spreadsheet');
@@ -55,7 +55,7 @@ test('Cira envelope exposes contract law and universal taxonomy for every route'
   assert.ok(envelope.tool_plan.required_tools.some((tool) => tool.tool_name === 'run_tests'));
   assert.ok(envelope.frames.plan_frame.steps.some((step) => step.id === 'tool_runtime_gateway'));
 
-  for (const [key, value] of Object.entries(CIRA_EXECUTION_LAW)) {
+  for (const [key, value] of Object.entries(SIRA_EXECUTION_LAW)) {
     assert.equal(envelope.execution_law[key], value, key);
   }
   assert.ok(UNIVERSAL_INTENT_TAXONOMY.coding.includes('landing_page_generation'));

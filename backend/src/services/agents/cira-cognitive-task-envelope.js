@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const Ajv = require('ajv');
 const addFormats = require('ajv-formats');
 
-const CIRA_TASK_ENVELOPE_VERSION = 'cira.task_envelope.v1';
+const CIRA_TASK_ENVELOPE_VERSION = 'sira.task_envelope.v1';
 
 const UNIVERSAL_INTENT_TAXONOMY = {
   conversation: [
@@ -145,7 +145,7 @@ const UNIVERSAL_INTENT_TAXONOMY = {
   ],
 };
 
-const CIRA_EXECUTION_LAW = {
+const SIRA_EXECUTION_LAW = {
   do_not_answer_freely: true,
   compile_request_to_contract: true,
   validate_contract_before_execution: true,
@@ -226,8 +226,8 @@ const ciraTaskEnvelopeSchema = {
     execution_law: {
       type: 'object',
       additionalProperties: false,
-      required: Object.keys(CIRA_EXECUTION_LAW),
-      properties: Object.fromEntries(Object.keys(CIRA_EXECUTION_LAW).map((key) => [key, { type: 'boolean', const: true }])),
+      required: Object.keys(SIRA_EXECUTION_LAW),
+      properties: Object.fromEntries(Object.keys(SIRA_EXECUTION_LAW).map((key) => [key, { type: 'boolean', const: true }])),
     },
     frames: {
       type: 'object',
@@ -1018,7 +1018,7 @@ function buildCiraCognitiveTaskEnvelope({
         'cost_estimate',
       ],
     },
-    execution_law: CIRA_EXECUTION_LAW,
+    execution_law: SIRA_EXECUTION_LAW,
     frames: null,
     final_answer_contract: {
       must_include: ['breve_resumen_de_lo_realizado', 'archivos_generados_si_aplica', 'advertencias_si_existen', 'fuentes_usadas_si_aplica'],
@@ -1079,7 +1079,7 @@ function validateCiraCognitiveTaskEnvelope(envelope) {
 
 function buildCiraIntentEnginePrompt() {
   return [
-    'You are Cira Intent Engine, the task-understanding layer for an advanced agentic platform.',
+    'You are Sira Intent Engine, the task-understanding layer for an advanced agentic platform.',
     'Do not answer the final user. Do not execute tools. Do not invent files, citations, sources or results.',
     'Compile every request into CiraTaskEnvelopeV1, then into IntentFrame, PlanFrame, ToolCallFrame, ArtifactFrame and ValidationFrame.',
     'If critical information is missing, ask at most three concrete clarification questions. Otherwise proceed with explicit assumptions.',
@@ -1090,7 +1090,8 @@ function buildCiraIntentEnginePrompt() {
 module.exports = {
   CIRA_TASK_ENVELOPE_VERSION,
   UNIVERSAL_INTENT_TAXONOMY,
-  CIRA_EXECUTION_LAW,
+  CIRA_EXECUTION_LAW: SIRA_EXECUTION_LAW,
+  SIRA_EXECUTION_LAW,
   ciraTaskEnvelopeSchema,
   buildCiraCognitiveTaskEnvelope,
   validateCiraCognitiveTaskEnvelope,
