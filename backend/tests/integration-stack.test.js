@@ -385,4 +385,41 @@ describe("integration-stack", () => {
     }
     expect(plan.security_gates.includes("secret_scan")).toBe(true);
   });
+
+  test("dependencyReadiness detects real DOCX/PDF packages and keeps wet-run gates honest", () => {
+    const s = createIntegrationStack();
+    const readiness = s.dependencyReadiness({
+      primaryIntent: "professional_document_generation",
+      outputFormats: ["docx", "pdf"],
+      requiredTools: ["docx_renderer", "pdf_renderer"],
+    });
+    const docxLayer = readiness.layers.find(l => l.id === "docx-generation");
+    const pdfLayer = readiness.layers.find(l => l.id === "pdf-generation");
+    expect(Boolean(docxLayer)).toBe(true);
+    expect(Boolean(pdfLayer)).toBe(true);
+    expect(docxLayer.libraries.find(l => l.id === "docx").status).toBe("ready");
+    expect(docxLayer.libraries.find(l => l.id === "mammoth").status).toBe("ready");
+    expect(pdfLayer.libraries.find(l => l.id === "pdf-lib").status).toBe("ready");
+    expect(readiness.release_gate.never_claim_missing_tools).toBe(true);
+    expect(readiness.release_gate.do_not_expose_secret_values).toBe(true);
+    expect(readiness.summary.package_files_detected).toBeGreaterThanOrEqual(1);
+  });
+
+  test("dependencyReadiness detects web-builder packages from project manifests", () => {
+    const s = createIntegrationStack();
+    const readiness = s.dependencyReadiness({
+      primaryIntent: "web_app_generation",
+      outputFormats: ["zip"],
+      requiredTools: ["run_frontend_build", "playwright_tester"],
+      requiresCode: true,
+    });
+    const builder = readiness.layers.find(l => l.id === "fullstack-web-builder");
+    expect(Boolean(builder)).toBe(true);
+    for (const expected of ["nextjs", "react", "tailwindcss", "playwright", "eslint"]) {
+      const library = builder.libraries.find(l => l.id === expected);
+      expect(Boolean(library)).toBe(true);
+      expect(library.status).toBe("ready");
+    }
+    expect(readiness.release_gate.ready_for_dry_run).toBe(true);
+  });
 });

@@ -90,6 +90,51 @@ describe("AI Product OS integration stack", () => {
     assert.ok(plan.validation_gates.includes("build_passes"))
   })
 
+  it("reports installed artifact dependencies instead of claiming unavailable tools", () => {
+    const stack = integrationStack.createIntegrationStack()
+    const readiness = stack.dependencyReadiness({
+      primaryIntent: "professional_document_generation",
+      secondaryIntents: ["scientific_research"],
+      outputFormats: ["docx", "pdf"],
+      requiredTools: ["docx_renderer", "pdf_renderer"],
+    })
+
+    const docxLayer = readiness.layers.find((layer: any) => layer.id === "docx-generation")
+    const pdfLayer = readiness.layers.find((layer: any) => layer.id === "pdf-generation")
+    assert.ok(docxLayer, "docx readiness layer missing")
+    assert.ok(pdfLayer, "pdf readiness layer missing")
+
+    const docxLib = docxLayer.libraries.find((library: any) => library.id === "docx")
+    const mammothLib = docxLayer.libraries.find((library: any) => library.id === "mammoth")
+    const pdfLib = pdfLayer.libraries.find((library: any) => library.id === "pdf-lib")
+
+    assert.equal(docxLib.status, "ready")
+    assert.equal(mammothLib.status, "ready")
+    assert.equal(pdfLib.status, "ready")
+    assert.equal(readiness.release_gate.never_claim_missing_tools, true)
+    assert.equal(readiness.release_gate.do_not_expose_secret_values, true)
+    assert.ok(readiness.summary.package_files_detected >= 1)
+  })
+
+  it("checks builder dependencies for web app tasks without touching frontend UI", () => {
+    const stack = integrationStack.createIntegrationStack()
+    const readiness = stack.dependencyReadiness({
+      primaryIntent: "web_app_generation",
+      outputFormats: ["zip"],
+      requiredTools: ["run_frontend_build", "playwright_tester"],
+      requiresCode: true,
+    })
+    const builder = readiness.layers.find((layer: any) => layer.id === "fullstack-web-builder")
+    assert.ok(builder, "builder readiness layer missing")
+
+    for (const expected of ["nextjs", "react", "tailwindcss", "playwright", "eslint"]) {
+      const library = builder.libraries.find((item: any) => item.id === expected)
+      assert.ok(library, `missing builder library ${expected}`)
+      assert.equal(library.status, "ready", `${expected} should be detected from package manifests`)
+    }
+    assert.equal(readiness.release_gate.ready_for_dry_run, true)
+  })
+
   it("can resolve directly from a Cira envelope shape", () => {
     const stack = integrationStack.createIntegrationStack()
     const plan = stack.resolveExecutionStack({

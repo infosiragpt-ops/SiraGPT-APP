@@ -769,6 +769,28 @@ router.post(
 );
 
 router.post(
+  "/product-os/integrations/readiness",
+  authenticateToken,
+  [
+    body("envelope").optional().isObject(),
+    body("primaryIntent").optional().isString().isLength({ min: 2, max: 120 }),
+    body("primary_intent").optional().isString().isLength({ min: 2, max: 120 }),
+    body("secondaryIntents").optional().isArray({ max: 30 }),
+    body("secondary_intents").optional().isArray({ max: 30 }),
+    body("outputFormats").optional().isArray({ max: 20 }),
+    body("output_formats").optional().isArray({ max: 20 }),
+    body("requiredTools").optional().isArray({ max: 60 }),
+    body("required_tools").optional().isArray({ max: 60 }),
+    body("attachments").optional().isArray({ max: 25 }),
+  ],
+  (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    ok(res, { readiness: sharedIntegration.dependencyReadiness(req.body || {}, { cwd: process.cwd() }) });
+  }
+);
+
+router.post(
   "/product-os/integrations/eval",
   authenticateToken,
   [

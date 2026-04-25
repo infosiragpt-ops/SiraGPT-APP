@@ -1,5 +1,8 @@
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
+
 /**
  * integration-stack — internal capability registry for the AI Product OS.
  *
@@ -593,6 +596,216 @@ const TOOL_LAYER_RULES = Object.freeze([
   [/dashboard|bi|market|pricing|competitor/i, ["bi-studio", "data-pipelines", "rag"]],
 ]);
 
+const LIBRARY_RUNTIME_REQUIREMENTS = Object.freeze({
+  "litellm": { python: ["litellm"], env_any: ["LITELLM_PROXY_URL", "LITELLM_HOST"], external: true },
+  "vercel-ai": { npm: ["ai"] },
+  "openai-sdk": { npm: ["openai"], env_any: ["OPENAI_API_KEY"] },
+  "anthropic-sdk": { npm: ["@anthropic-ai/sdk"], env_any: ["ANTHROPIC_API_KEY"] },
+  "google-genai": { npm: ["@google/genai", "@google/generative-ai"], env_any: ["GEMINI_API_KEY", "GOOGLE_API_KEY"] },
+  "openrouter-provider": { env_any: ["OPENROUTER_API_KEY"], external: true },
+  "ollama": { env_any: ["OLLAMA_HOST"], external: true },
+  "vllm": { env_any: ["VLLM_BASE_URL"], external: true },
+
+  "openai-agents-sdk": { npm: ["@openai/agents"], python: ["openai-agents"], env_any: ["OPENAI_API_KEY"] },
+  "pydantic-ai": { python: ["pydantic-ai"], external: true },
+  "semantic-kernel": { npm: ["semantic-kernel"], python: ["semantic-kernel"], external: true },
+  "google-adk": { npm: ["@google/adk"], python: ["google-adk"], external: true },
+  "mastra": { npm: ["@mastra/core"] },
+  "crewai": { python: ["crewai"], external: true },
+
+  "langgraph": { npm: ["@langchain/langgraph"], python: ["langgraph"], external: true },
+  "temporal": { npm: ["@temporalio/client", "@temporalio/worker"], env_any: ["TEMPORAL_ADDRESS"], external: true },
+  "dbos": { npm: ["@dbos-inc/dbos-sdk"] },
+  "prefect": { python: ["prefect"], external: true },
+  "dagster": { python: ["dagster"], external: true },
+  "bullmq": { npm: ["bullmq"] },
+
+  "llamaindex": { npm: ["llamaindex"], python: ["llama-index"], external: true },
+  "langchain": { npm: ["langchain", "@langchain/core"], python: ["langchain"], external: true },
+  "haystack": { python: ["haystack-ai"], external: true },
+  "qdrant": { env_any: ["QDRANT_URL"], external: true },
+  "pgvector": { env_any: ["DATABASE_URL", "POSTGRES_URL"], external: true },
+  "opensearch": { env_any: ["OPENSEARCH_URL"], external: true },
+  "sentence-transformers": { python: ["sentence-transformers"], external: true },
+  "graphrag": { python: ["graphrag"], external: true },
+  "mem0": { npm: ["mem0ai"], python: ["mem0ai"], external: true },
+  "zep": { env_any: ["ZEP_API_URL", "ZEP_API_KEY"], external: true },
+
+  "docling": { python: ["docling"], external: true },
+  "markitdown": { python: ["markitdown"], external: true },
+  "mineru": { python: ["mineru"], external: true },
+  "unstructured": { python: ["unstructured"], external: true },
+  "pymupdf": { python: ["pymupdf"], external: true },
+  "pdfplumber": { python: ["pdfplumber"], external: true },
+  "tesseract": { npm: ["tesseract.js"], cli: ["tesseract"] },
+  "paddleocr": { python: ["paddleocr"], external: true },
+  "mammoth": { npm: ["mammoth"] },
+
+  "python-docx": { python: ["python-docx"], external: true },
+  "docxtpl": { python: ["docxtpl"], external: true },
+  "docx": { npm: ["docx"] },
+  "docxtemplater": { npm: ["docxtemplater"] },
+  "docxtemplater-pptx": { npm: ["docxtemplater"] },
+  "docx-preview": { npm: ["docx-preview"] },
+
+  "openpyxl": { python: ["openpyxl"], external: true },
+  "xlsxwriter": { python: ["XlsxWriter"], external: true },
+  "pandas": { python: ["pandas"], external: true },
+  "sheetjs": { npm: ["xlsx"] },
+  "exceljs": { npm: ["exceljs"] },
+  "duckdb": { npm: ["duckdb"], python: ["duckdb"], external: true },
+  "polars": { npm: ["nodejs-polars"], python: ["polars"], external: true },
+
+  "pptxgenjs": { npm: ["pptxgenjs"] },
+  "python-pptx": { python: ["python-pptx"], external: true },
+  "marp": { npm: ["@marp-team/marp-cli"] },
+  "revealjs": { npm: ["reveal.js"] },
+  "decktape": { npm: ["decktape"] },
+
+  "reportlab": { python: ["reportlab"], external: true },
+  "weasyprint": { python: ["weasyprint"], external: true },
+  "playwright-pdf": { npm: ["playwright", "@playwright/test"] },
+  "pdfkit": { npm: ["pdfkit"] },
+  "pdf-lib": { npm: ["pdf-lib"] },
+  "pypdf": { python: ["pypdf"], external: true },
+  "pikepdf": { python: ["pikepdf"], external: true },
+  "pdfjs": { npm: ["pdfjs-dist"] },
+  "react-pdf": { npm: ["react-pdf", "@react-pdf/renderer"] },
+  "canvg": { npm: ["canvg"] },
+  "resvg": { npm: ["@resvg/resvg-js"], cli: ["resvg"] },
+  "sharp": { npm: ["sharp"] },
+
+  "katex": { npm: ["katex"] },
+  "mathjax": { npm: ["mathjax"] },
+  "pandoc": { npm: ["node-pandoc"], cli: ["pandoc"] },
+  "quarto": { cli: ["quarto"], external: true },
+  "typst": { cli: ["typst"], external: true },
+  "citeproc-js": { npm: ["citeproc"] },
+  "csl-styles": { reference: true },
+  "zod": { npm: ["zod"] },
+  "pydantic": { python: ["pydantic"], external: true },
+  "ajv": { npm: ["ajv"] },
+  "instructor": { npm: ["@instructor-ai/instructor"], python: ["instructor"], external: true },
+  "guardrails": { python: ["guardrails-ai"], external: true },
+  "nemo-guardrails": { python: ["nemoguardrails"], external: true },
+  "presidio": { python: ["presidio-analyzer", "presidio-anonymizer"], external: true },
+  "gitleaks": { cli: ["gitleaks"], external: true },
+
+  "mcp-typescript-sdk": { npm: ["@modelcontextprotocol/sdk"] },
+  "mcp-python-sdk": { python: ["mcp"], external: true },
+  "mcp-servers": { external: true },
+  "mcp-inspector": { npm: ["@modelcontextprotocol/inspector"] },
+  "langchain-mcp-adapters": { npm: ["@langchain/mcp-adapters"], python: ["langchain-mcp-adapters"], external: true },
+  "docker-mcp-gateway": { env_any: ["DOCKER_HOST"], external: true },
+
+  "playwright": { npm: ["playwright", "@playwright/test"] },
+  "puppeteer": { npm: ["puppeteer"] },
+  "scrapy": { python: ["scrapy"], external: true },
+  "crawlee": { npm: ["crawlee"] },
+  "firecrawl": { npm: ["@mendable/firecrawl-js"], env_any: ["FIRECRAWL_API_KEY"], external: true },
+  "crawl4ai": { python: ["crawl4ai"], external: true },
+  "browserless": { env_any: ["BROWSERLESS_URL", "BROWSERLESS_API_KEY"], external: true },
+  "stagehand": { npm: ["@browserbasehq/stagehand"], env_any: ["BROWSERBASE_API_KEY"], external: true },
+
+  "postgres": { env_any: ["DATABASE_URL", "POSTGRES_URL"], external: true },
+  "prisma": { npm: ["prisma", "@prisma/client"], env_any: ["DATABASE_URL"] },
+  "drizzle": { npm: ["drizzle-orm"] },
+  "sqlalchemy": { python: ["sqlalchemy"], external: true },
+  "alembic": { python: ["alembic"], external: true },
+  "redis": { npm: ["redis", "ioredis"], env_any: ["REDIS_URL"], external: true },
+  "clickhouse": { npm: ["@clickhouse/client"], env_any: ["CLICKHOUSE_URL"], external: true },
+  "neo4j": { npm: ["neo4j-driver"], env_any: ["NEO4J_URI"], external: true },
+  "kuzu": { npm: ["kuzu"] },
+
+  "airbyte": { env_any: ["AIRBYTE_API_URL"], external: true },
+  "dbt": { python: ["dbt-core"], external: true },
+  "great-expectations": { python: ["great-expectations"], external: true },
+  "soda-core": { python: ["soda-core"], external: true },
+  "openlineage": { python: ["openlineage-python"], external: true },
+  "apache-arrow": { npm: ["apache-arrow"], python: ["pyarrow"], external: true },
+  "superset": { env_any: ["SUPERSET_URL"], external: true },
+  "metabase": { env_any: ["METABASE_URL"], external: true },
+  "cube": { npm: ["@cubejs-client/core"], env_any: ["CUBEJS_API_URL"], external: true },
+  "evidence": { npm: ["@evidence-dev/evidence"] },
+  "echarts": { npm: ["echarts"] },
+  "plotly": { npm: ["plotly.js", "plotly.js-basic-dist-min", "react-plotly.js"] },
+  "recharts": { npm: ["recharts"] },
+  "d3": { npm: ["d3"] },
+
+  "nextjs": { npm: ["next"] },
+  "react": { npm: ["react", "react-dom"] },
+  "tailwindcss": { npm: ["tailwindcss"] },
+  "shadcn-ui": { reference: true },
+  "vitest": { npm: ["vitest"] },
+  "eslint": { npm: ["eslint"] },
+  "prettier": { npm: ["prettier"] },
+  "tldraw": { npm: ["tldraw"] },
+  "excalidraw": { npm: ["@excalidraw/excalidraw"] },
+  "react-flow": { npm: ["@xyflow/react", "reactflow"] },
+  "mermaid": { npm: ["mermaid"] },
+  "d2": { cli: ["d2"], external: true },
+  "svgjs": { npm: ["@svgdotjs/svg.js"] },
+  "fabricjs": { npm: ["fabric", "fabricjs"] },
+  "storybook": { npm: ["storybook", "@storybook/react"] },
+
+  "e2b": { npm: ["e2b"], env_any: ["E2B_API_KEY"], external: true },
+  "daytona": { env_any: ["DAYTONA_API_KEY"], external: true },
+  "docker": { env_any: ["DOCKER_HOST"], external: true },
+  "gvisor": { external: true },
+  "firecracker": { external: true },
+  "tree-sitter": { npm: ["tree-sitter"] },
+  "esbuild": { npm: ["esbuild"] },
+  "ruff": { cli: ["ruff"], external: true },
+  "mypy": { python: ["mypy"], external: true },
+
+  "ragas": { python: ["ragas"], external: true },
+  "promptfoo": { npm: ["promptfoo"] },
+  "deepeval": { python: ["deepeval"], external: true },
+  "giskard": { python: ["giskard"], external: true },
+  "phoenix": { python: ["arize-phoenix"], external: true },
+  "langfuse": { npm: ["langfuse"], python: ["langfuse"], env_any: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"], external: true },
+  "openai-evals": { python: ["evals"], external: true },
+
+  "opentelemetry-js": { npm: ["@opentelemetry/api", "@opentelemetry/sdk-node"] },
+  "opentelemetry-python": { python: ["opentelemetry-api", "opentelemetry-sdk"], external: true },
+  "prometheus": { env_any: ["PROMETHEUS_URL"], external: true },
+  "grafana": { env_any: ["GRAFANA_URL"], external: true },
+  "tempo": { env_any: ["TEMPO_URL"], external: true },
+  "loki": { env_any: ["LOKI_URL"], external: true },
+  "jaeger": { env_any: ["JAEGER_ENDPOINT"], external: true },
+  "sentry": { npm: ["@sentry/node", "@sentry/nextjs"], env_any: ["SENTRY_DSN"], external: true },
+
+  "kafka": { npm: ["kafkajs"], env_any: ["KAFKA_BROKERS"], external: true },
+  "nats": { npm: ["nats"], env_any: ["NATS_URL"], external: true },
+  "rabbitmq": { npm: ["amqplib"], env_any: ["RABBITMQ_URL", "AMQP_URL"], external: true },
+  "celery": { python: ["celery"], external: true },
+
+  "kubernetes": { npm: ["@kubernetes/client-node"], env_any: ["KUBECONFIG"], external: true },
+  "helm": { cli: ["helm"], external: true },
+  "kustomize": { cli: ["kustomize"], external: true },
+  "terraform": { cli: ["terraform"], external: true },
+  "argo-cd": { env_any: ["ARGOCD_SERVER"], external: true },
+  "keda": { external: true },
+  "istio": { external: true },
+  "minio": { npm: ["minio"], env_any: ["MINIO_ENDPOINT"], external: true },
+
+  "vault": { npm: ["node-vault"], env_any: ["VAULT_ADDR"], external: true },
+  "opa": { cli: ["opa"], external: true },
+  "casbin": { npm: ["casbin"] },
+  "owasp-asvs": { reference: true },
+  "semgrep": { cli: ["semgrep"], external: true },
+  "codeql": { external: true },
+  "trivy": { cli: ["trivy"], external: true },
+  "syft": { cli: ["syft"], external: true },
+  "cosign": { cli: ["cosign"], external: true },
+  "zap": { external: true },
+
+  "assistant-ui": { npm: ["@assistant-ui/react"] },
+  "copilotkit": { npm: ["@copilotkit/react-core"] },
+  "ws": { npm: ["ws"] },
+  "sse": { built_in: true },
+});
+
 function createIntegrationStack({ providers = {}, vendors = {}, mcpAuditor = null, telemetry = null } = {}) {
   const modelGatewayCore = createLiteLLMGateway({
     providers: providers.modelProviders || providers.models || {},
@@ -668,9 +881,16 @@ function createIntegrationStack({ providers = {}, vendors = {}, mcpAuditor = nul
     return buildExecutionStackPlan(input, status());
   }
 
+  function dependencyReadiness(input = {}, options = {}) {
+    return buildDependencyReadiness(input, {
+      ...options,
+      runtimeStatus: options.runtimeStatus || status(),
+    });
+  }
+
   return {
     modelGateway, agentSdk, orchestration, rag, document, browser, sandbox, mcp, eval: evals,
-    manifest, status, integrity, resolveExecutionStack,
+    manifest, status, integrity, resolveExecutionStack, dependencyReadiness,
     LAYERS, LAYERS_BY_ID,
   };
 }
@@ -722,6 +942,269 @@ function buildExecutionStackPlan(input = {}, runtimeStatus = null) {
     },
     execution_notes: buildExecutionNotes({ normalized, layers, stubs, capabilityOnly }),
   };
+}
+
+function buildDependencyReadiness(input = {}, options = {}) {
+  const runtimeStatus = options.runtimeStatus || null;
+  const plan = buildExecutionStackPlan(input, runtimeStatus);
+  const inventory = options.inventory || loadPackageInventory({
+    cwd: options.cwd || process.cwd(),
+    packageManifests: options.packageManifests,
+  });
+  const env = options.env || process.env || {};
+
+  const layers = plan.layers.map((planLayer) => {
+    const layerDef = LAYERS_BY_ID[planLayer.id];
+    const libraries = (layerDef?.libraries || []).map((library) => inspectLibraryReadiness(library, inventory, env));
+    const counts = countLibraryStates(libraries);
+    const operationalStatus = layerOperationalStatus(planLayer, counts);
+    return {
+      id: planLayer.id,
+      label: planLayer.label,
+      runtime_state: planLayer.runtime_state,
+      operational_status: operationalStatus,
+      readiness_score: libraries.length ? round2((counts.ready + counts.configured + counts.reference_only) / libraries.length) : 0,
+      ready_libraries: counts.ready + counts.configured + counts.reference_only,
+      missing_libraries: counts.missing,
+      partial_libraries: counts.partial,
+      external_required: counts.external_required,
+      env_missing: unique(libraries.flatMap((item) => item.env_missing || [])),
+      libraries,
+      wet_run_blocked: isWetRunBlocked(planLayer, counts, operationalStatus),
+    };
+  });
+
+  const allLibraries = layers.flatMap((layer) => layer.libraries);
+  const summary = countReadinessSummary(layers, allLibraries, inventory);
+  const blockers = layers
+    .filter((layer) => layer.wet_run_blocked)
+    .map((layer) => ({
+      layer_id: layer.id,
+      reason: layer.operational_status,
+      runtime_state: layer.runtime_state,
+      missing_libraries: layer.libraries
+        .filter((library) => ["missing", "external_required", "partial"].includes(library.status))
+        .slice(0, 8)
+        .map((library) => library.id),
+      env_missing: layer.env_missing,
+    }));
+
+  return {
+    schema_version: "sira.integration_dependency_readiness.v1",
+    generated_at: new Date().toISOString(),
+    execution_stack: plan,
+    package_inventory: {
+      package_files: inventory.package_files,
+      package_count: Object.keys(inventory.packages).length,
+    },
+    summary,
+    layers,
+    blockers,
+    release_gate: {
+      ready_for_dry_run: true,
+      ready_for_wet_run: blockers.length === 0,
+      never_claim_missing_tools: true,
+      do_not_expose_secret_values: true,
+    },
+  };
+}
+
+function inspectLibraryReadiness(library, inventory, env) {
+  const requirement = getRuntimeRequirement(library);
+  const npmCandidates = requirement.npm || [];
+  const installed = npmCandidates
+    .filter((name) => inventory.packages[name])
+    .map((name) => ({
+      package: name,
+      scope: inventory.packages[name].scopes,
+      dependency_type: inventory.packages[name].dependency_types,
+    }));
+  const envMissing = missingEnv(requirement, env);
+
+  let status = "missing";
+  if (requirement.built_in) status = "ready";
+  else if (requirement.reference) status = "reference_only";
+  else if (installed.length > 0 && envMissing.length === 0) status = "ready";
+  else if (installed.length > 0 && envMissing.length > 0) status = "partial";
+  else if ((requirement.env_any || []).some((name) => hasEnv(env, name)) || (requirement.env_all || []).length > 0 && envMissing.length === 0) status = "configured";
+  else if ((requirement.external || requirement.python || requirement.cli || requirement.service) && npmCandidates.length === 0) status = "external_required";
+
+  return {
+    id: library.id,
+    name: library.name,
+    role: library.role,
+    language: library.language,
+    status,
+    npm_candidates: npmCandidates,
+    installed_packages: installed,
+    python_candidates: requirement.python || [],
+    cli_candidates: requirement.cli || [],
+    env_required: unique([...(requirement.env_any || []), ...(requirement.env_all || [])]),
+    env_missing: envMissing,
+    external_required: Boolean(requirement.external || requirement.service),
+    note: readinessNote(status, requirement),
+  };
+}
+
+function getRuntimeRequirement(library) {
+  const explicit = LIBRARY_RUNTIME_REQUIREMENTS[library.id];
+  if (explicit) return explicit;
+  const language = normalizeTerm(library.language);
+  if (/(type_script|typescript|javascript|js|node|react)/.test(language)) {
+    return { npm: inferNpmCandidates(library) };
+  }
+  if (/python/.test(language)) {
+    return { python: [library.id], external: true };
+  }
+  if (/(server|service|native|cli|postgres_extension|standard|data)/.test(language) || /server|service|native|cli|standard/.test(normalizeTerm(library.role))) {
+    return { external: true };
+  }
+  return { reference: true };
+}
+
+function inferNpmCandidates(library) {
+  const id = String(library.id || "").trim();
+  const name = String(library.name || "").trim().toLowerCase().replace(/\s+/g, "-");
+  return unique([id, name].filter(Boolean));
+}
+
+function loadPackageInventory({ cwd = process.cwd(), packageManifests = null } = {}) {
+  const packages = {};
+  const packageFiles = [];
+  const manifests = packageManifests ? normalizePackageManifests(packageManifests) : readPackageManifests(cwd);
+
+  for (const { scope, file, manifest } of manifests) {
+    if (!manifest || typeof manifest !== "object") continue;
+    if (file) packageFiles.push(file);
+    for (const dependencyType of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+      for (const [name, version] of Object.entries(manifest[dependencyType] || {})) {
+        if (!packages[name]) {
+          packages[name] = { version, scopes: [], dependency_types: [] };
+        }
+        if (!packages[name].scopes.includes(scope)) packages[name].scopes.push(scope);
+        if (!packages[name].dependency_types.includes(dependencyType)) packages[name].dependency_types.push(dependencyType);
+      }
+    }
+  }
+
+  return {
+    packages,
+    package_files: unique(packageFiles),
+  };
+}
+
+function normalizePackageManifests(packageManifests) {
+  if (Array.isArray(packageManifests)) {
+    return packageManifests.map((item, index) => ({
+      scope: item.scope || `manifest_${index + 1}`,
+      file: item.file || null,
+      manifest: item.manifest || item,
+    }));
+  }
+  return Object.entries(packageManifests || {}).map(([scope, manifest]) => ({
+    scope,
+    file: null,
+    manifest,
+  }));
+}
+
+function readPackageManifests(cwd) {
+  const candidates = [
+    path.join(cwd, "package.json"),
+    path.join(cwd, "backend", "package.json"),
+    path.join(cwd, "..", "package.json"),
+    path.join(cwd, "..", "backend", "package.json"),
+  ];
+  const seen = new Set();
+  const manifests = [];
+  for (const candidate of candidates) {
+    const file = path.resolve(candidate);
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const manifest = readJsonSafe(file);
+    if (!manifest) continue;
+    manifests.push({
+      scope: file.endsWith(`${path.sep}backend${path.sep}package.json`) ? "backend" : "root",
+      file,
+      manifest,
+    });
+  }
+  return manifests;
+}
+
+function readJsonSafe(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (_err) {
+    return null;
+  }
+}
+
+function missingEnv(requirement, env) {
+  const missing = [];
+  const envAny = requirement.env_any || [];
+  if (envAny.length > 0 && !envAny.some((name) => hasEnv(env, name))) {
+    missing.push(...envAny);
+  }
+  for (const name of requirement.env_all || []) {
+    if (!hasEnv(env, name)) missing.push(name);
+  }
+  return unique(missing);
+}
+
+function hasEnv(env, name) {
+  return Boolean(env && Object.prototype.hasOwnProperty.call(env, name) && String(env[name] || "").trim() !== "");
+}
+
+function countLibraryStates(libraries) {
+  return libraries.reduce((acc, library) => {
+    acc[library.status] = (acc[library.status] || 0) + 1;
+    return acc;
+  }, { ready: 0, configured: 0, partial: 0, missing: 0, external_required: 0, reference_only: 0 });
+}
+
+function layerOperationalStatus(planLayer, counts) {
+  if (planLayer.runtime_state === "bound") return "bound";
+  if ((counts.ready + counts.configured + counts.reference_only) > 0) {
+    return planLayer.runtime_state === "stub" ? "package_ready_stub_adapter" : "package_ready";
+  }
+  if (planLayer.runtime_state === "stub") return "stub_runtime_requires_binding";
+  if (counts.external_required > 0 || counts.partial > 0) return "needs_external_binding";
+  return "missing_runtime_dependency";
+}
+
+function isWetRunBlocked(planLayer, counts, operationalStatus) {
+  if (planLayer.runtime_state === "stub" && (counts.ready + counts.configured) === 0) return true;
+  return ["stub_runtime_requires_binding", "needs_external_binding", "missing_runtime_dependency"].includes(operationalStatus);
+}
+
+function countReadinessSummary(layers, allLibraries, inventory) {
+  const states = countLibraryStates(allLibraries);
+  return {
+    selected_layers: layers.length,
+    package_files_detected: inventory.package_files.length,
+    packages_detected: Object.keys(inventory.packages).length,
+    ready_libraries: states.ready + states.configured + states.reference_only,
+    partial_libraries: states.partial,
+    missing_libraries: states.missing,
+    external_required_libraries: states.external_required,
+    wet_run_blockers: layers.filter((layer) => layer.wet_run_blocked).length,
+    env_missing: unique(allLibraries.flatMap((library) => library.env_missing || [])),
+  };
+}
+
+function readinessNote(status, requirement) {
+  if (status === "ready") return "runtime dependency detected";
+  if (status === "configured") return "external runtime configured through environment";
+  if (status === "partial") return "package detected but required environment binding is missing";
+  if (status === "external_required") return "requires external service, Python package, native binary, or production binding";
+  if (status === "reference_only") return "architecture reference or built-in capability; no package binding required";
+  if ((requirement.npm || []).length > 0) return "npm package not detected in project manifests";
+  return "runtime binding not detected";
+}
+
+function round2(value) {
+  return Math.round(value * 100) / 100;
 }
 
 function normalizeExecutionInput(input = {}) {
@@ -984,10 +1467,12 @@ function unique(values) {
 module.exports = {
   createIntegrationStack,
   buildExecutionStackPlan,
+  buildDependencyReadiness,
   normalizeExecutionInput,
   LAYERS,
   LAYERS_BY_ID,
   INTENT_LAYER_MAP,
   FAMILY_LAYER_MAP,
   FORMAT_LAYER_MAP,
+  LIBRARY_RUNTIME_REQUIREMENTS,
 };
