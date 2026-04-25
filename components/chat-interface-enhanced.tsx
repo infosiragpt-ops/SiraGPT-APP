@@ -121,6 +121,12 @@ import { useComputerUse } from "@/hooks/use-computer-use"
 import { WordConnector } from "./WordConnector"
 import { ExcelConnector, type ExcelConnectorRef } from "./ExcelConnector"
 import { resolveModelIconName } from "@/lib/model-icons"
+import {
+  buildFileOnlyPrompt,
+  createLongPasteDocumentFile,
+  getLongPasteMetadata,
+  shouldCompilePastedTextAsDocument,
+} from "@/lib/long-paste"
 
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
@@ -1206,11 +1212,13 @@ const ActiveOptionsDisplay = ({
   removeFile,
   uploadProgress,
   retryUpload,
+  restoreLongPasteToInput,
 }: {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
   uploadProgress: { [key: string]: number };
   retryUpload?: (file: any) => void;
+  restoreLongPasteToInput?: (file: any, index: number) => void;
 }) => {
   // Viewer state — same reusable viewer used by sent-message chips, so
   // the user gets identical high-fidelity preview in both contexts.
@@ -1253,6 +1261,7 @@ const ActiveOptionsDisplay = ({
           const progress = uploadProgress[fileId] || 0;
           const isUploading = progress > 0 && progress < 100;
           const isFailed = file.status === 'failed';
+          const longPasteMeta = getLongPasteMetadata(file);
           const imageSizeClass = uploadedFiles.length > 1 ? 'h-20 w-20' : 'h-32 w-32';
 
           return (
@@ -1338,8 +1347,20 @@ const ActiveOptionsDisplay = ({
                   {getFileIcon(file)}
                   <div className="flex flex-col flex-1 min-w-0">
                     <span className={`truncate font-medium text-[13px] ${isFailed ? 'text-red-600 dark:text-red-400' : ''}`}>
-                      {file.name}
+                      {longPasteMeta?.title || file.name}
                     </span>
+                    {longPasteMeta && !isUploading && !isFailed && (
+                      <button
+                        type="button"
+                        className="mt-0.5 w-fit text-left text-[11px] leading-none text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          restoreLongPasteToInput?.(file, index);
+                        }}
+                      >
+                        Mostrar en el campo de texto ›
+                      </button>
+                    )}
                     {isUploading && (
                       <div className="flex items-center gap-1 mt-1">
                         <div className="flex-1 h-1 bg-gray-200 dark:bg-muted rounded-full overflow-hidden">
@@ -3537,6 +3558,7 @@ But first, you need to connect your Spotify account securely using the button be
     const tempFiles = filesToUpload.map((file) => {
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+      const longPasteMeta = getLongPasteMetadata(file);
       return {
         tempId,
         name: file.name,
@@ -3545,6 +3567,8 @@ But first, you need to connect your Spotify account securely using the button be
         preview,
         file,
         sourceChannel,
+        longPasteMeta,
+        isLongPasteDocument: Boolean(longPasteMeta),
         status: 'uploading' as 'uploading' | 'ready' | 'failed',
       };
     });
@@ -3594,6 +3618,8 @@ But first, you need to connect your Spotify account securely using the button be
           file: tempFiles[idx]?.file ?? f.file,
           preview: tempFiles[idx]?.preview ?? f.preview,
           sourceChannel,
+          longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
+          isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
           status: 'ready' as const,
         }));
         const tempIds = new Set(tempFiles.map(tf => tf.tempId));
@@ -3754,16 +3780,40 @@ But first, you need to connect your Spotify account securely using the button be
           return;
         }
       }
-      // HTML-only paste (rare — usually browsers attach text/plain too).
-      // Strip to text via DOM parsing so we don't lose the content.
+      let htmlFallbackText: string | null = null;
       if (!text && html) {
         const tmp = document.createElement('div');
         tmp.innerHTML = html;
-        const fallbackText = (tmp.textContent || tmp.innerText || '').trim();
-        if (fallbackText) {
-          e.preventDefault();
-          setInput(prev => prev + fallbackText);
+        htmlFallbackText = (tmp.textContent || tmp.innerText || '').trim();
+      }
+      const pastedText = (text && text.trim()) ? text : htmlFallbackText;
+      if (pastedText && shouldCompilePastedTextAsDocument(pastedText)) {
+        e.preventDefault();
+        const documentFile = createLongPasteDocumentFile(pastedText);
+        const { accepted, rejected } = validateBatch([documentFile], {
+          existingCount: uploadedFilesRef.current.length,
+        });
+        if (rejected.length > 0) {
+          rejected.forEach(r => toast.error(r.reason));
+          return;
         }
+        logIngest({
+          source: 'paste-long-text',
+          count: accepted.length,
+          total_bytes: accepted.reduce((s, f) => s + f.size, 0),
+          rejected_count: rejected.length,
+          rejected_codes: rejected.map(r => r.code),
+          had_text: true,
+        });
+        handleAndUploadFiles(filesToFileList(accepted), 'paste-long-text');
+        toast.success('Texto largo adjuntado como documento.');
+        return;
+      }
+      // HTML-only paste (rare — usually browsers attach text/plain too).
+      // Strip to text via DOM parsing so we don't lose the content.
+      if (!text && htmlFallbackText) {
+        e.preventDefault();
+        setInput(prev => prev + htmlFallbackText);
       }
       // Otherwise let the browser do its native plain-text paste.
       return;
@@ -3996,15 +4046,17 @@ But first, you need to connect your Spotify account securely using the button be
   ]);
 
   const handleSend = async () => {
-    const msg = input.trim();
-    if (!msg) return;
+    const composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
+    const rawMsg = input.trim();
+    if (!rawMsg && composerFiles.length === 0) return;
+    const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
 
     const isBusy = isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
 
     if (isBusy) {
       // Park the message — we'll drain the queue once the busy flags
       // flip back to idle (see the useEffect watching busy state).
-      pendingMsgQueueRef.current.push({ msg, files: [...uploadedFiles] });
+      pendingMsgQueueRef.current.push({ msg, files: composerFiles });
       setInput("");
       setUploadedFiles([]);
       const now = Date.now();
@@ -4089,7 +4141,7 @@ REWRITTEN TEXT:`;
       );
       return; // Stop further execution
     }
-    const filesToSend = [...uploadedFiles];
+    const filesToSend = [...composerFiles];
     const buildImageEditPrompt = (rawPrompt: string) => {
       const editFile = filesToSend.find((file: any) => file?.editRegion);
       if (!editFile?.editRegion) return rawPrompt;
@@ -5407,6 +5459,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setUploadedFiles(uploadedFiles.filter((_, i) => i !== index))
   }
 
+  const restoreLongPasteToInput = React.useCallback((file: any, index: number) => {
+    const metadata = getLongPasteMetadata(file);
+    if (!metadata?.text) return;
+    setInput(prev => prev ? `${prev}\n\n${metadata.text}` : metadata.text);
+    setUploadedFiles((cur: any[]) => cur.filter((_, i) => i !== index));
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [setUploadedFiles]);
+
   const isInitial = !currentChat && !showAudioPanel && !isWordConnectorActive && !isExcelConnectorActive
 
   // Any active tool/connector/thesis mode? Used to conditionally render
@@ -6048,6 +6108,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       removeFile={removeFile}
                       uploadProgress={uploadProgress}
                       retryUpload={retryUpload}
+                      restoreLongPasteToInput={restoreLongPasteToInput}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                     {/* Tool pills used to live ABOVE the input; moved to
@@ -6162,19 +6223,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                           {!isStopButtonVisible && (() => {
                             const hasText = input.trim().length > 0
+                            const hasAttachment = uploadedFiles.length > 0
+                            const canSend = hasText || hasAttachment
                             const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
                             // When the user has typed → Send. When idle → open Voice Studio.
-                            const action = hasText
+                            const action = canSend
                               ? handleSend
                               : () => { setShowAudioPanel(true); setAudioTab('stt') }
-                            const label = hasText ? 'Enviar (⏎)' : 'Modo de voz'
-                            const Icon = hasText ? ArrowUp : AudioLines
+                            const label = canSend ? 'Enviar (⏎)' : 'Modo de voz'
+                            const Icon = canSend ? ArrowUp : AudioLines
                             return (
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
                                     onClick={action}
-                                    disabled={hasText && (isLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
+                                    disabled={canSend && (isLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
                                     size="icon"
                                     aria-label={label}
                                     title={label}
@@ -6190,7 +6253,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     {busy ? (
                                       <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
                                     ) : (
-                                      <Icon className="h-[16px] w-[16px]" strokeWidth={hasText ? 2.25 : 1.75} />
+                                      <Icon className="h-[16px] w-[16px]" strokeWidth={canSend ? 2.25 : 1.75} />
                                     )}
                                   </Button>
                                 </TooltipTrigger>
@@ -6406,6 +6469,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           removeFile={removeFile}
                           uploadProgress={uploadProgress}
                           retryUpload={retryUpload}
+                          restoreLongPasteToInput={restoreLongPasteToInput}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                         {/* Tool pills relocated below the input — see
@@ -6510,18 +6574,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                               {!isStopButtonVisible && (() => {
                                 const hasText = input.trim().length > 0
+                                const hasAttachment = uploadedFiles.length > 0
+                                const canSend = hasText || hasAttachment
                                 const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
-                                const action = hasText
+                                const action = canSend
                                   ? handleSend
                                   : () => { setShowAudioPanel(true); setAudioTab('stt') }
-                                const label = hasText ? 'Enviar (⏎)' : 'Modo de voz'
-                                const Icon = hasText ? ArrowUp : AudioLines
+                                const label = canSend ? 'Enviar (⏎)' : 'Modo de voz'
+                                const Icon = canSend ? ArrowUp : AudioLines
                                 return (
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <Button
                                         onClick={action}
-                                        disabled={hasText && (isLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
+                                        disabled={canSend && (isLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
                                         size="icon"
                                         aria-label={label}
                                         title={label}
@@ -6537,7 +6603,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                         {busy ? (
                                           <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
                                         ) : (
-                                          <Icon className="h-[16px] w-[16px]" strokeWidth={hasText ? 2.25 : 1.75} />
+                                          <Icon className="h-[16px] w-[16px]" strokeWidth={canSend ? 2.25 : 1.75} />
                                         )}
                                       </Button>
                                     </TooltipTrigger>

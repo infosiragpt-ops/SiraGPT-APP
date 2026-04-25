@@ -73,6 +73,7 @@ export type IngestSource =
   | "drop-internal"     // drag inside the browser (image dragged out of a tab)
   | "paste-files"       // OS-clipboard files (Cmd+C in Finder → Cmd+V here)
   | "paste-image"       // screenshot or copied image (Cmd+Shift+4 → Cmd+V)
+  | "paste-long-text"   // long pasted text compiled into a text document chip
   | "mobile-share"      // share-sheet → opened via picker
   | "camera"            // input capture
   | "unknown"

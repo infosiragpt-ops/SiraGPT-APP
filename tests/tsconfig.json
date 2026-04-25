@@ -15,6 +15,7 @@
     "../lib/i18n/locales.ts",
     "../lib/i18n/locale-resolution.ts",
     "../lib/auth/auth-guard-rules.ts",
-    "../lib/app-wrapper-routes.ts"
+    "../lib/app-wrapper-routes.ts",
+    "../lib/long-paste.ts"
   ]
 }
