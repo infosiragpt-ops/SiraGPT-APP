@@ -1,0 +1,731 @@
+/**
+ * task-envelope-builder — turns a raw user request into a full
+ * Cira Cognitive Task Envelope v1.
+ *
+ * Builds deterministically:
+ *
+ *   1. Normalises raw text + attachments
+ *   2. Resolves the primary intent against the universal taxonomy
+ *   3. Derives task_classification, output_contract, tool_plan,
+ *      agent_plan, workflow_graph, safety, quality, ui, memory,
+ *      cost/latency, observability, final_answer policies from
+ *      sensible defaults per intent
+ *   4. Validates the produced envelope against the schema
+ *
+ * Optional LLM enrichment hook: when an `llmClient` is provided, the
+ * builder calls it to refine the intent + entities + assumptions
+ * BEFORE the deterministic defaults fill in everything else. The LLM
+ * response is sanitised and merged; the envelope still passes the
+ * validator either way.
+ *
+ * Pure JS, deterministic, zero deps.
+ */
+
+const { SCHEMA_VERSION, validateEnvelope } = require("./task-envelope-schema");
+const { getIntent, TAXONOMY } = require("./intent-taxonomy");
+const intentRouter = require("../ai-product-os/semantic-intent-router");
+const skillSystem = require("../ai-product-os/skill-system");
+const planner = require("../ai-product-os/planner-agent");
+
+/**
+ * @param {object} args
+ * @param {string} args.text                    — raw user text
+ * @param {Array}  [args.attachments]
+ * @param {Array}  [args.history]
+ * @param {object} [args.userProfile]
+ * @param {string} [args.userPlan]
+ * @param {string} [args.conversationId]
+ * @param {string} [args.userId]
+ * @param {object} [args.modelChoice]           — output of model-router.select()
+ * @param {object} [args.llmClient]             — optional intent classifier client
+ * @returns {Promise<{ envelope, validation, frames }>}
+ */
+async function buildEnvelope({
+  text,
+  attachments = [],
+  history = [],
+  userProfile = {},
+  userPlan = "FREE",
+  conversationId = null,
+  userId = null,
+  modelChoice = null,
+  llmClient = null,
+} = {}) {
+  if (typeof text !== "string" || text.trim().length === 0) {
+    throw new Error("task-envelope-builder: text (non-empty string) required");
+  }
+
+  // ── 1. Normalise raw input ───────────────────────────────────────
+  const cleanText = normaliseText(text);
+  const detectedLanguage = detectLanguage(text);
+  const normalizedAttachments = (attachments || []).map(normaliseAttachment);
+
+  // ── 2. Run the intent router (LLM-primary + regex fallback) ──────
+  const decision = await intentRouter.classifyIntent({
+    prompt: text,
+    history,
+    context: {
+      has_attachments: normalizedAttachments.length > 0,
+      attachment_kinds: normalizedAttachments.map(a => a.detected_type).filter(Boolean),
+      locale: detectedLanguage,
+      user_role: userProfile.role || null,
+    },
+    llmClient,
+  });
+
+  // Map the router's primary_intent (e.g. "complex_academic_document_generation")
+  // to the universal taxonomy id (e.g. "academic_document"). Keeps both ids
+  // available so downstream code can pick whichever it prefers.
+  const taxonomyIntent = mapRouterIntentToTaxonomy(decision.intent_primary, normalizedAttachments);
+
+  // ── 3. Resolve the skill bundle ──────────────────────────────────
+  const skill = skillSystem.resolveSkillForIntent(decision, { userPlan });
+  const enrichedDecision = skillSystem.mergeDecisionWithSkill(decision, skill);
+
+  // ── 4. Build the planner graph (the workflow_graph) ──────────────
+  const requestId = `req_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
+  const { plan, validation: planValidation } = planner.buildAndValidate(enrichedDecision, {
+    contract_id: requestId,
+  });
+
+  // ── 5. Compose the envelope ──────────────────────────────────────
+  const envelope = {
+    schema_version: SCHEMA_VERSION,
+    request_id: requestId,
+    conversation_id: conversationId,
+    user_id: userId,
+    created_at: new Date().toISOString(),
+
+    raw_input: {
+      text,
+      input_language: detectedLanguage,
+      input_mode: pickInputMode(text, normalizedAttachments),
+      attachments: normalizedAttachments,
+      links: extractLinks(text),
+      images: normalizedAttachments.filter(a => a.detected_type === "image"),
+      audio: normalizedAttachments.filter(a => a.detected_type === "audio"),
+      video: normalizedAttachments.filter(a => a.detected_type === "video"),
+    },
+
+    normalized_request: {
+      clean_text: cleanText,
+      detected_language: detectedLanguage,
+      target_language: detectedLanguage,
+      translated_query_en: null,
+      user_tone: inferTone(text),
+      spelling_quality: inferSpellingQuality(text),
+      requires_context_resolution: history.length > 0 && /\b(eso|aquello|el documento|la imagen|esto|the file|that one)\b/i.test(text),
+    },
+
+    intent_analysis: {
+      primary_intent: {
+        id: taxonomyIntent.id,
+        label: taxonomyIntent.label,
+        confidence: clamp01(decision.confidence ?? 0.6),
+      },
+      secondary_intents: (decision.intent_secondary || []).slice(0, 8).map(s => ({ id: s, label: humanise(s), confidence: 0.7 })),
+      excluded_intents: deriveExcludedIntents(taxonomyIntent),
+      task_family: taxonomyIntent.family,
+      task_domain: inferDomain(text, taxonomyIntent),
+      complexity_level: taxonomyIntent.default_complexity,
+      ambiguity_level: decision.needs_clarification ? "high" : "low",
+      novelty_level: "medium",
+      user_effort_expected: "low",
+      system_autonomy_expected: decision.confidence >= 0.8 ? "high" : "medium",
+    },
+
+    goal_model: deriveGoalModel(text, taxonomyIntent, normalizedAttachments),
+
+    task_classification: deriveTaskClassification(taxonomyIntent, decision, normalizedAttachments),
+
+    entities: deriveEntities(text, taxonomyIntent, normalizedAttachments),
+
+    context_requirements: deriveContextRequirements(taxonomyIntent, normalizedAttachments),
+
+    data_ingestion_plan: deriveDataIngestionPlan(normalizedAttachments, taxonomyIntent),
+
+    output_contract: deriveOutputContract(taxonomyIntent, text),
+
+    model_execution_context: deriveModelExecutionContext(modelChoice, taxonomyIntent),
+
+    tool_plan: deriveToolPlan(enrichedDecision, taxonomyIntent),
+
+    agent_plan: deriveAgentPlan(enrichedDecision),
+
+    workflow_graph: deriveWorkflowGraph(plan, enrichedDecision),
+
+    clarification_policy: {
+      needs_clarification: Boolean(decision.needs_clarification),
+      clarification_reason: decision.needs_clarification ? "input_under_specified" : null,
+      questions: decision.needs_clarification ? deriveClarifyingQuestions(text, taxonomyIntent) : [],
+      auto_assumptions_allowed: !decision.needs_clarification,
+      act_without_clarification_if_confidence_above: 0.82,
+      ask_user_if_confidence_below: 0.55,
+    },
+
+    safety_and_permissions: deriveSafety(taxonomyIntent, enrichedDecision),
+
+    quality_plan: deriveQualityPlan(taxonomyIntent, enrichedDecision),
+
+    ui_response_plan: deriveUiPlan(plan, taxonomyIntent),
+
+    memory_policy: deriveMemoryPolicy(taxonomyIntent, normalizedAttachments),
+
+    cost_latency_policy: deriveCostLatencyPolicy(taxonomyIntent),
+
+    observability: {
+      trace_required: true,
+      log_model_calls: true,
+      log_tool_calls: true,
+      log_artifact_generation: true,
+      log_validation_scores: true,
+      redact_sensitive_data_in_logs: true,
+      metrics: ["latency", "tool_success_rate", "artifact_success_rate", "source_validation_rate", "user_satisfaction_signal", "cost_estimate"],
+    },
+
+    final_answer_contract: {
+      must_include: deriveMustInclude(taxonomyIntent),
+      must_not_include: ["razonamiento_interno_completo", "datos_privados_no_solicitados", "promesas_de_trabajo_futuro"],
+      delivery_mode: taxonomyIntent.default_output_kind.startsWith("file:") ? "chat_plus_artifacts" : "chat",
+    },
+  };
+
+  const validation = validateEnvelope(envelope);
+  return {
+    envelope,
+    validation,
+    decision,
+    skill,
+    plan,
+    plan_validation: planValidation,
+  };
+}
+
+// ── Mappers + derivers ──────────────────────────────────────────────
+
+function mapRouterIntentToTaxonomy(routerIntent, attachments) {
+  const map = {
+    complex_academic_document_generation: "academic_document",
+    spreadsheet_generation: "xlsx_generation",
+    presentation_generation: "pptx_generation",
+    pdf_report_generation: "report_generation",
+    image_generation: "image_generation",
+    video_generation: "video_generation",
+    code_generation: "code_generation",
+    web_app_build: "web_app_generation",
+    data_analysis: "data_analysis",
+    database_query: "database_query",
+    web_scraping: "web_scraping",
+    design_system: "brand_kit",
+    research_question: "scientific_research",
+    text_answer: "general_question",
+    small_talk: "small_talk",
+    math_solving: "general_question",
+    viz_generation: "chart_generation",
+    email_send: "letter_or_email",
+    calendar_action: "calendar_scheduling",
+    drive_action: "general_question",
+    agent_long_running_task: "workflow_automation",
+    unknown: "general_question",
+  };
+  const id = map[routerIntent] || "general_question";
+  const t = getIntent(id);
+  if (t) return t;
+  // last resort
+  return getIntent("general_question");
+}
+
+function deriveExcludedIntents(taxonomyIntent) {
+  const out = [];
+  if (taxonomyIntent.id !== "image_generation") out.push({ id: "image_generation", reason: "El usuario no pidió crear imágenes." });
+  if (taxonomyIntent.id !== "video_generation") out.push({ id: "video_generation", reason: "El usuario no pidió video." });
+  return out.slice(0, 6);
+}
+
+function deriveGoalModel(text, taxonomyIntent, attachments) {
+  const wantsExcel = attachments.some(a => a.detected_type === "spreadsheet");
+  const successCriteria = [];
+  successCriteria.push(`Cumplir el formato de salida ${taxonomyIntent.default_output_kind}.`);
+  if (taxonomyIntent.default_required_capabilities.includes("research")) successCriteria.push("Incluir fuentes verificables.");
+  if (wantsExcel) successCriteria.push("Procesar el archivo adjunto sin alterarlo.");
+  if (taxonomyIntent.family === "document_artifacts") successCriteria.push("Mantener tono profesional y estructura clara.");
+  return {
+    user_goal: text.length > 200 ? `${text.slice(0, 200)}…` : text,
+    business_goal: null,
+    success_criteria: successCriteria,
+    non_goals: ["No inventar fuentes.", "No modificar archivos originales sin confirmación.", "No realizar acciones destructivas."],
+    assumptions: deriveAssumptions(taxonomyIntent),
+  };
+}
+
+function deriveAssumptions(taxonomyIntent) {
+  const out = [];
+  if (taxonomyIntent.family === "document_artifacts" && taxonomyIntent.id === "academic_document") {
+    out.push({ assumption: "Si no se especifica el estilo de citas, usar APA 7.", confidence: 0.82, needs_user_confirmation: false });
+  }
+  if (taxonomyIntent.family === "spreadsheet_artifacts") {
+    out.push({ assumption: "Las hojas se nombran en español por defecto.", confidence: 0.7, needs_user_confirmation: false });
+  }
+  if (taxonomyIntent.family === "image") {
+    out.push({ assumption: "Aspect ratio 16:9 cuando el usuario no especifica.", confidence: 0.65, needs_user_confirmation: false });
+  }
+  return out;
+}
+
+function deriveTaskClassification(taxonomyIntent, decision, attachments) {
+  const wantsTools = (decision.required_tools || []).length > 0;
+  const wantsResearch = taxonomyIntent.default_required_capabilities.includes("research");
+  const wantsCode = taxonomyIntent.default_required_capabilities.includes("code");
+  const wantsVision = taxonomyIntent.default_required_capabilities.includes("vision") || taxonomyIntent.family === "image";
+  return {
+    task_type: taxonomyIntent.family === "conversation" ? "single_step_text" : "multi_step_agentic_workflow",
+    execution_category: taxonomyIntent.family,
+    output_category: taxonomyIntent.default_output_kind === "text"
+      ? "text"
+      : taxonomyIntent.default_output_kind === "multi_artifact"
+        ? "multi_artifact"
+        : "single_artifact",
+    interaction_pattern: taxonomyIntent.family === "conversation" ? "answer_directly" : "plan_execute_validate_deliver",
+    requires_tool_use: wantsTools,
+    requires_file_processing: attachments.length > 0,
+    requires_external_research: wantsResearch,
+    requires_code_execution: wantsCode || taxonomyIntent.id === "data_analysis",
+    requires_visual_generation: wantsVision || taxonomyIntent.family === "design_visual",
+    requires_human_approval: taxonomyIntent.default_risk === "critical" || taxonomyIntent.family === "high_risk_domains",
+    can_answer_directly: taxonomyIntent.family === "conversation",
+  };
+}
+
+function deriveEntities(text, taxonomyIntent, attachments) {
+  const lowerText = text.toLowerCase();
+  const requestedFormats = [];
+  if (/\bword\b|\bdocx\b|\.docx\b/i.test(text)) requestedFormats.push("docx");
+  if (/\bpdf\b|\.pdf\b/i.test(text)) requestedFormats.push("pdf");
+  if (/\bexcel\b|\bxlsx\b|hoja de c[aá]lculo|spreadsheet/i.test(text)) requestedFormats.push("xlsx");
+  if (/\bpptx?\b|powerpoint|presentaci[oó]n/i.test(text)) requestedFormats.push("pptx");
+  if (/\bsvg\b/i.test(text)) requestedFormats.push("svg");
+  return {
+    requested_formats: requestedFormats.length > 0 ? requestedFormats : [taxonomyIntent.default_output_kind.replace(/^file:|^image:/, "")],
+    document_type: taxonomyIntent.id,
+    citation_style: /apa\s*7|apa septima/i.test(text) ? { value: "APA7", source: "user_specified", confidence: 0.95 } : { value: "APA7", source: "default_inferred", confidence: 0.65 },
+    topic: { value: null, source: "not_provided", confidence: 0 },
+    data_files: attachments.map(a => ({ file_id: a.file_id, role: "primary_dataset", expected_use: a.detected_type === "spreadsheet" ? "analysis_and_charts" : "context" })),
+    target_audience: { value: "academic_or_professional_reader", source: "inferred", confidence: 0.7 },
+    deadline: null,
+    length_requirement: null,
+    style_requirement: taxonomyIntent.family === "document_artifacts" ? "professional_academic" : null,
+  };
+}
+
+function deriveContextRequirements(taxonomyIntent, attachments) {
+  const caps = taxonomyIntent.default_required_capabilities;
+  return {
+    needs_conversation_history: true,
+    needs_user_profile: true,
+    needs_project_memory: false,
+    needs_uploaded_files: attachments.length > 0,
+    needs_web_search: caps.includes("research"),
+    needs_scientific_apis: taxonomyIntent.id === "scientific_research" || taxonomyIntent.id === "academic_document",
+    needs_database_access: taxonomyIntent.id === "database_query",
+    needs_browser_automation: taxonomyIntent.id === "web_scraping" || taxonomyIntent.id === "browser_automation",
+    needs_code_sandbox: caps.includes("sandbox") || caps.includes("code"),
+    freshness_required: caps.includes("research") ? "medium" : "none",
+    minimum_source_quality: caps.includes("research") ? "scientific_or_institutional" : "any",
+    citation_required: caps.includes("research"),
+    source_validation_required: caps.includes("research"),
+  };
+}
+
+function deriveDataIngestionPlan(attachments, taxonomyIntent) {
+  const externalSources = [];
+  if (taxonomyIntent.default_required_capabilities.includes("research")) {
+    externalSources.push(
+      { source: "scopus", purpose: "scientific_literature", required: true },
+      { source: "openalex", purpose: "scientific_literature", required: true },
+      { source: "scielo", purpose: "scientific_literature", required: false },
+      { source: "crossref", purpose: "doi_validation", required: true },
+    );
+  }
+  return {
+    files_to_process: attachments.map(a => ({
+      file_id: a.file_id,
+      processor: a.detected_type === "spreadsheet" ? "spreadsheet_reader"
+        : a.detected_type === "image" ? "image_analyser"
+        : "doc_parser",
+      extraction_targets: a.detected_type === "spreadsheet"
+        ? ["sheet_names", "columns", "data_types", "missing_values", "descriptive_statistics", "chart_candidates"]
+        : ["text", "headings", "tables", "figures"],
+      quality_checks: ["detect_empty_rows", "detect_invalid_values", "detect_outliers"],
+    })),
+    external_sources: externalSources,
+    source_ranking_strategy: {
+      prefer: ["peer_reviewed_articles", "doi_available", "recent_sources", "indexed_journals", "official_institutions"],
+      avoid: ["blogs_without_authority", "uncited_claims", "broken_links"],
+    },
+  };
+}
+
+function deriveOutputContract(taxonomyIntent, text) {
+  const kind = taxonomyIntent.default_output_kind;
+  if (kind === "text") {
+    return {
+      primary_output: { type: "text", format: "markdown", filename_suggestion: null, required: true },
+      secondary_outputs: [],
+    };
+  }
+  if (kind.startsWith("file:")) {
+    const fmt = kind.split(":")[1];
+    const secondary = [];
+    if (/pdf/i.test(text) && fmt !== "pdf") secondary.push({ type: "file", format: "pdf", required: true });
+    if (taxonomyIntent.family === "document_artifacts") secondary.push({ type: "inline_summary", format: "markdown", required: true });
+    return {
+      primary_output: { type: "file", format: fmt, filename_suggestion: `${slug(taxonomyIntent.id)}.${fmt}`, required: true },
+      secondary_outputs: secondary,
+      document_specification: taxonomyIntent.family === "document_artifacts" ? defaultDocSpec() : null,
+      spreadsheet_specification: taxonomyIntent.family === "spreadsheet_artifacts" ? defaultXlsxSpec() : null,
+      visual_specification: null,
+      video_specification: null,
+      image_specification: null,
+      accessibility: { alt_text_for_images: true, clear_heading_structure: true, table_headers_required: true },
+    };
+  }
+  if (kind === "image" || kind.startsWith("image:")) {
+    return {
+      primary_output: { type: "image", format: kind.split(":")[1] || "png", filename_suggestion: null, required: true },
+      secondary_outputs: [],
+      image_specification: { style: "photorealistic", aspect_ratio: "16:9", quality: "high" },
+    };
+  }
+  if (kind === "video") {
+    return {
+      primary_output: { type: "video", format: "mp4", filename_suggestion: null, required: true },
+      secondary_outputs: [],
+      video_specification: { duration_seconds: 10, style: "cinematic", aspect_ratio: "16:9" },
+    };
+  }
+  if (kind === "audio") {
+    return {
+      primary_output: { type: "audio", format: "mp3", filename_suggestion: null, required: true },
+      secondary_outputs: [],
+    };
+  }
+  if (kind === "code_artifact") {
+    return {
+      primary_output: { type: "code_project", format: "zip", filename_suggestion: `${slug(taxonomyIntent.id)}.zip`, required: true },
+      secondary_outputs: [{ type: "preview_url", required: false }, { type: "technical_summary", format: "markdown", required: true }],
+    };
+  }
+  return {
+    primary_output: { type: "multi_artifact", format: null, filename_suggestion: null, required: true },
+    secondary_outputs: [],
+  };
+}
+
+function defaultDocSpec() {
+  return {
+    include_cover_page: true,
+    include_table_of_contents: true,
+    include_introduction: true,
+    include_methodology: false,
+    include_results: false,
+    include_discussion: false,
+    include_conclusions: true,
+    include_references: true,
+    include_appendices: "if_needed",
+    include_charts: true,
+    include_tables: true,
+    citation_style: "APA7",
+    tone: "formal_professional",
+    language: "es",
+  };
+}
+
+function defaultXlsxSpec() {
+  return {
+    sheets: ["Resumen", "Datos", "Análisis"],
+    formulas_required: true,
+    charts_required: true,
+    styles_required: true,
+    freeze_headers: true,
+    data_validation: true,
+  };
+}
+
+function deriveModelExecutionContext(modelChoice, taxonomyIntent) {
+  return {
+    selected_model: {
+      provider: modelChoice?.model?.provider || "user_selected",
+      model_id: modelChoice?.model?.id || "selected_by_user",
+      modality: taxonomyIntent.family === "image" ? "image" : taxonomyIntent.family === "video" ? "video" : "text",
+    },
+    model_role: "reasoning_and_generation",
+    backend_role: "tool_execution_and_validation",
+    should_model_generate_final_file_directly: false,
+    should_backend_render_artifacts: !["text", "image", "video", "audio"].includes(taxonomyIntent.default_output_kind),
+    structured_output_required: ["document_artifacts", "spreadsheet_artifacts", "presentation_artifacts", "data"].includes(taxonomyIntent.family),
+    temperature_policy: { planning: 0.2, research_synthesis: 0.3, creative_writing: 0.6, final_answer: 0.3 },
+  };
+}
+
+function deriveToolPlan(decision, taxonomyIntent) {
+  const required = (decision.required_tools || []).map(toolName => ({
+    tool_name: toolName,
+    tool_type: "registry",
+    reason: `Resolves intent ${taxonomyIntent.id} per skill bundle.`,
+    priority: "critical",
+    risk_level: "low",
+    permission_required: "registered_scope",
+    input_dependencies: [],
+    expected_output: "tool_result",
+  }));
+  return {
+    required_tools: required,
+    optional_tools: [
+      { tool_name: "grammar_style_reviewer", reason: "Pulir redacción profesional cuando aplique." },
+    ],
+    forbidden_tools: [
+      { tool_name: "direct_file_overwrite", reason: "Nunca modificar archivos originales sin confirmación." },
+    ],
+  };
+}
+
+function deriveAgentPlan(decision) {
+  const out = {};
+  for (const id of (decision.required_agents || [])) {
+    out[id] = { role: humanise(id), active: true };
+  }
+  return out;
+}
+
+function deriveWorkflowGraph(plan, decision) {
+  const nodes = (plan.nodes || []).map(n => ({
+    id: n.id,
+    label: humanise(n.id),
+    agent: n.agent || "intent-compiler",
+    tools: n.tool ? [n.tool] : [],
+    depends_on: n.depends_on || [],
+    status: "pending",
+  }));
+  return {
+    execution_mode: "durable_multi_step",
+    nodes,
+    retry_policy: {
+      max_retries_per_node: 2,
+      retry_on: ["tool_timeout", "invalid_json", "file_generation_error", "source_validation_failure"],
+    },
+    fallback_policy: {
+      if_scientific_api_fails: "use_alternative_source_api",
+      if_pdf_export_fails: "render_pdf_from_html",
+      if_chart_generation_fails: "generate_tables_only_and_report_limitation",
+    },
+  };
+}
+
+function deriveSafety(taxonomyIntent, decision) {
+  const risks = [];
+  if (taxonomyIntent.default_required_capabilities.includes("research")) {
+    risks.push({ category: "external_research", risk: "source_quality_or_hallucinated_citations", mitigation: "validate_sources_and_doi" });
+  }
+  if (taxonomyIntent.default_required_capabilities.includes("code") || taxonomyIntent.default_required_capabilities.includes("sandbox")) {
+    risks.push({ category: "code_execution", risk: "unsafe_generated_code", mitigation: "execute_only_in_sandbox" });
+  }
+  if (taxonomyIntent.id === "web_scraping") {
+    risks.push({ category: "web_automation", risk: "violation_of_terms_of_service", mitigation: "respect_robots_no_captcha_bypass" });
+  }
+  if (taxonomyIntent.id === "database_query") {
+    risks.push({ category: "data_access", risk: "unintended_writes", mitigation: "read_only_default_writes_require_approval" });
+  }
+  return {
+    overall_risk_level: taxonomyIntent.default_risk,
+    risk_categories: risks,
+    requires_user_confirmation: taxonomyIntent.default_risk === "critical",
+    allowed_actions: ["read_uploaded_files", "create_new_artifacts", "call_registered_tools"],
+    blocked_actions: ["delete_user_files", "overwrite_original_files", "send_email_without_confirmation", "publish_online_without_confirmation", "make_payments", "access_private_external_accounts_without_permission"],
+    privacy: { contains_sensitive_data: "unknown", should_mask_personal_data: true, store_in_memory: "only_summary_if_user_allows" },
+  };
+}
+
+function deriveQualityPlan(taxonomyIntent, decision) {
+  const validators = [{ name: "intent_fulfillment_validator", checks: ["all_requested_outputs_created", "user_goal_satisfied"] }];
+  if (taxonomyIntent.default_required_capabilities.includes("research")) {
+    validators.push({ name: "source_validator", checks: ["no_fake_references", "doi_or_url_present_when_available", "sources_match_claims", "citation_style_correct"] });
+  }
+  if (taxonomyIntent.family === "document_artifacts" || taxonomyIntent.family === "spreadsheet_artifacts" || taxonomyIntent.family === "presentation_artifacts") {
+    validators.push({ name: "artifact_validator", checks: ["file_opens_successfully", "format_sovereignty"] });
+  }
+  if (taxonomyIntent.id === "data_analysis") {
+    validators.push({ name: "data_validator", checks: ["charts_match_dataset", "statistics_computed_correctly", "no_unexplained_missing_values"] });
+  }
+  validators.push({ name: "language_validator", checks: ["formal_when_required", "no_unwanted_language_switching", "grammar_and_style_polished"] });
+  return {
+    quality_level: taxonomyIntent.family === "document_artifacts" ? "professional_academic" : "professional",
+    validators,
+    minimum_acceptance_score: 0.88,
+    regenerate_if_below_score: true,
+  };
+}
+
+function deriveUiPlan(plan, taxonomyIntent) {
+  const labels = (plan.nodes || []).map(n => humanise(n.id));
+  return {
+    show_progress_steps: labels.length > 1,
+    progress_labels: labels,
+    show_tool_activity: "summarized",
+    show_intermediate_preview: taxonomyIntent.family !== "conversation",
+    final_response_style: taxonomyIntent.family === "conversation" ? "concise_text" : "concise_with_artifact_links",
+    artifact_cards: deriveArtifactCards(taxonomyIntent),
+  };
+}
+
+function deriveArtifactCards(taxonomyIntent) {
+  const k = taxonomyIntent.default_output_kind;
+  if (k === "text") return [];
+  if (k.startsWith("file:")) {
+    const fmt = k.split(":")[1];
+    return [{ type: "download_card", label: `Documento ${fmt.toUpperCase()}`, format: fmt }];
+  }
+  if (k === "image" || k.startsWith("image:")) return [{ type: "preview_card", label: "Imagen", format: k.split(":")[1] || "png" }];
+  if (k === "video") return [{ type: "preview_card", label: "Video", format: "mp4" }];
+  if (k === "code_artifact") return [{ type: "download_card", label: "Proyecto", format: "zip" }, { type: "preview_card", label: "Vista previa", format: "url" }];
+  return [];
+}
+
+function deriveMemoryPolicy(taxonomyIntent, attachments) {
+  return {
+    read_memory: true,
+    write_memory: true,
+    memory_items_to_read: ["preferred_language", "preferred_citation_style", "preferred_document_style", "previous_project_context"],
+    memory_items_to_write: [
+      { key: "last_intent_family", value: taxonomyIntent.family, confidence: 0.9 },
+    ],
+    do_not_store: ["raw_sensitive_dataset", "private_identifiers_without_consent"],
+  };
+}
+
+function deriveCostLatencyPolicy(taxonomyIntent) {
+  const isCheap = taxonomyIntent.default_complexity === "low";
+  return {
+    priority: taxonomyIntent.default_complexity === "very_high" ? "quality_over_speed" : "balanced",
+    max_tool_calls: isCheap ? 5 : 25,
+    max_research_sources: isCheap ? 0 : 20,
+    max_final_sources: isCheap ? 0 : 10,
+    prefer_parallel_execution: true,
+    expensive_tools_allowed: !isCheap,
+    fallback_to_cheaper_tools: false,
+  };
+}
+
+function deriveMustInclude(taxonomyIntent) {
+  const out = ["breve_resumen_de_lo_realizado"];
+  if (taxonomyIntent.default_output_kind !== "text") out.push("archivos_generados");
+  if (taxonomyIntent.default_required_capabilities.includes("research")) out.push("fuentes_usadas_si_aplica");
+  out.push("advertencias_si_existen");
+  return out;
+}
+
+function deriveClarifyingQuestions(text, taxonomyIntent) {
+  const out = [];
+  if (taxonomyIntent.family === "document_artifacts") out.push("¿Sobre qué tema específico quieres el documento?");
+  if (taxonomyIntent.id === "image_generation") out.push("¿Estilo realista, ilustración o 3D?");
+  if (taxonomyIntent.id === "video_generation") out.push("¿Cuántos segundos y qué tipo de cámara?");
+  if (out.length === 0) out.push("¿Puedes dar más contexto sobre el resultado que esperas?");
+  return out.slice(0, 3);
+}
+
+// ── Pure helpers ────────────────────────────────────────────────────
+
+function normaliseText(text) {
+  return String(text).replace(/\s+/g, " ").trim();
+}
+
+function detectLanguage(text) {
+  const t = String(text).toLowerCase();
+  if (/[áéíóúñ¿¡]/.test(t) || /\b(que|para|como|donde|cuando|porque)\b/.test(t)) return "es";
+  if (/[äöüß]/.test(t) || /\b(und|nicht|aber|wenn)\b/.test(t)) return "de";
+  if (/\b(que|comme|pour|parce|alors)\b/.test(t)) return "fr";
+  return "en";
+}
+
+function pickInputMode(text, attachments) {
+  if (attachments.length > 0 && text.length === 0) return "file_only";
+  if (attachments.length > 0 && text.length > 0) return "mixed";
+  return "text";
+}
+
+function inferTone(text) {
+  if (/!/.test(text) && /[A-ZÁÉÍÓÚ]{5,}/.test(text)) return "frustrated";
+  if (/por favor|please|could you|podrías/i.test(text)) return "polite_request";
+  if (text.length < 30) return "casual";
+  return /\?/.test(text) ? "exploratory" : "direct_request";
+}
+
+function inferSpellingQuality(text) {
+  const errors = (text.match(/\b(dle|qye|hcaer|hsacer|tu sofware|crea m e)\b/gi) || []).length;
+  if (errors >= 2) return "very_noisy";
+  if (errors >= 1) return "noisy_but_understandable";
+  return "clean";
+}
+
+function inferDomain(text, taxonomyIntent) {
+  if (taxonomyIntent.family === "high_risk_domains") return taxonomyIntent.id;
+  if (/medic|salud|paciente/i.test(text)) return "healthcare";
+  if (/legal|abogad|contrato|juicio/i.test(text)) return "legal";
+  if (/finan|inversi|contab/i.test(text)) return "finance";
+  if (/educa|tesis|docente|estudi/i.test(text)) return "academic";
+  return "general";
+}
+
+function normaliseAttachment(a, idx) {
+  const mime = a.mime_type || a.mimeType || "";
+  const detected = detectAttachmentType(mime, a.filename || a.name || "");
+  return {
+    file_id: a.file_id || a.id || `file_${idx + 1}`,
+    filename: a.filename || a.name || `attachment_${idx + 1}`,
+    mime_type: mime,
+    detected_type: detected,
+    size_bytes: a.size_bytes || a.size || 0,
+    status: "available",
+  };
+}
+
+function detectAttachmentType(mime, name) {
+  const m = (mime || "").toLowerCase();
+  const ext = name.split(".").pop().toLowerCase();
+  if (m.includes("spreadsheet") || ext === "xlsx" || ext === "xls" || ext === "csv") return "spreadsheet";
+  if (m.includes("wordprocessing") || ext === "docx" || ext === "doc") return "document";
+  if (m.includes("presentation") || ext === "pptx" || ext === "ppt") return "presentation";
+  if (m.includes("pdf") || ext === "pdf") return "pdf";
+  if (m.startsWith("image/") || ["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(ext)) return "image";
+  if (m.startsWith("audio/") || ["mp3", "wav", "ogg", "m4a"].includes(ext)) return "audio";
+  if (m.startsWith("video/") || ["mp4", "mov", "webm", "mkv"].includes(ext)) return "video";
+  if (m.startsWith("text/") || ["txt", "md", "json", "yaml", "yml"].includes(ext)) return "text";
+  return "unknown";
+}
+
+function extractLinks(text) {
+  return (String(text).match(/https?:\/\/\S+/g) || []).slice(0, 20);
+}
+
+function humanise(id) {
+  return String(id || "").replace(/[._-]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function slug(id) {
+  return String(id || "documento").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function clamp01(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+module.exports = {
+  buildEnvelope,
+  // exposed for tests
+  mapRouterIntentToTaxonomy,
+  deriveOutputContract,
+  deriveSafety,
+  deriveQualityPlan,
+};

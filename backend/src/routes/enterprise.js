@@ -48,6 +48,9 @@ const skillSystem = require("../services/ai-product-os/skill-system");
 const memoryLayer = require("../services/ai-product-os/memory-layer");
 const orchestrator = require("../services/ai-product-os/orchestrator");
 const { createIntegrationStack } = require("../services/ai-product-os/integration-stack");
+const ciraEngine = require("../services/cira/engine");
+const ciraTaxonomy = require("../services/cira/intent-taxonomy");
+const ciraSchema = require("../services/cira/task-envelope-schema");
 
 // Single in-memory facade for the local memory tier. Production binds
 // a Qdrant / pgvector adapter via createMemory({ adapter }).
@@ -761,6 +764,49 @@ router.post(
       }));
     } catch (err) {
       fail(res, 500, err.message || "redTeam failed");
+    }
+  }
+);
+
+// ─── Cira Cognitive Task Envelope ──────────────────────────────────────
+
+router.get("/cira/schema", authenticateToken, (_req, res) => {
+  ok(res, { schema_version: ciraSchema.SCHEMA_VERSION, schema: ciraSchema.TASK_ENVELOPE_SCHEMA });
+});
+
+router.get("/cira/taxonomy", authenticateToken, (req, res) => {
+  const family = typeof req.query.family === "string" ? req.query.family : null;
+  ok(res, {
+    integrity: ciraTaxonomy.integrity(),
+    families: ciraTaxonomy.listFamilies(),
+    intents: ciraTaxonomy.listIntents(family ? { family } : {}),
+  });
+});
+
+router.post(
+  "/cira/envelope",
+  authenticateToken,
+  [
+    body("text").isString().isLength({ min: 1, max: 8000 }),
+    body("attachments").optional().isArray(),
+    body("history").optional().isArray(),
+    body("user_plan").optional().isString(),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = await ciraEngine.runUserMessage({
+        text: req.body.text,
+        attachments: req.body.attachments,
+        history: req.body.history,
+        userPlan: req.body.user_plan || req.user?.plan || "FREE",
+        userId: req.user?.id || req.user?.userId || null,
+        dryRun: true,
+      });
+      ok(res, ciraEngine.snapshot(r));
+    } catch (err) {
+      fail(res, 500, err.message || "cira envelope failed");
     }
   }
 );
