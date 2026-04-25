@@ -20,6 +20,8 @@
  * works zero-deps. Production injects concrete vendor clients.
  */
 
+const liteLLMGateway = require("../ai-product-os/litellm-gateway");
+
 const SUPPORTED_PROVIDERS = Object.freeze([
   "openai",
   "anthropic",
@@ -45,23 +47,47 @@ const SUPPORTED_MODALITIES = Object.freeze([
  * @param {"json"|"text"|"json_schema"} [args.responseFormat]
  * @param {Array<object>} [args.tools]
  * @param {object} [opts.providers]  — { openai({...}), anthropic({...}), ... }
+ * @param {object} [opts.gatewayPolicy] LiteLLM-style retry/fallback/budget policy
+ * @param {object} [opts.gateway] Optional injected gateway with dispatch({plan,payload})
  * @returns {Promise<{ text, parsed?, usage, raw, provider, modelId }>}
  */
-async function callUserSelectedModel({ selectedModel, systemPrompt, messages, responseFormat = "text", tools = [] } = {}, { providers = createDefaultProviders() } = {}) {
+async function callUserSelectedModel(
+  { selectedModel, systemPrompt, messages, responseFormat = "text", tools = [] } = {},
+  { providers = createDefaultProviders(), gatewayPolicy = {}, gateway = null, telemetry = null } = {},
+) {
   validateSelection(selectedModel);
   validateMessages(messages);
-  const fn = providers[selectedModel.provider];
-  if (typeof fn !== "function") {
-    throw mkErr("provider_unsupported", `provider "${selectedModel.provider}" has no adapter registered`);
-  }
-  const out = await fn({
+
+  const plan = liteLLMGateway.createGatewayPlan({
+    selectedModel,
+    messages,
+    responseFormat,
+    tools,
+    policy: gatewayPolicy,
+  });
+
+  const payload = {
     selectedModel,
     systemPrompt,
     messages,
     responseFormat,
     tools,
+  };
+
+  const result = gateway && typeof gateway.dispatch === "function"
+    ? await gateway.dispatch({ plan, payload })
+    : await liteLLMGateway.dispatchGatewayCall({ plan, payload, providers, telemetry });
+
+  const actualSelection = result.selectedModel || selectedModel;
+  if (!gatewayPolicy.allow_fallbacks && !gatewayPolicy.allowFallbacks) {
+    guardAgainstAutoRouting(selectedModel, actualSelection);
+  }
+
+  return shape(result.output, actualSelection, {
+    gateway_trace: result.trace,
+    gateway_cost_usd: result.cost,
+    fallback_used: result.fallback_used,
   });
-  return shape(out, selectedModel);
 }
 
 function validateSelection(s) {
@@ -89,7 +115,7 @@ function validateMessages(messages) {
   }
 }
 
-function shape(out, selectedModel) {
+function shape(out, selectedModel, gatewayMeta = {}) {
   if (!out || typeof out !== "object") throw mkErr("provider_returned_non_object", "provider must return an object");
   return {
     provider: selectedModel.provider,
@@ -98,6 +124,9 @@ function shape(out, selectedModel) {
     parsed: out.parsed ?? null,
     usage: out.usage || { input_tokens: 0, output_tokens: 0 },
     raw: out.raw ?? null,
+    gateway_trace: gatewayMeta.gateway_trace || out.gateway_trace || null,
+    gateway_cost_usd: gatewayMeta.gateway_cost_usd ?? out.gateway_cost_usd ?? null,
+    fallback_used: Boolean(gatewayMeta.fallback_used || out.fallback_used),
   };
 }
 
@@ -178,6 +207,8 @@ module.exports = {
   listSupportedProviders,
   listSupportedModalities,
   createDefaultProviders,
+  createGatewayPlan: liteLLMGateway.createGatewayPlan,
+  createLiteLLMGateway: liteLLMGateway.createLiteLLMGateway,
   SUPPORTED_PROVIDERS,
   SUPPORTED_MODALITIES,
 };
