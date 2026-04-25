@@ -47,10 +47,16 @@ const modelRouter = require("../services/ai-product-os/model-router");
 const skillSystem = require("../services/ai-product-os/skill-system");
 const memoryLayer = require("../services/ai-product-os/memory-layer");
 const orchestrator = require("../services/ai-product-os/orchestrator");
+const { createIntegrationStack } = require("../services/ai-product-os/integration-stack");
 
 // Single in-memory facade for the local memory tier. Production binds
 // a Qdrant / pgvector adapter via createMemory({ adapter }).
 const sharedMemory = memoryLayer.createMemory();
+
+// Single integration-stack instance with stub adapters for every
+// layer. Production deploys swap providers via createIntegrationStack
+// ({ providers: { agentSdk, orchestration, rag, ... } }).
+const sharedIntegration = createIntegrationStack();
 const { validateContract } = require("../services/agents/task-contract-resolver");
 const { runQaBoard } = require("../services/agents/qa-board");
 const { createTracer } = require("../services/observability/spans");
@@ -697,6 +703,64 @@ router.post(
       ok(res, { ...result, summary: orchestrator.summarize(result) });
     } catch (err) {
       fail(res, 500, err.message || "orchestrate failed");
+    }
+  }
+);
+
+// ─── Integration Stack (Capa profesional) ──────────────────────────────
+
+router.get("/product-os/integrations", authenticateToken, (_req, res) => {
+  ok(res, { integrity: sharedIntegration.integrity(), status: sharedIntegration.status() });
+});
+
+router.get("/product-os/integrations/manifest", authenticateToken, (_req, res) => {
+  ok(res, { manifest: sharedIntegration.manifest() });
+});
+
+router.post(
+  "/product-os/integrations/eval",
+  authenticateToken,
+  [
+    body("metric").isString().isLength({ min: 2, max: 60 }),
+    body("prediction").isString().isLength({ min: 1, max: 50000 }),
+    body("reference").optional().isString(),
+    body("context").optional(),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      const r = await sharedIntegration.eval.evaluate({
+        task: "ad-hoc",
+        metric: req.body.metric,
+        prediction: req.body.prediction,
+        reference: req.body.reference || "",
+        context: req.body.context,
+      });
+      ok(res, r);
+    } catch (err) {
+      fail(res, 500, err.message || "eval failed");
+    }
+  }
+);
+
+router.post(
+  "/product-os/integrations/red-team",
+  authenticateToken,
+  [
+    body("prompt").isString().isLength({ min: 1, max: 8000 }),
+    body("attack_classes").optional().isArray(),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    try {
+      ok(res, await sharedIntegration.eval.redTeam({
+        prompt: req.body.prompt,
+        attack_classes: req.body.attack_classes,
+      }));
+    } catch (err) {
+      fail(res, 500, err.message || "redTeam failed");
     }
   }
 );
