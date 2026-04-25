@@ -4,8 +4,11 @@ const { createTrace } = require("./tracing");
 const { runnable, sequence } = require("./runnable");
 const { buildContentBlocks, summarizeContentBlocks } = require("./content-blocks");
 const { validateJsonSchema } = require("./parsers");
+const { createDefaultRuntimeMiddleware, runMiddleware } = require("./middleware");
 
-function createCiraKernel({ validateEnvelope, registry = null } = {}) {
+function createCiraKernel({ validateEnvelope, registry = null, middleware = null, runtimeOptions = {} } = {}) {
+  const runtimeMiddleware = Array.isArray(middleware) ? middleware : createDefaultRuntimeMiddleware(runtimeOptions);
+
   const contentStep = runnable("content_blocks.normalize", async (state, context) => {
     const contentBlocks = buildContentBlocks({
       text: state.text,
@@ -13,7 +16,8 @@ function createCiraKernel({ validateEnvelope, registry = null } = {}) {
       history: state.history,
     });
     context.trace.emit("content_blocks.ready", summarizeContentBlocks(contentBlocks));
-    return { ...state, content_blocks: contentBlocks, content_summary: summarizeContentBlocks(contentBlocks) };
+    const next = { ...state, content_blocks: contentBlocks, content_summary: summarizeContentBlocks(contentBlocks) };
+    return runMiddleware("after_content", runtimeMiddleware, next, context);
   });
 
   const contractStep = runnable("contract.validate", async (state, context) => {
@@ -51,7 +55,8 @@ function createCiraKernel({ validateEnvelope, registry = null } = {}) {
     }));
     const missing = selected.filter((tool) => tool.required && !tool.registered).map((tool) => tool.name);
     context.trace.emit("tools.selected", { count: selected.length, missing });
-    return { ...state, selected_tools: selected, missing_tools: missing };
+    const next = { ...state, selected_tools: selected, missing_tools: missing };
+    return runMiddleware("after_tools", runtimeMiddleware, next, context);
   });
 
   const graphStep = runnable("execution_graph.materialize", async (state, context) => {
@@ -63,7 +68,7 @@ function createCiraKernel({ validateEnvelope, registry = null } = {}) {
       edge_count: edges.length,
       execution_mode: graph.execution_mode || "unknown",
     });
-    return {
+    const next = {
       ...state,
       runtime_graph: {
         graph_id: graph.graph_id || `${state.envelope.request_id}.graph`,
@@ -73,10 +78,12 @@ function createCiraKernel({ validateEnvelope, registry = null } = {}) {
         release_gate: graph.release_gate || state.envelope.final_answer_contract?.delivery_mode || null,
       },
     };
+    return runMiddleware("after_graph", runtimeMiddleware, next, context);
   });
 
   const releaseStep = runnable("release.preflight", async (state, context) => {
-    const output = state.envelope.output_contract?.primary_output || {};
+    const middlewareState = await runMiddleware("before_release", runtimeMiddleware, state, context);
+    const output = middlewareState.envelope.output_contract?.primary_output || {};
     const schemaValidation = validateJsonSchema(output, {
       type: "object",
       required: ["type", "format"],
@@ -87,8 +94,19 @@ function createCiraKernel({ validateEnvelope, registry = null } = {}) {
     });
     const violations = [];
     if (!schemaValidation.ok) violations.push(...schemaValidation.errors);
-    if (state.missing_tools.length > 0) {
-      violations.push({ code: "tool_missing_from_registry", tools: state.missing_tools });
+    if ((middlewareState.missing_tools || []).length > 0) {
+      violations.push({ code: "tool_missing_from_registry", tools: middlewareState.missing_tools });
+    }
+    for (const report of middlewareState.runtime_validation_reports || []) {
+      if (report.status === "failed" && report.severity === "error") {
+        violations.push({
+          code: report.code || "runtime_validation_failed",
+          stage: report.at_stage || report.stage || null,
+          validator: report.name,
+          message: report.message,
+          details: report.details || null,
+        });
+      }
     }
     const ready = violations.length === 0;
     context.trace.emit("release.preflight", {
@@ -97,11 +115,12 @@ function createCiraKernel({ validateEnvelope, registry = null } = {}) {
       primary_output: output.format || null,
     });
     return {
-      ...state,
+      ...middlewareState,
       release_preflight: {
         ready,
         violations,
         primary_output: output,
+        reports: middlewareState.runtime_validation_reports || [],
       },
     };
   });
@@ -122,6 +141,8 @@ async function runCiraAgentRuntime({
   envelope,
   validateEnvelope,
   registry = null,
+  middleware = null,
+  runtimeOptions = {},
   metadata = {},
 } = {}) {
   const trace = createTrace({
@@ -131,7 +152,7 @@ async function runCiraAgentRuntime({
       ...metadata,
     },
   });
-  const kernel = createCiraKernel({ validateEnvelope, registry });
+  const kernel = createCiraKernel({ validateEnvelope, registry, middleware, runtimeOptions });
   try {
     const state = await kernel.invoke({ text, attachments, history, envelope }, { trace });
     const finished = trace.finish(state.release_preflight.ready ? "completed" : "blocked", {
@@ -167,6 +188,8 @@ function shapeRuntimeResult(state, trace) {
     content_summary: state.content_summary,
     selected_tools: state.selected_tools,
     runtime_graph: state.runtime_graph,
+    runtime_validation_reports: state.runtime_validation_reports || [],
+    format_sovereignty: state.format_sovereignty || null,
     release_preflight: state.release_preflight,
     trace,
     trace_events: trace.events,

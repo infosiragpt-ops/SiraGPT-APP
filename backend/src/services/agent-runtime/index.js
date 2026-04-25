@@ -6,6 +6,7 @@ const parsers = require("./parsers");
 const retriever = require("./retriever");
 const tracing = require("./tracing");
 const ciraKernel = require("./cira-kernel");
+const middleware = require("./middleware");
 
 module.exports = {
   ...runnable,
@@ -13,5 +14,6 @@ module.exports = {
   ...parsers,
   ...retriever,
   ...tracing,
+  ...middleware,
   ...ciraKernel,
 };
