@@ -44,6 +44,13 @@ export const VALID_CHAT_INTENTS: ChatIntent[] = [
   'text',
 ]
 
+export function normalizeRoutingIntent(intent: ChatIntent): ChatIntent {
+  // PowerPoint is a downloadable document artifact in the current chat
+  // runtime. Keeping "ppt" as a final route lets it fall through to free
+  // chat in some shells, which can leak [CREATE_DOCUMENT:*.pptx] markers.
+  return intent === 'ppt' ? 'doc' : intent
+}
+
 interface SemanticIntentResponse {
   ok?: boolean
   intent?: ChatIntent
@@ -324,7 +331,7 @@ export class AIService {
         && typeof data.confidence === 'number'
         && data.confidence >= 0.55
       ) {
-        return data.intent
+        return normalizeRoutingIntent(data.intent)
       }
       return null
     } catch (error: any) {
@@ -351,11 +358,11 @@ export class AIService {
       if (semanticIntent === 'doc' && shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
         return 'text';
       }
-      return semanticIntent;
+      return normalizeRoutingIntent(semanticIntent);
     }
 
     const deterministicIntent = classifyIntentFastPath(prompt);
-    if (deterministicIntent) return deterministicIntent;
+    if (deterministicIntent) return normalizeRoutingIntent(deterministicIntent);
 
     try {
 
@@ -465,7 +472,7 @@ Respond with only one word.
       console.log('intent FROM OPEN AI', intent);
 
       if (VALID_CHAT_INTENTS.includes(intent as ChatIntent)) {
-        return intent as ChatIntent;
+        return normalizeRoutingIntent(intent as ChatIntent);
       }
       return 'text'; // Default fallback
     } catch (error: any) {

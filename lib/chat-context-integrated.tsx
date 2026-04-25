@@ -588,7 +588,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setIsStreaming(false);
           setCurrentStreamId(null);
 
-        } else if (intent === 'doc') {
+        } else if (intent === 'doc' || intent === 'ppt') {
           // Document generation — Word / Excel / PowerPoint / PDF / SVG.
           // Same SSE + progressStage contract as viz/math/plan; the
           // assistant message carries a `doc`-typed file with a base64
