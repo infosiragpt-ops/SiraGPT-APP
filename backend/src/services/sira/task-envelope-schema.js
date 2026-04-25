@@ -1,6 +1,6 @@
 /**
  * task-envelope-schema — JSON Schema for the Cira Cognitive Task
- * Envelope v1 (cira.task_envelope.v1).
+ * Envelope v1 (sira.task_envelope.v1).
  *
  * The envelope is the universal internal contract that turns ANY user
  * request into an executable plan. It captures:
@@ -21,14 +21,14 @@
  * Pure JS, deterministic, zero deps.
  */
 
-const SCHEMA_VERSION = "cira.task_envelope.v1";
+const SCHEMA_VERSION = "sira.task_envelope.v1";
 
 // ── Top-level schema ────────────────────────────────────────────────
 
 const TASK_ENVELOPE_SCHEMA = Object.freeze({
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: SCHEMA_VERSION,
-  title: "Cira Cognitive Task Envelope",
+  title: "Sira Cognitive Task Envelope",
   type: "object",
   additionalProperties: false,
   required: [
@@ -40,6 +40,7 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
     "workflow_graph", "clarification_policy",
     "safety_and_permissions", "quality_plan", "ui_response_plan",
     "memory_policy", "cost_latency_policy", "observability",
+    "execution_law",
     "final_answer_contract",
   ],
   properties: {
@@ -201,11 +202,31 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
     workflow_graph: {
       type: "object",
       additionalProperties: false,
-      required: ["execution_mode", "nodes", "retry_policy", "fallback_policy"],
+      required: [
+        "execution_mode", "nodes", "edges", "state", "artifacts", "tool_calls",
+        "permissions", "idempotency_key", "retry_policy", "timeout_policy",
+        "compensation_action", "rollback_strategy", "validation_gate",
+        "human_approval_gate", "release_gate", "evidence_ledger",
+        "audit_trace", "fallback_policy",
+      ],
       properties: {
         execution_mode: { type: "string" },
         nodes: { type: "array", items: workflowNode() },
+        edges: { type: "array", items: { type: "object" } },
+        state: { type: "string", enum: ["planned", "running", "paused", "succeeded", "failed", "cancelled"] },
+        artifacts: { type: "array", items: { type: "object" } },
+        tool_calls: { type: "array", items: { type: "object" } },
+        permissions: { type: "object" },
+        idempotency_key: { type: "string" },
         retry_policy: { type: "object" },
+        timeout_policy: { type: "object" },
+        compensation_action: { type: "string" },
+        rollback_strategy: { type: "string" },
+        validation_gate: { type: "object" },
+        human_approval_gate: { type: "object" },
+        release_gate: { type: "object" },
+        evidence_ledger: { type: "array", items: { type: "object" } },
+        audit_trace: { type: "array", items: { type: "object" } },
         fallback_policy: { type: "object" },
       },
     },
@@ -304,6 +325,45 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
         log_validation_scores: { type: "boolean" },
         redact_sensitive_data_in_logs: { type: "boolean" },
         metrics: { type: "array", items: { type: "string" } },
+      },
+    },
+
+    execution_law: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "do_not_answer_freely",
+        "compile_request_to_contract",
+        "validate_contract_before_execution",
+        "select_tools_only_from_registry",
+        "execute_as_dag",
+        "persist_state",
+        "require_evidence_for_factual_claims",
+        "require_format_sovereignty",
+        "run_deterministic_validators",
+        "repair_before_delivery",
+        "block_release_if_validation_fails",
+        "never_fake_scores",
+        "never_fake_file_reading",
+        "never_fake_citations",
+        "never_fake_artifacts",
+      ],
+      properties: {
+        do_not_answer_freely: { type: "boolean" },
+        compile_request_to_contract: { type: "boolean" },
+        validate_contract_before_execution: { type: "boolean" },
+        select_tools_only_from_registry: { type: "boolean" },
+        execute_as_dag: { type: "boolean" },
+        persist_state: { type: "boolean" },
+        require_evidence_for_factual_claims: { type: "boolean" },
+        require_format_sovereignty: { type: "boolean" },
+        run_deterministic_validators: { type: "boolean" },
+        repair_before_delivery: { type: "boolean" },
+        block_release_if_validation_fails: { type: "boolean" },
+        never_fake_scores: { type: "boolean" },
+        never_fake_file_reading: { type: "boolean" },
+        never_fake_citations: { type: "boolean" },
+        never_fake_artifacts: { type: "boolean" },
       },
     },
 
@@ -417,6 +477,18 @@ function validateEnvelope(env) {
         if (!allIds.has(dep)) errors.push(`unknown_dep ${n.id}→${dep}`);
         else if (!seenIds.has(dep)) errors.push(`forward_dep ${n.id}→${dep}`);
       }
+    }
+    if (Array.isArray(env.workflow_graph.edges)) {
+      const nodeIds = new Set(env.workflow_graph.nodes.map(n => n.id));
+      for (const e of env.workflow_graph.edges) {
+        if (!nodeIds.has(e.from)) errors.push(`unknown_edge_from ${e.from}`);
+        if (!nodeIds.has(e.to)) errors.push(`unknown_edge_to ${e.to}`);
+      }
+    }
+  }
+  if (env.execution_law) {
+    for (const k of TASK_ENVELOPE_SCHEMA.properties.execution_law.required) {
+      if (env.execution_law[k] !== true) errors.push(`execution_law.${k} must_be_true`);
     }
   }
   if (env.clarification_policy) {

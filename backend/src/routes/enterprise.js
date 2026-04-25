@@ -48,15 +48,15 @@ const skillSystem = require("../services/ai-product-os/skill-system");
 const memoryLayer = require("../services/ai-product-os/memory-layer");
 const orchestrator = require("../services/ai-product-os/orchestrator");
 const { createIntegrationStack } = require("../services/ai-product-os/integration-stack");
-const ciraEngine = require("../services/cira/engine");
-const ciraTaxonomy = require("../services/cira/intent-taxonomy");
-const ciraSchema = require("../services/cira/task-envelope-schema");
-const ciraToolRegistryFactory = require("../services/cira/tool-registry");
-const ciraValidatorEngine = require("../services/cira/validator-engine");
-const ciraPrompts = require("../services/cira/intent-prompts");
-const ciraRuntime = require("../services/cira/runtime");
+const ciraEngine = require("../services/sira/engine");
+const ciraTaxonomy = require("../services/sira/intent-taxonomy");
+const ciraSchema = require("../services/sira/task-envelope-schema");
+const ciraToolRegistryFactory = require("../services/sira/tool-registry");
+const ciraValidatorEngine = require("../services/sira/validator-engine");
+const ciraPrompts = require("../services/sira/intent-prompts");
+const ciraRuntime = require("../services/sira/runtime");
 
-// Single Cira tool registry shared across requests.
+// Single Sira tool registry shared across requests.
 // Production extends this via ciraSharedToolRegistry.register({...}) at boot.
 const ciraSharedToolRegistry = ciraToolRegistryFactory.createDefaultRegistry();
 
@@ -776,13 +776,13 @@ router.post(
   }
 );
 
-// ─── Cira Cognitive Task Envelope ──────────────────────────────────────
+// ─── Sira Cognitive Task Envelope ──────────────────────────────────────
 
-router.get("/cira/schema", authenticateToken, (_req, res) => {
+router.get("/sira/schema", authenticateToken, (_req, res) => {
   ok(res, { schema_version: ciraSchema.SCHEMA_VERSION, schema: ciraSchema.TASK_ENVELOPE_SCHEMA });
 });
 
-router.get("/cira/taxonomy", authenticateToken, (req, res) => {
+router.get("/sira/taxonomy", authenticateToken, (req, res) => {
   const family = typeof req.query.family === "string" ? req.query.family : null;
   ok(res, {
     integrity: ciraTaxonomy.integrity(),
@@ -792,7 +792,7 @@ router.get("/cira/taxonomy", authenticateToken, (req, res) => {
 });
 
 router.post(
-  "/cira/envelope",
+  "/sira/envelope",
   authenticateToken,
   [
     body("text").isString().isLength({ min: 1, max: 8000 }),
@@ -819,9 +819,9 @@ router.post(
   }
 );
 
-// ─── Cira Tool Registry + Runtime ──────────────────────────────────────
+// ─── Sira Tool Registry + Runtime ──────────────────────────────────────
 
-router.get("/cira/tools", authenticateToken, (req, res) => {
+router.get("/sira/tools", authenticateToken, (req, res) => {
   const category = typeof req.query.category === "string" ? req.query.category : null;
   const tools = category ? ciraSharedToolRegistry.byCategory(category) : ciraSharedToolRegistry.list();
   ok(res, {
@@ -836,16 +836,16 @@ router.get("/cira/tools", authenticateToken, (req, res) => {
   });
 });
 
-router.get("/cira/prompts", authenticateToken, (_req, res) => {
+router.get("/sira/prompts", authenticateToken, (_req, res) => {
   ok(res, {
-    intent_engine: ciraPrompts.CIRA_INTENT_ENGINE_SYSTEM_PROMPT,
-    planner: ciraPrompts.CIRA_PLANNER_SYSTEM_PROMPT,
-    validator: ciraPrompts.CIRA_VALIDATOR_SYSTEM_PROMPT,
+    intent_engine: ciraPrompts.SIRA_INTENT_ENGINE_SYSTEM_PROMPT,
+    planner: ciraPrompts.SIRA_PLANNER_SYSTEM_PROMPT,
+    validator: ciraPrompts.SIRA_VALIDATOR_SYSTEM_PROMPT,
   });
 });
 
 router.post(
-  "/cira/run",
+  "/sira/run",
   authenticateToken,
   [
     body("text").isString().isLength({ min: 1, max: 8000 }),

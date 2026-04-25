@@ -1,5 +1,5 @@
 /**
- * cira-runtime — deterministic tests for the Cira Tool Registry,
+ * cira-runtime — deterministic tests for the Sira Tool Registry,
  * validator engine, prompts and runtime executor (MASTER_SPEC §11/§12).
  */
 
@@ -7,13 +7,13 @@ const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
-  CiraToolRegistry, createDefaultRegistry, DEFAULT_TOOLS,
+  SiraToolRegistry, createDefaultRegistry, DEFAULT_TOOLS,
   TOOL_PERMISSIONS, TOOL_RISK_LEVELS, TOOL_CATEGORIES,
-} = require("../src/services/cira/tool-registry");
-const validators = require("../src/services/cira/validator-engine");
-const prompts = require("../src/services/cira/intent-prompts");
-const runtime = require("../src/services/cira/runtime");
-const { buildEnvelope } = require("../src/services/cira/task-envelope-builder");
+} = require("../src/services/sira/tool-registry");
+const validators = require("../src/services/sira/validator-engine");
+const prompts = require("../src/services/sira/intent-prompts");
+const runtime = require("../src/services/sira/runtime");
+const { buildEnvelope } = require("../src/services/sira/task-envelope-builder");
 
 function expect(actual) {
   return {
@@ -47,13 +47,13 @@ describe("cira tool-registry", () => {
   });
 
   test("rejects duplicate registration", () => {
-    const reg = new CiraToolRegistry();
+    const reg = new SiraToolRegistry();
     reg.register(DEFAULT_TOOLS[0]);
     assert.throws(() => reg.register(DEFAULT_TOOLS[0]), /already registered/);
   });
 
   test("rejects invalid risk level", () => {
-    const reg = new CiraToolRegistry();
+    const reg = new SiraToolRegistry();
     assert.throws(() => reg.register({
       name: "x", category: "custom", riskLevel: "doom", permissionsRequired: [],
       timeoutMs: 1000, execute: async () => ({}),
@@ -65,6 +65,18 @@ describe("cira tool-registry", () => {
     const list = reg.listForModelPrompt();
     expect(list[0].name).toBeTruthy();
     expect(typeof list[0].execute).toBe("undefined");
+    expect(Array.isArray(list[0].manifest.allowedFormats)).toBe(true);
+    expect(list[0].manifest.auditPolicy).toMatch(/log_tool_name/);
+  });
+
+  test("default tools expose enterprise ToolManifest fields", () => {
+    const reg = createDefaultRegistry();
+    const tool = reg.get("create_docx");
+    expect(tool.manifest.name).toBe("create_docx");
+    expect(tool.manifest.allowedFormats.includes("docx")).toBe(true);
+    expect(tool.manifest.forbiddenFormats.includes("mp4")).toBe(true);
+    expect(tool.manifest.acceptanceTests.includes("artifact_has_expected_format")).toBe(true);
+    expect(tool.manifest.recoveryPolicy.onValidationFailure).toMatch(/repair/);
   });
 
   test("invoke returns success on stub tool", async () => {
@@ -88,7 +100,7 @@ describe("cira tool-registry", () => {
   });
 
   test("invoke enforces timeoutMs", async () => {
-    const reg = new CiraToolRegistry();
+    const reg = new SiraToolRegistry();
     reg.register({
       name: "slow", category: "custom", riskLevel: "low", permissionsRequired: [],
       timeoutMs: 50, retryable: false, requiresHumanConfirmation: false,
@@ -100,7 +112,7 @@ describe("cira tool-registry", () => {
   });
 
   test("requires_confirmation surfaced when humanApproved false", async () => {
-    const reg = new CiraToolRegistry();
+    const reg = new SiraToolRegistry();
     reg.register({
       name: "publish_world", category: "landing", riskLevel: "critical",
       permissionsRequired: ["publish_online"], timeoutMs: 1000,
@@ -197,16 +209,16 @@ describe("cira validator-engine", () => {
 // ── Intent prompts ──────────────────────────────────────────────────
 
 describe("cira intent-prompts", () => {
-  test("CIRA_INTENT_ENGINE_SYSTEM_PROMPT contains spec-mandated rules", () => {
-    const p = prompts.CIRA_INTENT_ENGINE_SYSTEM_PROMPT;
-    expect(p).toMatch(/Cira Intent Engine/);
+  test("SIRA_INTENT_ENGINE_SYSTEM_PROMPT contains spec-mandated rules", () => {
+    const p = prompts.SIRA_INTENT_ENGINE_SYSTEM_PROMPT;
+    expect(p).toMatch(/Sira Intent Engine/);
     expect(p).toMatch(/CiraTaskEnvelopeSchema/);
     expect(p).toMatch(/needs_clarification/);
     expect(p).toMatch(/3 preguntas/);
   });
 
-  test("CIRA_PLANNER_SYSTEM_PROMPT enforces validator + sandbox + preview rules", () => {
-    const p = prompts.CIRA_PLANNER_SYSTEM_PROMPT;
+  test("SIRA_PLANNER_SYSTEM_PROMPT enforces validator + sandbox + preview rules", () => {
+    const p = prompts.SIRA_PLANNER_SYSTEM_PROMPT;
     expect(p).toMatch(/PlanFrame/);
     expect(p).toMatch(/sandbox/);
     expect(p).toMatch(/source validation/);
@@ -214,7 +226,7 @@ describe("cira intent-prompts", () => {
 
   test("buildIntentClassificationRequest assembles the structured request", () => {
     const r = prompts.buildIntentClassificationRequest({ userMessage: "hola" });
-    expect(r.system).toMatch(/Cira Intent Engine/);
+    expect(r.system).toMatch(/Sira Intent Engine/);
     expect(r.user).toMatch(/hola/);
     expect(r.response_format).toBe("json_schema");
     expect(r.temperature).toBeLessThan(1);
@@ -222,13 +234,13 @@ describe("cira intent-prompts", () => {
 
   test("buildPlannerRequest uses planner system prompt", () => {
     const r = prompts.buildPlannerRequest({ envelopeJson: "{}" });
-    expect(r.system).toMatch(/Cira Planner/);
+    expect(r.system).toMatch(/Sira Planner/);
     expect(r.schema_name).toBe("PlanFrameV1");
   });
 
   test("buildValidatorRequest uses validator system prompt", () => {
     const r = prompts.buildValidatorRequest({ checkResultsJson: "[]", envelopeJson: "{}" });
-    expect(r.system).toMatch(/Cira Validator/);
+    expect(r.system).toMatch(/Sira Validator/);
     expect(r.schema_name).toBe("ValidationFrameV1");
   });
 });
@@ -245,6 +257,8 @@ describe("cira runtime", () => {
     expect(r.summary.nodes_executed).toBeGreaterThan(0);
     expect(r.artifact_frame.frame_type).toBe("artifact_frame");
     expect(r.validation_frame.frame_type).toBe("validation_frame");
+    expect(Array.isArray(r.audit_trace)).toBe(true);
+    expect(Array.isArray(r.evidence_ledger)).toBe(true);
   });
 
   test("invokes registered tools when not dryRun", async () => {

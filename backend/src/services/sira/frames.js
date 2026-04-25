@@ -20,6 +20,7 @@ const FRAME_TYPES = Object.freeze([
   "tool_call_frame",
   "artifact_frame",
   "validation_frame",
+  "final_response_frame",
 ]);
 
 // ── IntentFrame ─────────────────────────────────────────────────────
@@ -55,6 +56,12 @@ function buildPlanFrame({ envelope } = {}) {
       depends_on: [...(n.depends_on || [])],
     })),
     retry_policy: { ...wg.retry_policy },
+    timeout_policy: { ...(wg.timeout_policy || {}) },
+    validation_gate: { ...(wg.validation_gate || {}) },
+    human_approval_gate: { ...(wg.human_approval_gate || {}) },
+    release_gate: { ...(wg.release_gate || {}) },
+    evidence_ledger: [...(wg.evidence_ledger || [])],
+    audit_trace: [...(wg.audit_trace || [])],
     fallback_policy: { ...wg.fallback_policy },
   });
 }
@@ -143,6 +150,39 @@ function buildValidationFrame({ envelope, checkResults = [], aggregate_score = n
   });
 }
 
+// ── FinalResponseFrame ──────────────────────────────────────────────
+
+function buildFinalResponseFrame({ envelope, validationFrame, artifacts = [], warnings = [] } = {}) {
+  if (!envelope || !envelope.final_answer_contract) throw new Error("frames.buildFinalResponseFrame: envelope required");
+  const ready = Boolean(validationFrame?.ready_to_deliver);
+  const requiredArtifacts = artifacts.filter(a => a.required !== false);
+  return Object.freeze({
+    frame_type: "final_response_frame",
+    request_id: envelope.request_id,
+    delivery_mode: envelope.final_answer_contract.delivery_mode,
+    ready_to_deliver: ready,
+    release_decision: ready ? "approved" : "blocked_for_repair",
+    must_include: [...(envelope.final_answer_contract.must_include || [])],
+    must_not_include: [...(envelope.final_answer_contract.must_not_include || [])],
+    user_visible_summary: buildUserVisibleSummary(envelope, ready),
+    artifact_cards: requiredArtifacts.map(a => ({
+      label: a.name || a.filename || a.format || a.type,
+      type: a.type,
+      format: a.format || null,
+      status: a.status || (ready ? "ready" : "planned"),
+      download_url: a.download_url || null,
+      preview_url: a.preview_url || null,
+    })),
+    warnings: warnings.slice(0, 6),
+  });
+}
+
+function buildUserVisibleSummary(envelope, ready) {
+  const label = envelope.intent_analysis?.primary_intent?.label || envelope.intent_analysis?.primary_intent?.id || "Tarea";
+  if (!ready) return `${label}: la entrega queda bloqueada hasta reparar validaciones pendientes.`;
+  return `${label}: entrega validada y lista según el contrato de usuario.`;
+}
+
 // ── Frame validators ────────────────────────────────────────────────
 
 function validateFrame(frame) {
@@ -168,6 +208,10 @@ function validateFrame(frame) {
       if (typeof frame.aggregate_score !== "number") errors.push("validation_frame.aggregate_score must be number");
       if (typeof frame.ready_to_deliver !== "boolean") errors.push("validation_frame.ready_to_deliver must be boolean");
       break;
+    case "final_response_frame":
+      if (typeof frame.ready_to_deliver !== "boolean") errors.push("final_response_frame.ready_to_deliver must be boolean");
+      if (!frame.release_decision) errors.push("final_response_frame.release_decision required");
+      break;
   }
   return { ok: errors.length === 0, errors };
 }
@@ -181,5 +225,6 @@ module.exports = {
   buildToolCallFrame,
   buildArtifactFrame,
   buildValidationFrame,
+  buildFinalResponseFrame,
   validateFrame,
 };

@@ -1,5 +1,5 @@
 /**
- * cira/tool-registry — Cira Tool Registry as defined in the
+ * cira/tool-registry — Sira Tool Registry as defined in the
  * MASTER_SPEC §11-12.
  *
  * Each tool is a typed contract:
@@ -9,7 +9,7 @@
  *     inputSchema, outputSchema, category, riskLevel,
  *     permissionsRequired[], timeoutMs, retryable,
  *     requiresHumanConfirmation,
- *     execute(input, context) → CiraToolResult
+ *     execute(input, context) → SiraToolResult
  *   }
  *
  * 60+ default tools registered across 10 categories:
@@ -25,7 +25,7 @@
  *   - validator  ( 5 tools)
  *
  * Each tool's `execute` defaults to a deterministic stub that emits
- * a typed CiraToolResult. The platform works zero-deps; production
+ * a typed SiraToolResult. The platform works zero-deps; production
  * deploys swap concrete implementations via toolRegistry.register().
  *
  * Pure JS, deterministic, zero deps.
@@ -52,18 +52,19 @@ const TOOL_CATEGORIES = Object.freeze([
   "validator", "storage", "custom",
 ]);
 
-class CiraToolRegistry {
+class SiraToolRegistry {
   constructor() {
     this.tools = new Map();
   }
 
   register(tool) {
-    validateToolContract(tool);
-    if (this.tools.has(tool.name)) {
-      throw new Error(`cira-tool-registry: tool already registered: "${tool.name}"`);
+    const normalized = normalizeTool(tool);
+    validateToolContract(normalized);
+    if (this.tools.has(normalized.name)) {
+      throw new Error(`sira-tool-registry: tool already registered: "${normalized.name}"`);
     }
-    this.tools.set(tool.name, tool);
-    return tool;
+    this.tools.set(normalized.name, normalized);
+    return normalized;
   }
 
   get(name) {
@@ -86,6 +87,15 @@ class CiraToolRegistry {
       riskLevel: t.riskLevel,
       permissionsRequired: [...t.permissionsRequired],
       requiresHumanConfirmation: t.requiresHumanConfirmation,
+      manifest: {
+        inputSchema: t.manifest.inputSchema,
+        outputSchema: t.manifest.outputSchema,
+        allowedFormats: [...t.manifest.allowedFormats],
+        forbiddenFormats: [...t.manifest.forbiddenFormats],
+        sideEffectLevel: t.manifest.sideEffectLevel,
+        sandboxRequired: t.manifest.sandboxRequired,
+        auditPolicy: t.manifest.auditPolicy,
+      },
     }));
   }
 
@@ -147,13 +157,106 @@ class CiraToolRegistry {
 // ── Validation + helpers ────────────────────────────────────────────
 
 function validateToolContract(t) {
-  if (!t || typeof t !== "object") throw new Error("cira-tool-registry: tool must be an object");
-  if (!t.name || typeof t.name !== "string") throw new Error("cira-tool-registry: tool.name required");
-  if (typeof t.execute !== "function") throw new Error(`cira-tool-registry: ${t.name}.execute() required`);
-  if (!TOOL_CATEGORIES.includes(t.category)) throw new Error(`cira-tool-registry: ${t.name}.category invalid`);
-  if (!TOOL_RISK_LEVELS.includes(t.riskLevel)) throw new Error(`cira-tool-registry: ${t.name}.riskLevel invalid`);
-  if (!Array.isArray(t.permissionsRequired)) throw new Error(`cira-tool-registry: ${t.name}.permissionsRequired must be array`);
-  if (typeof t.timeoutMs !== "number" || t.timeoutMs <= 0) throw new Error(`cira-tool-registry: ${t.name}.timeoutMs must be positive number`);
+  if (!t || typeof t !== "object") throw new Error("sira-tool-registry: tool must be an object");
+  if (!t.name || typeof t.name !== "string") throw new Error("sira-tool-registry: tool.name required");
+  if (typeof t.execute !== "function") throw new Error(`sira-tool-registry: ${t.name}.execute() required`);
+  if (!TOOL_CATEGORIES.includes(t.category)) throw new Error(`sira-tool-registry: ${t.name}.category invalid`);
+  if (!TOOL_RISK_LEVELS.includes(t.riskLevel)) throw new Error(`sira-tool-registry: ${t.name}.riskLevel invalid`);
+  if (!Array.isArray(t.permissionsRequired)) throw new Error(`sira-tool-registry: ${t.name}.permissionsRequired must be array`);
+  if (typeof t.timeoutMs !== "number" || t.timeoutMs <= 0) throw new Error(`sira-tool-registry: ${t.name}.timeoutMs must be positive number`);
+  if (!t.manifest || typeof t.manifest !== "object") throw new Error(`sira-tool-registry: ${t.name}.manifest required`);
+  if (!Array.isArray(t.manifest.allowedFormats)) throw new Error(`sira-tool-registry: ${t.name}.manifest.allowedFormats required`);
+  if (!Array.isArray(t.manifest.acceptanceTests)) throw new Error(`sira-tool-registry: ${t.name}.manifest.acceptanceTests required`);
+}
+
+function normalizeTool(tool) {
+  if (!tool || typeof tool !== "object") return tool;
+  const manifest = buildToolManifest(tool);
+  return {
+    retryable: true,
+    requiresHumanConfirmation: false,
+    inputSchema: { type: "object", additionalProperties: true },
+    outputSchema: { type: "object", additionalProperties: true },
+    ...tool,
+    manifest: {
+      ...manifest,
+      ...(tool.manifest || {}),
+      inputSchema: tool.manifest?.inputSchema || tool.inputSchema || manifest.inputSchema,
+      outputSchema: tool.manifest?.outputSchema || tool.outputSchema || manifest.outputSchema,
+    },
+  };
+}
+
+function buildToolManifest(tool) {
+  const formats = formatsForTool(tool);
+  return {
+    name: tool.name,
+    purpose: tool.description || tool.displayName || tool.name,
+    inputSchema: tool.inputSchema || { type: "object", additionalProperties: true },
+    outputSchema: tool.outputSchema || { type: "object", additionalProperties: true },
+    allowedFormats: formats.allowed,
+    forbiddenFormats: formats.forbidden,
+    expectedErrors: ["permission_denied", "tool_timeout", "invalid_input", "tool_execution_error"],
+    acceptanceTests: acceptanceTestsForTool(tool),
+    usageLimits: {
+      timeoutMs: tool.timeoutMs || 30000,
+      retryable: tool.retryable !== false,
+      maxRetries: tool.retryable === false ? 0 : 2,
+    },
+    examples: {
+      positive: [`Use ${tool.name} only when the CiraTaskEnvelope requires ${tool.category || "custom"} capability.`],
+      negative: [`Do not call ${tool.name} when output_contract forbids its output format.`],
+    },
+    recoveryPolicy: {
+      onTimeout: "retry_with_backoff_then_failure_report",
+      onValidationFailure: "repair_inputs_and_reexecute_once",
+      onPermissionDenied: "request_human_approval_or_block_release",
+    },
+    sideEffectLevel: sideEffectLevelForTool(tool),
+    requiresConfirmation: Boolean(tool.requiresHumanConfirmation),
+    sandboxRequired: (tool.permissionsRequired || []).includes("execute_sandboxed_code"),
+    auditPolicy: "log_tool_name_scope_duration_status_no_sensitive_payload",
+    scopes: (tool.permissionsRequired || []).filter(p => p !== "none"),
+  };
+}
+
+function formatsForTool(tool) {
+  const name = String(tool.name || "");
+  const category = String(tool.category || "");
+  if (/docx|document|resume|contract|report/i.test(name) || category === "document") {
+    return { allowed: ["docx", "pdf", "markdown"], forbidden: ["png", "mp4"] };
+  }
+  if (/xlsx|spreadsheet|formula|chart/i.test(name) || category === "spreadsheet") {
+    return { allowed: ["xlsx", "csv", "json"], forbidden: ["docx", "mp4"] };
+  }
+  if (/pptx|slides|deck/i.test(name) || category === "presentation") {
+    return { allowed: ["pptx", "pdf"], forbidden: ["xlsx", "mp4"] };
+  }
+  if (/svg|mermaid|diagram|chart/i.test(name) || category === "svg") {
+    return { allowed: ["svg", "png", "html"], forbidden: ["docx", "xlsx"] };
+  }
+  if (category === "image") return { allowed: ["png", "jpg", "webp"], forbidden: ["docx", "xlsx"] };
+  if (category === "video") return { allowed: ["mp4", "webm"], forbidden: ["docx", "xlsx"] };
+  if (category === "code" || category === "landing") return { allowed: ["zip", "html", "typescript", "javascript", "python"], forbidden: ["mp4"] };
+  return { allowed: ["json", "markdown", "text"], forbidden: [] };
+}
+
+function acceptanceTestsForTool(tool) {
+  const tests = ["input_schema_valid", "output_schema_valid", "permission_policy_passed"];
+  if (tool.category === "validator") tests.push("validator_reports_binary_pass_fail");
+  if ((tool.permissionsRequired || []).includes("write_artifact")) tests.push("artifact_has_expected_format");
+  if ((tool.permissionsRequired || []).includes("external_api_access")) tests.push("source_metadata_or_error_returned");
+  if ((tool.permissionsRequired || []).includes("execute_sandboxed_code")) tests.push("sandbox_no_host_side_effects");
+  return tests;
+}
+
+function sideEffectLevelForTool(tool) {
+  const perms = new Set(tool.permissionsRequired || []);
+  if (perms.has("publish_online") || perms.has("send_message") || perms.has("database_write")) return "external_side_effect";
+  if (perms.has("write_artifact")) return "writes_new_artifact";
+  if (perms.has("execute_sandboxed_code")) return "sandboxed_execution";
+  if (perms.has("external_api_access") || perms.has("browser_access") || perms.has("database_read")) return "read_external";
+  return "none";
 }
 
 function shapeResult(r) {
@@ -303,6 +406,19 @@ function d(name, category, riskLevel, permissionsRequired, description) {
     timeoutMs: 30000,
     retryable: true,
     requiresHumanConfirmation: riskLevel === "critical" || (category === "landing" && permissionsRequired.includes("publish_online")),
+    manifest: buildToolManifest({
+      name,
+      displayName: humanise(name),
+      description,
+      category,
+      riskLevel,
+      permissionsRequired,
+      timeoutMs: 30000,
+      retryable: true,
+      requiresHumanConfirmation: riskLevel === "critical" || (category === "landing" && permissionsRequired.includes("publish_online")),
+      inputSchema: { type: "object", additionalProperties: true },
+      outputSchema: { type: "object", additionalProperties: true },
+    }),
     async execute(input, context) {
       return {
         status: "success",
@@ -328,13 +444,13 @@ function humanise(s) {
  * registry.register() AFTER instantiating.
  */
 function createDefaultRegistry() {
-  const reg = new CiraToolRegistry();
+  const reg = new SiraToolRegistry();
   for (const t of DEFAULTS) reg.register(t);
   return reg;
 }
 
 module.exports = {
-  CiraToolRegistry,
+  SiraToolRegistry,
   createDefaultRegistry,
   TOOL_PERMISSIONS,
   TOOL_RISK_LEVELS,

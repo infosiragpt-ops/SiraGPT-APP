@@ -7,11 +7,11 @@
 const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
 
-const { TASK_ENVELOPE_SCHEMA, SCHEMA_VERSION, validateEnvelope } = require("../src/services/cira/task-envelope-schema");
-const taxonomy = require("../src/services/cira/intent-taxonomy");
-const { buildEnvelope } = require("../src/services/cira/task-envelope-builder");
-const frames = require("../src/services/cira/frames");
-const engine = require("../src/services/cira/engine");
+const { TASK_ENVELOPE_SCHEMA, SCHEMA_VERSION, validateEnvelope } = require("../src/services/sira/task-envelope-schema");
+const taxonomy = require("../src/services/sira/intent-taxonomy");
+const { buildEnvelope, SIRA_EXECUTION_LAW } = require("../src/services/sira/task-envelope-builder");
+const frames = require("../src/services/sira/frames");
+const engine = require("../src/services/sira/engine");
 
 function expect(actual) {
   return {
@@ -30,8 +30,8 @@ function expect(actual) {
 
 describe("task-envelope-schema", () => {
   test("schema has required top-level fields", () => {
-    expect(SCHEMA_VERSION).toBe("cira.task_envelope.v1");
-    for (const k of ["raw_input", "intent_analysis", "goal_model", "tool_plan", "workflow_graph"]) {
+    expect(SCHEMA_VERSION).toBe("sira.task_envelope.v1");
+    for (const k of ["raw_input", "intent_analysis", "goal_model", "tool_plan", "workflow_graph", "execution_law"]) {
       expect(TASK_ENVELOPE_SCHEMA.required.includes(k)).toBe(true);
     }
   });
@@ -120,6 +120,20 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.entities.requested_formats.includes("docx")).toBe(true);
     expect(r.envelope.context_requirements.needs_uploaded_files).toBe(true);
     expect(r.envelope.context_requirements.citation_required).toBe(true);
+  });
+
+  test("envelope embeds non-negotiable execution law and durable graph gates", async () => {
+    const r = await buildEnvelope({
+      text: "Busca fuentes reales y genera un Word académico con APA 7",
+    });
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.execution_law.never_fake_citations).toBe(true);
+    expect(r.envelope.execution_law.block_release_if_validation_fails).toBe(true);
+    expect(r.envelope.workflow_graph.state).toBe("planned");
+    expect(Array.isArray(r.envelope.workflow_graph.edges)).toBe(true);
+    expect(r.envelope.workflow_graph.validation_gate.block_release_on_failure).toBe(true);
+    expect(r.envelope.workflow_graph.release_gate.required).toBe(true);
+    expect(r.envelope.workflow_graph.rollback_strategy).toMatch(/no_original_overwrite/);
   });
 
   test("image request produces image_specification", async () => {
@@ -244,6 +258,19 @@ describe("frames", () => {
     expect(f.aggregate_score).toBeGreaterThanOrEqual(0.88);
   });
 
+  test("buildFinalResponseFrame blocks release when validation is not ready", async () => {
+    const { envelope } = await buildEnvelope({ text: "Genera un word con fuentes" });
+    const validationFrame = frames.buildValidationFrame({
+      envelope,
+      checkResults: [{ name: "artifact_validator", status: "failed", detail: "missing docx" }],
+    });
+    const artifactFrame = frames.buildArtifactFrame({ envelope });
+    const f = frames.buildFinalResponseFrame({ envelope, validationFrame, artifacts: artifactFrame.artifacts });
+    expect(f.frame_type).toBe("final_response_frame");
+    expect(f.ready_to_deliver).toBe(false);
+    expect(f.release_decision).toBe("blocked_for_repair");
+  });
+
   test("validateFrame catches bad frame_type", () => {
     const r = frames.validateFrame({ frame_type: "ghost" });
     expect(r.ok).toBe(false);
@@ -274,6 +301,7 @@ describe("engine / runUserMessage", () => {
     expect(r.tool_call_frame.frame_type).toBe("tool_call_frame");
     expect(r.artifact_frame.frame_type).toBe("artifact_frame");
     expect(r.validation_frame.frame_type).toBe("validation_frame");
+    expect(r.final_response_frame.frame_type).toBe("final_response_frame");
     expect(r.response.ready_to_deliver).toBe(true);
   });
 
@@ -327,7 +355,26 @@ function minimalEnvelope() {
     model_execution_context: { selected_model: {}, model_role: "x", backend_role: "y", should_model_generate_final_file_directly: false, should_backend_render_artifacts: false, structured_output_required: false, temperature_policy: {} },
     tool_plan: { required_tools: [], optional_tools: [], forbidden_tools: [] },
     agent_plan: {},
-    workflow_graph: { execution_mode: "single", nodes: [], retry_policy: {}, fallback_policy: {} },
+    workflow_graph: {
+      execution_mode: "single",
+      nodes: [],
+      edges: [],
+      state: "planned",
+      artifacts: [],
+      tool_calls: [],
+      permissions: {},
+      idempotency_key: "test",
+      retry_policy: {},
+      timeout_policy: {},
+      compensation_action: "none",
+      rollback_strategy: "none",
+      validation_gate: {},
+      human_approval_gate: {},
+      release_gate: {},
+      evidence_ledger: [],
+      audit_trace: [],
+      fallback_policy: {},
+    },
     clarification_policy: { needs_clarification: false, questions: [], auto_assumptions_allowed: true, act_without_clarification_if_confidence_above: 0.8, ask_user_if_confidence_below: 0.5 },
     safety_and_permissions: { overall_risk_level: "low", risk_categories: [], requires_user_confirmation: false, allowed_actions: [], blocked_actions: [], privacy: {} },
     quality_plan: { quality_level: "basic", validators: [], minimum_acceptance_score: 0.5, regenerate_if_below_score: false },
@@ -335,6 +382,7 @@ function minimalEnvelope() {
     memory_policy: { read_memory: true, write_memory: true, memory_items_to_read: [], memory_items_to_write: [], do_not_store: [] },
     cost_latency_policy: { priority: "balanced", max_tool_calls: 5, max_research_sources: 0, max_final_sources: 0, prefer_parallel_execution: true, expensive_tools_allowed: false, fallback_to_cheaper_tools: false },
     observability: { trace_required: true, log_model_calls: true, log_tool_calls: true, log_artifact_generation: true, log_validation_scores: true, redact_sensitive_data_in_logs: true, metrics: [] },
+    execution_law: { ...SIRA_EXECUTION_LAW },
     final_answer_contract: { must_include: [], must_not_include: [], delivery_mode: "chat" },
   };
 }

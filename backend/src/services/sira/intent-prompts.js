@@ -9,10 +9,10 @@
  * Pure JS, deterministic, zero deps.
  */
 
-const CIRA_INTENT_ENGINE_SYSTEM_PROMPT = [
-  "Eres Cira Intent Engine, el motor de comprensión estructurada de una plataforma agentic avanzada llamada Cira.",
+const SIRA_INTENT_ENGINE_SYSTEM_PROMPT = [
+  "Eres Sira Intent Engine, el motor de comprensión estructurada de una plataforma agentic avanzada llamada Cira.",
   "",
-  "Tu tarea es convertir cualquier solicitud del usuario en un Cira Cognitive Task Envelope.",
+  "Tu tarea es convertir cualquier solicitud del usuario en un Sira Cognitive Task Envelope.",
   "",
   "No respondas al usuario final.",
   "No ejecutes herramientas.",
@@ -20,7 +20,7 @@ const CIRA_INTENT_ENGINE_SYSTEM_PROMPT = [
   "No inventes resultados.",
   "No inventes fuentes.",
   "No asumas que una herramienta tuvo éxito.",
-  "Devuelve únicamente JSON válido compatible con CiraTaskEnvelopeSchema (cira.task_envelope.v1).",
+  "Devuelve únicamente JSON válido compatible con CiraTaskEnvelopeSchema (sira.task_envelope.v1).",
   "",
   "Contexto importante:",
   "- El usuario elige manualmente el modelo de IA que quiere usar.",
@@ -76,8 +76,8 @@ const CIRA_INTENT_ENGINE_SYSTEM_PROMPT = [
   "Devuelve únicamente un JSON válido de CiraTaskEnvelope v1.",
 ].join("\n");
 
-const CIRA_PLANNER_SYSTEM_PROMPT = [
-  "Eres Cira Planner, el planificador de workflows de Cira.",
+const SIRA_PLANNER_SYSTEM_PROMPT = [
+  "Eres Sira Planner, el planificador de workflows de Cira.",
   "",
   "Recibes un CiraTaskEnvelope ya validado.",
   "Tu tarea es convertirlo en un workflow ejecutable con nodos, dependencias, herramientas, agentes, outputs esperados y validaciones.",
@@ -90,7 +90,7 @@ const CIRA_PLANNER_SYSTEM_PROMPT = [
   "Reglas:",
   "- Divide tareas complejas en pasos pequeños.",
   "- Usa ejecución paralela cuando sea seguro.",
-  "- Toda herramienta debe existir en Cira Tool Registry.",
+  "- Toda herramienta debe existir en Sira Tool Registry.",
   "- Toda acción riesgosa debe marcar confirmación humana.",
   "- Nunca sobrescribas archivos originales.",
   "- Todo artifact debe pasar por validation node.",
@@ -112,8 +112,8 @@ const CIRA_PLANNER_SYSTEM_PROMPT = [
   "- estimated_complexity",
 ].join("\n");
 
-const CIRA_VALIDATOR_SYSTEM_PROMPT = [
-  "Eres Cira Validator. Recibes un set de checks deterministas y sus resultados.",
+const SIRA_VALIDATOR_SYSTEM_PROMPT = [
+  "Eres Sira Validator. Recibes un set de checks deterministas y sus resultados.",
   "",
   "Tu trabajo es producir un ValidationFrame que diga si el resultado está listo para entregar al usuario o si necesita repararse.",
   "",
@@ -132,7 +132,7 @@ const CIRA_VALIDATOR_SYSTEM_PROMPT = [
  */
 function buildIntentClassificationRequest({ userMessage, conversationContext = "(none)", attachmentsSummary = "(none)", schemaName = "CiraTaskEnvelopeV1" }) {
   return {
-    system: CIRA_INTENT_ENGINE_SYSTEM_PROMPT,
+    system: SIRA_INTENT_ENGINE_SYSTEM_PROMPT,
     user: [
       `USER_MESSAGE:`,
       userMessage,
@@ -153,7 +153,7 @@ function buildIntentClassificationRequest({ userMessage, conversationContext = "
 
 function buildPlannerRequest({ envelopeJson, schemaName = "PlanFrameV1" }) {
   return {
-    system: CIRA_PLANNER_SYSTEM_PROMPT,
+    system: SIRA_PLANNER_SYSTEM_PROMPT,
     user: [
       `ENVELOPE:`,
       envelopeJson,
@@ -168,7 +168,7 @@ function buildPlannerRequest({ envelopeJson, schemaName = "PlanFrameV1" }) {
 
 function buildValidatorRequest({ checkResultsJson, envelopeJson, schemaName = "ValidationFrameV1" }) {
   return {
-    system: CIRA_VALIDATOR_SYSTEM_PROMPT,
+    system: SIRA_VALIDATOR_SYSTEM_PROMPT,
     user: [
       `CHECK_RESULTS:`,
       checkResultsJson,
@@ -185,9 +185,9 @@ function buildValidatorRequest({ checkResultsJson, envelopeJson, schemaName = "V
 }
 
 module.exports = {
-  CIRA_INTENT_ENGINE_SYSTEM_PROMPT,
-  CIRA_PLANNER_SYSTEM_PROMPT,
-  CIRA_VALIDATOR_SYSTEM_PROMPT,
+  SIRA_INTENT_ENGINE_SYSTEM_PROMPT,
+  SIRA_PLANNER_SYSTEM_PROMPT,
+  SIRA_VALIDATOR_SYSTEM_PROMPT,
   buildIntentClassificationRequest,
   buildPlannerRequest,
   buildValidatorRequest,

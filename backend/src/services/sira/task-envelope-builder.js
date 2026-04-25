@@ -1,6 +1,6 @@
 /**
  * task-envelope-builder — turns a raw user request into a full
- * Cira Cognitive Task Envelope v1.
+ * Sira Cognitive Task Envelope v1.
  *
  * Builds deterministically:
  *
@@ -26,6 +26,24 @@ const { getIntent, TAXONOMY } = require("./intent-taxonomy");
 const intentRouter = require("../ai-product-os/semantic-intent-router");
 const skillSystem = require("../ai-product-os/skill-system");
 const planner = require("../ai-product-os/planner-agent");
+
+const SIRA_EXECUTION_LAW = Object.freeze({
+  do_not_answer_freely: true,
+  compile_request_to_contract: true,
+  validate_contract_before_execution: true,
+  select_tools_only_from_registry: true,
+  execute_as_dag: true,
+  persist_state: true,
+  require_evidence_for_factual_claims: true,
+  require_format_sovereignty: true,
+  run_deterministic_validators: true,
+  repair_before_delivery: true,
+  block_release_if_validation_fails: true,
+  never_fake_scores: true,
+  never_fake_file_reading: true,
+  never_fake_citations: true,
+  never_fake_artifacts: true,
+});
 
 /**
  * @param {object} args
@@ -182,6 +200,8 @@ async function buildEnvelope({
       redact_sensitive_data_in_logs: true,
       metrics: ["latency", "tool_success_rate", "artifact_success_rate", "source_validation_rate", "user_satisfaction_signal", "cost_estimate"],
     },
+
+    execution_law: { ...SIRA_EXECUTION_LAW },
 
     final_answer_contract: {
       must_include: deriveMustInclude(taxonomyIntent),
@@ -506,13 +526,75 @@ function deriveWorkflowGraph(plan, decision) {
     depends_on: n.depends_on || [],
     status: "pending",
   }));
+  const edges = [];
+  for (const node of nodes) {
+    for (const dep of node.depends_on || []) {
+      edges.push({ from: dep, to: node.id, type: "dependency" });
+    }
+  }
+  const toolCalls = nodes.flatMap(node => (node.tools || []).map(tool => ({
+    node_id: node.id,
+    tool_name: tool,
+    status: "planned",
+    input_key: `${node.id}.input`,
+    output_key: `${node.id}.${tool}.output`,
+  })));
   return {
     execution_mode: "durable_multi_step",
     nodes,
+    edges,
+    state: "planned",
+    artifacts: [],
+    tool_calls: toolCalls,
+    permissions: {
+      read_uploaded_files: true,
+      write_new_artifacts: true,
+      execute_sandboxed_code: Boolean((decision.required_tools || []).some(t => /sandbox|code|test|build/i.test(t))),
+      external_api_access: Boolean((decision.required_tools || []).some(t => /research|web|doi|openalex|crossref/i.test(t))),
+      destructive_actions_allowed: false,
+    },
+    idempotency_key: `cira:${plan.graph_id || "graph"}:${decision.intent_primary || "intent"}`,
     retry_policy: {
       max_retries_per_node: 2,
       retry_on: ["tool_timeout", "invalid_json", "file_generation_error", "source_validation_failure"],
     },
+    timeout_policy: {
+      per_node_ms: 30000,
+      total_workflow_ms: 15 * 60 * 1000,
+      on_timeout: "pause_and_resume_or_repair",
+    },
+    compensation_action: "record_failure_report_and_preserve_original_inputs",
+    rollback_strategy: "new_artifacts_only_no_original_overwrite",
+    validation_gate: {
+      required: true,
+      validators: ["intent_fulfillment_validator", "artifact_validator", "safety_validator"],
+      block_release_on_failure: true,
+    },
+    human_approval_gate: {
+      required: Boolean(decision.needs_clarification || decision.risk_level === "critical"),
+      reasons: decision.needs_clarification ? ["clarification_required"] : [],
+    },
+    release_gate: {
+      required: true,
+      controller: "release_manager_agent",
+      decision: "pending",
+      blocks_on: ["failed_validation", "missing_artifact", "format_mismatch", "unsafe_action"],
+    },
+    evidence_ledger: [],
+    audit_trace: [
+      {
+        event: "contract_created",
+        at: new Date().toISOString(),
+        source: "cira.task-envelope-builder",
+        decision_tier: decision.tier || "unknown",
+      },
+      {
+        event: "workflow_graph_created",
+        at: new Date().toISOString(),
+        nodes: nodes.length,
+        tool_calls: toolCalls.length,
+      },
+    ],
     fallback_policy: {
       if_scientific_api_fails: "use_alternative_source_api",
       if_pdf_export_fails: "render_pdf_from_html",
@@ -723,6 +805,7 @@ function clamp01(n) {
 
 module.exports = {
   buildEnvelope,
+  SIRA_EXECUTION_LAW,
   // exposed for tests
   mapRouterIntentToTaxonomy,
   deriveOutputContract,

@@ -19,7 +19,7 @@
  */
 
 const { buildEnvelope } = require("./task-envelope-builder");
-const { buildIntentFrame, buildPlanFrame, buildToolCallFrame, buildArtifactFrame, buildValidationFrame } = require("./frames");
+const { buildIntentFrame, buildPlanFrame, buildToolCallFrame, buildArtifactFrame, buildValidationFrame, buildFinalResponseFrame } = require("./frames");
 const { validateEnvelope } = require("./task-envelope-schema");
 
 /**
@@ -40,7 +40,7 @@ const { validateEnvelope } = require("./task-envelope-schema");
  */
 async function runUserMessage(args = {}) {
   if (typeof args.text !== "string" || args.text.trim().length === 0) {
-    throw new Error("cira.engine: text (non-empty string) required");
+    throw new Error("sira.engine: text (non-empty string) required");
   }
   const dryRun = args.dryRun !== false;
 
@@ -122,7 +122,13 @@ async function runUserMessage(args = {}) {
   const validationFrame = buildValidationFrame({ envelope, checkResults });
 
   // ── Step 6. Response Builder ─────────────────────────────────────
-  const response = buildResponse({ envelope, validationFrame, artifactResults, dryRun });
+  const finalResponseFrame = buildFinalResponseFrame({
+    envelope,
+    validationFrame,
+    artifacts: artifactFrame.artifacts,
+    warnings: validationFrame.ready_to_deliver ? [] : ["validation_failed_release_blocked"],
+  });
+  const response = buildResponse({ envelope, validationFrame, finalResponseFrame, artifactResults, dryRun });
 
   return {
     ok: true,
@@ -133,6 +139,7 @@ async function runUserMessage(args = {}) {
     tool_call_frame: toolCallFrame,
     artifact_frame: artifactFrame,
     validation_frame: validationFrame,
+    final_response_frame: finalResponseFrame,
     tool_results: toolResults,
     artifact_results: artifactResults,
     response,
@@ -148,7 +155,7 @@ function validatorPassed(validator, { envelope, dryRun }) {
   return validator.name === "intent_fulfillment_validator";
 }
 
-function buildResponse({ envelope, validationFrame, artifactResults, dryRun }) {
+function buildResponse({ envelope, validationFrame, finalResponseFrame, artifactResults, dryRun }) {
   const summary = `${envelope.intent_analysis.primary_intent.label || envelope.intent_analysis.primary_intent.id} preparado.`;
   const artifacts = (artifactResults || []).map(a => ({
     name: a.artifact.name,
@@ -162,6 +169,8 @@ function buildResponse({ envelope, validationFrame, artifactResults, dryRun }) {
     must_include: envelope.final_answer_contract.must_include,
     artifacts,
     ready_to_deliver: validationFrame.ready_to_deliver,
+    release_decision: finalResponseFrame.release_decision,
+    user_visible_summary: finalResponseFrame.user_visible_summary,
     dry_run: dryRun,
   };
 }

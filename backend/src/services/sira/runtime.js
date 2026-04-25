@@ -1,7 +1,7 @@
 /**
- * runtime — Cira Tool Runtime as defined in MASTER_SPEC §11/§12.
+ * runtime — Sira Tool Runtime as defined in MASTER_SPEC §11/§12.
  *
- * Drives an envelope.workflow_graph through the Cira Tool Registry,
+ * Drives an envelope.workflow_graph through the Sira Tool Registry,
  * collecting results, building the ArtifactFrame, and running the
  * validator engine before composing a ValidationFrame.
  *
@@ -36,10 +36,12 @@ async function runWorkflow({
   dryRun = false,
 } = {}) {
   if (!envelope || !envelope.workflow_graph) {
-    throw new Error("cira.runtime: envelope.workflow_graph required");
+    throw new Error("sira.runtime: envelope.workflow_graph required");
   }
   const reg = registry || createDefaultRegistry();
   const log = [];
+  const auditTrace = [...(envelope.workflow_graph.audit_trace || [])];
+  const evidenceLedger = [...(envelope.workflow_graph.evidence_ledger || [])];
   const toolResults = [];
   const artifacts = [];
   const completed = new Set();
@@ -64,6 +66,7 @@ async function runWorkflow({
     if (!next) break;
 
     log.push({ ts: new Date().toISOString(), type: "node.started", node_id: next.id });
+    auditTrace.push({ ts: new Date().toISOString(), event: "node_started", node_id: next.id });
     if (Array.isArray(next.tools) && next.tools.length > 0) {
       for (const toolName of next.tools) {
         if (!reg.has(toolName)) {
@@ -76,6 +79,21 @@ async function runWorkflow({
         }
         const r = await reg.invoke(toolName, toolArgs[toolName] || {}, baseContext);
         toolResults.push({ node: next.id, tool: toolName, ...r });
+        auditTrace.push({
+          ts: new Date().toISOString(),
+          event: "tool_invoked",
+          node_id: next.id,
+          tool: toolName,
+          status: r.status,
+        });
+        if (r.output?.source || r.output?.sources || r.metadata?.source_id) {
+          evidenceLedger.push({
+            node_id: next.id,
+            tool: toolName,
+            source: r.output?.source || r.metadata?.source_id || "tool_output",
+            status: r.status,
+          });
+        }
         // Collect artefacts emitted by tools
         if (Array.isArray(r.artifacts)) {
           for (const a of r.artifacts) artifacts.push({ ...a, source_node: next.id, source_tool: toolName });
@@ -84,6 +102,7 @@ async function runWorkflow({
     }
     completed.add(next.id);
     log.push({ ts: new Date().toISOString(), type: "node.completed", node_id: next.id });
+    auditTrace.push({ ts: new Date().toISOString(), event: "node_completed", node_id: next.id });
   }
 
   // ── Always emit at least the planned artefacts ───────────────────
@@ -115,6 +134,8 @@ async function runWorkflow({
     tool_results: toolResults,
     artifact_frame,
     validation_frame,
+    evidence_ledger: evidenceLedger,
+    audit_trace: auditTrace,
     log,
     summary: {
       nodes_executed: completed.size,
