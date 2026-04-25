@@ -46,13 +46,22 @@ function createCiraKernel({ validateEnvelope, registry = null, middleware = null
     const available = registry && typeof registry.list === "function"
       ? new Set(registry.list().map((tool) => tool.name))
       : null;
-    const selected = requested.map((tool) => ({
-      name: tool.tool_name || tool.name,
-      reason: tool.reason || null,
-      priority: tool.priority || "normal",
-      required: tool.required !== false,
-      registered: available ? available.has(tool.tool_name || tool.name) : true,
-    }));
+    const selected = requested.map((tool) => {
+      const name = tool.tool_name || tool.name;
+      const descriptor = registry && typeof registry.get === "function" ? registry.get(name) : null;
+      return {
+        name,
+        reason: tool.reason || null,
+        priority: tool.priority || "normal",
+        required: tool.required !== false,
+        registered: available ? available.has(name) : true,
+        category: descriptor?.category || tool.tool_type || null,
+        riskLevel: descriptor?.riskLevel || tool.risk_level || "low",
+        permissionsRequired: descriptor?.permissionsRequired || permissionsFromToolRequest(tool),
+        requiresHumanConfirmation: Boolean(descriptor?.requiresHumanConfirmation || tool.requires_human_confirmation),
+        manifest: descriptor?.manifest ? pickToolManifest(descriptor.manifest) : null,
+      };
+    });
     const missing = selected.filter((tool) => tool.required && !tool.registered).map((tool) => tool.name);
     context.trace.emit("tools.selected", { count: selected.length, missing });
     const next = { ...state, selected_tools: selected, missing_tools: missing };
@@ -187,6 +196,8 @@ function shapeRuntimeResult(state, trace) {
     content_blocks: state.content_blocks,
     content_summary: state.content_summary,
     selected_tools: state.selected_tools,
+    tool_policy: state.tool_policy || null,
+    policy_blocked_tools: state.policy_blocked_tools || [],
     runtime_graph: state.runtime_graph,
     runtime_validation_reports: state.runtime_validation_reports || [],
     format_sovereignty: state.format_sovereignty || null,
@@ -210,6 +221,24 @@ function normalizeToolRequest(tool, required) {
   if (!tool) return null;
   if (typeof tool === "string") return { tool_name: tool, required };
   return { ...tool, required };
+}
+
+function permissionsFromToolRequest(tool = {}) {
+  const raw = tool.permissionsRequired || tool.permissions_required || tool.permission_required;
+  if (!raw || raw === "registered_scope") return [];
+  return Array.isArray(raw) ? raw : [raw];
+}
+
+function pickToolManifest(manifest = {}) {
+  return {
+    sideEffectLevel: manifest.sideEffectLevel || "none",
+    sandboxRequired: Boolean(manifest.sandboxRequired),
+    requiresConfirmation: Boolean(manifest.requiresConfirmation),
+    auditPolicy: manifest.auditPolicy || null,
+    scopes: Array.isArray(manifest.scopes) ? manifest.scopes : [],
+    allowedFormats: Array.isArray(manifest.allowedFormats) ? manifest.allowedFormats : [],
+    forbiddenFormats: Array.isArray(manifest.forbiddenFormats) ? manifest.forbiddenFormats : [],
+  };
 }
 
 module.exports = {

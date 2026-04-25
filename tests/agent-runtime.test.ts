@@ -14,6 +14,10 @@ const { createDefaultRegistry } = require(path.join(
   process.cwd(),
   "backend/src/services/sira/tool-registry.js",
 ))
+const siraWorkflowRuntime = require(path.join(
+  process.cwd(),
+  "backend/src/services/sira/runtime.js",
+))
 
 describe("agent-runtime · langchain-inspired runnable contract", () => {
   it("composes runnables and emits trace events", async () => {
@@ -177,5 +181,120 @@ describe("sira engine · agent runtime integration", () => {
     assert.equal(dagReport.status, "failed")
     assert.ok(dagReport.details.cycles.length > 0)
     assert.ok(dagReport.details.missing_dependencies.length > 0)
+  })
+
+  it("blocks high-impact side-effect tools unless a human explicitly approves them", async () => {
+    const base = await siraEngine.runUserMessage({
+      text: "crea una landing profesional y publica una vista previa",
+      attachments: [],
+      dryRun: true,
+    })
+    const envelope = structuredClone(base.envelope)
+    envelope.tool_plan.required_tools = [{
+      tool_name: "create_preview_url",
+      reason: "Public preview requires backend authorization.",
+      priority: "critical",
+    }]
+    envelope.tool_plan.optional_tools = []
+    envelope.workflow_graph.nodes = [{
+      id: "tool.create_preview_url",
+      label: "Create Preview Url",
+      agent: "artifact_agent",
+      tools: ["create_preview_url"],
+      depends_on: [],
+      status: "pending",
+    }]
+    envelope.workflow_graph.tool_calls = [{
+      node_id: "tool.create_preview_url",
+      tool_name: "create_preview_url",
+      status: "planned",
+    }]
+
+    const result = await runtime.runCiraAgentRuntime({
+      text: "crea una landing profesional y publica una vista previa",
+      envelope,
+      registry: createDefaultRegistry(),
+    })
+
+    assert.equal(result.ok, true)
+    assert.equal(result.status, "blocked")
+    assert.equal(result.tool_policy.blocked_required_tools, 1)
+    assert.ok(result.policy_blocked_tools.some((tool: any) => tool.name === "create_preview_url"))
+    assert.ok(result.release_preflight.violations.some((violation: any) => violation.code === "tool_runtime_policy_blocked"))
+    const policyReport = result.runtime_validation_reports.find((report: any) => report.name === "tool_runtime_policy")
+    assert.equal(policyReport.status, "failed")
+  })
+
+  it("authorizes high-impact tools only with explicit approval and side-effect opt-in", async () => {
+    const base = await siraEngine.runUserMessage({
+      text: "crea una landing profesional y publica una vista previa",
+      attachments: [],
+      dryRun: true,
+    })
+    const envelope = structuredClone(base.envelope)
+    envelope.tool_plan.required_tools = [{
+      tool_name: "create_preview_url",
+      reason: "Approved publish preview.",
+      priority: "critical",
+    }]
+    envelope.tool_plan.optional_tools = []
+    envelope.workflow_graph.nodes = [{
+      id: "tool.create_preview_url",
+      label: "Create Preview Url",
+      agent: "artifact_agent",
+      tools: ["create_preview_url"],
+      depends_on: [],
+      status: "pending",
+    }]
+    envelope.workflow_graph.tool_calls = [{
+      node_id: "tool.create_preview_url",
+      tool_name: "create_preview_url",
+      status: "planned",
+    }]
+
+    const result = await runtime.runCiraAgentRuntime({
+      text: "crea una landing profesional y publica una vista previa",
+      envelope,
+      registry: createDefaultRegistry(),
+      runtimeOptions: {
+        toolPolicyProfile: "interactive",
+        humanApproved: true,
+        allowExternalSideEffects: true,
+      },
+    })
+
+    assert.equal(result.ok, true)
+    assert.equal(result.tool_policy.blocked_required_tools, 0)
+    assert.ok(!result.release_preflight.violations.some((violation: any) => violation.code === "tool_runtime_policy_blocked"))
+    const policyReport = result.runtime_validation_reports.find((report: any) => report.name === "tool_runtime_policy")
+    assert.equal(policyReport.status, "passed")
+  })
+
+  it("enforces the same tool policy inside the concrete workflow executor", async () => {
+    const base = await siraEngine.runUserMessage({
+      text: "crea una landing profesional y publica una vista previa",
+      attachments: [],
+      dryRun: true,
+    })
+    const envelope = structuredClone(base.envelope)
+    envelope.workflow_graph.nodes = [{
+      id: "tool.create_preview_url",
+      label: "Create Preview Url",
+      agent: "artifact_agent",
+      tools: ["create_preview_url"],
+      depends_on: [],
+      status: "pending",
+    }]
+
+    const result = await siraWorkflowRuntime.runWorkflow({
+      envelope,
+      registry: createDefaultRegistry(),
+      dryRun: false,
+    })
+
+    const denied = result.tool_results.find((toolResult: any) => toolResult.tool === "create_preview_url")
+    assert.equal(denied.status, "error")
+    assert.equal(denied.error.code, "tool_policy_denied")
+    assert.ok(result.audit_trace.some((event: any) => event.event === "tool_policy_denied"))
   })
 })

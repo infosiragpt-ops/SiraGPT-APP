@@ -10,6 +10,7 @@
  */
 
 const { createDefaultRegistry } = require("./tool-registry");
+const { evaluateToolPolicy, resolveToolPolicyProfile } = require("./tool-policy");
 const { validateArtifact, validateSources, validateCode, validateDocument, validateSafety, composeValidationFrame } = require("./validator-engine");
 
 const DEFAULT_PERMISSIONS = Object.freeze([
@@ -56,6 +57,8 @@ async function runWorkflow({
     files: context.files || [],
     memory: context.memory || {},
     humanApproved: Boolean(context.humanApproved),
+    allowExternalSideEffects: Boolean(context.allowExternalSideEffects),
+    toolPolicyProfile: resolveToolPolicyProfile({ envelope, context }),
     trace: context.trace || (() => {}),
   };
 
@@ -76,6 +79,31 @@ async function runWorkflow({
         }
         if (dryRun) {
           toolResults.push({ node: next.id, tool: toolName, status: "skipped_dry_run" });
+          continue;
+        }
+        const tool = reg.get(toolName);
+        const policyDecision = evaluateToolPolicy(tool || { name: toolName }, {
+          envelope,
+          profile: baseContext.toolPolicyProfile,
+          humanApproved: baseContext.humanApproved,
+          allowExternalSideEffects: baseContext.allowExternalSideEffects,
+        });
+        if (!policyDecision.allowed) {
+          toolResults.push({
+            node: next.id,
+            tool: toolName,
+            status: "error",
+            error: { code: "tool_policy_denied", message: policyDecision.reason },
+            metadata: { policy: policyDecision },
+          });
+          auditTrace.push({
+            ts: new Date().toISOString(),
+            event: "tool_policy_denied",
+            node_id: next.id,
+            tool: toolName,
+            profile: policyDecision.profile,
+            reason: policyDecision.reason,
+          });
           continue;
         }
         const r = await reg.invoke(toolName, toolArgs[toolName] || {}, baseContext);

@@ -1,5 +1,7 @@
 "use strict";
 
+const { applyToolRuntimePolicy } = require("../sira/tool-policy");
+
 const PRIORITY_WEIGHT = Object.freeze({
   critical: 100,
   high: 80,
@@ -38,6 +40,7 @@ async function runMiddleware(stage, middlewares = [], state, context = {}) {
 function createDefaultRuntimeMiddleware(options = {}) {
   return [
     createToolSelectionMiddleware(options),
+    createToolRuntimePolicyMiddleware(options),
     createToolCallLimitMiddleware(options),
     createDagIntegrityMiddleware(options),
     createFormatSovereigntyMiddleware(options),
@@ -84,6 +87,62 @@ function createToolSelectionMiddleware({ maxTools = 16 } = {}) {
           max_tools: maxTools,
           required_tools: required.length,
           optional_tools_dropped: Math.max(0, droppedOptional),
+        },
+      });
+      context.trace?.emit?.("middleware.report", latestReport(next));
+      return next;
+    },
+  };
+}
+
+function createToolRuntimePolicyMiddleware(options = {}) {
+  return {
+    name: "tool_runtime_policy",
+    stages: ["after_tools"],
+    run(state, context) {
+      const policy = applyToolRuntimePolicy(state.selected_tools || [], {
+        envelope: state.envelope,
+        runtimeOptions: options,
+        humanApproved: Boolean(options.humanApproved),
+        allowExternalSideEffects: Boolean(options.allowExternalSideEffects),
+      });
+      const blockedRequired = policy.blocked.filter((tool) => tool.required !== false);
+      const blockedOptional = policy.blocked.filter((tool) => tool.required === false);
+      const status = blockedRequired.length > 0
+        ? "failed"
+        : blockedOptional.length > 0 || policy.warnings.length > 0
+          ? "passed_with_warning"
+          : "passed";
+      const next = addRuntimeReport({
+        ...state,
+        selected_tools: policy.tools,
+        policy_blocked_tools: policy.blocked.map((tool) => ({
+          name: tool.name || tool.tool_name,
+          required: tool.required !== false,
+          reason: tool.policy?.reason || "tool blocked by runtime policy",
+          code: tool.policy?.code || "tool_policy_denied",
+          permissions_required: tool.policy?.permissions_required || [],
+        })),
+        tool_policy: policy.summary,
+      }, {
+        name: "tool_runtime_policy",
+        stage: context.stage,
+        status,
+        severity: blockedRequired.length > 0 ? "error" : blockedOptional.length > 0 ? "warning" : "info",
+        code: blockedRequired.length > 0
+          ? "tool_runtime_policy_blocked"
+          : blockedOptional.length > 0
+            ? "tool_runtime_policy_blocked_optional"
+            : "tool_runtime_policy_ok",
+        message: blockedRequired.length > 0
+          ? `Runtime policy blocked ${blockedRequired.length} required tool(s).`
+          : `Runtime policy profile "${policy.profile}" authorized ${policy.allowed.length}/${policy.tools.length} tool(s).`,
+        details: {
+          profile: policy.profile,
+          blocked_required_tools: blockedRequired.map((tool) => tool.name || tool.tool_name),
+          blocked_optional_tools: blockedOptional.map((tool) => tool.name || tool.tool_name),
+          warnings: policy.warnings,
+          model_trust_boundary: policy.summary.model_trust_boundary,
         },
       });
       context.trace?.emit?.("middleware.report", latestReport(next));
@@ -238,6 +297,8 @@ function dedupeTools(tools) {
     if (!name) continue;
     const previous = byName.get(name);
     const next = {
+      ...(previous || {}),
+      ...raw,
       name,
       reason: raw.reason || previous?.reason || null,
       priority: raw.priority || previous?.priority || "normal",
@@ -387,6 +448,7 @@ module.exports = {
   runMiddleware,
   createDefaultRuntimeMiddleware,
   createToolSelectionMiddleware,
+  createToolRuntimePolicyMiddleware,
   createToolCallLimitMiddleware,
   createDagIntegrityMiddleware,
   createFormatSovereigntyMiddleware,
