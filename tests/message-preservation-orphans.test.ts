@@ -14,7 +14,7 @@ import {
  *   2. Frontend optimistically shows the user turn with a temp id
  *      `msg-user-<ts>`.
  *   3. Assistant responds and the chat is refreshed from the server.
- *   4. Server response (for whatever reason — race, partial save,
+ *   4. Server response (for whatever reason: race, partial save,
  *      transcription pipeline replacing the turn) does NOT include
  *      the user message.
  *   5. Old merge logic only iterated over the incoming list, so the
@@ -25,10 +25,10 @@ import {
  * orphaned local user message before the assistant message that
  * followed it locally.
  */
-describe("mergeMessagesPreservingUserContent — never drops local user messages", () => {
+describe("mergeMessagesPreservingUserContent - never drops local user messages", () => {
   it("re-inserts a user message that the server omitted (the transcribe bug)", () => {
     const local = [
-      { id: "asst_seed", role: "ASSISTANT", content: "Hola, ¿en qué te ayudo?" },
+      { id: "asst_seed", role: "ASSISTANT", content: "Hola, en que te ayudo?" },
       {
         id: "msg-user-1700000000000",
         role: "USER",
@@ -38,7 +38,7 @@ describe("mergeMessagesPreservingUserContent — never drops local user messages
       { id: "msg-ai-1700000001000", role: "ASSISTANT", content: "" },
     ]
     const incoming = [
-      { id: "asst_seed", role: "ASSISTANT", content: "Hola, ¿en qué te ayudo?" },
+      { id: "asst_seed", role: "ASSISTANT", content: "Hola, en que te ayudo?" },
       // Server skipped the user turn entirely
       {
         id: "asst_real",
@@ -68,7 +68,7 @@ describe("mergeMessagesPreservingUserContent — never drops local user messages
     ]
     const incoming = [
       { id: "real_user_id", role: "USER", content: "transcribir esto" },
-      { id: "real_asst_id", role: "ASSISTANT", content: "Aquí está la transcripción..." },
+      { id: "real_asst_id", role: "ASSISTANT", content: "Aqui esta la transcripcion..." },
     ]
     const merged = mergeMessagesPreservingUserContent(incoming, local)
 
@@ -88,7 +88,7 @@ describe("mergeMessagesPreservingUserContent — never drops local user messages
     const merged = mergeMessagesPreservingUserContent(incoming, local)
     const users = merged.filter(m => String(m.role).toUpperCase() === "USER")
     assert.equal(users.length, 1)
-    // Content was preserved from local (existing behaviour)
+    // Content was preserved from local (existing behavior)
     assert.equal(users[0].content, "anything")
   })
 

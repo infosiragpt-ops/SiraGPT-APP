@@ -59,7 +59,7 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     if (isUserMessage(message)) localUsersByOrdinal.push(message);
   }
 
-  // Pass 1 — preserve content of user messages that survived the server round-trip.
+  // Pass 1 - preserve content of user messages that survived the server round-trip.
   let userOrdinal = -1;
   const enriched: TMessage[] = incomingMessages.map((incoming) => {
     if (!isUserMessage(incoming)) return incoming;
@@ -84,7 +84,7 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     return next;
   });
 
-  // Pass 2 — re-insert any local user message that was DROPPED by the server.
+  // Pass 2 - re-insert any local user message that was DROPPED by the server.
   // This guards against the bug where a server refresh returns the assistant
   // turn but omits the user message that triggered it (race condition,
   // partial backend save, transcription pipeline replacing the turn, etc.).

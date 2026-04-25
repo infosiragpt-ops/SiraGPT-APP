@@ -75,3 +75,25 @@ test('merges chat refresh without altering unrelated assistant messages', () => 
   assert.equal(merged.messages[0].content, 'transcribir');
   assert.equal(merged.messages[1].content, 'LAS NORMAS A USAR SON VANCOUVER');
 });
+
+test('re-inserts a visible user message if the backend refresh drops the turn', () => {
+  const local = [
+    { id: 'old-user', role: 'USER', content: 'hola' },
+    { id: 'old-ai', role: 'ASSISTANT', content: 'Hola.' },
+    { id: 'msg-user-2', role: 'USER', content: 'transcribir', files: [{ id: 'img-1', mimeType: 'image/png' }] },
+    { id: 'msg-ai-2', role: 'ASSISTANT', content: '' },
+  ];
+
+  const incoming = [
+    { id: 'old-user', role: 'USER', content: 'hola' },
+    { id: 'old-ai', role: 'ASSISTANT', content: 'Hola.' },
+    { id: 'server-ai-2', role: 'ASSISTANT', content: 'LAS NORMAS A USAR SON VANCOUVER' },
+  ];
+
+  const merged = mergeMessagesPreservingUserContent(incoming, local);
+
+  assert.equal(merged[2].role, 'USER');
+  assert.equal(merged[2].content, 'transcribir');
+  assert.deepEqual((merged[2] as any).files, [{ id: 'img-1', mimeType: 'image/png' }]);
+  assert.equal(merged[3].content, 'LAS NORMAS A USAR SON VANCOUVER');
+});
