@@ -50,6 +50,17 @@ interface SemanticIntentResponse {
   confidence?: number
   needsClarification?: boolean
   finalOutput?: string
+  semanticProfile?: {
+    primary_intent: string
+    secondary_intents: string[]
+    user_goal: string
+    required_tools: string[]
+    output_format: string
+    language: string
+    quality_level: string
+    confidence: number
+    needs_clarification: boolean
+  }
   contract?: {
     pipeline?: string
     required_extension?: string | null
@@ -146,11 +157,72 @@ const normalizePrompt = (prompt: string) =>
     .replace(/\s+/g, ' ')
     .trim()
 
+const EXISTING_DOCUMENT_REFERENCE_RE =
+  /\b(?:del|de la|de el|en el|sobre el|este|esta|ese|esa|mi|el|la)\s+(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|power\s*point|powerpoint|pptx?)\b|\b(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|pptx?)\s+(?:adjunto|subido|cargado|anterior)\b/i
+
+const DOCUMENT_UNDERSTANDING_RE =
+  /\b(?:cual|cu[aá]l|que|qu[eé]|quien|qui[eé]n|cuando|cu[aá]ndo|donde|d[oó]nde|primera\s+palabra|primer\s+parrafo|primer\s+p[aá]rrafo|resume|resumen|resumir|analiza|analisis|an[aá]lisis|lee|leer|extrae|extraer|identifica|identificar|dime|segun|seg[uú]n|explica|explicar|contenido|menciona|dice)\b/i
+
+const OUTPUT_FORMAT_REQUEST_RE =
+  /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|redacta(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg|documento|archivo|informe|reporte|presentaci[oó]n)\b/i
+
+const DOCUMENT_FILE_EXT_RE = /\.(?:docx?|pdf|xlsx?|csv|pptx?|txt|md)$/i
+
+const DOCUMENT_MIME_RE =
+  /(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-|vnd\.oasis\.opendocument)|text\/(?:plain|markdown|csv)|application\/csv)/i
+
+const parseFilesFromMessage = (message: any): any[] => {
+  const rawFiles = message?.files
+  if (!rawFiles) return []
+  if (Array.isArray(rawFiles)) return rawFiles
+  if (typeof rawFiles === 'string') {
+    try {
+      const parsed = JSON.parse(rawFiles)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+const isDocumentLikeAttachment = (file: any) => {
+  if (!file) return false
+  if (typeof file === 'string') return DOCUMENT_FILE_EXT_RE.test(file)
+  const name = String(file.name || file.originalName || file.filename || file.path || '')
+  const mimeType = String(file.mimeType || file.type || file.contentType || '')
+  if (mimeType.startsWith('image/') || file.type === 'image') return false
+  return DOCUMENT_FILE_EXT_RE.test(name) || DOCUMENT_MIME_RE.test(mimeType)
+}
+
+export function hasDocumentAttachmentContext(conversationHistory: any[] = []): boolean {
+  return (Array.isArray(conversationHistory) ? conversationHistory : []).some((message) =>
+    parseFilesFromMessage(message).some(isDocumentLikeAttachment)
+  )
+}
+
+export function shouldAnswerFromExistingDocument(
+  prompt: string,
+  conversationHistory: any[] = []
+): boolean {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return false
+  if (OUTPUT_FORMAT_REQUEST_RE.test(normalized)) return false
+  if (!EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)) return false
+  if (!DOCUMENT_UNDERSTANDING_RE.test(normalized)) return false
+
+  // Even without loaded history, this is a question about an existing
+  // document ("del Word"), not a request to create a new Word file.
+  // History presence is used separately to reattach the previous file.
+  return true
+}
+
 const ROUTING_PATTERNS = {
   gmail: /\b(gmail|e-?mail|correo(s)?|mail|inbox|bandeja de entrada|redacta(r)? (un )?correo|envia(r)? (un )?correo|responde(r)? (un )?correo|lee(r)? (mis )?correos)\b/i,
   googleServices: /\b(google (calendar|calendario|drive)|calendar|calendario|evento|event|meeting|reunion|agenda|drive|carpeta|folder)\b/i,
+  realtimeLookup: /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b|\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b|\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
   externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
-  deliverableFile: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|informe|reporte|presentacion|diapositivas|slides|hoja de calculo|spreadsheet|archivo|documento|matriz narrativa|matriz de consistencia|base de datos)\b/i,
+  deliverableFile: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|svg|informe|reporte|presentacion|diapositivas|slides|hoja de calculo|spreadsheet|archivo|documento|matriz narrativa|matriz de consistencia|base de datos)\b/i,
   dataWork: /\b(calcula(r)?|analiza(r)?|procesa(r)?|limpia(r)?|extrae(r)?|clasifica(r)?|regresion|estadistica|csv|datos|dataset|cronbach|spearman|anova|correlacion|likert)\b/i,
   codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|debug|bug|corrige(r)?|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
   longRunningAgent: /\b(2 horas|dos horas|30 minutos|60 minutos|una hora|sin detenerse|sin parar|persistente|background|mientras salgo|aunque cierre|auto.?corrige|autonom(o|a)|verifica(r)?|self.?check|self.?supervision)\b/i,
@@ -164,7 +236,7 @@ const ROUTING_PATTERNS = {
   // primera palabra del word?" is about an existing uploaded file, not
   // a request to generate a new document. Without this guard, every
   // mention of "word"/"excel" routed to the document pipeline.
-  doc: /\b(?:(?:descargar?|genera(?:r|me)?|crea(?:me|r)?|exporta(?:r|me)?|haz(?:me)?|hazme|envia(?:me)?|elabora(?:me|r)?|redacta(?:me|r)?|prepara(?:me|r)?|arma(?:me)?|construye(?:me)?|necesito|quiero|dame)\s+(?:un[oa]?\s+|el\s+|la\s+|los\s+|las\s+)?(?:nuev[oa]\s+)?(?:documento|archivo|informe|reporte|tesis|monograf[ií]a|ensayo|memoria|presentaci[oó]n|hoja\s+de\s+c[aá]lculo|spreadsheet|ppt|pptx?|docx?|word|excel|powerpoint|power\s*point|pdf|xlsx)|exporta(?:r|me)?\s+(?:a|en|como)\s+(?:pdf|word|excel|docx|xlsx|pptx|powerpoint)|informe\s+(?:apa|word|pdf)|tesis\s+(?:formato|apa|word)|apa\s*7|apa\s+septima|plantilla\s+upn|instrumento\s+(?:bai|phq|gad|whoqol)|whoqol|phq-?9|gad-?7|escala\s+de\s+bai)\b/i,
+  doc: /\b(?:(?:descargar?|genera(?:r|me)?|crea(?:me|r)?|exporta(?:r|me)?|haz(?:me)?|hazme|envia(?:me)?|elabora(?:me|r)?|redacta(?:me|r)?|prepara(?:me|r)?|arma(?:me)?|construye(?:me)?|necesito|quiero|dame)\s+(?:un[oa]?\s+|el\s+|la\s+|los\s+|las\s+)?(?:nuev[oa]\s+)?(?:documento|archivo|informe|reporte|tesis|monograf[ií]a|ensayo|memoria|presentaci[oó]n|hoja\s+de\s+c[aá]lculo|spreadsheet|ppt|pptx?|docx?|word|excel|powerpoint|power\s*point|pdf|xlsx|svg)|exporta(?:r|me)?\s+(?:a|en|como)\s+(?:pdf|word|excel|docx|xlsx|pptx|powerpoint|svg)|informe\s+(?:apa|word|pdf)|tesis\s+(?:formato|apa|word)|apa\s*7|apa\s+septima|plantilla\s+upn|instrumento\s+(?:bai|phq|gad|whoqol)|whoqol|phq-?9|gad-?7|escala\s+de\s+bai)\b/i,
   viz: /\b(graficos?|graficas?|plot|plotear|histogram(a|as)?|pareto|ishikawa|fishbone|espina de pescado|box[- ]?plot|diagrama de caja|scatter|dispersion|s[- ]?curve|curva s|earned value|gantt|sankey|treemap|mapa de arbol|heatmap|mapa de calor|flujo de (datos|procesos?)|diagrama (de )?(flujo|er|entidad[- ]relacion|clases?|secuencia|estados?|uml|jerarquia|jornada|journey)|dashboard (de|para|con)|visuali(c|z)a(r|cion)?|torta|pastel|barras apiladas?|mermaid|d3|plotly|recharts|chart\.?js)\b/i,
   image: /\b(imagen|image|photo|foto|picture|drawing|dibujo|logo|ilustracion|render)\b/i,
   video: /\b(video|clip|animacion|movie|veo 3|veo3|sora)\b/i,
@@ -180,6 +252,7 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.googleServices.test(lc)) return 'google_services'
 
   const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(lc)
+  const asksForRealtimeLookup = ROUTING_PATTERNS.realtimeLookup.test(lc)
   const asksForDeliverableFile = ROUTING_PATTERNS.deliverableFile.test(lc)
   const asksForDataWork = ROUTING_PATTERNS.dataWork.test(lc)
   const asksForCodeWork = ROUTING_PATTERNS.codeWork.test(lc)
@@ -192,7 +265,7 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
     return 'agent_task'
   }
 
-  if (asksForExternalResearch) return 'web_search'
+  if (asksForExternalResearch || asksForRealtimeLookup) return 'web_search'
   if (ROUTING_PATTERNS.architecturePlan.test(lc)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(lc)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(lc)) return 'math'
@@ -269,8 +342,17 @@ export class AIService {
     signal?: AbortSignal
   ): Promise<ChatIntent> {
 
+    if (shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
+      return 'text';
+    }
+
     const semanticIntent = await this.classifyIntentViaSemanticRouter(prompt, conversationHistory, signal);
-    if (semanticIntent) return semanticIntent;
+    if (semanticIntent) {
+      if (semanticIntent === 'doc' && shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
+        return 'text';
+      }
+      return semanticIntent;
+    }
 
     const deterministicIntent = classifyIntentFastPath(prompt);
     if (deterministicIntent) return deterministicIntent;

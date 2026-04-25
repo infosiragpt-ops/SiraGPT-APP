@@ -296,6 +296,7 @@ router.post('/intent/semantic', optionalAuth, async (req, res) => {
         final_output: analysis.structured_intent.final_output,
         skill_ids: analysis.structured_intent.skill_ids,
       },
+      semanticProfile: analysis.semantic_profile,
       skillPlan: {
         version: analysis.skill_plan.version,
         primary_skill_id: analysis.skill_plan.primary_skill_id,

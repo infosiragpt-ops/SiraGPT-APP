@@ -59,6 +59,22 @@ function matchAny(value, patterns) {
   return patterns.some((pattern) => pattern.test(value));
 }
 
+const EXISTING_DOCUMENT_REFERENCE_RE =
+  /\b(?:del|de la|de el|en el|sobre el|este|esta|ese|esa|mi|el|la)\s+(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|power\s*point|powerpoint|pptx?)\b|\b(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|pptx?)\s+(?:adjunto|subido|cargado|anterior)\b/i;
+
+const DOCUMENT_UNDERSTANDING_RE =
+  /\b(?:cual|cu[aá]l|que|qu[eé]|quien|qui[eé]n|cuando|cu[aá]ndo|donde|d[oó]nde|primera\s+palabra|primer\s+parrafo|primer\s+p[aá]rrafo|resume|resumen|resumir|analiza|analisis|an[aá]lisis|lee|leer|extrae|extraer|identifica|identificar|dime|segun|seg[uú]n|explica|explicar|contenido|menciona|dice)\b/i;
+
+const OUTPUT_FORMAT_REQUEST_RE =
+  /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|redacta(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
+
+function shouldAnswerFromExistingDocument(rawUserRequest) {
+  const n = normalizeText(rawUserRequest);
+  if (!n) return false;
+  if (OUTPUT_FORMAT_REQUEST_RE.test(n)) return false;
+  return EXISTING_DOCUMENT_REFERENCE_RE.test(n) && DOCUMENT_UNDERSTANDING_RE.test(n);
+}
+
 function buildDomainSignals(rawUserRequest) {
   const n = normalizeText(rawUserRequest);
   return {
@@ -67,6 +83,11 @@ function buildDomainSignals(rawUserRequest) {
     ]),
     googleServices: matchAny(n, [
       /\b(google drive|drive|google calendar|calendario|calendar|evento|event|reunion|meeting|agenda|carpeta)\b/i,
+    ]),
+    realtimeLookup: matchAny(n, [
+      /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b/i,
+      /\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b/i,
+      /\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
     ]),
     math: matchAny(n, [
       /\b(integral|derivada|ecuacion|cronbach|spearman|anova|regresion|chi cuadrado|p valor|probabilidad|matriz|autovalor|estadistica|likert|varianza|desviacion|sistema de ecuaciones|fisica|quimica)\b/i,
@@ -137,6 +158,7 @@ function requiresAgenticExecution(contract, signals) {
 function mapContractToChatIntent(contract, signals) {
   if (signals.gmail) return 'gmail';
   if (signals.googleServices) return 'google_services';
+  if (signals.realtimeLookup) return 'web_search';
 
   if (signals.plan) return 'plan';
   if (signals.artifact) return 'artifact';
@@ -315,6 +337,121 @@ function productDecisionConfidence(contract, primary) {
   return Number(Math.min(0.98, Math.max(0.01, score)).toFixed(2));
 }
 
+function semanticPrimaryIntent(contract, structuredIntent) {
+  if (structuredIntent?.intent_primary) return structuredIntent.intent_primary;
+  switch (contract?.pipeline) {
+    case 'DocumentPipeline':
+      return contract?.citations_required || contract?.source_requirements?.required
+        ? 'academic_document_generation'
+        : 'document_generation';
+    case 'SpreadsheetPipeline':
+      return 'spreadsheet_generation';
+    case 'SlidePipeline':
+      return 'presentation_generation';
+    case 'ResearchGroundingPipeline':
+      return 'web_research';
+    case 'RAGDocumentUnderstandingPipeline':
+      return 'document_understanding';
+    case 'CodePipeline':
+      return 'code_generation';
+    case 'ImagePipeline':
+      return contract?.primary_intent === 'image_editing' ? 'image_editing' : 'image_generation';
+    case 'VisualArtifactPipeline':
+      return 'visual_artifact_generation';
+    case 'ActionExecutionPipeline':
+      return 'external_action';
+    case 'MultiIntentPipeline':
+      return 'multi_step_agentic_task';
+    default:
+      return contract?.primary_intent || 'direct_answer';
+  }
+}
+
+function semanticSecondaryIntents(contract, structuredIntent) {
+  const items = [
+    ...(structuredIntent?.intent_secondary || []),
+    ...(contract?.secondary_intents || []),
+  ];
+  if (contract?.source_requirements?.required) items.push('web_research', 'source_validation');
+  if (contract?.citations_required) items.push('apa7_citation');
+  if (contract?.required_extension === '.docx') items.push('docx_export');
+  if (contract?.required_extension === '.xlsx') items.push('excel_analysis', 'xlsx_export');
+  if (contract?.required_extension === '.pptx') items.push('slide_design', 'pptx_export');
+  if (contract?.required_extension === '.pdf') items.push('pdf_export');
+  if (contract?.required_extension === '.csv') items.push('csv_export');
+  if (contract?.required_extension === '.html') items.push('html_export');
+  if (contract?.required_extension === '.svg') items.push('svg_export');
+  if (contract?.grounding_required && contract?.pipeline === 'RAGDocumentUnderstandingPipeline') items.push('private_document_grounding');
+  return [...new Set(items)].slice(0, 16);
+}
+
+function semanticTools(contract, structuredIntent, fileIds = []) {
+  const tools = new Set([
+    ...(structuredIntent?.required_tools || []),
+    ...(contract?.required_tools || []),
+  ]);
+  const raw = contract?.raw_user_request || '';
+  const mentionsSpreadsheet = /\b(excel|xlsx|csv|hoja de c[aá]lculo|spreadsheet|tabla|dataset|base de datos)\b/i.test(raw)
+    || fileIds.some((id) => /\.(xlsx|xls|csv)$/i.test(String(id)));
+  const mentionsDoi = /\b(doi|apa|cita|citas|referencias|bibliograf[ií]a)\b/i.test(raw);
+
+  if (mentionsSpreadsheet) tools.add('spreadsheet_reader');
+  if (contract?.source_requirements?.required) tools.add('web_search');
+  if (mentionsDoi || contract?.source_requirements?.verification_policy === 'strict') tools.add('doi_validator');
+  if (contract?.citations_required) tools.add('citation_generator');
+  if (contract?.required_extension === '.docx') tools.add('docx_renderer');
+  if (contract?.required_extension === '.xlsx') tools.add('xlsx_renderer');
+  if (contract?.required_extension === '.pptx') tools.add('pptx_renderer');
+  if (contract?.required_extension === '.pdf') tools.add('pdf_renderer');
+  if (contract?.required_extension === '.csv') tools.add('csv_renderer');
+  if (contract?.required_extension === '.html') tools.add('html_renderer');
+  if (contract?.required_extension === '.svg') tools.add('svg_renderer');
+  if (contract?.artifact_required) tools.add('artifact_validator');
+  return [...tools].slice(0, 24);
+}
+
+function semanticOutputFormat(contract, finalOutput) {
+  if (contract?.required_extension) return contract.required_extension.replace(/^\./, '').toLowerCase();
+  if (contract?.output_format) return String(contract.output_format).toLowerCase();
+  if (finalOutput && finalOutput !== 'chat_answer') return finalOutput;
+  return 'chat';
+}
+
+function semanticQualityLevel(contract) {
+  const raw = contract?.raw_user_request || '';
+  const academic = /\b(apa|tesis|acad[eé]mic|investigaci[oó]n|art[ií]culos?|papers?|doi|referencias|citas)\b/i.test(raw)
+    || contract?.citations_required
+    || contract?.source_requirements?.required;
+  if (academic && contract?.artifact_required) return 'professional_academic';
+  if (contract?.quality_bar?.level === 'critical') return 'critical_verified';
+  if (contract?.artifact_required) return 'professional_deliverable';
+  return contract?.quality_bar?.level === 'premium' ? 'premium' : 'professional';
+}
+
+function semanticUserGoal(contract, profilePrimaryIntent, outputFormat) {
+  const raw = String(contract?.raw_user_request || '').trim();
+  if (raw.length > 0 && raw.length <= 240) return raw;
+  const formatPart = outputFormat && outputFormat !== 'chat' ? ` en formato ${outputFormat.toUpperCase()}` : '';
+  const sourcePart = contract?.source_requirements?.required ? ' con fuentes verificadas' : '';
+  return `Atender la solicitud de ${profilePrimaryIntent}${formatPart}${sourcePart}.`;
+}
+
+function buildSemanticProfile({ contract, structuredIntent, finalOutput, confidence, needsClarification, fileIds = [] } = {}) {
+  const outputFormat = semanticOutputFormat(contract, finalOutput);
+  const primaryIntent = semanticPrimaryIntent(contract, structuredIntent);
+  return {
+    primary_intent: primaryIntent,
+    secondary_intents: semanticSecondaryIntents(contract, structuredIntent),
+    user_goal: semanticUserGoal(contract, primaryIntent, outputFormat),
+    required_tools: semanticTools(contract, structuredIntent, fileIds),
+    output_format: outputFormat,
+    language: contract?.detected_language || 'unknown',
+    quality_level: semanticQualityLevel(contract),
+    confidence: Number(Math.max(0.01, Math.min(0.99, confidence || structuredIntent?.confidence || 0.72)).toFixed(2)),
+    needs_clarification: Boolean(needsClarification || structuredIntent?.needs_clarification),
+  };
+}
+
 function buildModelRouting(productOsDecision, skillPlan) {
   const profile = skillPlan?.model_profile || {};
   const request = {
@@ -373,7 +510,9 @@ function buildSemanticIntentAnalysis({
   });
   const runtimeProfile = buildEnterpriseRuntimeProfile(contract, graph);
   const signals = buildDomainSignals(prompt);
-  const intent = mapContractToChatIntent(contract, signals);
+  const documentUnderstandingOverride = shouldAnswerFromExistingDocument(prompt);
+  const intent = documentUnderstandingOverride ? 'text' : mapContractToChatIntent(contract, signals);
+  const finalOutput = documentUnderstandingOverride ? 'chat_answer' : finalOutputForContract(contract, intent);
   const productOsDecision = buildProductOsDecisionFromContract(contract, signals, fileIds);
   const skillPlan = productSkillSystem.buildSkillExecutionPlan(productOsDecision, { userPlan: 'ENTERPRISE' });
   const enrichedProductOsDecision = productSkillSystem.mergeDecisionWithSkillPlan(productOsDecision, skillPlan);
@@ -383,6 +522,14 @@ function buildSemanticIntentAnalysis({
   const modelRouting = buildModelRouting(enrichedProductOsDecision, skillPlan);
   const confidence = confidenceForDecision(contract, intent, toolRuntimePlan, qaBoardReview);
   const needsClarification = contract.ambiguity_score >= 0.8;
+  const semanticProfile = buildSemanticProfile({
+    contract,
+    structuredIntent: enrichedProductOsDecision,
+    finalOutput,
+    confidence,
+    needsClarification,
+    fileIds,
+  });
 
   if (!VALID_CHAT_INTENTS.has(intent)) {
     throw new Error(`Semantic router produced invalid chat intent: ${intent}`);
@@ -394,13 +541,14 @@ function buildSemanticIntentAnalysis({
     intent,
     confidence,
     needs_clarification: needsClarification,
-    final_output: finalOutputForContract(contract, intent),
+    final_output: finalOutput,
     contract,
     execution_graph: graph,
     tool_runtime_plan: toolRuntimePlan,
     qa_board: qaBoardReview,
     operating_core: operatingCore,
     runtime_profile: runtimeProfile,
+    semantic_profile: semanticProfile,
     structured_intent: enrichedProductOsDecision,
     skill_plan: skillPlan,
     model_routing: modelRouting,
@@ -435,6 +583,8 @@ module.exports = {
     requiresAgenticExecution,
     finalOutputForContract,
     buildProductOsDecisionFromContract,
+    buildSemanticProfile,
     buildModelRouting,
+    shouldAnswerFromExistingDocument,
   },
 };

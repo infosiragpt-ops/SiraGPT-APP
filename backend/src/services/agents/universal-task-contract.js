@@ -527,8 +527,54 @@ function matchAny(raw, patterns) {
   return patterns.some((pattern) => pattern.test(raw) || pattern.test(normalize(raw)));
 }
 
+const OUTPUT_FORMAT_PATTERNS = [
+  { ext: '.svg', pipeline: 'VisualArtifactPipeline', intent: 'visual_artifact', keywords: 'svg' },
+  { ext: '.docx', pipeline: 'DocumentPipeline', intent: 'document_generation', keywords: 'docx|word|documento word|ms word' },
+  { ext: '.xlsx', pipeline: 'SpreadsheetPipeline', intent: 'spreadsheet_generation', keywords: 'xlsx|excel|hoja de calculo|spreadsheet' },
+  { ext: '.csv', pipeline: 'SpreadsheetPipeline', intent: 'spreadsheet_generation', keywords: 'csv' },
+  { ext: '.pptx', pipeline: 'SlidePipeline', intent: 'slide_generation', keywords: 'pptx|powerpoint|power point|presentacion|diapositivas|slides|slide deck|pitch deck' },
+  { ext: '.pdf', pipeline: 'DocumentPipeline', intent: 'document_generation', keywords: 'pdf' },
+  { ext: '.html', pipeline: 'DocumentPipeline', intent: 'document_generation', keywords: 'html' },
+  { ext: '.md', pipeline: 'DocumentPipeline', intent: 'document_generation', keywords: 'markdown|\\.md|md' },
+  { ext: '.json', pipeline: 'DocumentPipeline', intent: 'document_generation', keywords: 'json' },
+];
+
+function formatMentionIsInputContext(before) {
+  return /\b(basado en|basada en|a partir de|desde|segun|según|del archivo|de la hoja|datos de|archivo de|lee|leer|analiza|analizar|extrae|extraer)\s+(?:un|una|el|la|este|esta|ese|esa|mi|mis)?\s*$/.test(before);
+}
+
+function hasOutputFormatMention(n, keywords) {
+  const re = new RegExp(`\\b(?:${keywords})\\b`, 'g');
+  let match;
+  while ((match = re.exec(n))) {
+    const before = n.slice(Math.max(0, match.index - 140), match.index);
+    if (formatMentionIsInputContext(before.slice(-60))) continue;
+    const explicitOutputPreposition = /\b(en|como|a|formato)\s+(?:un|una|el|la)?\s*$/.test(before);
+    const generationVerb = /\b(crea|crear|creame|haz|hazme|genera|generar|generame|prepara|entrega|exporta|exportar|descarga|descargar|download|dame|quiero|necesito|elabora|elaborar|redacta|redactar|arma|construye|build|make|generate|prepare|deliver)\b/.test(before);
+    const finalOutputMarker = /^(?:\s+(?:para descargar|descargable|de salida|final|profesional|academico|acad[eé]mico|ejecutivo|editable|con|sobre|de)\b)/.test(n.slice(match.index + match[0].length, match.index + match[0].length + 80));
+    if (explicitOutputPreposition || generationVerb || finalOutputMarker) return true;
+  }
+  return false;
+}
+
+function detectRequestedOutputFormats(raw) {
+  const n = normalize(raw);
+  const seen = new Set();
+  const formats = [];
+  for (const format of OUTPUT_FORMAT_PATTERNS) {
+    if (hasOutputFormatMention(n, format.keywords) && !seen.has(format.ext)) {
+      formats.push(format);
+      seen.add(format.ext);
+    }
+  }
+  return formats;
+}
+
 function inferExplicitExtension(raw) {
   const n = normalize(raw);
+  const requestedFormats = detectRequestedOutputFormats(raw);
+  if (requestedFormats.length > 0) return requestedFormats[0].ext;
+
   const looksLikeInputFileReference =
     /\b(este|esta|el|la|mi|mis)\s+(archivo|documento|pdf|word|docx|excel|xlsx|ppt|pptx)\b/.test(n) ||
     /\b(adjunto|cargado|subido|uploaded|attached)\b/.test(n);
@@ -541,15 +587,6 @@ function inferExplicitExtension(raw) {
   if (looksLikeInputFileReference && asksToUnderstandInput && !asksToGenerateArtifact) {
     return null;
   }
-  if (/\bsvg\b/.test(n)) return '.svg';
-  if (/\b(docx|word|documento word|ms word)\b/.test(n)) return '.docx';
-  if (/\b(xlsx|excel|hoja de calculo|hoja de cálculo|spreadsheet)\b/.test(n)) return '.xlsx';
-  if (/\b(pptx|powerpoint|power point|presentacion|presentación|diapositivas|slides|slide deck|pitch deck)\b/.test(n)) return '.pptx';
-  if (/\bpdf\b/.test(n)) return '.pdf';
-  if (/\bcsv\b/.test(n)) return '.csv';
-  if (/\bhtml\b/.test(n)) return '.html';
-  if (/\b(markdown|\.md| md)\b/.test(n)) return '.md';
-  if (/\bjson\b/.test(n)) return '.json';
 
   for (const [keyword, [ext]] of Object.entries(CODE_EXTENSIONS)) {
     if (new RegExp(`\\b${keyword}\\b`, 'i').test(n)) return ext;
@@ -660,15 +697,7 @@ function inferSecondaryIntents(raw, primary) {
 }
 
 function inferRequestedArtifacts(raw) {
-  const n = normalize(raw);
-  const artifacts = [];
-  if (/\b(svg)\b/.test(n)) artifacts.push({ ext: '.svg', pipeline: 'VisualArtifactPipeline', intent: 'visual_artifact' });
-  if (/\b(docx|word|documento word)\b/.test(n)) artifacts.push({ ext: '.docx', pipeline: 'DocumentPipeline', intent: 'document_generation' });
-  if (/\b(xlsx|excel|hoja de calculo|hoja de cálculo)\b/.test(n)) artifacts.push({ ext: '.xlsx', pipeline: 'SpreadsheetPipeline', intent: 'spreadsheet_generation' });
-  if (/\b(csv)\b/.test(n)) artifacts.push({ ext: '.csv', pipeline: 'SpreadsheetPipeline', intent: 'spreadsheet_generation' });
-  if (/\b(pptx|powerpoint|power point|presentacion|presentación|diapositivas|slides)\b/.test(n)) artifacts.push({ ext: '.pptx', pipeline: 'SlidePipeline', intent: 'slide_generation' });
-  if (/\b(pdf)\b/.test(n)) artifacts.push({ ext: '.pdf', pipeline: 'DocumentPipeline', intent: 'document_generation' });
-  return artifacts;
+  return detectRequestedOutputFormats(raw).map(({ ext, pipeline, intent }) => ({ ext, pipeline, intent }));
 }
 
 function buildMultiIntentDag({ raw, primaryPipeline, primaryIntent, requiredExtension }) {
