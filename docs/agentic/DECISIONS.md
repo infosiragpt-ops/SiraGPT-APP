@@ -46,3 +46,16 @@ Razon:
 - Evita migraciones de base de datos durante este sprint.
 - Mantiene compatibilidad con el storage adapter actual.
 - Permite replay y reporting basico sin acoplar la UI.
+
+## 2026-04-26 - Presupuesto preflight antes del runtime
+
+Decision:
+
+- Evaluar presupuesto estimado antes de llamar al engine y al runtime.
+- Registrar `token_budget_checked` en todos los turnos y bloquear con `token_budget_exceeded` cuando el modo sea `enforce`.
+
+Razon:
+
+- Evita gastar herramientas y llamadas LLM en solicitudes que ya exceden limites configurados.
+- Mantiene el mensaje del usuario persistido para no perder contexto.
+- Permite operar en modo `observe` para medir sin afectar usuarios durante rollout.

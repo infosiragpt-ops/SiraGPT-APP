@@ -7,6 +7,8 @@ Rama: `feat/agentic-core-4h`
 
 Este sprint endurece el nucleo interno de SiraGPT sin tocar la interfaz visual. El repositorio ya contiene capas agenticas amplias: `sira/*`, `agent-runtime/*`, `ai-product-os/*`, RAG, tool registry, validators, storage y document pipelines. El cambio elegido para este bloque es agregar contabilidad auditable de tokens por turno porque conecta directamente con produccion: control de coste, limites por usuario, observabilidad, reporting admin y presupuesto por tarea.
 
+Segunda pasada: convertir la contabilidad en una politica preflight de presupuesto para bloquear solicitudes que excedan limites por plan, turno, conversacion o dia antes de gastar runtime/herramientas.
+
 ## Hitos
 
 ### Hito 1 - Inspeccion y documentacion
@@ -60,6 +62,19 @@ Validacion:
 - `npm test`
 - `npm run build`
 - `npm run lint`
+
+### Hito 5 - Token Budget Preflight
+
+Criterio de aceptacion:
+
+- Existe una politica determinista de presupuesto por plan.
+- El controlador de chat evalua presupuesto antes de ejecutar engine/runtime.
+- Si una solicitud excede el presupuesto, se persiste el mensaje del usuario, se responde con bloqueo controlado y se audita `turn_blocked_token_budget`.
+- El modo `observe` permite medir sin bloquear.
+
+Validacion:
+
+- `rm -rf .test-dist && node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node --test --test-name-pattern="token budget" .test-dist/tests/sira-token-budget-policy.test.js`
 
 ## Fuera de alcance
 

@@ -34,6 +34,7 @@ const { guardAgainstAutoRouting } = require("./model-adapter");
 const { createDefaultRegistry } = require("./tool-registry");
 const { createSessionActorQueue, buildChatTurnActorKey } = require("./session-actor-queue");
 const { buildTokenUsageFrame } = require("./token-ledger");
+const { assessTokenBudget } = require("./token-budget-policy");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -91,7 +92,14 @@ async function handleChatTurnUnlocked({
   permissions = ["none", "read_uploaded_file", "write_artifact", "execute_sandboxed_code", "external_api_access"],
   toolArgs = {},
   dryRun = true,
-} = {}, { storage = null, registry = null, providers = null, tokenLedger = null } = {}) {
+} = {}, {
+  storage = null,
+  registry = null,
+  providers = null,
+  tokenLedger = null,
+  tokenBudgetCaps = null,
+  tokenBudgetMode = "enforce",
+} = {}) {
   if (!userMessage || typeof userMessage !== "string") {
     throw new Error("chat-controller: userMessage required");
   }
@@ -115,6 +123,54 @@ async function handleChatTurnUnlocked({
   });
   await store.audit("turn_started", { conversationId, userMessage_len: userMessage.length, attachment_count: attachments.length }, { userId });
 
+  const tokenBudget = assessTokenBudget({
+    userId,
+    conversationId,
+    userPlan,
+    userMessage,
+    attachments,
+    history,
+    selectedModel,
+    tokenLedger,
+    caps: tokenBudgetCaps,
+    mode: tokenBudgetMode,
+  });
+  await store.audit("token_budget_checked", {
+    decision: tokenBudget.decision,
+    enforcement_mode: tokenBudget.enforcement_mode,
+    projected_usage: tokenBudget.projected_usage,
+    caps: tokenBudget.caps,
+    violations: tokenBudget.violations,
+  }, { userId });
+  if (tokenBudget.decision === "blocked") {
+    const blockedText = "La solicitud supera el presupuesto de tokens configurado para esta sesión. Reduce el tamaño del mensaje, divide la tarea o aumenta el plan antes de continuar.";
+    persistedIds.assistant_message_id = await store.addMessage({
+      conversationId,
+      role: "assistant",
+      content: {
+        text: blockedText,
+        token_budget: tokenBudget,
+        ready_to_deliver: false,
+      },
+      selectedModel,
+    });
+    await store.audit("turn_blocked_token_budget", {
+      decision: tokenBudget.decision,
+      violations: tokenBudget.violations,
+      projected_usage: tokenBudget.projected_usage,
+    }, { userId });
+    return {
+      stage: "token_budget_exceeded",
+      token_budget: tokenBudget,
+      persisted_ids: persistedIds,
+      summary: {
+        stage: "token_budget_exceeded",
+        violations: tokenBudget.violations.map(v => v.code),
+        projected_tokens: tokenBudget.projected_usage.projected_turn_tokens,
+      },
+    };
+  }
+
   // ── 2. Run engine (envelope + 5 frames + dry response) ───────────
   const bundle = await ciraEngine.runUserMessage({
     text: userMessage,
@@ -131,6 +187,7 @@ async function handleChatTurnUnlocked({
     return {
       stage: "envelope_invalid",
       errors: bundle.errors || ["unknown_envelope_failure"],
+      token_budget: tokenBudget,
       persisted_ids: persistedIds,
     };
   }
@@ -175,6 +232,7 @@ async function handleChatTurnUnlocked({
       clarifying_questions: bundle.envelope.clarification_policy?.questions || [],
       policy: policyVerdict,
       token_usage: tokenUsage,
+      token_budget: tokenBudget,
       persisted_ids: persistedIds,
     };
   }
@@ -246,6 +304,7 @@ async function handleChatTurnUnlocked({
       artifacts: runtimeResult.artifact_frame.artifacts,
       ready_to_deliver: runtimeResult.validation_frame.ready_to_deliver,
       token_usage: tokenUsage,
+      token_budget: tokenBudget,
     },
     selectedModel,
   });
@@ -270,6 +329,7 @@ async function handleChatTurnUnlocked({
     runtime: runtimeResult,
     policy: policyVerdict,
     token_usage: tokenUsage,
+    token_budget: tokenBudget,
     persisted_ids: persistedIds,
     summary: {
       stage: runtimeResult.validation_frame.ready_to_deliver ? "delivered" : "needs_repair",
