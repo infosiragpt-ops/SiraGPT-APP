@@ -2305,5 +2305,6 @@ router.post('/generate-html', async (req, res) => {
 module.exports = {
   router,
   initializeWebSocketServer,
-  CustomComputerUseAgent
+  CustomComputerUseAgent,
+  activeSessions
 };

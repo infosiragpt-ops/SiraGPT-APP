@@ -193,7 +193,7 @@ export function MessageActionRail({
   // Regeneration only makes sense after the model has finished producing a
   // response. During the thinking/streaming state it creates visual noise and
   // cannot safely act on a complete assistant message yet.
-  const showRegenerate = canRegenerate && !isStreaming
+  const showRegenerate = canRegenerate && !isStreaming && (hasText || hasError)
   const showShare = canShare && hasText && !hasError
 
   // Nothing to render? Don't render the container either — keeps the

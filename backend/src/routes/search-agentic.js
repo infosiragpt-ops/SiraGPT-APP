@@ -93,7 +93,7 @@ router.post(
     // loop checks `signal?.aborted` between provider calls, so a
     // closed tab stops burning Crossref / OpenAlex quota immediately.
     const controller = new AbortController();
-    req.on("close", () => {
+    res.on("close", () => {
       if (!res.writableEnded) controller.abort();
     });
 

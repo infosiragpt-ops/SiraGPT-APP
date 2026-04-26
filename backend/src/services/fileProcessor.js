@@ -37,6 +37,7 @@ class FileProcessor {
 
         case 'text/plain':
         case 'text/csv':
+        case 'text/tab-separated-values':
           extractedText = await this.processText(filePath);
           break;
 

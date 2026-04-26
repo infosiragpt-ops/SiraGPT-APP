@@ -331,6 +331,14 @@ export class AIService {
         && typeof data.confidence === 'number'
         && data.confidence >= 0.55
       ) {
+        const requiredExtension = String(data.contract?.required_extension || '').toLowerCase()
+        const outputFormat = String(data.semanticProfile?.output_format || data.finalOutput || '').toLowerCase()
+        const requiredTools = Array.isArray(data.contract?.required_tools) ? data.contract.required_tools : []
+        const isDownloadableDocument =
+          /\.(docx|xlsx|pptx|pdf|csv|svg|html|md)$/.test(requiredExtension)
+          || /\b(docx|xlsx|pptx|pdf|csv|svg|html|markdown|md)_?(file|document)?\b/.test(outputFormat)
+          || (requiredTools.includes('create_document') && /\.(docx|xlsx|pptx|pdf|csv|svg|html|md)$/.test(requiredExtension))
+        if (isDownloadableDocument) return 'doc'
         return normalizeRoutingIntent(data.intent)
       }
       return null

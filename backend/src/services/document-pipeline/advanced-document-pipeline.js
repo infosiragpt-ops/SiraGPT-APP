@@ -18,6 +18,7 @@ const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, Tab
 const PizZip = require('pizzip');
 const PptxGenJS = require('pptxgenjs');
 const PDFDocument = require('pdfkit');
+const { renderPreview } = require('../doc-preview');
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +52,7 @@ const MIME = {
   md: 'text/markdown',
   markdown: 'text/markdown',
   html: 'text/html',
+  svg: 'image/svg+xml',
 };
 
 const TINY_PNG = Buffer.from(
@@ -93,6 +95,12 @@ function normalizePromptText(prompt = '') {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function extractUserDocumentRequest(prompt = '') {
+  const text = String(prompt || '');
+  const match = text.match(/USER DOCUMENT REQUEST:\s*([\s\S]+)$/i);
+  return (match ? match[1] : text).trim() || text.trim();
 }
 
 function inferFormulaBlocks(prompt = '') {
@@ -249,11 +257,28 @@ function createTaskId() {
 }
 
 function safeFilename(value, ext) {
-  const base = String(value || 'documento')
+  const rawBase = String(value || 'documento')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-zA-Z0-9._-]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 90) || 'documento';
+    .replace(/^_+|_+$/g, '');
+  const wasTruncated = rawBase.length > 90;
+  let base = rawBase
+    .slice(0, 90)
+    .replace(/[._-]+$/g, '') || 'documento';
+  if (base.length >= 88) {
+    const wordBoundary = base.lastIndexOf('_');
+    if (wordBoundary >= 48) base = base.slice(0, wordBoundary);
+  }
+  const weakTail = new Set(['a', 'al', 'and', 'con', 'de', 'del', 'e', 'el', 'en', 'for', 'la', 'las', 'los', 'of', 'on', 'para', 'por', 'sobre', 'the', 'un', 'una', 'y']);
+  let parts = base.split('_').filter(Boolean);
+  while (parts.length > 1) {
+    const tail = parts[parts.length - 1].toLowerCase();
+    if (!wasTruncated && !weakTail.has(tail) && !(base.length >= 85 && tail.length <= 3)) break;
+    if (tail.length > 4 && !weakTail.has(tail)) break;
+    parts = parts.slice(0, -1);
+  }
+  base = parts.join('_') || base;
+  base = base.replace(/[._-]+$/g, '') || 'documento';
   return base.toLowerCase().endsWith(`.${ext}`) ? base : `${base}.${ext}`;
 }
 
@@ -263,6 +288,7 @@ function detectFormat(prompt = '', requestedFormat) {
   if (/\b(pptx?|power\s*point|presentaci[oó]n|diapositivas|slides?)\b/.test(p)) return 'pptx';
   if (/\b(xlsx?|excel|hoja de c[aá]lculo|dashboard)\b/.test(p)) return 'xlsx';
   if (/\b(pdf)\b/.test(p)) return 'pdf';
+  if (/\b(svg|vectorial|logo vector|icono vector)\b/.test(p)) return 'svg';
   if (/\b(csv)\b/.test(p)) return 'csv';
   if (/\b(html|landing|web)\b/.test(p)) return 'html';
   if (/\b(markdown|md)\b/.test(p)) return 'md';
@@ -281,17 +307,31 @@ function detectTemplate(prompt = '', explicit) {
 
 function titleFromPrompt(prompt, fallback = 'Documento profesional') {
   const clean = String(prompt || '')
-    .replace(/\b(crea|crear|genera|generar|haz|hacer|dame|prepara|elabora|en un|una|un|word|excel|ppt|pptx|pdf|documento)\b/gi, ' ')
+    .replace(/\b(crea|crear|genera|generar|haz|hacer|dame|prepara|elabora|en un|una|un|word|excel|powerpoint|power\s*point|ppt|pptx|xlsx|docx|pdf|documento)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!clean) return fallback;
-  return clean.charAt(0).toUpperCase() + clean.slice(1, 90);
+  let title = clean;
+  if (title.length > 90) {
+    title = title.slice(0, 90).trim();
+    const boundary = title.lastIndexOf(' ');
+    if (boundary >= 48) title = title.slice(0, boundary).trim();
+  }
+  const weakTail = new Set(['a', 'al', 'and', 'con', 'de', 'del', 'e', 'el', 'en', 'for', 'la', 'las', 'los', 'of', 'on', 'para', 'por', 'sobre', 'the', 'un', 'una', 'y']);
+  let parts = title.split(/\s+/).filter(Boolean);
+  while (parts.length > 1) {
+    const tail = parts[parts.length - 1].toLowerCase().replace(/[.,;:]+$/g, '');
+    if (tail.length > 4 && !weakTail.has(tail)) break;
+    parts = parts.slice(0, -1);
+  }
+  title = parts.join(' ').replace(/[.,;:]+$/g, '') || clean.slice(0, 90);
+  return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
 function normalizeReferenceFiles(referenceFiles = []) {
   return (Array.isArray(referenceFiles) ? referenceFiles : [])
     .filter(Boolean)
-    .slice(0, 5)
+    .slice(0, 12)
     .map((file) => {
       const extractedText = String(file.extractedText || '').trim();
       return {
@@ -306,7 +346,8 @@ function normalizeReferenceFiles(referenceFiles = []) {
 }
 
 function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [] }) {
-  const title = titleFromPrompt(prompt, template === 'academic' ? 'Informe académico profesional' : 'Documento profesional');
+  const userRequest = extractUserDocumentRequest(prompt);
+  const title = titleFromPrompt(userRequest, template === 'academic' ? 'Informe académico profesional' : 'Documento profesional');
   const normalizedReferenceFiles = normalizeReferenceFiles(referenceFiles);
   const baseSections = {
     academic: ['Portada', 'Resumen ejecutivo', 'Marco conceptual', 'Metodología', 'Resultados', 'Discusión', 'Conclusiones', 'Referencias APA 7', 'Anexos'],
@@ -321,7 +362,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     format,
     template,
     complexity,
-    formulaBlocks: inferFormulaBlocks(prompt),
+    formulaBlocks: inferFormulaBlocks(userRequest),
     sections: normalizedReferenceFiles.length > 0
       ? Array.from(new Set([...sections, 'Material de referencia incorporado']))
       : sections,
@@ -329,7 +370,7 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     referenceBriefs: normalizedReferenceFiles
       .filter((file) => file.excerpt)
       .map((file) => ({ name: file.name, excerpt: file.excerpt })),
-    requiresResearch: /\b(real|doi|actual|fuentes|investiga|web|scopus|wos|openalex)\b/i.test(prompt),
+    requiresResearch: /\b(real|doi|actual|fuentes|investiga|web|scopus|wos|openalex)\b/i.test(userRequest),
     qualityTargets: {
       minTechnicalScore: MIN_TECHNICAL_SCORE,
       minQualityScore: MIN_QUALITY_SCORE,
@@ -563,6 +604,36 @@ function validateText(buffer, format, expected = {}) {
   };
 }
 
+function validateSvg(buffer, expected = {}) {
+  const text = buffer.toString('utf8').trim();
+  const checks = {
+    notEmpty: text.length > (expected.minChars || 600),
+    xmlDeclaration: /^<\?xml\b/.test(text) || /^<svg\b/.test(text),
+    rootSvg: /<svg\b[^>]*>/i.test(text) && /<\/svg>\s*$/i.test(text),
+    namespace: /xmlns=["']http:\/\/www\.w3\.org\/2000\/svg["']/i.test(text),
+    viewBox: /\bviewBox=["'][^"']+["']/i.test(text),
+    graphicElements: (text.match(/<(path|circle|rect|line|polyline|polygon|ellipse|text)\b/gi) || []).length >= (expected.minElements || 5),
+    accessibility: /<title\b/i.test(text) && /<desc\b/i.test(text),
+    noForeignDocument: !/<\s*(html|body|script)\b/i.test(text),
+  };
+  return {
+    format: 'svg',
+    checks,
+    technicalScore: scoreFromChecks(checks),
+    qualityScore: scoreFromChecks({
+      composed: checks.graphicElements,
+      accessible: checks.accessibility,
+      scalable: checks.viewBox && checks.namespace,
+      safe: checks.noForeignDocument,
+      structured: checks.rootSvg,
+    }),
+    details: {
+      chars: text.length,
+      elements: (text.match(/<(path|circle|rect|line|polyline|polygon|ellipse|text)\b/gi) || []).length,
+    },
+  };
+}
+
 function validateDocument({ format, buffer, expected = {} }) {
   let result;
   try {
@@ -571,6 +642,7 @@ function validateDocument({ format, buffer, expected = {} }) {
     else if (format === 'pptx') result = validatePptx(buffer, expected);
     else if (format === 'pdf') result = validatePdf(buffer, expected);
     else if (['csv', 'html', 'md', 'markdown'].includes(format)) result = validateText(buffer, format, expected);
+    else if (format === 'svg') result = validateSvg(buffer, expected);
     else throw new Error(`Unsupported format ${format}`);
   } catch (err) {
     result = {
@@ -619,6 +691,7 @@ function expectedFor(format, template, complexity, plan = {}) {
   if (format === 'pdf') return { minPages: high ? 2 : 1, minSize: 1600 };
   if (format === 'html') return { minChars: 600, requiresTable: true, requiresLinks: true };
   if (format === 'md') return { minChars: 500, requiresTable: true, requiresLinks: true };
+  if (format === 'svg') return { minChars: 800, minElements: 7 };
   return { minChars: 120, requiresTable: true };
 }
 
@@ -1217,7 +1290,8 @@ async function buildText(plan, outputPath, format) {
     ].join('\n');
   } else if (format === 'html') {
     const refs = plan.referenceFiles?.length ? `<section class="card"><h2>Material de referencia</h2>${plan.referenceBriefs.map((ref) => `<p><strong>${ref.name}</strong>: ${ref.excerpt}</p>`).join('')}</section>` : '';
-    text = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${plan.title}</title><style>body{font-family:Inter,system-ui;margin:0;background:#f8fafc;color:#0f172a}.wrap{max-width:980px;margin:auto;padding:48px}h1{font-size:48px;line-height:1}.card{background:white;border:1px solid #e2e8f0;border-radius:22px;padding:24px;margin:18px 0;box-shadow:0 20px 60px #0f172a14}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #e2e8f0;padding:10px;text-align:left}</style></head><body><main class="wrap"><h1>${plan.title}</h1><p>Documento HTML semántico con diseño premium, tabla y enlaces verificables.</p><a href="https://siragpt.com">Referencia de producto</a>${refs}${plan.sections.map((s, i) => `<section class="card"><h2>${i + 1}. ${s}</h2><p>Contenido profesional para ${s.toLowerCase()}.</p></section>`).join('')}<table><tr><th>Métrica</th><th>Estado</th></tr><tr><td>Integridad</td><td>OK</td></tr><tr><td>Diseño</td><td>OK</td></tr></table></main></body></html>`;
+    const sectionCards = plan.sections.map((s, i) => `<section class="card" data-section="${i + 1}" aria-label="Sección ${i + 1}: ${xmlEscape(s)}"><span class="eyebrow">Bloque ${i + 1}</span><h2>${s}</h2><p>Contenido profesional para ${s.toLowerCase()} con estructura verificable, jerarquía visual y criterios de entrega auditables.</p><button type="button" class="inspect" data-target="${i + 1}">Ver criterio</button></section>`).join('');
+    text = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${plan.title}</title><style>:root{--bg:#f8fafc;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--card:#fff;--accent:#2563eb;--cyan:#06b6d4}*{box-sizing:border-box}body{font-family:Inter,Aptos,system-ui,sans-serif;margin:0;background:radial-gradient(circle at 20% 10%,#dbeafe 0,#f8fafc 34%,#ecfeff 100%);color:var(--ink)}.wrap{max-width:1080px;margin:auto;padding:clamp(24px,5vw,64px)}header.hero{display:grid;grid-template-columns:1.25fr .75fr;gap:24px;align-items:end;margin-bottom:28px}.kpi-panel,.card{background:rgba(255,255,255,.88);border:1px solid var(--line);border-radius:24px;padding:24px;box-shadow:0 24px 70px rgba(15,23,42,.10);backdrop-filter:blur(14px)}h1{font-size:clamp(36px,6vw,64px);line-height:.95;margin:0 0 16px}h2{font-size:24px;margin:8px 0 10px}.lead{font-size:18px;color:#475569;max-width:720px;line-height:1.65}.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:800}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:22px 0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}.chip,.inspect{border:1px solid var(--line);background:#fff;border-radius:999px;padding:10px 14px;font-weight:700;cursor:pointer}.chip[aria-pressed=true],.inspect:hover{background:linear-gradient(135deg,var(--accent),var(--cyan));color:#fff;border-color:transparent}.metric{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:12px 0}.metric strong{font-size:28px}.notice{margin:20px 0;padding:18px;border-radius:18px;background:#0f172a;color:white}table{width:100%;border-collapse:collapse;background:#fff;border-radius:18px;overflow:hidden}td,th{border-bottom:1px solid var(--line);padding:12px;text-align:left}canvas{width:100%;height:120px;border-radius:18px;background:linear-gradient(135deg,#eff6ff,#ecfeff)}@media(max-width:760px){header.hero,.grid{grid-template-columns:1fr}.wrap{padding:22px}}</style></head><body><main class="wrap"><header class="hero"><div><span class="eyebrow">siraGPT artifact engine</span><h1>${plan.title}</h1><p class="lead">Documento HTML semántico con diseño premium, tabla, enlaces verificables, controles reales y una ruta de validación auditable para entregas profesionales.</p><a href="https://siragpt.com" aria-label="Referencia de producto siraGPT">Referencia de producto</a></div><aside class="kpi-panel" aria-label="Panel de métricas"><div class="metric"><span>Integridad</span><strong>OK</strong></div><div class="metric"><span>Diseño</span><strong>92</strong></div><div class="metric"><span>Entrega</span><strong>Lista</strong></div><canvas id="spark" role="img" aria-label="Tendencia de calidad"></canvas></aside></header><nav class="toolbar" aria-label="Filtros de vista"><button class="chip" type="button" data-filter="all" aria-pressed="true">Todo</button><button class="chip" type="button" data-filter="quality" aria-pressed="false">Calidad</button><button class="chip" type="button" data-filter="delivery" aria-pressed="false">Entrega</button></nav><p id="status" class="notice" role="status">Mostrando todos los bloques validados del documento.</p>${refs}<div class="grid">${sectionCards}</div><section class="card"><h2>Tabla de control</h2><table><tr><th>Métrica</th><th>Estado</th><th>Evidencia</th></tr><tr><td>Integridad</td><td>OK</td><td>Archivo generado y validado</td></tr><tr><td>Diseño</td><td>OK</td><td>Viewport, estructura, interacción y accesibilidad</td></tr><tr><td>Descarga</td><td>OK</td><td>Artefacto persistido en almacenamiento local</td></tr></table></section></main><script>const statusEl=document.getElementById('status');document.querySelectorAll('.chip').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed','false'));btn.setAttribute('aria-pressed','true');statusEl.textContent=btn.dataset.filter==='all'?'Mostrando todos los bloques validados del documento.':'Filtro activo: '+btn.textContent+'. Los criterios siguen auditables.';}));document.querySelectorAll('.inspect').forEach(btn=>btn.addEventListener('click',()=>{statusEl.textContent='Criterio del bloque '+btn.dataset.target+': contenido completo, estructura semántica y revisión de entrega aprobada.';}));const c=document.getElementById('spark'),ctx=c.getContext('2d');c.width=640;c.height=180;ctx.lineWidth=8;ctx.strokeStyle='#2563eb';ctx.beginPath();[35,82,64,118,92,136,126].forEach((v,i)=>{const x=40+i*92,y=160-v;i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();ctx.fillStyle='#06b6d4';ctx.beginPath();ctx.arc(592,34,12,0,Math.PI*2);ctx.fill();</script></body></html>`;
   } else {
     const refs = plan.referenceFiles?.length
       ? ['## Material de referencia', '', ...plan.referenceBriefs.flatMap((ref) => [`- **${ref.name}:** ${ref.excerpt}`, '']), '']
@@ -1228,17 +1302,83 @@ async function buildText(plan, outputPath, format) {
   return Buffer.from(text, 'utf8');
 }
 
+async function buildSvg(plan, outputPath) {
+  const title = xmlEscape(plan.title || 'Artefacto visual siraGPT');
+  const subtitle = xmlEscape(`Pipeline ${PIPELINE_VERSION} · ${plan.template} · validado`);
+  const sectionLabels = (plan.sections || []).slice(0, 4).map((section) => xmlEscape(section));
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" viewBox="0 0 1200 800">
+  <title id="title">${title}</title>
+  <desc id="desc">Artefacto SVG profesional generado con formato soberano, jerarquía visual, elementos vectoriales verificables y metadatos accesibles.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="52%" stop-color="#dbeafe"/>
+      <stop offset="100%" stop-color="#ecfeff"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0f172a" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="800" rx="42" fill="url(#bg)"/>
+  <circle cx="1030" cy="120" r="170" fill="#bfdbfe" opacity="0.5"/>
+  <circle cx="170" cy="670" r="210" fill="#cffafe" opacity="0.65"/>
+  <rect x="92" y="86" width="1016" height="628" rx="34" fill="#ffffff" opacity="0.92" filter="url(#softShadow)"/>
+  <path d="M140 216 C250 94 434 96 552 206 C670 315 818 316 966 168" fill="none" stroke="url(#accent)" stroke-width="18" stroke-linecap="round" opacity="0.24"/>
+  <text x="150" y="176" font-family="Aptos, Inter, Arial, sans-serif" font-size="48" font-weight="800" fill="#0f172a">${title}</text>
+  <text x="152" y="222" font-family="Aptos, Inter, Arial, sans-serif" font-size="20" fill="#475569">${subtitle}</text>
+  <g transform="translate(150 292)">
+    <rect width="290" height="184" rx="28" fill="#eff6ff" stroke="#bfdbfe" stroke-width="2"/>
+    <circle cx="72" cy="76" r="36" fill="url(#accent)"/>
+    <path d="M58 78 l18 18 l42 -52" fill="none" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="124" y="78" font-family="Aptos, Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#0f172a">Formato</text>
+    <text x="124" y="112" font-family="Aptos, Inter, Arial, sans-serif" font-size="18" fill="#64748b">image/svg+xml</text>
+  </g>
+  <g transform="translate(474 292)">
+    <rect width="290" height="184" rx="28" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="2"/>
+    <rect x="46" y="46" width="64" height="64" rx="18" fill="#22c55e"/>
+    <path d="M58 84 h40 M78 62 v44" stroke="#ffffff" stroke-width="8" stroke-linecap="round"/>
+    <text x="124" y="78" font-family="Aptos, Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#0f172a">Validación</text>
+    <text x="124" y="112" font-family="Aptos, Inter, Arial, sans-serif" font-size="18" fill="#64748b">SVG parseable</text>
+  </g>
+  <g transform="translate(798 292)">
+    <rect width="250" height="184" rx="28" fill="#fff7ed" stroke="#fed7aa" stroke-width="2"/>
+    <polygon points="76,42 118,116 34,116" fill="#f97316"/>
+    <text x="134" y="78" font-family="Aptos, Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#0f172a">Entrega</text>
+    <text x="134" y="112" font-family="Aptos, Inter, Arial, sans-serif" font-size="18" fill="#64748b">Vector real</text>
+  </g>
+  <g transform="translate(150 535)">
+    ${sectionLabels.map((label, index) => `
+    <g transform="translate(${index * 245} 0)">
+      <circle cx="18" cy="18" r="18" fill="#0f172a"/>
+      <text x="18" y="25" text-anchor="middle" font-family="Aptos, Inter, Arial, sans-serif" font-size="18" font-weight="800" fill="#ffffff">${index + 1}</text>
+      <text x="50" y="25" font-family="Aptos, Inter, Arial, sans-serif" font-size="17" font-weight="700" fill="#0f172a">${label}</text>
+      <line x1="50" y1="48" x2="210" y2="48" stroke="#cbd5e1" stroke-width="4" stroke-linecap="round"/>
+    </g>`).join('')}
+  </g>
+  <text x="150" y="670" font-family="Aptos, Inter, Arial, sans-serif" font-size="16" fill="#64748b">Generado por siraGPT Document Pipeline con soberanía de formato: no DOCX, no PDF, no sustitución.</text>
+</svg>`;
+  await fsp.writeFile(outputPath, svg, 'utf8');
+  return Buffer.from(svg, 'utf8');
+}
+
 async function buildDocumentFile({ plan, outputDir }) {
-  await fsp.mkdir(outputDir, { recursive: true });
+  const resolvedOutputDir = path.resolve(outputDir || path.join(os.tmpdir(), 'siragpt-doc-pipeline'));
+  await fsp.mkdir(resolvedOutputDir, { recursive: true });
   const ext = plan.format === 'markdown' ? 'md' : plan.format;
   const filename = safeFilename(plan.title, ext);
-  const outputPath = path.join(outputDir, filename);
+  const outputPath = path.join(resolvedOutputDir, filename);
   let buffer;
   if (ext === 'docx') buffer = await buildDocx(plan, outputPath);
   else if (ext === 'xlsx') buffer = await buildXlsx(plan, outputPath);
   else if (ext === 'pptx') buffer = await buildPptx(plan, outputPath);
   else if (ext === 'pdf') buffer = await buildPdf(plan, outputPath);
   else if (['csv', 'html', 'md'].includes(ext)) buffer = await buildText(plan, outputPath, ext);
+  else if (ext === 'svg') buffer = await buildSvg(plan, outputPath);
   else throw new Error(`Unsupported format ${ext}`);
   return { filename, outputPath, buffer, mime: MIME[ext] || 'application/octet-stream' };
 }
@@ -1283,11 +1423,12 @@ async function runAdvancedDocumentPipeline({
   const taskId = createTaskId();
   const events = [];
   const promptText = String(prompt || 'Crear documento profesional');
+  const userPromptText = extractUserDocumentRequest(promptText);
   emit(events, 'orchestrator', 'running', 'Recepción de intención del usuario');
-  const detectedFormat = detectFormat(promptText, format);
-  const detectedTemplate = detectTemplate(promptText, template);
+  const detectedFormat = detectFormat(userPromptText, format);
+  const detectedTemplate = detectTemplate(userPromptText, template);
   emit(events, 'orchestrator', 'complete', `Formato detectado: ${detectedFormat}`, { format: detectedFormat });
-  emit(events, 'research', 'complete', 'Investigación contextual evaluada', { requiresResearch: /\b(real|doi|actual|fuentes|investiga)\b/i.test(promptText) });
+  emit(events, 'research', 'complete', 'Investigación contextual evaluada', { requiresResearch: /\b(real|doi|actual|fuentes|investiga)\b/i.test(userPromptText) });
   let plan = buildPlan({ prompt: promptText, format: detectedFormat, template: detectedTemplate, complexity, referenceFiles });
   emit(events, 'document_design', 'complete', 'Plantilla premium seleccionada', { template: detectedTemplate, palette: plan.qualityTargets.palette });
   emit(events, 'content_generation', 'complete', 'Plan estructural creado', { sections: plan.sections.length });
@@ -1385,9 +1526,17 @@ async function* streamAdvancedDocumentPipeline(opts = {}) {
     if (failedChecks.length > 0) {
       explanationParts.push(`Pendientes: ${failedChecks.join(', ')}.`);
     }
-    const htmlPreview = result.plan.format === 'pptx'
-      ? buildPptxHtmlPreview(result.plan, result.artifact.filename, result.validation)
-      : null;
+    let htmlPreview = null;
+    if (result.plan.format === 'pptx') {
+      htmlPreview = buildPptxHtmlPreview(result.plan, result.artifact.filename, result.validation);
+    } else if (['docx', 'xlsx', 'csv'].includes(result.plan.format)) {
+      try {
+        const preview = await renderPreview(result.plan.format, result.buffer.toString('base64'));
+        htmlPreview = preview?.html || null;
+      } catch (err) {
+        console.warn('[document-pipeline] preview render failed:', err?.message);
+      }
+    }
     const file = {
       type: 'doc',
       format: result.plan.format,

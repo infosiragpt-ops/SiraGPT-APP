@@ -121,6 +121,50 @@ describe("mergeMessagesPreservingUserContent - never drops local user messages",
     assert.ok(Array.isArray(u.files) && u.files.length === 1, "files preserved")
   })
 
+  it("keeps rich upload metadata when the server refresh returns only file ids", () => {
+    const local: any[] = [
+      {
+        id: "real_user_id",
+        role: "USER",
+        content: "transcribir porfavor",
+        files: [
+          {
+            id: "img_1",
+            name: "captura.png",
+            type: "image/png",
+            url: "/uploads/user/captura.png",
+            extractedText: "LAS NORMAS A USAR SON VANCOUVER",
+          },
+          {
+            id: "doc_1",
+            name: "documento-prueba.docx",
+            type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            url: "/uploads/user/documento-prueba.docx",
+            extractedText: "ALFA es la primera palabra real.",
+          },
+        ],
+      },
+      { id: "asst_real", role: "ASSISTANT", content: "stub" },
+    ]
+    const incoming: any[] = [
+      {
+        id: "real_user_id",
+        role: "USER",
+        content: "transcribir porfavor",
+        files: ["img_1", "doc_1"],
+      },
+      { id: "asst_real", role: "ASSISTANT", content: "answer" },
+    ]
+
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    const u = merged.find(m => String(m.role).toUpperCase() === "USER") as any
+
+    assert.equal(u.files[0].name, "captura.png")
+    assert.equal(u.files[0].type, "image/png")
+    assert.equal(u.files[1].name, "documento-prueba.docx")
+    assert.match(u.files[1].extractedText, /ALFA/)
+  })
+
   it("handles multiple orphans in correct order", () => {
     const local = [
       { id: "msg-user-1", role: "USER", content: "first question" },

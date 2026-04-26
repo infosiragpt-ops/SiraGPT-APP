@@ -202,7 +202,9 @@ router.post(
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
 
     const controller = new AbortController();
-    req.on('close', () => controller.abort());
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
 
     const history = Array.isArray(owned.messages) ? owned.messages : [];
     const userMsg = {

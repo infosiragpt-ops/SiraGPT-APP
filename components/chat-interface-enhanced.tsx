@@ -40,6 +40,15 @@ import {
   Crown,
   PanelLeftOpen,
   GripVertical,
+  Info,
+  Lock,
+  Pin,
+  Link2,
+  MessageCircle,
+  Flag,
+  Settings,
+  PenSquare,
+  MessageSquare,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -287,6 +296,51 @@ function sourceMeta(source: AgenticSource) {
     venue || null,
     source.doi ? `DOI ${source.doi.replace(/^https?:\/\/doi\.org\//i, "")}` : null,
   ].filter(Boolean).join(" · ")
+}
+
+type DetectedLink = {
+  raw: string
+  url: string
+  host: string
+}
+
+const URL_TOKEN_RE = /\b(?:https?:\/\/|www\.)[^\s<>"'`]+/gi
+
+function cleanUrlToken(raw: string) {
+  return raw.replace(/[)\].,;!?]+$/g, "")
+}
+
+function extractDetectedLinks(value: string): DetectedLink[] {
+  if (!value) return []
+  const seen = new Set<string>()
+  const links: DetectedLink[] = []
+  for (const match of value.matchAll(URL_TOKEN_RE)) {
+    const raw = cleanUrlToken(match[0] || "")
+    if (!raw) continue
+    const url = raw.startsWith("www.") ? `https://${raw}` : raw
+    try {
+      const parsed = new URL(url)
+      if (!["http:", "https:"].includes(parsed.protocol)) continue
+      const normalized = parsed.toString()
+      if (seen.has(normalized)) continue
+      seen.add(normalized)
+      links.push({
+        raw,
+        url: normalized,
+        host: parsed.hostname.replace(/^www\./, ""),
+      })
+    } catch {
+      continue
+    }
+  }
+  return links.slice(0, 8)
+}
+
+function appendTextToken(current: string, token: string) {
+  const trimmedToken = token.trim()
+  if (!trimmedToken) return current
+  if (!current.trim()) return trimmedToken
+  return `${current.trimEnd()} ${trimmedToken}`
 }
 
 function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number): SearchActivityEntry | null {
@@ -578,6 +632,59 @@ const SelectedTextDisplay = ({ text, onClear }: { text: string | null; onClear: 
   );
 };
 
+const LinkContextDisplay = ({
+  links,
+  removeLink,
+  isWebSearchActive,
+  setIsWebSearchActive,
+}: {
+  links: DetectedLink[];
+  removeLink: (link: DetectedLink) => void;
+  isWebSearchActive: boolean;
+  setIsWebSearchActive: (value: boolean) => void;
+}) => {
+  if (links.length === 0) return null;
+
+  return (
+    <div className="px-3 pt-3">
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200/70 bg-sky-50/55 px-2.5 py-2 dark:border-sky-500/20 dark:bg-sky-950/20">
+        {links.map((link) => (
+          <div
+            key={link.url}
+            className="group/link-chip flex min-w-0 max-w-[220px] items-center gap-1.5 rounded-full border border-sky-200 bg-background/90 px-2 py-1 text-xs text-sky-800 shadow-sm dark:border-sky-500/25 dark:bg-background/70 dark:text-sky-200"
+            title={link.url}
+          >
+            <Link2 className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 truncate font-medium">{link.host}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-4 w-4 shrink-0 rounded-full p-0 text-sky-700/75 hover:bg-sky-100 hover:text-sky-900 dark:text-sky-200/75 dark:hover:bg-sky-900/40 dark:hover:text-sky-100"
+              onClick={() => removeLink(link)}
+              aria-label={`Quitar enlace ${link.host}`}
+              title="Quitar enlace"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        ))}
+        {!isWebSearchActive && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsWebSearchActive(true)}
+            className="h-7 rounded-full px-2 text-xs text-sky-800 hover:bg-sky-100 dark:text-sky-200 dark:hover:bg-sky-900/40"
+          >
+            <Globe className="mr-1.5 h-3.5 w-3.5" />
+            Búsqueda web
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+};
+
 
 // Enhanced Actions Dropdown Component
 const ActionsDropdown = ({
@@ -626,6 +733,7 @@ const ActionsDropdown = ({
   handleWordConnectorToggle,
   handleExcelConnectorToggle,
   closeAllToolsAndConnectors,
+  onAddLinkRequest,
 
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -634,7 +742,8 @@ const ActionsDropdown = ({
   const [justClosed, setJustClosed] = React.useState(false);
   const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  const handleFileUpload = () => {
+  const handleFileUpload = (event?: Event | React.SyntheticEvent) => {
+    event?.preventDefault?.();
     fileInputRef.current?.click();
   };
 
@@ -744,7 +853,11 @@ const ActionsDropdown = ({
         <DropdownMenuContent align="start" sideOffset={10} className="liquid-menu-surface w-64 overflow-visible">
           {/* File Upload - Only for text chats */}
 
-          <DropdownMenuItem className="liquid-menu-item" onSelect={(e) => e.preventDefault()} onClick={handleFileUpload} disabled={isUploading || isGeneratingImage}>
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onSelect={handleFileUpload}
+            disabled={isUploading || isGeneratingImage}
+          >
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
                 <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
@@ -762,9 +875,28 @@ const ActionsDropdown = ({
             type="file"
             multiple
             className="hidden"
-            accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+            accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg"
             onChange={handleFilesSelected}
           />
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onSelect={(event) => {
+              event.preventDefault();
+              onAddLinkRequest?.();
+              setIsOpen(false);
+            }}
+            disabled={isMenuDisabled}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 rounded-lg bg-sky-100 dark:bg-sky-900/20 flex items-center justify-center">
+                <Link2 className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+              </div>
+              <div className="flex-1">
+                <div className="liquid-label font-medium text-sm">Agregar enlace</div>
+                <div className="text-xs text-muted-foreground">URL como contexto</div>
+              </div>
+            </div>
+          </DropdownMenuItem>
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -1672,21 +1804,25 @@ const ActiveToolsDisplay = ({
         </>
       )}
       {isWebSearchActive && (
-        <>
-          <div className="flex items-center gap-1.5 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 px-2 py-1 rounded-full text-xs border border-green-200 dark:border-green-800">
-            <Globe className="h-3 w-3" />
-            <span className="font-medium">Web Search</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-4 w-4 p-0 hover:bg-green-200 dark:hover:bg-green-800/30 rounded-full ml-1"
-              onClick={handleWebSearchClose}
-            >
-              <X className="h-3 w-3" />
-            </Button>
-          </div>
-
-        </>
+        <div
+          className="group/web-search-tool flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border border-green-200 bg-green-100 px-0 text-xs text-green-700 transition-[width,padding,box-shadow] duration-300 ease-out hover:w-[120px] hover:justify-start hover:px-2 hover:shadow-sm focus-within:w-[120px] focus-within:justify-start focus-within:px-2 focus-within:shadow-sm dark:border-green-800 dark:bg-green-900/20 dark:text-green-300"
+          aria-label="Web Search activo. Pasa el cursor para cerrar."
+        >
+          <Globe className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
+          <span className="ml-0 max-w-0 overflow-hidden whitespace-nowrap font-medium opacity-0 transition-all duration-250 ease-out group-hover/web-search-tool:ml-1.5 group-hover/web-search-tool:max-w-[72px] group-hover/web-search-tool:opacity-100 group-focus-within/web-search-tool:ml-1.5 group-focus-within/web-search-tool:max-w-[72px] group-focus-within/web-search-tool:opacity-100">
+            Web Search
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-0 h-4 w-0 shrink-0 overflow-hidden rounded-full p-0 opacity-0 transition-all duration-250 ease-out hover:bg-green-200 group-hover/web-search-tool:ml-1 group-hover/web-search-tool:w-4 group-hover/web-search-tool:opacity-100 group-focus-within/web-search-tool:ml-1 group-focus-within/web-search-tool:w-4 group-focus-within/web-search-tool:opacity-100 dark:hover:bg-green-800/30"
+            onClick={handleWebSearchClose}
+            aria-label="Cerrar Web Search"
+            title="Cerrar Web Search"
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
       )}
       {isImageGenerationActive && (
         <>
@@ -1842,7 +1978,8 @@ const NavbarModelSelector = ({
   availableModels,
   setSelectedProvider,
   chatTypes,
-  currentChat
+  currentChat,
+  setCurrentChat,
 }: any) => {
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -1868,6 +2005,268 @@ const NavbarModelSelector = ({
       setRecents(next);
     } catch {}
   };
+
+  const pickModelForTier = React.useCallback((tier: "instant" | "thinking") => {
+    const models = Array.isArray(availableModels) ? availableModels : [];
+    const byName = (patterns: RegExp[]) => models.find((m: any) => {
+      const label = `${m?.name || ""} ${m?.displayName || ""}`.toLowerCase();
+      return patterns.some((pattern) => pattern.test(label));
+    });
+
+    if (tier === "instant") {
+      return byName([
+        /deepseek-v4-flash/,
+        /gpt-4o-mini|gpt-5-mini/,
+        /flash|fast|mini|haiku|lite|nano|turbo/,
+      ]) || models[0];
+    }
+
+    return byName([
+      /deepseek-v4-pro/,
+      /\bgpt-5\b|gpt-4\.1|o[134]\b/,
+      /thinking|reason|r1|pro|sonnet|opus|ultra|max/,
+    ]) || models[0];
+  }, [availableModels]);
+
+  const applyGptModelTier = React.useCallback(async (tier: "instant" | "thinking") => {
+    if (!currentChat?.id) return;
+    const nextModel = pickModelForTier(tier);
+    if (!nextModel?.name) {
+      toast.error("No hay modelos disponibles");
+      return;
+    }
+
+    setSelectedModel(nextModel.name);
+    setSelectedProvider(nextModel.provider);
+    recordRecent(nextModel.name);
+    setCurrentChat?.((chat: any) => chat ? { ...chat, model: nextModel.name } : chat);
+
+    try {
+      await apiClient.updateChat(currentChat.id, { model: nextModel.name });
+      toast.success(`Modelo actualizado: ${nextModel.displayName || nextModel.name}`);
+    } catch (error) {
+      toast.error("No se pudo actualizar el modelo del GPT");
+    }
+  }, [currentChat?.id, pickModelForTier, setCurrentChat, setSelectedModel, setSelectedProvider]);
+
+  const startNewGptChat = React.useCallback(async () => {
+    const gptId = currentChat?.customGpt?.id || currentChat?.customGptId;
+    if (!gptId) return;
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/gpts/${gptId}/chat`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat");
+      localStorage.setItem("currentChatId", data.chat.id);
+      window.location.href = `/chat?id=${data.chat.id}`;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat");
+    }
+  }, [currentChat?.customGpt?.id, currentChat?.customGptId]);
+
+  const copyGptLink = React.useCallback(async () => {
+    const gpt = currentChat?.customGpt;
+    const href = gpt?.shareId
+      ? `${window.location.origin}/gpts/share/${gpt.shareId}`
+      : `${window.location.origin}/chat?id=${currentChat?.id || ""}`;
+    await navigator.clipboard.writeText(href);
+    toast.success("Enlace copiado");
+  }, [currentChat?.customGpt, currentChat?.id]);
+
+  const selectedGptModel = React.useMemo(() => {
+    const modelName = currentChat?.model || currentChat?.customGpt?.modelName || selectedModel;
+    return availableModels.find((m: any) => m.name === modelName);
+  }, [availableModels, currentChat?.customGpt?.modelName, currentChat?.model, selectedModel]);
+
+  const gptAvailableModels = React.useMemo(() => {
+    const models = Array.isArray(availableModels) ? availableModels : [];
+    return models.filter((model: any) => String(model?.type || "TEXT").toUpperCase() === "TEXT");
+  }, [availableModels]);
+
+  const gptModelsByProvider = React.useMemo(() => {
+    const order = ["OpenAI", "Anthropic", "Google", "Gemini", "DeepSeek", "xAI", "Groq", "OpenRouter"];
+    const groups: Record<string, any[]> = {};
+    for (const model of gptAvailableModels) {
+      const provider = model?.provider || "Otros";
+      (groups[provider] ||= []).push(model);
+    }
+    return Object.entries(groups).sort(([a], [b]) => {
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      if (ia === -1 && ib === -1) return a.localeCompare(b);
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+  }, [gptAvailableModels]);
+
+  const describeGptTier = React.useCallback((modelName: string) => {
+    const label = String(modelName || "").toLowerCase();
+    if (/deepseek-v4-pro|\bgpt-5\b|o[134]\b|thinking|reason|r1|pro|sonnet|opus|ultra|max/.test(label)) {
+      return "Thinking";
+    }
+    return "Instant";
+  }, []);
+
+  const applyGptModel = React.useCallback(async (model: any) => {
+    if (!currentChat?.id || !model?.name) return;
+
+    setSelectedModel(model.name);
+    setSelectedProvider(model.provider);
+    recordRecent(model.name);
+    setCurrentChat?.((chat: any) => chat ? { ...chat, model: model.name } : chat);
+
+    try {
+      await apiClient.updateChat(currentChat.id, { model: model.name });
+      toast.success(`Modelo actualizado: ${model.displayName || model.name}`);
+    } catch {
+      toast.error("No se pudo actualizar el modelo del GPT");
+    }
+  }, [currentChat?.id, setCurrentChat, setSelectedModel, setSelectedProvider]);
+
+  const [gptDialog, setGptDialog] = React.useState<null | "about" | "feedback" | "rate" | "report">(null);
+  const [projectDialog, setProjectDialog] = React.useState<null | "about">(null);
+  const [gptFeedback, setGptFeedback] = React.useState("");
+  const [gptReport, setGptReport] = React.useState("");
+  const [gptRating, setGptRating] = React.useState(0);
+  const [isGptPinned, setIsGptPinned] = React.useState(false);
+
+  React.useEffect(() => {
+    const gptId = currentChat?.customGpt?.id || currentChat?.customGptId;
+    if (!gptId || typeof window === "undefined") {
+      setIsGptPinned(false);
+      return;
+    }
+    try {
+      const pinned: string[] = JSON.parse(localStorage.getItem("sira:pinned-gpts") || "[]");
+      setIsGptPinned(pinned.includes(gptId));
+    } catch {
+      setIsGptPinned(false);
+    }
+  }, [currentChat?.customGpt?.id, currentChat?.customGptId]);
+
+  const togglePinGpt = React.useCallback(() => {
+    const gptId = currentChat?.customGpt?.id || currentChat?.customGptId;
+    if (!gptId || typeof window === "undefined") return;
+    try {
+      const pinned: string[] = JSON.parse(localStorage.getItem("sira:pinned-gpts") || "[]");
+      const exists = pinned.includes(gptId);
+      const next = exists ? pinned.filter((id) => id !== gptId) : [gptId, ...pinned];
+      localStorage.setItem("sira:pinned-gpts", JSON.stringify(next));
+      const metaKey = "sira:pinned-gpt-items";
+      const existingMeta = JSON.parse(localStorage.getItem(metaKey) || "[]");
+      const withoutCurrent = existingMeta.filter((item: any) => item?.id !== gptId);
+      const nextMeta = exists
+        ? withoutCurrent
+        : [
+            {
+              id: gptId,
+              name: currentChat?.customGpt?.name || "GPT",
+              iconUrl: currentChat?.customGpt?.iconUrl || null,
+              modelName: currentChat?.model || currentChat?.customGpt?.modelName || selectedModel,
+            },
+            ...withoutCurrent,
+          ].slice(0, 12);
+      localStorage.setItem(metaKey, JSON.stringify(nextMeta));
+      window.dispatchEvent(new CustomEvent("siragpt:pinned-gpts-changed"));
+      setIsGptPinned(!exists);
+      toast.success(exists ? "GPT quitado de la barra lateral" : "GPT fijado en la barra lateral");
+    } catch {
+      toast.error("No se pudo actualizar el GPT fijado");
+    }
+  }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.customGpt?.name, currentChat?.customGpt?.iconUrl, currentChat?.customGpt?.modelName, currentChat?.model, selectedModel]);
+
+  const submitGptFeedback = React.useCallback((kind: "feedback" | "rate" | "report") => {
+    const gptId = currentChat?.customGpt?.id || currentChat?.customGptId;
+    const payload = {
+      gptId,
+      chatId: currentChat?.id,
+      kind,
+      rating: kind === "rate" ? gptRating : undefined,
+      text: kind === "report" ? gptReport.trim() : gptFeedback.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      const key = "sira:gpt-actions";
+      const existing = JSON.parse(localStorage.getItem(key) || "[]");
+      localStorage.setItem(key, JSON.stringify([payload, ...existing].slice(0, 100)));
+      toast.success(kind === "report" ? "Reporte guardado" : kind === "rate" ? "Valoración guardada" : "Comentarios guardados");
+      setGptDialog(null);
+      setGptFeedback("");
+      setGptReport("");
+      if (kind === "rate") setGptRating(0);
+    } catch {
+      toast.error("No se pudo guardar la acción");
+    }
+  }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.id, gptFeedback, gptRating, gptReport]);
+
+  const project = currentChat?.project;
+  const projectName = project?.name || String(currentChat?.title || "Proyecto").replace(/^Chat in\s+/i, "");
+  const activeProjectModelName = currentChat?.model || selectedModel;
+  const selectedProjectModel = React.useMemo(() => {
+    return availableModels.find((m: any) => m.name === activeProjectModelName);
+  }, [availableModels, activeProjectModelName]);
+  const projectCounts = project?._count || {
+    files: project?.files?.length || 0,
+    chats: 0,
+    memories: 0,
+    documents: project?.documents?.length || 0,
+  };
+
+  const applyProjectModel = React.useCallback(async (model: any) => {
+    if (!currentChat?.id || !model?.name) return;
+    setSelectedModel(model.name);
+    setSelectedProvider(model.provider);
+    recordRecent(model.name);
+    setCurrentChat?.((chat: any) => chat ? { ...chat, model: model.name } : chat);
+
+    try {
+      await apiClient.updateChat(currentChat.id, { model: model.name });
+      toast.success(`Modelo del proyecto actualizado: ${model.displayName || model.name}`);
+    } catch {
+      toast.error("No se pudo actualizar el modelo del proyecto");
+    }
+  }, [currentChat?.id, setCurrentChat, setSelectedModel, setSelectedProvider]);
+
+  const startNewProjectChat = React.useCallback(async () => {
+    const projectId = currentChat?.project?.id || currentChat?.projectId;
+    if (!projectId) return;
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects/${projectId}/chat`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          title: `Chat in ${projectName}`.slice(0, 120),
+          model: activeProjectModelName,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat del proyecto");
+      localStorage.setItem("currentChatId", data.chat.id);
+      window.location.href = `/chat?id=${data.chat.id}`;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat del proyecto");
+    }
+  }, [currentChat?.project?.id, currentChat?.projectId, projectName, activeProjectModelName]);
+
+  const copyProjectLink = React.useCallback(async () => {
+    const projectId = currentChat?.project?.id || currentChat?.projectId;
+    if (!projectId) return;
+    await navigator.clipboard.writeText(`${window.location.origin}/projects/${projectId}`);
+    toast.success("Enlace del proyecto copiado");
+  }, [currentChat?.project?.id, currentChat?.projectId]);
 
 
   // If this is a video chat type, show video model
@@ -1943,34 +2342,417 @@ const NavbarModelSelector = ({
 
 
 
-  // If this chat is associated with a custom GPT, show GPT info instead of model selector
-  if (currentChat?.customGptId || currentChat?.customGpt) {
-    const customGptName = currentChat?.customGpt?.name || currentChat?.title || "Custom GPT";
-    const customGptIcon = currentChat?.customGpt?.iconUrl;
+  if ((currentChat?.projectId || currentChat?.project) && !(currentChat?.customGptId || currentChat?.customGpt)) {
+    const activeModelLabel = selectedProjectModel?.displayName || activeProjectModelName || "Modelo";
 
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-md border bg-background">
-        {customGptIcon ? (
-          customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={customGptIcon}
-              alt="GPT icon"
-              className="w-4 h-4 rounded-full object-cover"
-            />
-          ) : (
-            <div className="w-4 h-4 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white text-xs">
-              {customGptIcon}
+      <>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className={cn(
+              "group/project inline-flex h-11 max-w-[360px] items-center gap-2 rounded-2xl px-3",
+              "bg-emerald-500/10 text-foreground hover:bg-emerald-500/15",
+              "text-[15px] font-semibold tracking-tight",
+              "transition-colors duration-200",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+              "data-[state=open]:bg-emerald-500/15",
+            )}
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+              <FolderOpen className="h-4 w-4" />
+            </span>
+            <span className="min-w-0 truncate">{projectName}</span>
+            <ChevronDown className="h-4 w-4 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/project:rotate-180" />
+          </DropdownMenuTrigger>
+
+          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[342px] overflow-hidden rounded-3xl border-border/70 p-2 shadow-2xl">
+            <div className="mb-1 flex items-center gap-3 rounded-2xl px-2 py-2">
+              <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                <FolderOpen className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold">{projectName}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {activeModelLabel} · {projectCounts.files} archivos · {projectCounts.documents} docs
+                </div>
+              </div>
             </div>
-          )
-        ) : (
-          <Bot className="h-4 w-4 text-purple-600" />
-        )}
-        <span className="text-sm font-medium">{customGptName}</span>
-        <div className="flex items-center gap-1">
-          <div className="w-2 h-2 bg-purple-500 rounded-full" title="Custom GPT" />
+
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="h-12 rounded-2xl px-3 text-[15px]">
+                <div className="flex items-center gap-3">
+                  <Settings className="h-4 w-4" />
+                  <span>Modelo</span>
+                </div>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuSubContent sideOffset={10} className="w-[360px] rounded-3xl border-border/70 p-2 shadow-2xl">
+                  <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                    Modelos disponibles para este proyecto
+                  </div>
+                  <ScrollArea className="h-[420px] pr-1">
+                    {gptModelsByProvider.length > 0 ? (
+                      <div className="space-y-2">
+                        {gptModelsByProvider.map(([provider, models]) => (
+                          <div key={provider}>
+                            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                              {provider} · {models.length}
+                            </div>
+                            <div className="space-y-0.5">
+                              {models.map((model: any) => {
+                                const isActive = model.name === activeProjectModelName;
+                                const tier = describeGptTier(model.name || model.displayName);
+                                return (
+                                  <DropdownMenuItem
+                                    key={model.name}
+                                    onSelect={(event) => {
+                                      event.preventDefault();
+                                      applyProjectModel(model);
+                                    }}
+                                    className={cn("rounded-2xl px-3 py-2.5", isActive && "bg-muted/70")}
+                                  >
+                                    <IconProvider name={resolveModelIconName(model)} className="mr-2 h-5 w-5 shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="truncate text-[14px] font-medium">{model.displayName || model.name}</div>
+                                      <div className="truncate text-xs text-muted-foreground">{tier} · {model.name}</div>
+                                    </div>
+                                    {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
+                                  </DropdownMenuItem>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                        No hay modelos disponibles
+                      </div>
+                    )}
+                  </ScrollArea>
+                </DropdownMenuSubContent>
+              </DropdownMenuPortal>
+            </DropdownMenuSub>
+
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewProjectChat(); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <PenSquare className="mr-3 h-5 w-5" />
+              Nuevo chat en proyecto
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setProjectDialog("about"); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <Info className="mr-3 h-5 w-5" />
+              Instrucciones y contexto
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                const projectId = currentChat?.project?.id || currentChat?.projectId;
+                if (projectId) window.location.href = `/projects/${projectId}`;
+              }}
+              className="h-12 rounded-2xl px-3 text-[15px]"
+            >
+              <FolderOpen className="mr-3 h-5 w-5" />
+              Abrir proyecto
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyProjectLink(); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <Link2 className="mr-3 h-5 w-5" />
+              Copiar enlace
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <Dialog open={projectDialog !== null} onOpenChange={(open) => !open && setProjectDialog(null)}>
+          <DialogContent className="max-w-md rounded-3xl">
+            <DialogHeader>
+              <DialogTitle>{projectName}</DialogTitle>
+              <DialogDescription>
+                Este chat usa instrucciones, archivos, documentos y memoria aislados del proyecto.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-2xl border border-border/60 p-3">
+                  <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Archivos</div>
+                  <div className="mt-1 text-lg font-semibold">{projectCounts.files}</div>
+                </div>
+                <div className="rounded-2xl border border-border/60 p-3">
+                  <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Documentos</div>
+                  <div className="mt-1 text-lg font-semibold">{projectCounts.documents}</div>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border/60 p-3">
+                <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Modelo activo</div>
+                <div className="mt-1 font-medium">{activeModelLabel}</div>
+              </div>
+              <div className="rounded-2xl border border-border/60 p-3">
+                <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Instrucciones</div>
+                <div className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-muted-foreground">
+                  {project?.instructions || "Sin instrucciones configuradas."}
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setProjectDialog(null)}>Cerrar</Button>
+              {(currentChat?.project?.id || currentChat?.projectId) && (
+                <Button onClick={() => { window.location.href = `/projects/${currentChat?.project?.id || currentChat?.projectId}` }}>
+                  Abrir proyecto
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </>
+    );
+  }
+
+  // If this chat is associated with a custom GPT, show GPT info instead of model selector
+  if (currentChat?.customGptId || currentChat?.customGpt) {
+    const customGpt = currentChat?.customGpt;
+    const customGptName = customGpt?.name || String(currentChat?.title || "Custom GPT").replace(/^Chat with\s+/i, "");
+    const customGptIcon = customGpt?.iconUrl;
+    const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
+    const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
+
+    const GptIcon = () => customGptIcon ? (
+      customGptIcon.startsWith('http') || customGptIcon.startsWith('https') || customGptIcon.startsWith('data:') ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={customGptIcon}
+          alt="GPT icon"
+          className="h-7 w-7 rounded-full object-cover"
+        />
+      ) : (
+        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 text-sm text-white">
+          {customGptIcon}
         </div>
+      )
+    ) : (
+      <div className="flex h-7 w-7 items-center justify-center rounded-full bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300">
+        <Bot className="h-4 w-4" />
       </div>
+    );
+
+    return (
+      <>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className={cn(
+              "group/gpt inline-flex h-11 max-w-[360px] items-center gap-2 rounded-2xl px-3",
+              "bg-muted/50 text-foreground hover:bg-muted",
+              "text-[15px] font-semibold tracking-tight",
+              "transition-colors duration-200",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+              "data-[state=open]:bg-muted",
+            )}
+          >
+            <GptIcon />
+            <span className="min-w-0 truncate">{customGptName}</span>
+            <ChevronDown className="h-4 w-4 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/gpt:rotate-180" />
+          </DropdownMenuTrigger>
+
+          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[328px] overflow-hidden rounded-3xl border-border/70 p-2 shadow-2xl">
+            <div className="mb-1 flex items-center gap-3 rounded-2xl px-2 py-2">
+              <GptIcon />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold">{customGptName}</div>
+                <div className="truncate text-xs text-muted-foreground">{activeModelLabel}</div>
+              </div>
+            </div>
+
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="h-12 rounded-2xl px-3 text-[15px]">
+                <div className="flex items-center gap-3">
+                  <Settings className="h-4 w-4" />
+                  <span>Modelo</span>
+                </div>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuSubContent sideOffset={10} className="w-[360px] rounded-3xl border-border/70 p-2 shadow-2xl">
+                  <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                    Todos los modelos disponibles
+                  </div>
+                  <ScrollArea className="h-[420px] pr-1">
+                    {gptModelsByProvider.length > 0 ? (
+                      <div className="space-y-2">
+                        {gptModelsByProvider.map(([provider, models]) => (
+                          <div key={provider}>
+                            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                              {provider} · {models.length}
+                            </div>
+                            <div className="space-y-0.5">
+                              {models.map((model: any) => {
+                                const isActive = model.name === activeModelName;
+                                const tier = describeGptTier(model.name || model.displayName);
+                                return (
+                                  <DropdownMenuItem
+                                    key={model.name}
+                                    onSelect={(event) => {
+                                      event.preventDefault();
+                                      applyGptModel(model);
+                                    }}
+                                    className={cn(
+                                      "rounded-2xl px-3 py-2.5",
+                                      isActive && "bg-muted/70",
+                                    )}
+                                  >
+                                    <IconProvider name={resolveModelIconName(model)} className="mr-2 h-5 w-5 shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="truncate text-[14px] font-medium">{model.displayName || model.name}</div>
+                                      <div className="truncate text-xs text-muted-foreground">{tier} · {model.name}</div>
+                                    </div>
+                                    {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
+                                  </DropdownMenuItem>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                        No hay modelos disponibles
+                      </div>
+                    )}
+                  </ScrollArea>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
+                    }}
+                    className="rounded-2xl px-3 py-3 text-[15px]"
+                  >
+                    Configurar GPT...
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuPortal>
+            </DropdownMenuSub>
+
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewGptChat(); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <PenSquare className="mr-3 h-5 w-5" />
+              Nuevo chat
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("about"); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <Info className="mr-3 h-5 w-5" />
+              Acerca de
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                if (customGpt?.id) window.location.href = `/gpts/create?edit=${customGpt.id}`;
+              }}
+              className="h-12 rounded-2xl px-3 text-[15px]"
+            >
+              <Lock className="mr-3 h-5 w-5" />
+              Configuración de privacidad
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); togglePinGpt(); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <Pin className="mr-3 h-5 w-5" />
+              {isGptPinned ? "Quitar de la barra lateral" : "Mantener en la barra lateral"}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyGptLink(); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <Link2 className="mr-3 h-5 w-5" />
+              Copiar enlace
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("feedback"); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <MessageCircle className="mr-3 h-5 w-5" />
+              Enviar comentarios
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("rate"); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <MessageSquare className="mr-3 h-5 w-5" />
+              Valorar GPT
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setGptDialog("report"); }} className="h-12 rounded-2xl px-3 text-[15px]">
+              <Flag className="mr-3 h-5 w-5" />
+              Denunciar GPT
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <Dialog open={gptDialog !== null} onOpenChange={(open) => !open && setGptDialog(null)}>
+          <DialogContent className="max-w-md rounded-3xl">
+            {gptDialog === "about" && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>{customGptName}</DialogTitle>
+                  <DialogDescription>
+                    {customGpt?.description || "GPT personalizado configurado en siraGPT."}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 text-sm">
+                  <div className="rounded-2xl border border-border/60 p-3">
+                    <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Modelo activo</div>
+                    <div className="mt-1 font-medium">{activeModelLabel}</div>
+                  </div>
+                  <div className="rounded-2xl border border-border/60 p-3">
+                    <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Instrucciones</div>
+                    <div className="mt-1 max-h-32 overflow-auto text-muted-foreground">{customGpt?.instructions || "Sin instrucciones visibles."}</div>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setGptDialog(null)}>Cerrar</Button>
+                  {customGpt?.id && <Button onClick={() => { window.location.href = `/gpts/create?edit=${customGpt.id}` }}>Configurar</Button>}
+                </DialogFooter>
+              </>
+            )}
+
+            {gptDialog === "feedback" && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Enviar comentarios</DialogTitle>
+                  <DialogDescription>Deja una nota sobre la calidad o comportamiento de este GPT.</DialogDescription>
+                </DialogHeader>
+                <Textarea value={gptFeedback} onChange={(event) => setGptFeedback(event.target.value)} placeholder="Escribe tus comentarios..." className="min-h-28" />
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setGptDialog(null)}>Cancelar</Button>
+                  <Button onClick={() => submitGptFeedback("feedback")} disabled={!gptFeedback.trim()}>Guardar</Button>
+                </DialogFooter>
+              </>
+            )}
+
+            {gptDialog === "rate" && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Valorar GPT</DialogTitle>
+                  <DialogDescription>Selecciona una valoración para este GPT.</DialogDescription>
+                </DialogHeader>
+                <div className="flex items-center justify-center gap-2 py-2">
+                  {[1, 2, 3, 4, 5].map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setGptRating(value)}
+                      className={cn(
+                        "flex h-11 w-11 items-center justify-center rounded-full border text-lg transition",
+                        gptRating >= value ? "border-amber-400 bg-amber-50 text-amber-600" : "border-border text-muted-foreground hover:bg-muted",
+                      )}
+                      aria-label={`${value} estrellas`}
+                    >
+                      ★
+                    </button>
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setGptDialog(null)}>Cancelar</Button>
+                  <Button onClick={() => submitGptFeedback("rate")} disabled={gptRating === 0}>Guardar valoración</Button>
+                </DialogFooter>
+              </>
+            )}
+
+            {gptDialog === "report" && (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Denunciar GPT</DialogTitle>
+                  <DialogDescription>Describe el problema para dejarlo registrado localmente.</DialogDescription>
+                </DialogHeader>
+                <Textarea value={gptReport} onChange={(event) => setGptReport(event.target.value)} placeholder="Describe el problema..." className="min-h-28" />
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setGptDialog(null)}>Cancelar</Button>
+                  <Button variant="destructive" onClick={() => submitGptFeedback("report")} disabled={!gptReport.trim()}>Guardar reporte</Button>
+                </DialogFooter>
+              </>
+            )}
+          </DialogContent>
+        </Dialog>
+      </>
     );
   }
 
@@ -2195,6 +2977,8 @@ function ChatInterfaceContent() {
   } = useChat()
 
   const [input, setInput] = React.useState("")
+  const [linkDialogOpen, setLinkDialogOpen] = React.useState(false)
+  const [linkInput, setLinkInput] = React.useState("")
   const [isRecording, setIsRecording] = React.useState(false)
   const [isDictationTranscribing, setIsDictationTranscribing] = React.useState(false)
   const inputRef = React.useRef("")
@@ -2451,6 +3235,8 @@ function ChatInterfaceContent() {
     setSelectedWordText(null);
     setUploadedFiles([]);
     setInput('');
+    setLinkInput('');
+    setLinkDialogOpen(false);
 
     // Clear Computer Use state
     if (clearReasoning) clearReasoning();
@@ -2838,6 +3624,39 @@ But first, you need to connect your Spotify account securely using the button be
     inputRef.current = input;
   }, [input]);
 
+  const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
+
+  const removeDetectedLink = React.useCallback((link: DetectedLink) => {
+    setInput((prev) => {
+      const escapedRaw = link.raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      const escapedUrl = link.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      const withoutRaw = prev.replace(new RegExp(`\\s*${escapedRaw}`, "g"), " ")
+      const withoutUrl = withoutRaw.replace(new RegExp(`\\s*${escapedUrl}`, "g"), " ")
+      return withoutUrl.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trimStart()
+    });
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, []);
+
+  const addLinkToComposer = React.useCallback(() => {
+    const candidate = linkInput.trim();
+    if (!candidate) {
+      toast.error("Ingresa un enlace");
+      return;
+    }
+    const normalized = candidate.startsWith("www.") ? `https://${candidate}` : candidate;
+    try {
+      const parsed = new URL(normalized);
+      if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("invalid-protocol");
+      setInput((prev) => appendTextToken(prev, parsed.toString()));
+      setIsWebSearchActive(true);
+      setLinkInput("");
+      setLinkDialogOpen(false);
+      window.setTimeout(() => textareaRef.current?.focus(), 0);
+    } catch {
+      toast.error("Enlace no válido");
+    }
+  }, [linkInput]);
+
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -2982,6 +3801,11 @@ But first, you need to connect your Spotify account securely using the button be
 
   const handleDocumentPreview = (url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
+    setSplitRatio((current) => {
+      const balanced = current < 40 || current > 62 ? 48 : current
+      try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
+      return balanced
+    })
     setDocumentPreviewUrl(url);
   };
 
@@ -3471,7 +4295,19 @@ But first, you need to connect your Spotify account securely using the button be
   }, [isWordConnectorActive, currentChat?.id]);
 
   React.useEffect(() => {
-    if (currentChat || chatCreationInitiated.current) {
+    if (chatCreationInitiated.current) {
+      return;
+    }
+
+    const urlChatId = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('id')
+      : null;
+    if (urlChatId && currentChat?.id !== urlChatId) {
+      selectChat(urlChatId);
+      return;
+    }
+
+    if (currentChat) {
       return;
     }
 
@@ -3954,10 +4790,15 @@ But first, you need to connect your Spotify account securely using the button be
   // ────────────────────────────────────────────────────────────
   // Resizable split — chat ↔ right panel (Word/Excel/preview).
   // Ratio is the LEFT pane's width as a percentage. Persisted in
-  // localStorage across sessions, defaults to 50/50, clamped to
-  // [25, 75] on drag, resets to 50 on double-click.
+  // localStorage across sessions, defaults to 50/50. Dragging is
+  // constrained by real pixel minimums so neither chat nor preview can
+  // collapse into an unusable strip.
   // ────────────────────────────────────────────────────────────
   const SPLIT_STORAGE_KEY = 'siraGPT-split-ratio';
+  const SPLIT_LEFT_MIN_PX = 420;
+  const SPLIT_RIGHT_MIN_PX = 460;
+  const SPLIT_MIN_RATIO = 34;
+  const SPLIT_MAX_RATIO = 66;
   const [splitRatio, setSplitRatio] = React.useState<number>(50);
   const [isDraggingSplit, setIsDraggingSplit] = React.useState(false);
   const splitContainerRef = React.useRef<HTMLDivElement | null>(null);
@@ -3967,8 +4808,21 @@ But first, you need to connect your Spotify account securely using the button be
     try {
       const raw = localStorage.getItem(SPLIT_STORAGE_KEY);
       const n = raw ? parseFloat(raw) : NaN;
-      if (!Number.isNaN(n) && n >= 25 && n <= 75) setSplitRatio(n);
+      if (!Number.isNaN(n)) {
+        setSplitRatio(Math.max(SPLIT_MIN_RATIO, Math.min(SPLIT_MAX_RATIO, n)));
+      }
     } catch { /* storage unavailable — stick with default */ }
+  }, []);
+
+  const clampSplitRatio = React.useCallback((pct: number, containerWidth?: number) => {
+    const width = containerWidth || splitContainerRef.current?.getBoundingClientRect().width || 0;
+    if (width <= 0) return Math.max(SPLIT_MIN_RATIO, Math.min(SPLIT_MAX_RATIO, pct));
+
+    const leftMinPct = (SPLIT_LEFT_MIN_PX / width) * 100;
+    const rightMinPct = (SPLIT_RIGHT_MIN_PX / width) * 100;
+    const min = Math.min(SPLIT_MAX_RATIO, Math.max(SPLIT_MIN_RATIO, leftMinPct));
+    const max = Math.max(min, Math.min(SPLIT_MAX_RATIO, 100 - rightMinPct));
+    return Math.max(min, Math.min(max, pct));
   }, []);
 
   const startSplitDrag = React.useCallback((e: React.MouseEvent) => {
@@ -3980,8 +4834,7 @@ But first, you need to connect your Spotify account securely using the button be
       const rect = el.getBoundingClientRect();
       if (rect.width <= 0) return;
       const pct = ((ev.clientX - rect.left) / rect.width) * 100;
-      const clamped = Math.max(25, Math.min(75, pct));
-      setSplitRatio(clamped);
+      setSplitRatio(clampSplitRatio(pct, rect.width));
     };
     const onUp = () => {
       setIsDraggingSplit(false);
@@ -3994,9 +4847,10 @@ But first, you need to connect your Spotify account securely using the button be
   }, []);
 
   const resetSplitRatio = React.useCallback(() => {
-    setSplitRatio(50);
-    try { localStorage.setItem(SPLIT_STORAGE_KEY, '50'); } catch { /* ignore */ }
-  }, []);
+    const next = clampSplitRatio(50);
+    setSplitRatio(next);
+    try { localStorage.setItem(SPLIT_STORAGE_KEY, String(next)); } catch { /* ignore */ }
+  }, [clampSplitRatio]);
 
   // Mirror ratio into a ref so the mouseup handler closure (set up
   // at drag-start) can read the latest value without restarting the
@@ -5601,13 +6455,49 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // trigger. ReactMarkdown renders this raw HTML via rehypeRaw; the
       // parent message list delegates clicks by data-search-activity-id
       // so we do not need to mutate MessageComponent.
-      const renderStatus = (label: string) => (
-        `<button type="button" class="agentic-search-status" data-search-activity-id="${escapeHtml(aiMessage.id)}" aria-label="Abrir actividad de búsqueda: ${escapeHtml(label)}">` +
-        `<span class="agentic-search-status__bars" aria-hidden="true"><span></span><span></span><span></span></span>` +
-        `<span class="agentic-search-status__label">${escapeHtml(label)}</span>` +
-        `<span class="agentic-search-status__hint">Actividad</span>` +
-        `</button>`
-      );
+      //
+      // The badge now carries:
+      //   - phase label (Buscando · Recopilando · Seleccionando · Validando · Sintetizando)
+      //   - a real determinate progress bar (0-100%)
+      //   - an inline counter (12/50 fuentes)
+      //   - per-provider chips with their counts (Scopus 8 · OpenAlex 12 · …)
+      //   - elapsed time
+      // It is fully accessible (role=status, aria-live=polite) so screen
+      // readers announce the phase changes.
+      const renderStatus = (state: {
+        label: string;
+        percent?: number;
+        counter?: string;
+        providers?: Array<{ name: string; count: number }>;
+        phase?: string;
+        elapsedMs?: number;
+      }) => {
+        const safeLabel = escapeHtml(state.label);
+        const pct = Math.max(0, Math.min(100, Math.round(state.percent ?? 0)));
+        const counter = state.counter ? `<span class="agentic-search-status__counter">${escapeHtml(state.counter)}</span>` : "";
+        const elapsed = typeof state.elapsedMs === "number"
+          ? `<span class="agentic-search-status__elapsed">${(state.elapsedMs / 1000).toFixed(0)}s</span>` : "";
+        const chips = (state.providers || [])
+          .filter(p => p && p.count > 0)
+          .slice(0, 6)
+          .map(p => `<span class="agentic-search-status__chip"><b>${escapeHtml(p.name)}</b><i>${p.count}</i></span>`)
+          .join("");
+        const chipRow = chips ? `<span class="agentic-search-status__chips" aria-hidden="true">${chips}</span>` : "";
+        return (
+          `<button type="button" class="agentic-search-status" role="status" aria-live="polite" ` +
+          `data-search-activity-id="${escapeHtml(aiMessage.id)}" ` +
+          `aria-label="Abrir actividad de búsqueda: ${safeLabel}">` +
+          `<span class="agentic-search-status__head">` +
+          `<span class="agentic-search-status__bars" aria-hidden="true"><span></span><span></span><span></span></span>` +
+          `<span class="agentic-search-status__label">${safeLabel}</span>` +
+          (counter || "") + (elapsed || "") +
+          `<span class="agentic-search-status__hint">Actividad</span>` +
+          `</span>` +
+          `<span class="agentic-search-status__progress" aria-hidden="true"><span style="width:${pct}%"></span></span>` +
+          chipRow +
+          `</button>`
+        );
+      };
 
       const updateBubble = (content: string) => {
         setCurrentChat(prev => {
@@ -5619,9 +6509,28 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         });
       };
 
+      // Local progress state — the badge re-renders on every event so the
+      // user sees real motion (counter, %, providers, elapsed seconds).
+      const t0 = Date.now();
+      const progress = {
+        phase: "init" as "init" | "search" | "collect" | "rank" | "select" | "synth" | "validate" | "done",
+        label: "Iniciando búsqueda profesional…",
+        percent: 5,
+        counter: "" as string,
+        providers: [] as Array<{ name: string; count: number }>,
+      };
+      const renderProgress = () => renderStatus({
+        label: progress.label,
+        percent: progress.percent,
+        counter: progress.counter,
+        providers: progress.providers,
+        phase: progress.phase,
+        elapsedMs: Date.now() - t0,
+      });
+
       // Seed the bubble with the initial animated state right away so
       // the user sees motion the instant they trigger the search.
-      updateBubble(renderStatus('Iniciando búsqueda profesional…'));
+      updateBubble(renderProgress());
 
       // Wire the Stop button: composer Stop reads searchAbortControllerRef
       // and calls abort(), which propagates through the SSE fetch and —
@@ -5632,12 +6541,63 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       let finalSummary = '';
       let aborted = false;
+      let selectedSources: AgenticSource[] = [];
+      let summaryArrived = false;
+      let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
       const recordSearchEvent = (evt: AgenticEvent) => {
         setSearchActivities(prev => {
           const current = prev[aiMessage.id];
           if (!current) return prev;
           return { ...prev, [aiMessage.id]: applySearchActivityEvent(current, evt) };
         });
+      };
+
+      const bumpProvider = (name: string, count: number) => {
+        const i = progress.providers.findIndex(p => p.name === name);
+        if (i >= 0) progress.providers[i].count = Math.max(progress.providers[i].count, count);
+        else progress.providers.push({ name, count });
+      };
+
+      // Build a polished, validated client-side summary as a fallback
+      // when the LLM-driven `summary` event takes too long. Uses the
+      // exact `selected.sources` we already have, so we never block
+      // the user behind a slow rerank/synthesis call.
+      const buildClientSummary = (sources: AgenticSource[]): string => {
+        if (!Array.isArray(sources) || sources.length === 0) return "";
+        const validate = (s: any) => {
+          const checks: string[] = [];
+          const hasDoi = !!s.doi && /^10\.\d{4,9}\//i.test(String(s.doi));
+          if (hasDoi) checks.push("✓ DOI");
+          else if (s.url) checks.push("✓ URL");
+          else checks.push("⚠ sin enlace");
+          const yr = parseInt(String(s.year || s.published || ""), 10);
+          const cutoff = new Date().getUTCFullYear() - 5;
+          if (Number.isFinite(yr)) checks.push(yr >= cutoff ? "✓ reciente" : `⚠ ${yr}`);
+          const url = String(s.url || s.doi || "").toLowerCase();
+          if (/(\.edu|\.gov|\.ac\.|scielo|pubmed|crossref|wiley|springer|elsevier|nature)/.test(url)) {
+            checks.push("✓ autoridad");
+          }
+          return checks.join(" · ");
+        };
+        const lines: string[] = [];
+        lines.push(`## Resultados verificados`);
+        lines.push(``);
+        lines.push(`Encontré ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"} relevante${sources.length === 1 ? "" : "s"}, validadas por DOI, año y autoridad de dominio:`);
+        lines.push(``);
+        sources.forEach((s: any, idx: number) => {
+          const link = s.doi ? `https://doi.org/${s.doi}` : (s.url || "");
+          const title = link ? `[${(s.title || "(sin título)").trim()}](${link})` : (s.title || "(sin título)").trim();
+          const meta = [
+            (s.authors && s.authors.length > 0) ? (Array.isArray(s.authors) ? s.authors.slice(0, 3).join(", ") : String(s.authors)) : null,
+            s.year ? `(${s.year})` : null,
+            s.journal || null,
+          ].filter(Boolean).join(" · ");
+          lines.push(`${idx + 1}. **${title}**`);
+          if (meta) lines.push(`   _${meta}_`);
+          lines.push(`   ${validate(s)}`);
+          lines.push(``);
+        });
+        return lines.join("\n");
       };
 
       await agenticSearchService.runStream(
@@ -5652,24 +6612,73 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         {
           onEvent: (evt) => {
             recordSearchEvent(evt);
-            // Translate the verbose event stream into a single-line
-            // status so the user understands roughly where the search
-            // is without being buried in trace output.
+            // Translate the verbose event stream into a real progress
+            // state — counter + percent + provider chips + elapsed —
+            // so the user sees motion AND substance.
             switch (evt.type) {
               case 'start':
-                updateBubble(renderStatus(`Buscando "${evt.query}"…`));
+                progress.phase = "search";
+                progress.label = `Buscando “${evt.query}”…`;
+                progress.percent = 10;
+                progress.counter = "";
+                updateBubble(renderProgress());
                 break;
-              case 'batch':
-                updateBubble(renderStatus(`Recopilando fuentes · ${evt.totalCollected}/${evt.target}`));
+              case 'batch': {
+                progress.phase = "collect";
+                const total = Math.max(1, evt.target || 1);
+                const done = Math.min(total, evt.totalCollected || 0);
+                progress.label = "Recopilando fuentes";
+                progress.counter = `${done}/${total} fuentes`;
+                progress.percent = 10 + Math.round((done / total) * 50);  // 10→60%
+                if ((evt as any).provider) bumpProvider(String((evt as any).provider), done);
+                updateBubble(renderProgress());
                 break;
+              }
               case 'collection_done':
-                updateBubble(renderStatus(`Recopilación completa · ${evt.totalCollected} fuentes únicas`));
+                progress.phase = "collect";
+                progress.label = "Recopilación completa";
+                progress.counter = `${evt.totalCollected} fuentes únicas`;
+                progress.percent = 65;
+                updateBubble(renderProgress());
                 break;
               case 'ranking_start':
-                updateBubble(renderStatus(`Seleccionando las ${evt.topK} mejores de ${evt.pool}…`));
+                progress.phase = "rank";
+                progress.label = `Validando y rankeando ${evt.pool} fuentes`;
+                progress.counter = `top ${evt.topK}`;
+                progress.percent = 75;
+                updateBubble(renderProgress());
                 break;
               case 'selected':
-                updateBubble(renderStatus(`Preparando informe con ${evt.topK} fuentes seleccionadas…`));
+                progress.phase = "select";
+                progress.label = `Selección lista · ${evt.topK} fuentes finalistas`;
+                progress.counter = "";
+                progress.percent = 88;
+                selectedSources = (evt as any).sources || [];
+                // Render a PRELIMINARY answer immediately — the user
+                // already has the validated list even if the LLM
+                // synthesis stalls. The badge stays above so the user
+                // knows the polished summary is still cooking.
+                {
+                  const preview = buildClientSummary(selectedSources);
+                  if (preview) updateBubble(renderProgress() + "\n\n" + preview);
+                  else updateBubble(renderProgress());
+                }
+                // 12s safety net: if the polished `summary` event
+                // doesn't arrive, finalize with the client-side one
+                // so the user always gets a complete answer.
+                if (!fallbackTimer) {
+                  fallbackTimer = setTimeout(() => {
+                    if (summaryArrived || aborted) return;
+                    const fallback = buildClientSummary(selectedSources);
+                    if (fallback) {
+                      finalSummary = fallback;
+                      progress.phase = "done";
+                      progress.label = "Resultado validado";
+                      progress.percent = 100;
+                      updateBubble(fallback);
+                    }
+                  }, 12000);
+                }
                 break;
               case 'aborted':
                 aborted = true;
@@ -5679,14 +6688,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             }
           },
           onSummary: (markdown) => {
+            summaryArrived = true;
+            if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
             finalSummary = markdown;
             updateBubble(markdown);
           },
           onDone: (stats) => {
+            if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
             if (aborted) return;
             const tail = `\n\n---\n*Búsqueda agéntica · ${stats.totalCollected} fuentes recopiladas · ${stats.dedupedCount} únicas · ${stats.selectedCount} seleccionadas` +
               (stats.elapsedMs ? ` · ${(stats.elapsedMs / 1000).toFixed(1)}s` : '') + `*`;
-            updateBubble((finalSummary || '') + tail);
+            // Always end with a synthesized answer — never with the
+            // progress badge. If we never got a server summary, use
+            // the client-side fallback we built from `selected`.
+            const body = finalSummary || buildClientSummary(selectedSources) || "_No se recuperaron fuentes válidas para esta búsqueda._";
+            updateBubble(body + tail);
             setIsWebSearching(false);
             searchAbortControllerRef.current = null;
             toast.success('Búsqueda agéntica completada');
@@ -5871,9 +6887,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     >
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-4 rounded-lg border-2 border-dashed border-primary p-12">
-            <Upload className="h-12 w-12 text-primary" />
-            <p className="text-lg font-medium">Drop files to upload</p>
+          <div className="flex max-w-sm flex-col items-center gap-3 rounded-3xl border-2 border-dashed border-primary/70 bg-background/95 p-10 text-center shadow-2xl">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <Upload className="h-7 w-7" />
+            </div>
+            <p className="text-base font-semibold">Soltar para adjuntar</p>
+            <p className="text-xs leading-5 text-muted-foreground">
+              PDF, Word, Excel, PowerPoint, imágenes y datos hasta 50 MB.
+            </p>
           </div>
         </div>
       )}
@@ -5894,15 +6915,52 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         </button>
       )}
 
+      <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Agregar enlace</DialogTitle>
+            <DialogDescription>
+              El enlace quedará en el mensaje y se usará con búsqueda web activa.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Input
+              value={linkInput}
+              onChange={(event) => setLinkInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addLinkToComposer();
+                }
+              }}
+              placeholder="https://..."
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button type="button" onClick={addLinkToComposer}>
+              Agregar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div ref={splitContainerRef} className="flex flex-1 overflow-hidden w-full relative">
         {/* Left pane — chat. When a right-side tool panel is active we
             share width with it via the resizable divider; otherwise we
             take the full container. min-w-0 so children can shrink. */}
         <div
           style={rightPanelActive
-            ? { width: `${splitRatio}%`, transition: isDraggingSplit ? undefined : 'width 300ms ease' }
+            ? {
+                flex: '1 1 auto',
+                minWidth: SPLIT_LEFT_MIN_PX,
+                transition: isDraggingSplit ? undefined : 'flex-basis 300ms ease',
+              }
             : undefined}
-          className={`relative flex flex-col h-full min-w-0 overflow-hidden ${rightPanelActive ? 'shrink-0' : 'w-full'}`}
+          className={`relative flex flex-col h-full min-w-0 overflow-hidden ${rightPanelActive ? '' : 'w-full'}`}
         >
           {/* Header */}
           <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-4  backdrop-blur-sm ">
@@ -5925,6 +6983,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       setSelectedProvider={setSelectedProivder}
                       chatTypes={chatType}
                       currentChat={currentChat}
+                      setCurrentChat={setCurrentChat}
                     />
                   </>
                 ) : (
@@ -6111,6 +7170,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       restoreLongPasteToInput={restoreLongPasteToInput}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+                    <LinkContextDisplay
+                      links={detectedLinks}
+                      removeLink={removeDetectedLink}
+                      isWebSearchActive={isWebSearchActive}
+                      setIsWebSearchActive={setIsWebSearchActive}
+                    />
                     {/* Tool pills used to live ABOVE the input; moved to
                         a secondary row BELOW the input (see after the
                         TooltipProvider) so the top surface is dedicated
@@ -6152,6 +7217,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleWordConnectorToggle={handleWordConnectorToggle}
                           handleExcelConnectorToggle={handleExcelConnectorToggle}
                           closeAllToolsAndConnectors={closeAllToolsAndConnectors}
+                          onAddLinkRequest={() => setLinkDialogOpen(true)}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
@@ -6191,7 +7257,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                           : tComposer("placeholderDefault")
                           }
                           className={cn(
-                            "min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
+                            "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
                             "py-1.5 px-1",
                             "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
                             "placeholder:text-muted-foreground/65 placeholder:font-normal",
@@ -6472,6 +7538,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           restoreLongPasteToInput={restoreLongPasteToInput}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+                        <LinkContextDisplay
+                          links={detectedLinks}
+                          removeLink={removeDetectedLink}
+                          isWebSearchActive={isWebSearchActive}
+                          setIsWebSearchActive={setIsWebSearchActive}
+                        />
                         {/* Tool pills relocated below the input — see
                             the matching block after the TooltipProvider
                             closes. Top surface is reserved for drop-zone. */}
@@ -6511,6 +7583,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleWordConnectorToggle={handleWordConnectorToggle}
                               handleExcelConnectorToggle={handleExcelConnectorToggle}
                               closeAllToolsAndConnectors={closeAllToolsAndConnectors}
+                              onAddLinkRequest={() => setLinkDialogOpen(true)}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
@@ -6528,6 +7601,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               onKeyDown={handleKeyDown}
                               onKeyPress={handleKeyPress}
                               onPaste={handleClipboardPaste}
+                              onCompositionStart={() => { isComposingRef.current = true }}
+                              onCompositionEnd={() => { isComposingRef.current = false }}
                               placeholder={
                                 isImageGenerationActive
                                   ? tComposer("placeholderImage")
@@ -6702,7 +7777,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               </div>
             </div>
             <div
-              style={{ width: `${100 - splitRatio}%`, transition: isDraggingSplit ? undefined : 'width 300ms ease' }}
+              style={{
+                width: `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - splitRatio}%, 62%)`,
+                transition: isDraggingSplit ? undefined : 'width 300ms ease',
+              }}
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
               {activeSearchActivity && (

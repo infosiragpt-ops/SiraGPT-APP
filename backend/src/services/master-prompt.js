@@ -15,7 +15,10 @@
  */
 
 const { LANG_NAMES, buildSystemRule } = require('./language-policy');
-const { buildProjectPromptHeader } = require('./project-context');
+const {
+  buildProjectPromptHeader,
+  buildProjectKnowledgeBlock,
+} = require('./project-context');
 const {
   buildUserIntentAlignmentProfile,
   buildUserIntentAlignmentPrompt,
@@ -435,33 +438,7 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
     if (project.instructions) {
       body += `\n\n### Project instructions (follow these in every reply)\n${project.instructions}`;
     }
-    if (project.files && project.files.length > 0) {
-      // Cap per-file content so a 500-page PDF doesn't blow the prompt
-      // window. 12000 chars ≈ 3000 tokens per file is a reasonable
-      // ceiling that still gives the model strong grounding. Longer
-      // files get an explicit [truncated] marker so the model knows
-      // more material remains.
-      const PER_FILE_CAP = 12000;
-      const knowledge = project.files.map(f => {
-        const text = f.extractedText || '';
-        const truncated = text.length > PER_FILE_CAP
-          ? text.slice(0, PER_FILE_CAP) + '\n\n…[file truncated — full content exceeds prompt cap]'
-          : text;
-        return `### File: ${f.originalName}\n${truncated}`;
-      }).join('\n\n');
-      body += `\n\n## PROJECT FILES (authoritative — prefer these over your own prior knowledge when they conflict)\n${knowledge}`;
-    }
-
-    // Project memory — durable facts extracted from prior turns. We
-    // don't weight them as heavily as files (user preferences can
-    // shift; we'll re-extract on every turn) but they're surfaced to
-    // the model so it carries the project's history forward.
-    if (project.memories && project.memories.length > 0) {
-      const bullets = project.memories
-        .map(m => `- ${m.fact}`)
-        .join('\n');
-      body += `\n\n## PROJECT MEMORY (things the user has told you about this project)\n${bullets}`;
-    }
+    body += `\n\n${buildProjectKnowledgeBlock(project)}`;
   }
 
   body += intentContext;

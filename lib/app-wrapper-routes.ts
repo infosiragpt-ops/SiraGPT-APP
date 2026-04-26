@@ -1,4 +1,4 @@
-const CHAT_PAGES = ['/chat', '/gpts', '/projects', '/design', '/plan', '/profile', '/library', '/billing', '/settings', '/thesis', '/documents'] as const
+const CHAT_PAGES = ['/chat', '/gpts', '/parafraseo', '/projects', '/design', '/plan', '/profile', '/library', '/billing', '/settings', '/thesis', '/documents'] as const
 // /admin owns its full layout (own SidebarProvider + AdminSidebar in
 // app/admin/layout.tsx), so AppWrapper must render children as-is.
 // Injecting AppShell here would pull in AppSidebar, which calls

@@ -14,6 +14,12 @@ const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
 const longTermMemory = require('../services/long-term-memory');
 const artifactGenerator = require('../services/artifacts/artifact-generator');
+const {
+  streamGeneration: streamDesignGeneration,
+  extractHtml: extractDesignHtml,
+  qualityReportForHtml: qualityReportForDesignHtml,
+  shouldRepairDesign,
+} = require('../services/design-generator');
 const rag = require('../services/rag-service');
 const operationalRag = require('../services/rag/operational-runtime');
 const feedbackLedger = require('../services/agents/feedback-ledger');
@@ -154,6 +160,102 @@ function createProviderClient(provider) {
 function isDirectDeepSeekModel(modelName) {
   return /^deepseek-(v\d|chat|reasoner)/i.test(String(modelName || '').trim());
 }
+
+const PARAPHRASE_MODES = new Set(['standard', 'humanize', 'formal', 'academic', 'simple', 'creative', 'expand', 'shorten', 'custom']);
+
+function buildParaphraseInstructions({ mode, language, customInstruction }) {
+  const modeGuidance = {
+    standard: 'Reescribe con claridad, naturalidad y tono profesional, conservando la intención original.',
+    humanize: 'Haz que el texto suene humano, fluido y menos mecánico, sin exagerar ni añadir ideas no presentes.',
+    formal: 'Eleva el registro a un tono formal, sobrio y profesional.',
+    academic: 'Usa estilo académico claro, preciso y argumentativo, sin inventar citas ni referencias.',
+    simple: 'Simplifica el texto para máxima comprensión, manteniendo exactitud.',
+    creative: 'Dale una formulación más expresiva y atractiva, conservando el significado.',
+    expand: 'Amplía ligeramente las ideas para mejorar contexto y transición, sin inventar datos.',
+    shorten: 'Reduce y compacta el texto, manteniendo el mensaje central.',
+    custom: String(customInstruction || '').trim() || 'Aplica una paráfrasis profesional y natural.',
+  };
+
+  return [
+    'Eres un editor profesional especializado en paráfrasis humanizada.',
+    `Modo: ${mode}. ${modeGuidance[mode] || modeGuidance.standard}`,
+    `Idioma de salida: ${language || 'Español'}.`,
+    'Reglas estrictas:',
+    '- Devuelve únicamente el texto parafraseado; no expliques el proceso.',
+    '- Conserva nombres propios, cifras, fechas, términos técnicos y significado.',
+    '- No añadas información nueva, no inventes fuentes y no cambies la postura del texto.',
+    '- Mejora cohesión, ritmo, naturalidad, gramática y puntuación.',
+    '- Si el texto es muy corto, devuelve una versión natural y profesional sin rellenar artificialmente.',
+  ].join('\n');
+}
+
+router.post(
+  '/paraphrase',
+  [
+    body('text').isString().trim().isLength({ min: 1, max: 20000 }),
+    body('mode').optional().isString().trim().isLength({ min: 1, max: 40 }),
+    body('language').optional().isString().trim().isLength({ min: 2, max: 60 }),
+    body('customInstruction').optional().isString().trim().isLength({ max: 1000 }),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    if (!hasEnv('DEEPSEEK_API_KEY')) {
+      return res.status(503).json({ error: 'DeepSeek API key is not configured.' });
+    }
+
+    if (req.user.apiUsage >= req.user.monthlyLimit) {
+      return res.status(429).json({
+        error: 'Monthly API limit exceeded',
+        usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
+      });
+    }
+
+    const text = String(req.body.text || '').trim();
+    const requestedMode = String(req.body.mode || 'standard').trim().toLowerCase();
+    const mode = PARAPHRASE_MODES.has(requestedMode) ? requestedMode : 'standard';
+    const language = String(req.body.language || 'Español').trim();
+    const customInstruction = String(req.body.customInstruction || '').trim();
+    const model = 'deepseek-v4-pro';
+
+    try {
+      const openai = createProviderClient('DeepSeek');
+      const completion = await openai.chat.completions.create({
+        model,
+        temperature: mode === 'creative' || mode === 'humanize' ? 0.7 : 0.35,
+        max_tokens: Math.min(4096, Math.max(700, Math.ceil(text.length * 1.6))),
+        messages: [
+          { role: 'system', content: buildParaphraseInstructions({ mode, language, customInstruction }) },
+          { role: 'user', content: text },
+        ],
+      });
+
+      const output = String(completion.choices?.[0]?.message?.content || '').trim();
+      if (!output) return res.status(502).json({ error: 'DeepSeek returned an empty paraphrase.' });
+
+      const totalTokens = completion.usage?.total_tokens || Math.ceil((text.length + output.length) / 4);
+      try {
+        await usageService.recordUsage(req.user.id, model, totalTokens, totalTokens * 0.001);
+      } catch (usageErr) {
+        console.warn('[paraphrase] usage tracking failed:', usageErr?.message);
+      }
+
+      return res.json({
+        success: true,
+        text: output,
+        model,
+        mode,
+        language,
+        usage: completion.usage || { total_tokens: totalTokens },
+      });
+    } catch (error) {
+      console.error('[paraphrase] DeepSeek error:', error?.message || error);
+      return res.status(500).json({ error: error?.message || 'Paraphrase failed' });
+    }
+  }
+);
 
 // ✅ Get available AI models
 router.get('/models', async (req, res) => {
@@ -541,10 +643,14 @@ router.post(
       console.log(`Stream registered with ID: ${streamId}`);
     }
 
-    // Agar client connection close karta hai, toh AI generation ko bhi abort karein
-    req.on('close', () => {
-      console.log(`Client connection closed for chat: ${req.body.chatId}. Aborting AI generation.`);
-      controller.abort();
+    // Abort only when the response stream is actually closed by the
+    // client. `req.close` can fire after the request body is consumed,
+    // which aborts healthy SSE generations before the model emits.
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        console.log(`Client response closed for chat: ${req.body.chatId}. Aborting AI generation.`);
+        controller.abort();
+      }
     });
     req.on('aborted', () => {
       console.log(`Client request aborted for chat: ${req.body.chatId}. Aborting AI generation.`);
@@ -684,6 +790,17 @@ router.post(
                   take: 30,
                   select: { fact: true, createdAt: true },
                 },
+                documents: {
+                  orderBy: { updatedAt: 'desc' },
+                  take: 40,
+                  select: {
+                    id: true,
+                    title: true,
+                    content: true,
+                    updatedAt: true,
+                  },
+                },
+                _count: { select: { files: true, chats: true, memories: true, documents: true } },
               }
             }
           }
@@ -691,12 +808,12 @@ router.post(
 
         if (chat && chat.project) {
           project = chat.project;
-          console.log(`📁 Using Project: ${project.name} (${project.files?.length || 0} files, ${project.memories?.length || 0} memories)`);
+          console.log(`📁 Using Project: ${project.name} (${project.files?.length || 0} files, ${project.documents?.length || 0} documents, ${project.memories?.length || 0} memories)`);
         }
 
         if (chat && chat.customGpt) {
           customGpt = chat.customGpt;
-          actualModel = customGpt.modelName || model;
+          actualModel = chat.model || customGpt.modelName || model;
           actualTemperature = customGpt.temperature || 0.7;
 
           // ✅ Provider detection logic merged here
@@ -3557,10 +3674,14 @@ router.post(
       console.log(`Web Dev Stream registered with ID: ${streamId}`);
     }
 
-    // Handle client disconnection
-    req.on('close', () => {
-      console.log(`Client connection closed for web dev chat: ${req.body.chatId}. Aborting generation.`);
-      controller.abort();
+    // Handle client disconnection. Use response close, not request
+    // close, otherwise Node may abort after the body is read while the
+    // SSE response is still valid.
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        console.log(`Client response closed for web dev chat: ${req.body.chatId}. Aborting generation.`);
+        controller.abort();
+      }
     });
     req.on('aborted', () => {
       console.log(`Client request aborted for web dev chat: ${req.body.chatId}. Aborting generation.`);
@@ -3732,7 +3853,7 @@ Every element should feel intentionally designed, polished, and premium. The use
 
           // Build content array with text and images
           const contentArray = [
-            { type: 'text', text: prompt }
+            { type: 'text', text: displayPrompt }
           ];
 
           // Add all images to the content
@@ -3751,13 +3872,13 @@ Every element should feel intentionally designed, polished, and premium. The use
         } else {
           messages.push({
             role: 'user',
-            content: prompt
+            content: displayPrompt
           });
         }
       } else {
         messages.push({
           role: 'user',
-          content: prompt
+          content: displayPrompt
         });
       }
 
@@ -3769,15 +3890,67 @@ Every element should feel intentionally designed, polished, and premium. The use
       res.flushHeaders();
 
       let fullResponseContent = '';
+      const keepAlive = setInterval(() => {
+        try {
+          res.write(`: webdev-validating ${Date.now()}\n\n`);
+        } catch {
+          // Socket may already be closed by the browser.
+        }
+      }, 15000);
+
       try {
-        fullResponseContent = await aiService.generateStream({
-          provider: provider,
-          model: model,
+        const bufferedRes = {
+          write(payload) {
+            // Intentionally buffer provider output instead of streaming raw HTML.
+            // The chat should only receive a validated, renderable artifact.
+            return typeof payload === 'string';
+          }
+        };
+
+        const firstPass = await aiService.generateStream({
+          provider,
+          model,
           messages,
-          res,
+          res: bufferedRes,
           signal,
-          files: processedFiles
+          files: processedFiles,
+          userPrompt: displayPrompt,
+          qualityGuard: false,
         });
+
+        let candidateHtml = extractDesignHtml(firstPass);
+        let quality = qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
+
+        if (!candidateHtml || shouldRepairDesign(quality, 'balanced')) {
+          const fileContext = processedFiles.length
+            ? `\n\nReference files provided by the user:\n${processedFiles.map(file => `- ${file.name || 'file'} (${file.mimeType || 'unknown'})`).join('\n')}`
+            : '';
+          const designInstruction = `${displayPrompt}${fileContext}\n\nBuild a complete, visible, premium, responsive single-file website. The final answer must be a full HTML document with meaningful visible content, semantic sections, headings, responsive layout, and working vanilla-JS interactions.`;
+
+          for await (const event of streamDesignGeneration(null, {
+            instruction: designInstruction,
+            kind: 'other',
+            fidelity: 'high',
+            effort: 'thorough',
+            model,
+            signal,
+          })) {
+            if (event.final) {
+              candidateHtml = event.full;
+              quality = event.quality || qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
+            }
+          }
+        }
+
+        const finalQuality = quality || qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
+        if (!candidateHtml || !finalQuality.passed) {
+          const failed = finalQuality?.issues?.map(issue => issue.id).join(', ') || 'empty_artifact';
+          throw new Error(`Web artifact validation failed before delivery: ${failed}`);
+        }
+
+        fullResponseContent = `\`\`\`html\n${candidateHtml}\n\`\`\``;
+        res.write(`data: ${JSON.stringify({ content: fullResponseContent })}\n\n`);
+        res.write(`data: [DONE]\n\n`);
       } catch (apiError) {
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
           console.warn('Web Dev AI Service stream aborted by client in route.');
@@ -3785,9 +3958,11 @@ Every element should feel intentionally designed, polished, and premium. The use
         }
         console.error('Web Dev AI Service stream failed in route:', apiError.message);
         throw apiError;
+      } finally {
+        clearInterval(keepAlive);
       }
 
-      const tokens = fullResponseContent.length + prompt.length;
+      const tokens = fullResponseContent.length + displayPrompt.length;
 
       // Save chat and track usage in background
       if (fullResponseContent.trim()) {

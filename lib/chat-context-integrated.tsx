@@ -4,7 +4,7 @@ import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
-import { aiService, buildProfessionalCapabilityPrompt, type ChatIntent } from "./ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, shouldAnswerFromExistingDocument, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
@@ -60,6 +60,49 @@ const normalizeMessageAttachment = (file: any) => {
   };
 };
 
+const DOCUMENT_CONTEXT_EXT_RE = /\.(?:docx?|pdf|xlsx?|csv|pptx?|txt|md)$/i;
+const DOCUMENT_CONTEXT_MIME_RE =
+  /(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-|vnd\.oasis\.opendocument)|text\/(?:plain|markdown|csv)|application\/csv)/i;
+
+const parseMessageFiles = (files: any): any[] => {
+  if (!files) return [];
+  if (Array.isArray(files)) return files;
+  if (typeof files === 'string') {
+    try {
+      const parsed = JSON.parse(files);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const isDocumentContextAttachment = (file: any) => {
+  if (!file) return false;
+  if (typeof file === 'string') return DOCUMENT_CONTEXT_EXT_RE.test(file);
+  const mimeType = String(file.mimeType || file.type || file.contentType || '');
+  const name = String(file.name || file.originalName || file.filename || file.path || '');
+  if (mimeType.startsWith('image/') || file.type === 'image') return false;
+  return DOCUMENT_CONTEXT_EXT_RE.test(name) || DOCUMENT_CONTEXT_MIME_RE.test(mimeType);
+};
+
+const collectRecentDocumentContextIds = (messages: any[] = []) => {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const message of [...messages].reverse()) {
+    for (const file of parseMessageFiles(message?.files)) {
+      if (!isDocumentContextAttachment(file)) continue;
+      const id = resolveAttachmentId(file);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+      if (ids.length >= 4) return ids;
+    }
+  }
+  return ids;
+};
+
 interface Message {
   id: string
   chatId: string
@@ -107,6 +150,34 @@ interface Chat {
   messages: Message[]
   customGptId?: string
   projectId?: string | null
+  project?: {
+    id: string
+    name: string
+    description?: string | null
+    instructions?: string | null
+    isStarred?: boolean
+    shareId?: string | null
+    createdAt?: string
+    updatedAt?: string
+    files?: Array<{
+      id: string
+      originalName: string
+      mimeType: string
+      size: number
+      createdAt?: string
+    }>
+    documents?: Array<{
+      id: string
+      title: string
+      updatedAt?: string
+    }>
+    _count?: {
+      files: number
+      chats: number
+      memories: number
+      documents: number
+    }
+  } | null
   customGpt?: {
     id: string
     name: string
@@ -117,6 +188,8 @@ interface Chat {
     conversationStarters?: string[]
     modelName?: string
     temperature?: number
+    visibility?: string
+    shareId?: string
     knowledgeFiles?: Array<{
       id: string
       originalName: string
@@ -138,7 +211,7 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; initialIntent?: ChatIntent }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => Promise<void>
@@ -421,6 +494,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const normalizedFileIds = displayFiles
         .map(resolveAttachmentId)
         .filter((id): id is string => Boolean(id));
+      const conversationForRouting = activeChat?.messages || currentChat?.messages || [];
+      const historicalDocumentFileIds = normalizedFileIds.length === 0 && shouldAnswerFromExistingDocument(content, conversationForRouting)
+        ? collectRecentDocumentContextIds(conversationForRouting)
+        : [];
+      const requestFileIds = normalizedFileIds.length > 0 ? normalizedFileIds : historicalDocumentFileIds;
 
       // STEP 1: User ka message UI mein dikhayein (agar already nahi dikhaya gaya)
       if (!skipUserMessage) {
@@ -467,7 +545,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Reset pending stop state
       setPendingStop(false);
       try {
-        const intent = intentOverride || await aiService.classifyIntent(content, activeChat?.messages || currentChat?.messages || []);
+        const intent = intentOverride || await aiService.classifyIntent(content, conversationForRouting);
         const professionalPrompt = buildProfessionalCapabilityPrompt(intent, content);
         console.log('intent', intent);
 
@@ -616,7 +694,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               prompt: content,
               chatId: activeChat.id,
               model: selectedModel,
-              fileIds: normalizedFileIds,
+              fileIds: requestFileIds,
             });
             await apiClient.generateDocStream(
               docRequest,
@@ -937,7 +1015,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               model: selectedModel,
               prompt: content,
               chatId: activeChat.id,
-              files: normalizedFileIds,
+              files: requestFileIds,
               streamId: streamId,
             },
             (chunk) => {
@@ -1140,7 +1218,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; initialIntent?: ChatIntent }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent }
   ) => {
     if (!user || !token || !selectedModel) return;
     setChatType(type);
@@ -1150,6 +1228,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         model: selectedModel,
         isWordConnectorChat: options?.isWordConnectorChat || false,
         isExcelConnectorChat: options?.isExcelConnectorChat || false,
+        projectId: options?.projectId,
       });
       const newChat = response.chat;
       newChat.messages = [];

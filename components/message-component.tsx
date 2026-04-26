@@ -4,7 +4,7 @@ import * as React from "react"
 import { useState, useEffect, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { cn } from "@/lib/utils"
+import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
 import { AgenticStepsRenderer } from "@/components/agentic-steps"
@@ -2225,43 +2225,16 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                         onClick={async () => {
                                                             try {
                                                                 if (!resolvedDownloadUrl) throw new Error('Missing download URL');
-                                                                if (resolvedDownloadUrl.startsWith('data:') || resolvedDownloadUrl.startsWith('blob:')) {
-                                                                    const a = document.createElement('a');
-                                                                    a.href = resolvedDownloadUrl;
-                                                                    a.download = fileName;
-                                                                    document.body.appendChild(a);
-                                                                    a.click();
-                                                                    document.body.removeChild(a);
-                                                                    toast.success('Descarga iniciada');
-                                                                    return;
-                                                                }
                                                                 const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-                                                                const response = await fetch(resolvedDownloadUrl, {
+                                                                await downloadUrlAsFile(resolvedDownloadUrl, fileName, {
                                                                     credentials: 'include',
                                                                     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
                                                                 });
-                                                                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                                                                const blob = await response.blob();
-                                                                const url = window.URL.createObjectURL(blob);
-                                                                const a = document.createElement('a');
-                                                                a.href = url;
-                                                                a.download = fileName;
-                                                                document.body.appendChild(a);
-                                                                a.click();
-                                                                window.URL.revokeObjectURL(url);
-                                                                document.body.removeChild(a);
                                                                 toast.success('Descarga iniciada');
                                                             } catch (error) {
                                                                 console.error('Download error:', error);
                                                                 if (resolvedDownloadUrl) {
-                                                                    const a = document.createElement('a');
-                                                                    a.href = resolvedDownloadUrl;
-                                                                    a.download = fileName;
-                                                                    a.target = '_blank';
-                                                                    a.rel = 'noopener';
-                                                                    document.body.appendChild(a);
-                                                                    a.click();
-                                                                    document.body.removeChild(a);
+                                                                    downloadHref(resolvedDownloadUrl, fileName);
                                                                 } else {
                                                                     toast.error('No se pudo descargar');
                                                                 }

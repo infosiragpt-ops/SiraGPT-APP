@@ -32,6 +32,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
+import { downloadUrlAsFile } from "@/lib/utils"
 
 interface DocFile {
   type: "doc"
@@ -116,12 +117,9 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
     if (anyPreview) setPreviewOpen(v => !v)
   }
 
-  function download() {
+  async function download() {
     if (!available) return
-    const a = document.createElement("a")
-    a.href = doc.dataUrl as string
-    a.download = doc.filename
-    document.body.appendChild(a); a.click(); a.remove()
+    await downloadUrlAsFile(doc.dataUrl as string, doc.filename)
   }
 
   const Icon = meta.Icon

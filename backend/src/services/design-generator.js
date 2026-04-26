@@ -218,8 +218,12 @@ function qualityReportForHtml(html, { kind = 'prototype', fidelity = 'high' } = 
   const lower = source.toLowerCase();
   const issues = [];
   const warnings = [];
-  const addIssue = (id, message) => issues.push({ id, message });
-  const addWarning = (id, message) => warnings.push({ id, message });
+  const addIssue = (id, message) => {
+    if (!issues.some(issue => issue.id === id)) issues.push({ id, message });
+  };
+  const addWarning = (id, message) => {
+    if (!warnings.some(warning => warning.id === id)) warnings.push({ id, message });
+  };
 
   if (!/^\s*<!doctype\s+html/i.test(source)) addIssue('missing_doctype', 'Document must start with <!DOCTYPE html>.');
   if (!/<html[\s>]/i.test(source) || !/<\/html>/i.test(source)) addIssue('missing_html_root', 'Document must include a complete <html> root.');
@@ -229,6 +233,44 @@ function qualityReportForHtml(html, { kind = 'prototype', fidelity = 'high' } = 
   if (/```/.test(source)) addIssue('markdown_fence', 'Output must not contain markdown fences.');
   if (/(lorem ipsum|todo:|insert your|replace this|your logo here|coming soon placeholder)/i.test(source)) {
     addIssue('placeholder_copy', 'Document contains placeholder copy instead of realistic content.');
+  }
+
+  const bodyMatch = source.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  const bodySource = bodyMatch ? bodyMatch[1] : '';
+  const bodyWithoutNoise = bodySource
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+  const visibleText = bodyWithoutNoise
+    .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&[a-z0-9#]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const semanticSectionCount = (bodySource.match(/<(main|section|header|nav|article|aside|footer)\b/gi) || []).length;
+  const headingCount = (bodySource.match(/<h[1-6]\b/gi) || []).length;
+  const renderableMediaCount = (bodySource.match(/<(img|svg|canvas|video|picture)\b/gi) || []).length;
+  const meaningfulCardSignals = (bodySource.match(/class=["'][^"']*(card|grid|hero|feature|product|service|panel|dashboard|gallery|testimonial)[^"']*["']/gi) || []).length;
+
+  if (/<body\b[^>]*style=["'][^"']*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0)/i.test(source)
+      || /<(main|section|article)\b[^>]*style=["'][^"']*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0)/i.test(source)) {
+    addIssue('blank_or_invisible_page', 'Primary page content appears hidden or fully transparent.');
+  }
+  if (bodyMatch && bodySource.trim().length < 40) {
+    addIssue('empty_body', 'Document body is effectively empty.');
+  }
+  if (bodyMatch && visibleText.length < 80 && renderableMediaCount === 0 && meaningfulCardSignals === 0) {
+    addIssue('empty_body', 'Document has no meaningful visible text or renderable content.');
+  }
+  if (bodyMatch && fidelity !== 'wireframe' && semanticSectionCount === 0 && meaningfulCardSignals === 0) {
+    addIssue('missing_visible_structure', 'Document needs semantic page structure, not a blank or unstructured canvas.');
+  }
+  if (bodyMatch && fidelity !== 'wireframe' && headingCount === 0) {
+    addIssue('missing_heading', 'Document needs at least one visible heading that anchors the experience.');
+  }
+  if (bodyMatch && fidelity !== 'wireframe' && visibleText.length < 180) {
+    addWarning('low_content_density', 'Visible body copy is thin for a complete professional page.');
   }
 
   const hasScript = /<script[\s>]/i.test(source);
@@ -261,6 +303,13 @@ function qualityReportForHtml(html, { kind = 'prototype', fidelity = 'high' } = 
     score,
     issues,
     warnings,
+    metrics: {
+      bodyLength: bodySource.length,
+      visibleTextLength: visibleText.length,
+      semanticSectionCount,
+      headingCount,
+      renderableMediaCount,
+    },
   };
 }
 

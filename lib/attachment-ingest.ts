@@ -41,7 +41,7 @@ const ALLOWED_MIMES = new Set<string>([
   "application/vnd.oasis.opendocument.text",
   "application/vnd.oasis.opendocument.spreadsheet",
   "application/vnd.oasis.opendocument.presentation",
-  "text/plain", "text/csv", "text/markdown",
+  "text/plain", "text/csv", "text/tab-separated-values", "text/markdown",
   "text/html", "text/xml", "application/xml",
   "application/json",
   "application/rtf", "text/rtf",
@@ -57,7 +57,7 @@ const ALLOWED_EXTENSIONS = new Set<string>([
   "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
   "odt", "ods", "odp",
   // Text
-  "txt", "md", "markdown", "csv", "rtf",
+  "txt", "md", "markdown", "csv", "tsv", "rtf",
   // Web/structured
   "html", "htm", "json", "xml",
   // Email
@@ -168,6 +168,7 @@ function guessExtFromMime(mime: string): string | null {
   if (m === "text/plain") return "txt"
   if (m === "text/markdown") return "md"
   if (m === "text/csv") return "csv"
+  if (m === "text/tab-separated-values") return "tsv"
   if (m === "text/html") return "html"
   if (m === "application/json") return "json"
   if (m === "application/xml" || m === "text/xml") return "xml"

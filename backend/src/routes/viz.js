@@ -77,7 +77,12 @@ router.post(
 
     const controller = new AbortController();
     let clientGone = false;
-    req.on('close', () => { clientGone = true; controller.abort(); });
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        clientGone = true;
+        controller.abort();
+      }
+    });
     const heartbeat = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 15_000);
 
     send({ type: 'stage', label: 'Preparando generador', pct: 1 });

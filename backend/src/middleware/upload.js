@@ -46,7 +46,7 @@ const ALLOWED_MIMES = new Set([
   'application/vnd.oasis.opendocument.spreadsheet',
   'application/vnd.oasis.opendocument.presentation',
   // Plain text + structured text
-  'text/plain', 'text/csv', 'text/markdown',
+  'text/plain', 'text/csv', 'text/tab-separated-values', 'text/markdown',
   'text/html', 'text/xml', 'application/xml',
   'application/json',
   'application/rtf', 'text/rtf',
@@ -68,7 +68,7 @@ const ALLOWED_EXTENSIONS = new Set([
   'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
   'odt', 'ods', 'odp',
   // Text
-  'txt', 'md', 'markdown', 'csv', 'rtf',
+  'txt', 'md', 'markdown', 'csv', 'tsv', 'rtf',
   // Web/structured
   'html', 'htm', 'json', 'xml',
   // Email

@@ -31,6 +31,47 @@ const hasFiles = (value: unknown) => {
   }
 };
 
+const parseFilesArray = (value: unknown): unknown[] => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const hasRichFileMetadata = (value: unknown) =>
+  parseFilesArray(value).some((file) => {
+    if (!file || typeof file !== 'object') return false;
+    const f = file as Record<string, unknown>;
+    return Boolean(
+      f.name ||
+      f.originalName ||
+      f.filename ||
+      f.mimeType ||
+      f.contentType ||
+      f.type ||
+      f.url ||
+      f.path ||
+      f.preview ||
+      f.thumbnailUrl ||
+      f.extractedText
+    );
+  });
+
+const shouldPreserveLocalFiles = (incomingFiles: unknown, localFiles: unknown) => {
+  if (!hasFiles(localFiles)) return false;
+  if (!hasFiles(incomingFiles)) return true;
+
+  // Some backend refreshes return only file ids after upload. That is enough
+  // for model context, but not enough for the UI to render image thumbnails,
+  // document chips, previews, or extracted text. Keep the richest version that
+  // was already visible in the local optimistic message.
+  return hasRichFileMetadata(localFiles) && !hasRichFileMetadata(incomingFiles);
+};
+
 /**
  * Backend refreshes can race with optimistic UI updates or return partial
  * records after tool pipelines. User turns are source-of-truth for the UI:
@@ -99,7 +140,7 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
       next.content = localText as TMessage['content'];
     }
 
-    if (!hasFiles(next.files) && hasFiles(localMatch.files)) {
+    if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
       next.files = localMatch.files as TMessage['files'];
     }
 

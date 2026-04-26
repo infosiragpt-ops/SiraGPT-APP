@@ -24,7 +24,7 @@ import { describe, it } from "node:test"
  * original bug in CI.
  */
 
-const DOC_REGEX = /\[CREATE_DOCUMENT:(?<filename>[^\]]+)\](?<content>[\s\S]*?)\[\/CREATE_DOCUMENT\]/
+const DOC_REGEX = /\[CREATE_DOCUMENT:([^\]]+)\]([\s\S]*?)\[\/CREATE_DOCUMENT\]/
 const MIN_VISIBLE_CHARS = 5
 
 type Result = { finalContent: string; didCreateFile: boolean }
@@ -44,11 +44,11 @@ function processDocumentTurn(
   let didCreateFile = false
 
   const docMatch = fullResponseContent.match(DOC_REGEX)
-  if (!docMatch || !docMatch.groups) {
+  if (!docMatch) {
     return { finalContent, didCreateFile }
   }
 
-  const { filename, content } = docMatch.groups as { filename: string; content: string }
+  const [, filename, content] = docMatch
   const chatContent = content.trim()
 
   const stripped = fullResponseContent.replace(DOC_REGEX, "").trim()

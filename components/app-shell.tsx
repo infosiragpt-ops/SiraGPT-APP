@@ -20,7 +20,7 @@ export function AppShell({ children }: AppShellProps) {
     <AuthGuard>
       <div className="flex h-screen w-full">
         <AppSidebar />
-        <SidebarInset className="flex-1">
+        <SidebarInset className="min-w-0 flex-1">
           {/* Bridges window-level tool-activation events into
               setOpen(false) on the VISIBLE sidebar's provider. Must
               live here because this level's useSidebar() resolves to

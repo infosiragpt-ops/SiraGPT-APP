@@ -54,6 +54,7 @@ const categories = [
   { name: "Productivity", icon: <Briefcase className="w-4 h-4" /> },
   { name: "Programming", icon: <Code className="w-4 h-4" /> },
   { name: "Design", icon: <Palette className="w-4 h-4" /> },
+  { name: "DALL·E", icon: <ImageIcon className="w-4 h-4" /> },
   { name: "Research & Analysis", icon: <Search className="w-4 h-4" /> },
   { name: "Education", icon: <BookOpen className="w-4 h-4" /> },
   { name: "Data Analysis", icon: <Users className="w-4 h-4" /> },
@@ -94,6 +95,7 @@ export default function CreateGPTPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const editId = searchParams.get('edit')
+  const categoryParam = searchParams.get('category')
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -139,6 +141,12 @@ export default function CreateGPTPage() {
       loadGPTForEdit(editId)
     }
   }, [editId])
+
+  useEffect(() => {
+    if (!editId && categoryParam && !formData.category) {
+      setFormData(prev => ({ ...prev, category: categoryParam }))
+    }
+  }, [categoryParam, editId, formData.category])
 
   const loadGPTForEdit = async (gptId: string) => {
     setIsLoading(true)

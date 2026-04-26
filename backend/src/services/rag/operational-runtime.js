@@ -41,14 +41,17 @@ function isImageFile(file) {
 }
 
 function sourceIdForFile(file) {
+  if (file?.sourceType === 'project-document' && file?.id) return `project-document:${file.id}`;
+  if (file?.sourceType === 'project-file' && file?.id) return `project-file:${file.id}`;
   if (file?.id) return `file:${file.id}`;
   const name = file?.originalName || file?.name || file?.filename || 'file';
-  const text = file?.extractedText || '';
-  return `file:${hashShort(`${name}:${text.slice(0, 2000)}`)}`;
+  const text = file?.extractedText || file?.content || '';
+  const prefix = file?.sourceType || 'file';
+  return `${prefix}:${hashShort(`${name}:${text.slice(0, 2000)}`)}`;
 }
 
 function titleForFile(file) {
-  return file?.originalName || file?.name || file?.filename || 'Untitled file';
+  return file?.originalName || file?.title || file?.name || file?.filename || 'Untitled file';
 }
 
 function collectionFor({ project, customGpt, chatId, fallbackSeed }) {
@@ -63,7 +66,10 @@ function normaliseDocs(files = []) {
   return files
     .filter(file => file && !isImageFile(file))
     .map(file => {
-      const raw = typeof file.extractedText === 'string' ? file.extractedText.trim() : '';
+      const rawSource = typeof file.extractedText === 'string'
+        ? file.extractedText
+        : (typeof file.content === 'string' ? file.content : '');
+      const raw = rawSource.trim();
       if (raw.length < MIN_DOC_CHARS) return null;
       const truncated = raw.length > MAX_DOC_CHARS;
       return {
@@ -515,8 +521,18 @@ async function buildRuntimeContext({
 } = {}) {
   const currentDocs = normaliseDocs(processedFiles);
   const projectDocs = normaliseDocs(project?.files || []);
+  const projectDocumentDocs = normaliseDocs(
+    (Array.isArray(project?.documents) ? project.documents : []).map(doc => ({
+      id: doc.id,
+      sourceType: 'project-document',
+      originalName: doc.title,
+      mimeType: 'text/markdown',
+      extractedText: doc.content,
+      updatedAt: doc.updatedAt,
+    })),
+  );
   const customGptDocs = normaliseDocs(customGpt?.knowledgeFiles || []);
-  const docs = dedupeDocs([...currentDocs, ...projectDocs, ...customGptDocs]);
+  const docs = dedupeDocs([...currentDocs, ...projectDocs, ...projectDocumentDocs, ...customGptDocs]);
   const mustUseCustomGptKnowledge = shouldForceCustomGptKnowledge(prompt, customGptDocs);
   if (!userId || (!shouldRunForPrompt(prompt, docs) && !mustUseCustomGptKnowledge)) {
     return { active: false, reason: 'not needed', docs: [], hits: [], contextBlock: '' };

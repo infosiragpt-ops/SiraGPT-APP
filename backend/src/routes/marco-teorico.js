@@ -79,7 +79,9 @@ router.post(
     // so we stop any in-flight CrossRef / LLM calls instead of
     // wasting tokens after the user closed the tab.
     const controller = new AbortController();
-    req.on('close', () => controller.abort());
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 

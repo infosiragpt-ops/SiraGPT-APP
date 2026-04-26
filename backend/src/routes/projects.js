@@ -215,6 +215,16 @@ router.get('/:id/context', param('id').isString(), async (req, res) => {
             createdAt: true,
           },
         },
+        documents: {
+          select: {
+            id: true,
+            title: true,
+            content: true,
+            updatedAt: true,
+          },
+          orderBy: { updatedAt: 'desc' },
+          take: 50,
+        },
         _count: { select: { files: true, chats: true, memories: true, documents: true } },
       },
     });

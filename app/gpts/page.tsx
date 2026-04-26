@@ -1,42 +1,24 @@
 "use client"
 
 import * as React from "react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
+  ArrowLeft,
+  ArrowRight,
   Bot,
-  BookOpen,
-  Brain,
-  Briefcase,
-  CheckCircle2,
   Code,
   Copy,
-  Database,
   Edit,
-  FileText,
-  Gamepad2,
-  Globe,
-  Heart,
-  Layers3,
-  Loader2,
-  Lock,
-  MessageSquare,
-  Palette,
+  GraduationCap,
   Plus,
   Search,
-  Share2,
-  ShieldCheck,
   Sparkles,
-  Star,
   Trash2,
-  TrendingUp,
-  Users,
-  Wand2,
+  Video,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { SidebarTrigger } from "@/components/ui/sidebar"
 import {
   Dialog,
   DialogContent,
@@ -51,37 +33,87 @@ import { toast } from "sonner"
 import { gptsService, type CustomGPT, type GPTFilters } from "@/lib/gpts-service"
 import { useChat } from "@/lib/chat-context-integrated"
 
-type CategoryOption = {
-  value: string
-  label: string
-  icon: React.ComponentType<{ className?: string }>
-}
-
 type VisibilityFilter = "all" | "mine" | "public"
 
-const categories: CategoryOption[] = [
-  { value: "All", label: "Todo", icon: Sparkles },
-  { value: "Trending", label: "Tendencia", icon: TrendingUp },
-  { value: "Writing", label: "Escritura", icon: BookOpen },
-  { value: "Productivity", label: "Productividad", icon: Briefcase },
-  { value: "Programming", label: "Programación", icon: Code },
-  { value: "Design", label: "Diseño", icon: Palette },
-  { value: "Research & Analysis", label: "Investigación", icon: Search },
-  { value: "Education", label: "Educación", icon: BookOpen },
-  { value: "Data Analysis", label: "Datos", icon: Database },
-  { value: "Lifestyle", label: "Lifestyle", icon: Heart },
-  { value: "Entertainment", label: "Entretenimiento", icon: Gamepad2 },
-  { value: "Marketing", label: "Marketing", icon: TrendingUp },
-  { value: "Finance", label: "Finanzas", icon: Users },
-  { value: "Health & Fitness", label: "Salud", icon: Heart },
-  { value: "Travel", label: "Viajes", icon: Globe },
-  { value: "Other", label: "Otros", icon: Star },
+type StoreCategory = {
+  value: string
+  label: string
+}
+
+type StoreCard = {
+  id: string
+  title: string
+  description: string
+  author: string
+  category: string
+  rating?: string
+  icon: React.ReactNode
+  source?: CustomGPT
+}
+
+const storeCategories: StoreCategory[] = [
+  { value: "All", label: "Principales selecciones" },
+  { value: "Education", label: "Educación" },
+  { value: "Productivity", label: "Productividad" },
+  { value: "Research & Analysis", label: "Investigación y análisis" },
+  { value: "Writing", label: "Escritura" },
+  { value: "Lifestyle", label: "Estilo de vida" },
+  { value: "DALL·E", label: "DALL·E" },
+  { value: "Programming", label: "Programación" },
+  { value: "Design", label: "Diseño" },
+  { value: "Marketing", label: "Marketing" },
 ]
 
-const visibilityOptions: Array<{ value: VisibilityFilter; label: string }> = [
-  { value: "all", label: "Todos" },
-  { value: "mine", label: "Mis GPTs" },
-  { value: "public", label: "Públicos" },
+const curatedStoreCards: StoreCard[] = [
+  {
+    id: "curated-video-ai",
+    title: "Video AI by invideo",
+    description: "AI video maker GPT (Supercharged with Sora 2) - generate engaging videos with scripts, scenes and assets.",
+    author: "Por invideo.io",
+    category: "DALL·E",
+    rating: "4.0 ★",
+    icon: <Video className="h-9 w-9 text-black" />,
+  },
+  {
+    id: "curated-expedia",
+    title: "Expedia",
+    description: "Bring your trip plans to life — get there, stay there, find things to see and do.",
+    author: "Por expedia.com",
+    category: "Lifestyle",
+    icon: <ArrowRight className="h-12 w-12 text-[#171a3f]" />,
+  },
+  {
+    id: "curated-canva",
+    title: "Canva",
+    description: "Effortlessly design anything: presentations, logos, social media posts and more.",
+    author: "Por community builder",
+    category: "Design",
+    icon: <span className="font-serif text-6xl italic leading-none text-white">C</span>,
+  },
+  {
+    id: "curated-scholar",
+    title: "Scholar GPT",
+    description: "Enhance research with 200M+ resources and built-in critical reading skills. Access Google Scholar, PubMed, bioRxiv, arXiv...",
+    author: "Por awesomegpts.ai",
+    category: "Research & Analysis",
+    icon: <GraduationCap className="h-9 w-9 text-white" />,
+  },
+  {
+    id: "curated-fitness",
+    title: "Fitness, Workout & Diet - PhD Coach",
+    description: "IMPROVE QUICKLY. Receive turn-key fitness and workout support plus advanced diet advice.",
+    author: "Por Newgen PhD",
+    category: "Health & Fitness",
+    icon: <span className="text-4xl font-bold text-white">P</span>,
+  },
+  {
+    id: "curated-code",
+    title: "Code Copilot Studio",
+    description: "Plan, generate, test and refactor production code with structured prompts and QA gates.",
+    author: "Por siraGPT Labs",
+    category: "Programming",
+    icon: <Code className="h-9 w-9 text-white" />,
+  },
 ]
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -106,290 +138,161 @@ function resolveIconSrc(iconUrl?: string) {
   return null
 }
 
-function getKnowledgeCount(gpt: CustomGPT) {
-  return gpt._count?.files || (gpt as CustomGPT & { knowledgeFiles?: unknown[] }).knowledgeFiles?.length || 0
-}
-
-function getInstructionQuality(gpt: CustomGPT) {
-  let score = 20
-  const instructionsLength = gpt.instructions?.trim().length || 0
-  const starters = Array.isArray(gpt.conversationStarters) ? gpt.conversationStarters.length : 0
-  const knowledgeFiles = getKnowledgeCount(gpt)
-
-  if (instructionsLength >= 800) score += 30
-  else if (instructionsLength >= 300) score += 18
-  else if (instructionsLength >= 120) score += 10
-
-  if (gpt.description?.trim()) score += 12
-  if (starters >= 3) score += 12
-  else if (starters > 0) score += 6
-  if (knowledgeFiles > 0) score += 16
-  if (gpt.visibility === "PUBLIC") score += 5
-  if (gpt.isFeatured) score += 5
-
-  const clamped = Math.min(100, score)
-  if (clamped >= 82) return { score: clamped, label: "Excelente", color: "bg-emerald-500" }
-  if (clamped >= 62) return { score: clamped, label: "Sólido", color: "bg-blue-500" }
-  if (clamped >= 42) return { score: clamped, label: "Mejorable", color: "bg-amber-500" }
-  return { score: clamped, label: "Básico", color: "bg-rose-500" }
-}
-
-function getVisibilityMeta(visibility: CustomGPT["visibility"]) {
-  if (visibility === "PUBLIC") {
-    return { label: "Público", icon: Globe, className: "border-emerald-200 bg-emerald-50 text-emerald-700" }
-  }
-  if (visibility === "UNLISTED") {
-    return { label: "Enlace", icon: Share2, className: "border-blue-200 bg-blue-50 text-blue-700" }
-  }
-  return { label: "Privado", icon: Lock, className: "border-zinc-200 bg-zinc-50 text-zinc-600" }
-}
-
-function formatCount(value?: number) {
-  const n = Number(value || 0)
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
-  return n.toString()
-}
-
-function GPTAvatar({ gpt, large = false }: { gpt: CustomGPT; large?: boolean }) {
+function GPTIcon({ gpt }: { gpt: CustomGPT }) {
   const iconSrc = resolveIconSrc(gpt.iconUrl)
-  const sizeClass = large ? "h-14 w-14 text-2xl" : "h-12 w-12 text-xl"
 
   if (iconSrc) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={iconSrc}
-        alt={`${gpt.name} icon`}
-        className={cn(sizeClass, "rounded-2xl object-cover ring-1 ring-black/5")}
-      />
+      <img src={iconSrc} alt={`${gpt.name} icon`} className="h-full w-full rounded-full object-cover" />
     )
   }
 
+  return <Bot className="h-9 w-9 text-zinc-950" />
+}
+
+function gptToStoreCard(gpt: CustomGPT): StoreCard {
+  return {
+    id: gpt.id,
+    title: gpt.name,
+    description: gpt.description || "Asistente personalizado con instrucciones persistentes, conocimiento RAG y conversación especializada.",
+    author: `Por ${gpt.creator?.name || "siraGPT"}`,
+    category: gpt.category || "All",
+    rating: `${Math.max(4, Math.min(5, 4 + ((gpt._count?.conversations || 0) % 10) / 10)).toFixed(1)} ★`,
+    icon: <GPTIcon gpt={gpt} />,
+    source: gpt,
+  }
+}
+
+function CuratedIconShell({ card }: { card: StoreCard }) {
+  const palette = card.id.includes("expedia")
+    ? "bg-[#ffe45c] text-[#171a3f]"
+    : card.id.includes("canva")
+      ? "bg-[radial-gradient(circle_at_25%_20%,#65e0dc,#5145f6_74%)]"
+      : card.id.includes("scholar")
+        ? "bg-[#6c2df4]"
+        : card.id.includes("fitness")
+          ? "bg-black ring-4 ring-sky-300/60"
+          : card.id.includes("code")
+            ? "bg-zinc-950"
+            : "bg-white text-black ring-1 ring-zinc-200"
+
   return (
-    <div className={cn(
-      sizeClass,
-      "grid shrink-0 place-items-center rounded-2xl bg-[radial-gradient(circle_at_30%_20%,#ffffff_0,#dbeafe_28%,#2563eb_100%)] font-semibold text-white shadow-sm"
-    )}>
-      {gpt.iconUrl || gpt.name?.[0]?.toUpperCase() || <Bot className="h-5 w-5" />}
+    <div className={cn("grid h-16 w-16 shrink-0 place-items-center rounded-full", palette)}>
+      {card.icon}
     </div>
   )
 }
 
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-}: {
-  label: string
-  value: string | number
-  icon: React.ComponentType<{ className?: string }>
-}) {
-  return (
-    <div className="rounded-3xl border border-black/5 bg-white/80 p-4 shadow-sm backdrop-blur-xl">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">{label}</p>
-          <p className="mt-2 text-2xl font-semibold text-zinc-950">{value}</p>
-        </div>
-        <div className="grid h-10 w-10 place-items-center rounded-2xl bg-zinc-950 text-white">
-          <Icon className="h-5 w-5" />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function CapabilityCard({
-  icon: Icon,
-  title,
-  description,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  title: string
-  description: string
-}) {
-  return (
-    <div className="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-[0_18px_55px_rgba(15,23,42,0.06)]">
-      <div className="grid h-11 w-11 place-items-center rounded-2xl bg-zinc-100 text-zinc-900">
-        <Icon className="h-5 w-5" />
-      </div>
-      <h3 className="mt-4 text-sm font-semibold text-zinc-950">{title}</h3>
-      <p className="mt-2 text-sm leading-6 text-zinc-600">{description}</p>
-    </div>
-  )
-}
-
-function CategoryNav({
-  selectedCategory,
-  onSelectCategory,
-  pending,
-}: {
-  selectedCategory: string
-  onSelectCategory: (category: string) => void
-  pending?: boolean
-}) {
-  return (
-    <nav className="flex flex-wrap gap-2">
-      {categories.map((category) => {
-        const Icon = category.icon
-        const active = selectedCategory === category.value
-        return (
-          <button
-            key={category.value}
-            type="button"
-            onClick={() => onSelectCategory(category.value)}
-            className={cn(
-              "inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-all",
-              active
-                ? "border-zinc-950 bg-zinc-950 text-white shadow-sm"
-                : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50",
-              pending && "opacity-80"
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {category.label}
-          </button>
-        )
-      })}
-    </nav>
-  )
-}
-
-function GPTCard({
-  gpt,
-  onStartChat,
+function StoreCardView({
+  card,
+  onOpen,
   onEdit,
   onDelete,
-  onShare,
-  isOwner = false,
+  isOwner,
 }: {
-  gpt: CustomGPT
-  onStartChat: (gpt: CustomGPT) => Promise<void>
+  card: StoreCard
+  onOpen: (card: StoreCard) => void
   onEdit?: (gpt: CustomGPT) => void
   onDelete?: (gpt: CustomGPT) => void
-  onShare?: (gpt: CustomGPT) => void
   isOwner?: boolean
 }) {
-  const [isLoadingChat, setIsLoadingChat] = useState(false)
-  const quality = getInstructionQuality(gpt)
-  const visibility = getVisibilityMeta(gpt.visibility)
-  const VisibilityIcon = visibility.icon
-  const knowledgeCount = getKnowledgeCount(gpt)
-
-  const handleStartChat = async () => {
-    setIsLoadingChat(true)
-    try {
-      await onStartChat(gpt)
-    } catch (error) {
-      console.error("Error starting GPT chat:", error)
-    } finally {
-      setIsLoadingChat(false)
-    }
-  }
-
   return (
-    <article className="group relative overflow-hidden rounded-[2rem] border border-zinc-200 bg-white p-5 shadow-[0_18px_60px_rgba(15,23,42,0.07)] transition-all duration-300 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-[0_28px_80px_rgba(15,23,42,0.12)]">
-      <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-zinc-950 via-blue-500 to-emerald-400 opacity-0 transition-opacity group-hover:opacity-100" />
+    <article
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(card)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") onOpen(card)
+      }}
+      className="group relative flex min-h-[104px] cursor-pointer items-center gap-4 rounded-2xl bg-[#f8f8f8] p-4 transition duration-200 hover:bg-[#f1f1f1] focus:outline-none focus:ring-2 focus:ring-zinc-950/20"
+    >
+      {card.source ? (
+        <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-full bg-white ring-1 ring-zinc-200">
+          {card.icon}
+        </div>
+      ) : (
+        <CuratedIconShell card={card} />
+      )}
 
-      <div className="flex items-start gap-4">
-        <GPTAvatar gpt={gpt} large />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-lg font-semibold tracking-[-0.02em] text-zinc-950">{gpt.name}</h3>
-            {gpt.isFeatured && (
-              <Badge className="rounded-full bg-amber-100 text-amber-700 hover:bg-amber-100">
-                Destacado
-              </Badge>
-            )}
-          </div>
-          <p className="mt-1 line-clamp-2 text-sm leading-6 text-zinc-600">
-            {gpt.description || "Asistente personalizado con instrucciones persistentes y memoria contextual."}
-          </p>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-4">
+          <h3 className="line-clamp-1 text-[1rem] font-semibold leading-tight tracking-[-0.025em] text-zinc-950">
+            {card.title}
+          </h3>
+          {card.source && isOwner && (onEdit || onDelete) && (
+            <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
+              {onEdit && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onEdit(card.source!)
+                  }}
+                  className="grid h-8 w-8 place-items-center rounded-full bg-white text-zinc-700 shadow-sm hover:text-zinc-950"
+                  aria-label="Editar GPT"
+                >
+                  <Edit className="h-4 w-4" />
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onDelete(card.source!)
+                  }}
+                  className="grid h-8 w-8 place-items-center rounded-full bg-white text-zinc-700 shadow-sm hover:text-rose-600"
+                  aria-label="Eliminar GPT"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
-      </div>
-
-      <div className="mt-5 flex flex-wrap gap-2">
-        <span className={cn("inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium", visibility.className)}>
-          <VisibilityIcon className="h-3.5 w-3.5" />
-          {visibility.label}
-        </span>
-        {gpt.category && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-600">
-            <Layers3 className="h-3.5 w-3.5" />
-            {gpt.category}
-          </span>
-        )}
-        <span className="inline-flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-          <Database className="h-3.5 w-3.5" />
-          {knowledgeCount} archivo{knowledgeCount === 1 ? "" : "s"} RAG
-        </span>
-        {knowledgeCount > 0 && (
-          <span
-            title="Self-RAG: reflexión ISREL/ISSUP/ISUSE por segmento antes de responder"
-            className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700"
-          >
-            <Brain className="h-3.5 w-3.5" />
-            Self-RAG
-          </span>
-        )}
-      </div>
-
-      <div className="mt-5 grid grid-cols-3 gap-3">
-        <div className="rounded-2xl bg-zinc-50 p-3">
-          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">Chats</p>
-          <p className="mt-1 text-lg font-semibold text-zinc-950">{formatCount(gpt._count?.conversations)}</p>
-        </div>
-        <div className="rounded-2xl bg-zinc-50 p-3">
-          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">Modelo</p>
-          <p className="mt-1 truncate text-sm font-semibold text-zinc-950">{gpt.modelName || "default"}</p>
-        </div>
-        <div className="rounded-2xl bg-zinc-50 p-3">
-          <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">Temp.</p>
-          <p className="mt-1 text-lg font-semibold text-zinc-950">{Number(gpt.temperature ?? 0.7).toFixed(1)}</p>
-        </div>
-      </div>
-
-      <div className="mt-5">
-        <div className="flex items-center justify-between text-xs font-medium text-zinc-500">
-          <span>Seguimiento de instrucciones</span>
-          <span>{quality.label} · {quality.score}%</span>
-        </div>
-        <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-100">
-          <div className={cn("h-full rounded-full transition-all", quality.color)} style={{ width: `${quality.score}%` }} />
-        </div>
-      </div>
-
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-zinc-500">
-          Por <span className="font-medium text-zinc-700">{gpt.creator?.name || "Equipo"}</span>
+        <p className="mt-1 line-clamp-2 max-w-[20rem] text-[0.82rem] leading-[1.22rem] text-zinc-800">
+          {card.rating ? `${card.rating} - ` : ""}
+          {card.description}
         </p>
-        <div className="flex items-center gap-2">
-          {onShare && gpt.visibility !== "PRIVATE" && (
-            <Button variant="outline" size="icon" onClick={() => onShare(gpt)} className="h-9 w-9 rounded-full">
-              <Share2 className="h-4 w-4" />
-              <span className="sr-only">Compartir</span>
-            </Button>
-          )}
-          {isOwner && onEdit && (
-            <Button variant="outline" size="icon" onClick={() => onEdit(gpt)} className="h-9 w-9 rounded-full">
-              <Edit className="h-4 w-4" />
-              <span className="sr-only">Editar</span>
-            </Button>
-          )}
-          {isOwner && onDelete && (
-            <Button variant="outline" size="icon" onClick={() => onDelete(gpt)} className="h-9 w-9 rounded-full text-rose-600 hover:text-rose-700">
-              <Trash2 className="h-4 w-4" />
-              <span className="sr-only">Eliminar</span>
-            </Button>
-          )}
-          <Button onClick={handleStartChat} disabled={isLoadingChat} className="h-9 rounded-full bg-zinc-950 px-4 text-white hover:bg-zinc-800">
-            {isLoadingChat ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4" />}
-            <span className="ml-2">Usar GPT</span>
-          </Button>
-        </div>
+        <p className="mt-1.5 text-[0.78rem] text-zinc-400">{card.author}</p>
       </div>
     </article>
+  )
+}
+
+function TrendingRow({ index, card, onOpen }: { index: number; card: StoreCard; onOpen: (card: StoreCard) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(card)}
+      className="grid w-full grid-cols-[28px_46px_1fr] items-center gap-3 rounded-xl px-1.5 py-2 text-left transition hover:bg-zinc-50"
+    >
+      <span className="text-center text-[1rem] font-semibold text-zinc-950">{index}</span>
+      {card.source ? (
+        <span className="grid h-11 w-11 place-items-center overflow-hidden rounded-full bg-[#f5f5f5] ring-1 ring-zinc-200">
+          {card.icon}
+        </span>
+      ) : (
+        <span className="scale-[0.43]">
+          <CuratedIconShell card={card} />
+        </span>
+      )}
+      <span className="min-w-0">
+        <span className="line-clamp-1 text-[0.88rem] font-semibold leading-tight tracking-[-0.02em] text-zinc-950">{card.title}</span>
+        <span className="mt-0.5 line-clamp-2 text-[0.78rem] leading-4 text-zinc-700">{card.description}</span>
+        <span className="mt-0.5 block text-[0.74rem] text-zinc-400">{card.author}</span>
+      </span>
+    </button>
+  )
+}
+
+function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div>
+      <h2 className="text-[1.35rem] font-semibold tracking-[-0.04em] text-zinc-950 md:text-[1.55rem]">{title}</h2>
+      <p className="mt-0.5 text-[0.88rem] text-zinc-400">{subtitle}</p>
+    </div>
   )
 }
 
@@ -397,7 +300,7 @@ export default function GPTsPage() {
   const { user } = useAuth()
   const { selectChat } = useChat()
   const router = useRouter()
-  const [isPending, startTransition] = React.useTransition()
+  const categoryNavRef = useRef<HTMLDivElement | null>(null)
 
   const [gpts, setGpts] = useState<CustomGPT[]>([])
   const [loading, setLoading] = useState(true)
@@ -407,24 +310,18 @@ export default function GPTsPage() {
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [selectedGPT, setSelectedGPT] = useState<CustomGPT | null>(null)
 
-  const debouncedSearchQuery = useDebounce(searchQuery, 350)
+  const debouncedSearchQuery = useDebounce(searchQuery, 300)
 
   const fetchGPTs = useCallback(async () => {
     setLoading(true)
     try {
       const filters: GPTFilters = {
         search: debouncedSearchQuery || undefined,
-        category: selectedCategory !== "All" && selectedCategory !== "Trending" ? selectedCategory : undefined,
+        category: selectedCategory !== "All" ? selectedCategory : undefined,
         visibility: visibilityFilter,
       }
 
-      let fetchedGPTs = await gptsService.getGPTs(filters)
-      if (selectedCategory === "Trending") {
-        fetchedGPTs = [...fetchedGPTs]
-          .sort((a, b) => (b._count?.conversations || 0) - (a._count?.conversations || 0))
-          .slice(0, 12)
-      }
-
+      const fetchedGPTs = await gptsService.getGPTs(filters)
       setGpts(fetchedGPTs)
     } catch (error) {
       console.error("Error fetching GPTs:", error)
@@ -438,6 +335,46 @@ export default function GPTsPage() {
     fetchGPTs()
   }, [fetchGPTs])
 
+  const createdCards = useMemo(() => {
+    return [...gpts]
+      .sort((a, b) => {
+        if (a.isFeatured && !b.isFeatured) return -1
+        if (!a.isFeatured && b.isFeatured) return 1
+        return (b._count?.conversations || 0) - (a._count?.conversations || 0)
+      })
+      .map(gptToStoreCard)
+  }, [gpts])
+
+  const visibleCuratedCards = useMemo(() => {
+    if (visibilityFilter === "mine") return []
+    const normalizedQuery = debouncedSearchQuery.trim().toLowerCase()
+    return curatedStoreCards.filter(card => {
+      const matchesCategory = selectedCategory === "All" || card.category === selectedCategory
+      const matchesSearch = !normalizedQuery
+        || card.title.toLowerCase().includes(normalizedQuery)
+        || card.description.toLowerCase().includes(normalizedQuery)
+      return matchesCategory && matchesSearch
+    })
+  }, [debouncedSearchQuery, selectedCategory, visibilityFilter])
+
+  const featuredCards = useMemo(() => {
+    const merged = [...createdCards.filter(card => card.source?.isFeatured), ...createdCards.filter(card => !card.source?.isFeatured), ...visibleCuratedCards]
+    const unique = new Map<string, StoreCard>()
+    for (const card of merged) unique.set(card.id, card)
+    return Array.from(unique.values()).slice(0, 4)
+  }, [createdCards, visibleCuratedCards])
+
+  const trendingCards = useMemo(() => {
+    const merged = visibilityFilter === "mine" ? createdCards : [...createdCards, ...curatedStoreCards]
+    const unique = new Map<string, StoreCard>()
+    for (const card of merged) {
+      if (selectedCategory === "All" || card.category === selectedCategory || card.source?.category === selectedCategory) {
+        unique.set(card.id, card)
+      }
+    }
+    return Array.from(unique.values()).slice(0, 8)
+  }, [createdCards, selectedCategory, visibilityFilter])
+
   const handleStartChat = async (gpt: CustomGPT) => {
     try {
       const chat = await gptsService.startChatWithGPT(gpt.id)
@@ -449,6 +386,14 @@ export default function GPTsPage() {
       toast.error(error?.message || "No se pudo iniciar el chat")
       throw error
     }
+  }
+
+  const handleOpenCard = async (card: StoreCard) => {
+    if (card.source) {
+      await handleStartChat(card.source)
+      return
+    }
+    router.push(`/gpts/create?category=${encodeURIComponent(card.category)}`)
   }
 
   const handleEdit = (gpt: CustomGPT) => {
@@ -468,9 +413,14 @@ export default function GPTsPage() {
     }
   }
 
-  const handleShare = (gpt: CustomGPT) => {
-    setSelectedGPT(gpt)
-    setShareDialogOpen(true)
+  const handleCreateNew = () => {
+    const category = selectedCategory !== "All" ? `?category=${encodeURIComponent(selectedCategory)}` : ""
+    router.push(`/gpts/create${category}`)
+  }
+
+  const handleMine = () => {
+    setVisibilityFilter("mine")
+    setSelectedCategory("All")
   }
 
   const copyShareLink = async () => {
@@ -479,224 +429,138 @@ export default function GPTsPage() {
     toast.success("Enlace copiado")
   }
 
-  const handleCreateNew = () => {
-    router.push("/gpts/create")
+  const scrollCategories = (direction: "left" | "right") => {
+    categoryNavRef.current?.scrollBy({ left: direction === "left" ? -260 : 260, behavior: "smooth" })
   }
-
-  const handleCategoryChange = (category: string) => {
-    startTransition(() => setSelectedCategory(category))
-  }
-
-  const handleVisibilityChange = (visibility: VisibilityFilter) => {
-    startTransition(() => setVisibilityFilter(visibility))
-  }
-
-  const allDisplayGPTs = [...gpts].sort((a, b) => {
-    if (a.isFeatured && !b.isFeatured) return -1
-    if (!a.isFeatured && b.isFeatured) return 1
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  })
-
-  const userOwnedGPTs = allDisplayGPTs.filter(gpt => gpt.creator?.id === user?.id)
-  const publicGPTs = allDisplayGPTs.filter(gpt => gpt.visibility === "PUBLIC")
-  const ragGPTs = allDisplayGPTs.filter(gpt => getKnowledgeCount(gpt) > 0)
-  const activeCategory = categories.find(category => category.value === selectedCategory)?.label || selectedCategory
 
   return (
-    <main data-testid="gpts-store-page" className="min-h-full bg-[#f7f7f4] text-zinc-950">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
-        <section className="relative overflow-hidden rounded-[2.25rem] border border-zinc-200 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.08)]">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(37,99,235,0.12),transparent_28%),radial-gradient(circle_at_80%_10%,rgba(16,185,129,0.12),transparent_25%),linear-gradient(135deg,rgba(255,255,255,0.96),rgba(250,250,247,0.94))]" />
-          <div className="relative grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.35fr_0.65fr] lg:p-10">
-            <div>
-              <div className="flex items-center gap-3">
-                <SidebarTrigger className="md:hidden" />
-                <Badge className="rounded-full bg-zinc-950 px-3 py-1 text-white hover:bg-zinc-950">
-                  <Bot className="mr-1.5 h-3.5 w-3.5" />
-                  GPTs Store
-                </Badge>
-              </div>
-              <h1 className="mt-6 max-w-3xl text-4xl font-semibold tracking-[-0.055em] text-zinc-950 sm:text-5xl lg:text-6xl">
-                Asistentes personalizados con RAG, instrucciones y flujo profesional.
-              </h1>
-              <p className="mt-5 max-w-2xl text-base leading-8 text-zinc-600 sm:text-lg">
-                Crea, encuentra y ejecuta GPTs con conocimiento persistente, instrucciones reforzadas y controles de calidad para chats especializados.
-              </p>
-              <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-                <Button onClick={handleCreateNew} className="h-12 rounded-full bg-zinc-950 px-6 text-white hover:bg-zinc-800">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Crear GPT profesional
-                </Button>
-                <Button variant="outline" onClick={() => handleVisibilityChange("mine")} className="h-12 rounded-full border-zinc-300 bg-white/80 px-6">
-                  <Wand2 className="mr-2 h-4 w-4" />
-                  Ver mis GPTs
-                </Button>
-              </div>
-            </div>
+    <main data-testid="gpts-store-page" className="min-h-full bg-white text-zinc-950">
+      <div className="mx-auto flex min-h-full w-full max-w-[1220px] flex-col px-6 py-4 sm:px-8 lg:px-12">
+        <header className="flex items-center justify-between gap-4">
+          <h1 className="text-[1.25rem] font-medium tracking-[-0.04em] text-zinc-950">Explorar GPT</h1>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              data-testid="gpts-mine-button"
+              onClick={handleMine}
+              className={cn(
+                "text-[0.88rem] font-semibold tracking-[-0.02em] transition hover:text-zinc-600",
+                visibilityFilter === "mine" ? "text-zinc-950" : "text-zinc-900"
+              )}
+            >
+              Mis GPT
+            </button>
+            <Button data-testid="gpts-create-button" onClick={handleCreateNew} className="h-10 rounded-full bg-black px-4 text-[0.88rem] font-semibold text-white hover:bg-zinc-800">
+              <Plus className="mr-2 h-4 w-4" />
+              Crear
+            </Button>
+          </div>
+        </header>
 
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-              <StatCard label="Disponibles" value={allDisplayGPTs.length} icon={Bot} />
-              <StatCard label="Con RAG" value={ragGPTs.length} icon={Database} />
-              <StatCard label="Mis GPTs" value={userOwnedGPTs.length} icon={ShieldCheck} />
-              <StatCard label="Públicos" value={publicGPTs.length} icon={Globe} />
-            </div>
+        <section className="mx-auto mt-5 w-full max-w-[640px]">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <Input
+              data-testid="gpts-search"
+              placeholder="Buscar GPT"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              className="h-10 rounded-xl border-zinc-200 bg-white pl-11 text-[0.94rem] text-zinc-900 shadow-none placeholder:text-zinc-400 focus-visible:ring-1 focus-visible:ring-zinc-300"
+            />
           </div>
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-3">
-          <CapabilityCard
-            icon={Brain}
-            title="RAG por GPT"
-            description="Los archivos del GPT se recuperan como evidencia privada y no se mezclan como texto crudo en el prompt."
-          />
-          <CapabilityCard
-            icon={CheckCircle2}
-            title="Instrucciones resistentes"
-            description="El contrato interno separa persona, reglas del usuario y conocimiento para evitar fuga o sobreescritura."
-          />
-          <CapabilityCard
-            icon={FileText}
-            title="Trazabilidad lista para QA"
-            description="Cada GPT muestra señales de calidad: instrucciones, starters, conocimiento y uso real en conversaciones."
-          />
-        </section>
-
-        <section className="rounded-[2rem] border border-zinc-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="flex flex-col gap-4">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-zinc-400" />
-              <Input
-                data-testid="gpts-search"
-                placeholder="Buscar GPTs por nombre, propósito o especialidad..."
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                className="h-12 rounded-full border-zinc-200 bg-zinc-50 pl-12 text-base shadow-none focus-visible:ring-zinc-300"
-              />
-            </div>
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-              <CategoryNav selectedCategory={selectedCategory} onSelectCategory={handleCategoryChange} pending={isPending} />
-              <div className="flex shrink-0 rounded-full border border-zinc-200 bg-zinc-50 p-1">
-                {visibilityOptions.map(option => (
+        <section className="mx-auto mt-8 w-full max-w-[640px]">
+          <div className="relative flex items-center">
+            <button
+              type="button"
+              onClick={() => scrollCategories("left")}
+              className="mr-2 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-zinc-100 text-zinc-900 transition hover:bg-zinc-200"
+              aria-label="Categorías anteriores"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <div ref={categoryNavRef} className="flex flex-1 items-center gap-6 overflow-x-auto scroll-smooth [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {storeCategories.map(category => {
+                const active = selectedCategory === category.value
+                return (
                   <button
-                    key={option.value}
+                    key={category.value}
                     type="button"
-                    onClick={() => handleVisibilityChange(option.value)}
+                    onClick={() => {
+                      setSelectedCategory(category.value)
+                      setVisibilityFilter("all")
+                    }}
                     className={cn(
-                      "h-9 rounded-full px-4 text-sm font-medium transition",
-                      visibilityFilter === option.value
-                        ? "bg-white text-zinc-950 shadow-sm"
-                        : "text-zinc-500 hover:text-zinc-800"
+                      "relative shrink-0 pb-2.5 text-[0.88rem] font-medium tracking-[-0.025em] transition",
+                      active ? "text-zinc-950" : "text-zinc-400 hover:text-zinc-700"
                     )}
                   >
-                    {option.label}
+                    {category.label}
+                    {active && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-zinc-950" />}
                   </button>
-                ))}
-              </div>
+                )
+              })}
             </div>
+            <button
+              type="button"
+              onClick={() => scrollCategories("right")}
+              className="ml-2 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-zinc-100 text-zinc-900 transition hover:bg-zinc-200"
+              aria-label="Siguientes categorías"
+            >
+              <ArrowRight className="h-4 w-4" />
+            </button>
           </div>
         </section>
 
-        {userOwnedGPTs.length > 0 && visibilityFilter !== "public" && (
-          <section>
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium uppercase tracking-[0.18em] text-zinc-500">Workspace</p>
-                <h2 className="mt-1 text-2xl font-semibold tracking-[-0.04em]">Tus GPTs activos</h2>
-              </div>
-              <Button variant="outline" onClick={handleCreateNew} className="rounded-full">
-                <Plus className="mr-2 h-4 w-4" />
-                Nuevo
-              </Button>
-            </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              {userOwnedGPTs.slice(0, 4).map((gpt) => (
-                <GPTCard
-                  key={`owned-${gpt.id}`}
-                  gpt={gpt}
-                  onStartChat={handleStartChat}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  onShare={handleShare}
-                  isOwner
-                />
-              ))}
-            </div>
-          </section>
-        )}
-
-        <section>
-          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="text-sm font-medium uppercase tracking-[0.18em] text-zinc-500">Catálogo</p>
-              <h2 className="mt-1 text-3xl font-semibold tracking-[-0.045em]">
-                {selectedCategory === "All" ? "Descubrir GPTs" : `${activeCategory}`}
-              </h2>
-            </div>
-            <p className="text-sm text-zinc-500">
-              {loading ? "Cargando..." : `${allDisplayGPTs.length} resultado${allDisplayGPTs.length === 1 ? "" : "s"}`}
-            </p>
-          </div>
+        <section className="mx-auto mt-7 w-full max-w-[640px]">
+          <SectionHeader title={visibilityFilter === "mine" ? "Mis GPT" : "Featured"} subtitle={visibilityFilter === "mine" ? "Tus asistentes creados por área" : "Curated top picks from this week"} />
 
           {loading ? (
-            <div className="grid gap-4 lg:grid-cols-2">
-              {Array.from({ length: 6 }).map((_, index) => (
-                <div key={index} className="rounded-[2rem] border border-zinc-200 bg-white p-5">
-                  <div className="animate-pulse">
-                    <div className="flex gap-4">
-                      <div className="h-14 w-14 rounded-2xl bg-zinc-100" />
-                      <div className="flex-1">
-                        <div className="h-5 w-2/5 rounded bg-zinc-100" />
-                        <div className="mt-3 h-4 w-4/5 rounded bg-zinc-100" />
-                      </div>
-                    </div>
-                    <div className="mt-6 grid grid-cols-3 gap-3">
-                      <div className="h-16 rounded-2xl bg-zinc-100" />
-                      <div className="h-16 rounded-2xl bg-zinc-100" />
-                      <div className="h-16 rounded-2xl bg-zinc-100" />
+            <div className="mt-4 grid gap-2.5 md:grid-cols-2">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div key={index} className="min-h-[104px] animate-pulse rounded-2xl bg-[#f8f8f8] p-4">
+                  <div className="flex gap-4">
+                    <div className="h-16 w-16 rounded-full bg-zinc-200" />
+                    <div className="flex-1 pt-2">
+                      <div className="h-6 w-3/5 rounded bg-zinc-200" />
+                      <div className="mt-4 h-4 w-full rounded bg-zinc-200" />
+                      <div className="mt-2 h-4 w-4/5 rounded bg-zinc-200" />
                     </div>
                   </div>
                 </div>
               ))}
             </div>
-          ) : allDisplayGPTs.length > 0 ? (
-            <div className="grid gap-4 lg:grid-cols-2">
-              {allDisplayGPTs.map((gpt) => (
-                <GPTCard
-                  key={gpt.id}
-                  gpt={gpt}
-                  onStartChat={handleStartChat}
-                  onEdit={gpt.creator?.id === user?.id ? handleEdit : undefined}
-                  onDelete={gpt.creator?.id === user?.id ? handleDelete : undefined}
-                  onShare={handleShare}
-                  isOwner={gpt.creator?.id === user?.id}
+          ) : featuredCards.length > 0 ? (
+            <div className="mt-4 grid gap-2.5 md:grid-cols-2">
+              {featuredCards.map(card => (
+                <StoreCardView
+                  key={card.id}
+                  card={card}
+                  onOpen={handleOpenCard}
+                  onEdit={card.source?.creator?.id === user?.id ? handleEdit : undefined}
+                  onDelete={card.source?.creator?.id === user?.id ? handleDelete : undefined}
+                  isOwner={card.source?.creator?.id === user?.id}
                 />
               ))}
             </div>
           ) : (
-            <div className="rounded-[2rem] border border-dashed border-zinc-300 bg-white px-6 py-16 text-center">
-              <div className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-zinc-100 text-zinc-500">
-                <Bot className="h-8 w-8" />
-              </div>
-              <h3 className="mt-6 text-2xl font-semibold tracking-[-0.035em]">
-                {debouncedSearchQuery ? "No hay GPTs con esa búsqueda" : `No hay GPTs en "${activeCategory}"`}
-              </h3>
-              <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-zinc-600">
-                Crea un asistente con instrucciones claras, archivos de conocimiento y starters para que el chat responda con precisión desde el primer mensaje.
-              </p>
-              <div className="mt-6 flex flex-wrap justify-center gap-2">
-                {["Tesis APA 7", "Investigación de mercado", "Diseño web", "Análisis Excel"].map(template => (
-                  <button
-                    key={template}
-                    type="button"
-                    onClick={handleCreateNew}
-                    className="rounded-full border border-zinc-200 bg-zinc-50 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-white"
-                  >
-                    {template}
-                  </button>
-                ))}
-              </div>
+            <div className="mt-4 rounded-2xl bg-[#f8f8f8] p-7 text-center">
+              <Sparkles className="mx-auto h-10 w-10 text-zinc-400" />
+              <h3 className="mt-4 text-2xl font-semibold tracking-[-0.04em]">Aún no tienes GPTs en esta área</h3>
+              <p className="mx-auto mt-2 max-w-xl text-zinc-500">Crea uno desde esta categoría para que aparezca automáticamente en la tienda.</p>
+              <Button onClick={handleCreateNew} className="mt-6 rounded-full bg-black px-6 text-white hover:bg-zinc-800">Crear GPT</Button>
             </div>
           )}
+        </section>
+
+        <section className="mx-auto mt-8 w-full max-w-[640px] pb-10">
+          <SectionHeader title="Trending" subtitle="Most popular GPTs by our community" />
+          <div className="mt-4 grid gap-x-6 gap-y-1 md:grid-cols-2">
+            {trendingCards.map((card, index) => (
+              <TrendingRow key={`trending-${card.id}`} index={index + 1} card={card} onOpen={handleOpenCard} />
+            ))}
+          </div>
         </section>
 
         <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>

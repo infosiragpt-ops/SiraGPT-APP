@@ -24,6 +24,12 @@ import {
   Library,
   Images,
   LayoutGrid,
+  Pin,
+  Folder,
+  Download,
+  Archive,
+  EyeOff,
+  CalendarDays,
   FolderKanban,
   Palette,
   Loader2,
@@ -54,9 +60,21 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuPortal,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -68,12 +86,13 @@ import {
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter, usePathname } from "next/navigation"
-import { cn } from "@/lib/utils"
+import { cn, downloadBlob } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
 import { apiClient } from "@/lib/api"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 // import NotificationCenter from "./notification-center" // Commented out to stop repeated API calls
 
@@ -164,7 +183,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/projects', '/design', '/library',
+      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -224,6 +243,15 @@ export function AppSidebar() {
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
   const [editTitle, setEditTitle] = React.useState("")
   const [optimisticUpdates, setOptimisticUpdates] = React.useState<Record<string, string>>({})
+  const [pinnedGpts, setPinnedGpts] = React.useState<Array<{ id: string; name: string; iconUrl?: string | null; modelName?: string | null }>>([])
+  const [pinnedChatIds, setPinnedChatIds] = React.useState<string[]>([])
+  const [archivedChatIds, setArchivedChatIds] = React.useState<string[]>([])
+  const [hiddenChatIds, setHiddenChatIds] = React.useState<string[]>([])
+  const [chatFolders, setChatFolders] = React.useState<Record<string, string>>({})
+  const [scheduledChats, setScheduledChats] = React.useState<Record<string, { at: string; note?: string; title?: string }>>({})
+  const [scheduleTarget, setScheduleTarget] = React.useState<any | null>(null)
+  const [scheduleAt, setScheduleAt] = React.useState("")
+  const [scheduleNote, setScheduleNote] = React.useState("")
 
   // Scroll area ref for infinite scroll
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
@@ -234,6 +262,162 @@ export function AppSidebar() {
     logout()
     router.push("/")
   }
+
+  React.useEffect(() => {
+    const loadPinnedGpts = () => {
+      try {
+        const items = JSON.parse(localStorage.getItem("sira:pinned-gpt-items") || "[]")
+        setPinnedGpts(Array.isArray(items) ? items.filter((item) => item?.id && item?.name).slice(0, 12) : [])
+      } catch {
+        setPinnedGpts([])
+      }
+    }
+    loadPinnedGpts()
+    window.addEventListener("siragpt:pinned-gpts-changed", loadPinnedGpts)
+    window.addEventListener("storage", loadPinnedGpts)
+    return () => {
+      window.removeEventListener("siragpt:pinned-gpts-changed", loadPinnedGpts)
+      window.removeEventListener("storage", loadPinnedGpts)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    try {
+      const readArray = (key: string) => {
+        const value = JSON.parse(localStorage.getItem(key) || "[]")
+        return Array.isArray(value) ? value.filter((id) => typeof id === "string") : []
+      }
+      const readRecord = (key: string) => {
+        const value = JSON.parse(localStorage.getItem(key) || "{}")
+        return value && typeof value === "object" && !Array.isArray(value) ? value : {}
+      }
+      setPinnedChatIds(readArray("sira:pinned-chat-ids"))
+      setArchivedChatIds(readArray("sira:archived-chat-ids"))
+      setHiddenChatIds(readArray("sira:hidden-chat-ids"))
+      setChatFolders(readRecord("sira:chat-folders"))
+      setScheduledChats(readRecord("sira:scheduled-chats"))
+    } catch {
+      setPinnedChatIds([])
+      setArchivedChatIds([])
+      setHiddenChatIds([])
+      setChatFolders({})
+      setScheduledChats({})
+    }
+  }, [])
+
+  const persistArrayState = React.useCallback((
+    key: string,
+    setter: React.Dispatch<React.SetStateAction<string[]>>,
+    updater: (current: string[]) => string[],
+  ) => {
+    setter((current) => {
+      const next = updater(Array.isArray(current) ? current : [])
+      try { localStorage.setItem(key, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }, [])
+
+  const togglePinnedChat = React.useCallback((chat: any) => {
+    persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => {
+      const exists = current.includes(chat.id)
+      toast.success(exists ? "Chat desfijado" : "Chat fijado")
+      return exists ? current.filter((id) => id !== chat.id) : [chat.id, ...current]
+    })
+  }, [persistArrayState])
+
+  const archiveChatLocally = React.useCallback((chat: any) => {
+    persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => (
+      current.includes(chat.id) ? current : [chat.id, ...current]
+    ))
+    toast.success("Chat archivado")
+  }, [persistArrayState])
+
+  const hideChatLocally = React.useCallback((chat: any) => {
+    persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => (
+      current.includes(chat.id) ? current : [chat.id, ...current]
+    ))
+    toast.success("Chat ocultado")
+  }, [persistArrayState])
+
+  const moveChatToFolder = React.useCallback((chat: any, folder: string | null) => {
+    setChatFolders((current) => {
+      const next = { ...(current || {}) }
+      if (folder) next[chat.id] = folder
+      else delete next[chat.id]
+      try { localStorage.setItem("sira:chat-folders", JSON.stringify(next)) } catch {}
+      return next
+    })
+    toast.success(folder ? `Movido a ${folder}` : "Chat quitado de carpeta")
+  }, [])
+
+  const createFolderAndMove = React.useCallback((chat: any) => {
+    const folder = window.prompt("Nombre de la carpeta")
+    if (!folder?.trim()) return
+    moveChatToFolder(chat, folder.trim())
+  }, [moveChatToFolder])
+
+  const downloadChatExport = React.useCallback(async (chat: any) => {
+    try {
+      const activeChat = currentChat
+      let source: any
+      if (activeChat && activeChat.id === chat.id && activeChat.messages?.length) {
+        source = activeChat
+      } else {
+        source = (await apiClient.getChat(chat.id)).chat
+      }
+      const messages = Array.isArray(source.messages) ? source.messages : []
+      const body = [
+        `# ${source.title || "Chat"}`,
+        "",
+        `- ID: ${source.id}`,
+        `- Modelo: ${source.model || "N/A"}`,
+        `- Actualizado: ${source.updatedAt || chat.updatedAt || ""}`,
+        "",
+        ...messages.flatMap((message: any) => [
+          `## ${message.role || "MESSAGE"}`,
+          "",
+          String(message.content || "").trim(),
+          "",
+        ]),
+      ].join("\n")
+      const filename = `${String(source.title || "chat").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "chat"}.md`
+      downloadBlob(new Blob([body], { type: "text/markdown;charset=utf-8" }), filename)
+      toast.success("Descarga iniciada")
+    } catch (error) {
+      toast.error("No se pudo descargar el chat")
+    }
+  }, [currentChat])
+
+  const openScheduleDialog = React.useCallback((chat: any) => {
+    const current = scheduledChats[chat.id]
+    setScheduleTarget(chat)
+    setScheduleAt(current?.at || "")
+    setScheduleNote(current?.note || "")
+  }, [scheduledChats])
+
+  const saveScheduledChat = React.useCallback(() => {
+    if (!scheduleTarget?.id) return
+    if (!scheduleAt) {
+      toast.error("Elige fecha y hora")
+      return
+    }
+    setScheduledChats((current) => {
+      const next = {
+        ...(current || {}),
+        [scheduleTarget.id]: {
+          at: scheduleAt,
+          note: scheduleNote.trim(),
+          title: scheduleTarget.title,
+        },
+      }
+      try { localStorage.setItem("sira:scheduled-chats", JSON.stringify(next)) } catch {}
+      return next
+    })
+    setScheduleTarget(null)
+    setScheduleAt("")
+    setScheduleNote("")
+    toast.success("Chat programado")
+  }, [scheduleAt, scheduleNote, scheduleTarget])
 
   const handleNewChat = () => {
     markNewChatIntent()
@@ -346,9 +530,32 @@ export function AppSidebar() {
   }
 
   const handleGPTsClick = () => navigate("/gpts")
+  const handleParaphraseClick = () => navigate("/parafraseo")
   const handleProjectsClick = () => navigate("/projects")
   const handleDesignClick = () => navigate("/design")
   const handleLibraryClick = () => navigate("/library")
+
+  const startPinnedGptChat = async (gptId: string) => {
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/gpts/${gptId}/chat`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo abrir el GPT")
+      localStorage.setItem("currentChatId", data.chat.id)
+      setPendingHref("/chat")
+      router.push(`/chat?id=${data.chat.id}`, { scroll: false })
+      if (isMobile) setOpenMobile(false)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir el GPT")
+    }
+  }
 
   const handleChatClick = (chatId: string) => {
     setPendingHref('/chat')
@@ -498,6 +705,7 @@ export function AppSidebar() {
   const isOnChatPage = activePathname.startsWith('/chat')
   const isOnLibraryPage = activePathname.startsWith('/library')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
+  const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   const isOnDesignPage = activePathname.startsWith('/design')
 
@@ -579,6 +787,34 @@ export function AppSidebar() {
             </TooltipContent>
           </Tooltip>
 
+          {pinnedGpts.length > 0 && (
+            <div className={cn("mt-1 space-y-1", state === "closed" && "hidden")}>
+              {pinnedGpts.map((gpt) => (
+                <button
+                  key={gpt.id}
+                  type="button"
+                  onClick={() => startPinnedGptChat(gpt.id)}
+                  className="group/nav flex h-8 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground"
+                  title={gpt.name}
+                >
+                  {gpt.iconUrl ? (
+                    gpt.iconUrl.startsWith("http") || gpt.iconUrl.startsWith("https") || gpt.iconUrl.startsWith("data:") ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={gpt.iconUrl} alt="" className="h-4 w-4 rounded-full object-cover" />
+                    ) : (
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-purple-100 text-[10px] text-purple-700">
+                        {gpt.iconUrl}
+                      </span>
+                    )
+                  ) : (
+                    <Sparkles className="h-4 w-4 text-purple-500" />
+                  )}
+                  <span className="min-w-0 truncate">{gpt.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <SidebarMenuButton
@@ -636,6 +872,28 @@ export function AppSidebar() {
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
               <p>{t("gpts")}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <SidebarMenuButton
+                onPointerDown={() => markNavigationIntent('/parafraseo')}
+                onClick={handleParaphraseClick}
+                onMouseEnter={() => prefetchOnHover('/parafraseo')}
+                className={cn(
+                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
+                  isOnParaphrasePage && "bg-accent text-accent-foreground",
+                  pendingHref === '/parafraseo' && "opacity-70"
+                )}
+                variant="default"
+              >
+                <Sparkles className="h-4 w-4 text-teal-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
+                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">Parafraseo</span>
+              </SidebarMenuButton>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>Parafraseo</p>
             </TooltipContent>
           </Tooltip>
 
@@ -733,7 +991,17 @@ export function AppSidebar() {
                       // inline timestamp stays compact so the group
                       // header provides the coarse context and the row
                       // just shows the fine offset ("3h", "2d").
-                      const validChats = chats.filter(c => c && c.id)
+                      const seenChatIds = new Set<string>()
+                      const visibleChats = chats.filter((c) => {
+                        if (!c?.id || seenChatIds.has(c.id)) return false
+                        seenChatIds.add(c.id)
+                        if (hiddenChatIds.includes(c.id) || archivedChatIds.includes(c.id)) return false
+                        return true
+                      })
+                      const visibleById = new Map(visibleChats.map((chat) => [chat.id, chat]))
+                      const pinnedChats = pinnedChatIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
+                      const pinnedSet = new Set(pinnedChats.map((chat) => chat.id))
+                      const validChats = visibleChats.filter((chat) => !pinnedSet.has(chat.id))
                       const buckets = groupChatsByTime(validChats)
                       const groupDefs: Array<[keyof typeof buckets, string]> = [
                         ["today", t("today")],
@@ -805,6 +1073,17 @@ export function AppSidebar() {
                                             <span className="text-sm flex-1 truncate">
                                               {displayTitle}
                                             </span>
+                                            <span className="flex shrink-0 items-center gap-1 text-muted-foreground/55">
+                                              {pinnedChatIds.includes(chat.id) && (
+                                                <Pin className="h-3 w-3" aria-label="Chat fijado" />
+                                              )}
+                                              {chatFolders[chat.id] && (
+                                                <Folder className="h-3 w-3" aria-label={`Carpeta ${chatFolders[chat.id]}`} />
+                                              )}
+                                              {scheduledChats[chat.id] && (
+                                                <CalendarDays className="h-3 w-3" aria-label="Chat programado" />
+                                              )}
+                                            </span>
                                             {/* Timestamp fades on row-hover so the 3-dot menu
                                                 doesn't fight it for the right slot. tabular-nums
                                                 keeps widths aligned between "3h" and "12d". */}
@@ -844,22 +1123,129 @@ export function AppSidebar() {
                                         <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
                                       </Button>
                                     </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                    <DropdownMenuContent
+                                      align="end"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="w-[268px] rounded-2xl p-1.5 shadow-xl"
+                                    >
                                       <DropdownMenuItem
-                                        onClick={(e) => handleEditClick(chat, e)}
+                                        onSelect={(event) => {
+                                          event.preventDefault()
+                                          togglePinnedChat(chat)
+                                        }}
+                                        className="h-11 rounded-xl text-[15px]"
                                       >
-                                        <Edit2 className="mr-2 h-4 w-4" />
-                                        Rename
+                                        <Pin className="mr-3 h-5 w-5" />
+                                        {pinnedChatIds.includes(chat.id) ? "Desfijar chat" : "Fijar chat"}
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onSelect={(event) => {
+                                          event.preventDefault()
+                                          handleEditClick(chat, event as any)
+                                        }}
+                                        className="h-11 rounded-xl text-[15px]"
+                                      >
+                                        <Edit2 className="mr-3 h-5 w-5" />
+                                        Editar
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger className="h-11 rounded-xl px-2 text-[15px]">
+                                          <Folder className="mr-3 h-5 w-5" />
+                                          Mover a carpeta
+                                        </DropdownMenuSubTrigger>
+                                        <DropdownMenuPortal>
+                                          <DropdownMenuSubContent className="w-56 rounded-2xl p-1.5">
+                                            {["Trabajo", "Proyecto", "Personal"].map((folder) => (
+                                              <DropdownMenuItem
+                                                key={folder}
+                                                onSelect={(event) => {
+                                                  event.preventDefault()
+                                                  moveChatToFolder(chat, folder)
+                                                }}
+                                                className="h-10 rounded-xl"
+                                              >
+                                                <Folder className="mr-2 h-4 w-4" />
+                                                {folder}
+                                                {chatFolders[chat.id] === folder && <Check className="ml-auto h-4 w-4" />}
+                                              </DropdownMenuItem>
+                                            ))}
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem
+                                              onSelect={(event) => {
+                                                event.preventDefault()
+                                                createFolderAndMove(chat)
+                                              }}
+                                              className="h-10 rounded-xl"
+                                            >
+                                              <Plus className="mr-2 h-4 w-4" />
+                                              Nueva carpeta...
+                                            </DropdownMenuItem>
+                                            {chatFolders[chat.id] && (
+                                              <DropdownMenuItem
+                                                onSelect={(event) => {
+                                                  event.preventDefault()
+                                                  moveChatToFolder(chat, null)
+                                                }}
+                                                className="h-10 rounded-xl"
+                                              >
+                                                <X className="mr-2 h-4 w-4" />
+                                                Quitar de carpeta
+                                              </DropdownMenuItem>
+                                            )}
+                                          </DropdownMenuSubContent>
+                                        </DropdownMenuPortal>
+                                      </DropdownMenuSub>
+                                      <DropdownMenuItem
+                                        onSelect={(event) => {
+                                          event.preventDefault()
+                                          downloadChatExport(chat)
+                                        }}
+                                        className="h-11 rounded-xl text-[15px]"
+                                      >
+                                        <Download className="mr-3 h-5 w-5" />
+                                        Descargar
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onSelect={(event) => {
+                                          event.preventDefault()
+                                          openScheduleDialog(chat)
+                                        }}
+                                        className="h-11 rounded-xl text-[15px]"
+                                      >
+                                        <CalendarDays className="mr-3 h-5 w-5" />
+                                        Programar
                                       </DropdownMenuItem>
                                       <DropdownMenuSeparator />
                                       <DropdownMenuItem
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          deleteChat(chat.id)
+                                        onSelect={(event) => {
+                                          event.preventDefault()
+                                          archiveChatLocally(chat)
                                         }}
-                                        className="text-red-600 focus:text-red-600"
+                                        className="h-11 rounded-xl text-[15px]"
                                       >
-                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        <Archive className="mr-3 h-5 w-5" />
+                                        Archivar
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onSelect={(event) => {
+                                          event.preventDefault()
+                                          hideChatLocally(chat)
+                                        }}
+                                        className="h-11 rounded-xl text-[15px]"
+                                      >
+                                        <EyeOff className="mr-3 h-5 w-5" />
+                                        Ocultar
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        onSelect={(event) => {
+                                          event.preventDefault()
+                                          const confirmed = window.confirm(`Eliminar "${displayTitle}"? Esta acción no se puede deshacer.`)
+                                          if (confirmed) deleteChat(chat.id)
+                                        }}
+                                        className="h-11 rounded-xl text-[15px] text-red-600 focus:text-red-600"
+                                      >
+                                        <Trash2 className="mr-3 h-5 w-5" />
                                         Delete
                                       </DropdownMenuItem>
                                     </DropdownMenuContent>
@@ -871,18 +1257,30 @@ export function AppSidebar() {
                         )
                       }
 
-                      return groupDefs.map(([key, label]) => {
-                        const items = buckets[key]
-                        if (items.length === 0) return null
-                        return (
-                          <React.Fragment key={key}>
-                            <div className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none">
-                              {label}
-                            </div>
-                            {items.map(renderChatItem)}
-                          </React.Fragment>
-                        )
-                      })
+                      return (
+                        <>
+                          {pinnedChats.length > 0 && (
+                            <React.Fragment key="pinned">
+                              <div className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none">
+                                Fijados
+                              </div>
+                              {pinnedChats.map(renderChatItem)}
+                            </React.Fragment>
+                          )}
+                          {groupDefs.map(([key, label]) => {
+                            const items = buckets[key]
+                            if (items.length === 0) return null
+                            return (
+                              <React.Fragment key={key}>
+                                <div className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none">
+                                  {label}
+                                </div>
+                                {items.map(renderChatItem)}
+                              </React.Fragment>
+                            )
+                          })}
+                        </>
+                      )
                     })()}
 
                     {/* Loading indicator at the bottom */}
@@ -1099,6 +1497,66 @@ export function AppSidebar() {
         open={searchOpen}
         onOpenChange={setSearchOpen}
       />
+
+      <Dialog
+        open={Boolean(scheduleTarget)}
+        onOpenChange={(open) => {
+          if (open) return
+          setScheduleTarget(null)
+          setScheduleAt("")
+          setScheduleNote("")
+        }}
+      >
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Programar chat</DialogTitle>
+            <DialogDescription className="line-clamp-2">
+              {scheduleTarget?.title || "Selecciona una fecha y hora para este chat."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="schedule-chat-at">
+                Fecha y hora
+              </label>
+              <Input
+                id="schedule-chat-at"
+                type="datetime-local"
+                value={scheduleAt}
+                onChange={(event) => setScheduleAt(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="schedule-chat-note">
+                Nota opcional
+              </label>
+              <Textarea
+                id="schedule-chat-note"
+                value={scheduleNote}
+                onChange={(event) => setScheduleNote(event.target.value)}
+                placeholder="Agregar una indicación o recordatorio"
+                className="min-h-24 resize-none"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setScheduleTarget(null)
+                setScheduleAt("")
+                setScheduleNote("")
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button type="button" onClick={saveScheduledChat}>
+              Programar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Sidebar>
   )
 }

@@ -439,7 +439,15 @@ class ApiClient {
           if (signal?.aborted) { reader.cancel(); throw new Error('Request aborted'); }
 
           const { done, value } = await reader.read();
-          if (done) { flushBatch(); onClose(); return; }
+          if (done) {
+            flushBatch();
+            if (!hasDeliveredAnyContent) {
+              onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+              return;
+            }
+            onClose();
+            return;
+          }
 
           const chunk = decoder.decode(value, { stream: true });
           const lines = chunk.split('\n\n');
@@ -453,6 +461,10 @@ class ApiClient {
             // broken proxy or a retransmit.
             if (payload === '[DONE]') {
               flushBatch();
+              if (!hasDeliveredAnyContent) {
+                onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+                return;
+              }
               onClose();
               return;
             }

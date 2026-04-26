@@ -12,6 +12,38 @@ const rag = require('../services/rag-service');
 
 const router = express.Router();
 
+const projectChatSelect = {
+  id: true,
+  name: true,
+  description: true,
+  instructions: true,
+  isStarred: true,
+  shareId: true,
+  createdAt: true,
+  updatedAt: true,
+  files: {
+    select: {
+      id: true,
+      originalName: true,
+      mimeType: true,
+      size: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 30,
+  },
+  documents: {
+    select: {
+      id: true,
+      title: true,
+      updatedAt: true,
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 30,
+  },
+  _count: { select: { files: true, chats: true, memories: true, documents: true } },
+};
+
 // GET /api/chats/:chatId/pending-stream
 // Returns the server-side cached partial content for an in-flight
 // stream so the UI can resume after a tab reload / reconnect.
@@ -54,7 +86,23 @@ router.get('/', authenticateToken, async (req, res) => {
           messages: {
             orderBy: { timestamp: 'asc' },
             take: 1 // Get only the first message for preview
-          }
+          },
+          customGpt: {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              iconUrl: true,
+              instructions: true,
+              greetingMessage: true,
+              modelName: true,
+              temperature: true,
+              conversationStarters: true,
+              visibility: true,
+              shareId: true,
+            }
+          },
+          project: { select: projectChatSelect },
         },
         skip: parseInt(skip),
         take: parseInt(limit),
@@ -120,7 +168,8 @@ router.post('/', [
         projectId: projectId || null,
       },
       include: {
-        messages: true
+        messages: true,
+        project: { select: projectChatSelect },
       }
     });
 
@@ -142,7 +191,30 @@ router.get('/:id', authenticateToken, async (req, res) => {
       include: {
         messages: {
           orderBy: { timestamp: 'asc' }
-        }
+        },
+        customGpt: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            iconUrl: true,
+            instructions: true,
+            greetingMessage: true,
+            modelName: true,
+            temperature: true,
+            conversationStarters: true,
+            visibility: true,
+            shareId: true,
+            knowledgeFiles: {
+              select: {
+                id: true,
+                originalName: true,
+                extractedText: true,
+              }
+            }
+          }
+        },
+        project: { select: projectChatSelect },
       }
     });
 
@@ -191,7 +263,8 @@ router.put('/:id', [
       include: {
         messages: {
           orderBy: { timestamp: 'asc' }
-        }
+        },
+        project: { select: projectChatSelect },
       }
     });
 

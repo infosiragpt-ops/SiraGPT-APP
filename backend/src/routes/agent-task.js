@@ -406,7 +406,7 @@ router.post(
       if (!clientConnected || res.writableEnded) return;
       try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ }
     };
-    req.on('close', () => {
+    res.on('close', () => {
       clientConnected = false;
       // If the task belongs to a chat, keep it running and persist the
       // final trace. This is the practical "continue while I leave the

@@ -379,7 +379,7 @@ router.post(
     }
 
     const controller = new AbortController();
-    req.on('close', () => { if (!res.writableEnded) controller.abort(); });
+    res.on('close', () => { if (!res.writableEnded) controller.abort(); });
 
     send({
       type: 'start',

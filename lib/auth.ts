@@ -1,3 +1,33 @@
+type JwtPayload = {
+  userId?: string
+  id?: string
+  email?: string
+  isAdmin?: boolean
+}
+
+export interface AuthUser {
+  id: string
+  email: string
+  isAdmin: boolean
+}
+
+export async function validateSession(token: string): Promise<AuthUser | null> {
+  try {
+    const jwt = require("jsonwebtoken")
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || "your-secret-key") as JwtPayload
+    const id = decoded.userId || decoded.id
+    if (!id) return null
+
+    return {
+      id,
+      email: decoded.email || "",
+      isAdmin: Boolean(decoded.isAdmin),
+    }
+  } catch {
+    return null
+  }
+}
+
 // import bcrypt from 'bcryptjs'
 // import jwt from 'jsonwebtoken'
 // import { prisma } from './prisma'

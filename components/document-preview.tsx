@@ -3,6 +3,7 @@
 import React from "react"
 import { Loader2, X, AlertCircle, Download, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { downloadHref, downloadUrlAsFile } from "@/lib/utils"
 
 /**
  * DocumentPreview — right-pane viewer for generated documents.
@@ -207,34 +208,17 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
 
-  const clickDownload = React.useCallback((href: string, name: string) => {
-    const a = document.createElement("a")
-    a.href = href
-    a.download = name
-    a.target = "_blank"
-    a.rel = "noopener"
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-  }, [])
-
   const download = React.useCallback(async () => {
-    if (/^(data|blob):/i.test(downloadUrl)) {
-      clickDownload(downloadUrl, filename)
-      return
-    }
-
     try {
-      const resp = await fetch(downloadUrl, { credentials: "include" })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const blob = await resp.blob()
-      const objectUrl = URL.createObjectURL(blob)
-      clickDownload(objectUrl, filename)
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 1500)
+      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
+      await downloadUrlAsFile(downloadUrl, filename, {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
     } catch {
-      clickDownload(downloadUrl, filename)
+      downloadHref(downloadUrl, filename)
     }
-  }, [clickDownload, downloadUrl, filename])
+  }, [downloadUrl, filename])
 
   React.useEffect(() => {
     if (!previewUrl) return
@@ -343,20 +327,20 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   }, [filename, format, previewUrl])
 
   return (
-    <div className="relative flex h-full w-full flex-col bg-background">
-      <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
+      <div className="sticky top-0 z-20 flex h-14 min-h-14 w-full min-w-0 items-center border-b border-border/40 bg-background px-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pr-3">
           <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate text-sm font-medium" title={filename}>
+          <span className="block min-w-0 max-w-full truncate text-sm font-medium" title={filename}>
             {filename}
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <Button
             variant="ghost"
             size="icon"
             onClick={download}
-            className="h-8 w-8"
+            className="h-8 w-8 shrink-0"
             title="Descargar"
             aria-label="Descargar"
           >
@@ -366,7 +350,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             variant="ghost"
             size="icon"
             onClick={onClose}
-            className="h-8 w-8"
+            className="h-8 w-8 shrink-0"
             title="Cerrar"
             aria-label="Cerrar previsualización"
           >

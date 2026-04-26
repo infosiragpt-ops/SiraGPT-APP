@@ -92,7 +92,12 @@ router.post(
     // Client-disconnect handling.
     const controller = new AbortController();
     let clientGone = false;
-    req.on('close', () => { clientGone = true; controller.abort(); });
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        clientGone = true;
+        controller.abort();
+      }
+    });
 
     // Heartbeat every 15s so proxies don't drop the connection during
     // long LLM calls.

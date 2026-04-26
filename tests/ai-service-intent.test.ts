@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { aiService, buildProfessionalCapabilityPrompt } from "../lib/ai-service"
+import {
+  aiService,
+  buildProfessionalCapabilityPrompt,
+  shouldAnswerFromExistingDocument,
+} from "../lib/ai-service"
 
 describe("ai-service · deterministic intent routing", () => {
   it("routes research plus a deliverable file to the long-running agent", async () => {
@@ -20,6 +24,30 @@ describe("ai-service · deterministic intent routing", () => {
 
   it("keeps a simple document request on the lightweight doc generator", async () => {
     const intent = await aiService.classifyIntent("crea un documento Word vacío")
+    assert.equal(intent, "doc")
+  })
+
+  it("does not generate a Word file when the user asks about an existing Word attachment", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "dame un resumen en un solo parrafo",
+        files: [
+          {
+            id: "file-docx-1",
+            name: "RDC-RSN.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        ],
+      },
+    ]
+    const intent = await aiService.classifyIntent("cual es la primera palabra del word ?", history)
+    assert.equal(intent, "text")
+    assert.equal(shouldAnswerFromExistingDocument("cual es la primera palabra del word ?", history), true)
+  })
+
+  it("still creates a Word file when Word is requested as the output format", async () => {
+    const intent = await aiService.classifyIntent("hazme un Word con el resumen del documento")
     assert.equal(intent, "doc")
   })
 
@@ -60,6 +88,12 @@ describe("ai-service · deterministic intent routing", () => {
       "crea un diagrama de Pareto y un histograma con estos datos",
     )
     assert.equal(intent, "viz")
+  })
+
+  it("routes realtime weather, sports and places lookups to grounded search", async () => {
+    assert.equal(await aiService.classifyIntent("consulta el clima actual de La Paz"), "web_search")
+    assert.equal(await aiService.classifyIntent("resultados NBA de hoy"), "web_search")
+    assert.equal(await aiService.classifyIntent("busca restaurantes cerca de mi"), "web_search")
   })
 
   it("routes live calculators and 3D interactives to artifacts", async () => {
@@ -119,6 +153,11 @@ describe("ai-service · deterministic intent routing", () => {
       "crea una landing page profesional para vender asesorías de tesis",
     )
     assert.equal(intent, "webdev")
+  })
+
+  it("routes explicit SVG creation to the document artifact pipeline", async () => {
+    const intent = await aiService.classifyIntent("créame un SVG de una casa moderna")
+    assert.equal(intent, "doc")
   })
 
   it("does not treat general React explanations as web generation", async () => {

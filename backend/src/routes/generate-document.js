@@ -105,9 +105,11 @@ router.post(
             console.log(`Word Document Stream registered with ID: ${streamId}`);
         }
 
-        req.on('close', () => {
-            console.log(`Client connection closed for Word document chat: ${req.body.chatId}. Aborting generation.`);
-            controller.abort();
+        res.on('close', () => {
+            if (!res.writableEnded) {
+                console.log(`Client response closed for Word document chat: ${req.body.chatId}. Aborting generation.`);
+                controller.abort();
+            }
         });
         req.on('aborted', () => {
             console.log(`Client request aborted for Word document chat: ${req.body.chatId}. Aborting generation.`);

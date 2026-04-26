@@ -85,16 +85,75 @@ export function copyToClipboard(text: string): Promise<void> {
   return navigator.clipboard.writeText(text)
 }
 
-export function downloadFile(data: string, filename: string, type = "text/plain"): void {
-  const blob = new Blob([data], { type })
+export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const link = document.createElement("a")
   link.href = url
   link.download = filename
+  link.rel = "noopener"
+  link.style.display = "none"
   document.body.appendChild(link)
-  link.click()
+  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }))
   document.body.removeChild(link)
-  URL.revokeObjectURL(url)
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500)
+}
+
+export function dataUrlToBlob(dataUrl: string): Blob {
+  const match = /^data:([^;,]*)(;base64)?,(.*)$/i.exec(dataUrl)
+  if (!match) throw new Error("Invalid data URL")
+
+  const mimeType = match[1] || "application/octet-stream"
+  const isBase64 = Boolean(match[2])
+  const payload = match[3] || ""
+
+  if (!isBase64) {
+    return new Blob([decodeURIComponent(payload)], { type: mimeType })
+  }
+
+  const binary = atob(payload)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new Blob([bytes], { type: mimeType })
+}
+
+export function downloadHref(href: string, filename: string): void {
+  const link = document.createElement("a")
+  link.href = href
+  link.download = filename
+  link.target = "_blank"
+  link.rel = "noopener"
+  link.style.display = "none"
+  document.body.appendChild(link)
+  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }))
+  document.body.removeChild(link)
+}
+
+export async function downloadUrlAsFile(href: string, filename: string, init?: RequestInit): Promise<void> {
+  if (/^data:/i.test(href)) {
+    downloadBlob(dataUrlToBlob(href), filename)
+    return
+  }
+
+  if (/^blob:/i.test(href)) {
+    const blob = await fetch(href).then((response) => response.blob())
+    downloadBlob(blob, filename)
+    return
+  }
+
+  try {
+    const response = await fetch(href, init)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    downloadBlob(await response.blob(), filename)
+  } catch (error) {
+    downloadHref(href, filename)
+    throw error
+  }
+}
+
+export function downloadFile(data: string, filename: string, type = "text/plain"): void {
+  downloadBlob(new Blob([data], { type }), filename)
 }
 
 export function getRandomColor(): string {
