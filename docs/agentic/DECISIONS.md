@@ -59,3 +59,16 @@ Razon:
 - Evita gastar herramientas y llamadas LLM en solicitudes que ya exceden limites configurados.
 - Mantiene el mensaje del usuario persistido para no perder contexto.
 - Permite operar en modo `observe` para medir sin afectar usuarios durante rollout.
+
+## 2026-04-26 - Execution trace frame sin payloads crudos
+
+Decision:
+
+- Emitir un `execution_trace_frame` desde el runtime concreto.
+- Registrar en auditoria solo el resumen del trace, no inputs ni outputs de herramientas.
+
+Razon:
+
+- La plataforma necesita observabilidad real para diagnosticar workflows, retries y bloqueos.
+- Los traces deben ser utiles para admin/soporte sin filtrar prompts, archivos ni datos sensibles.
+- Mantiene la separacion entre ejecucion backend y UI: el frontend puede consumir el frame en el futuro sin cambiar el runtime.

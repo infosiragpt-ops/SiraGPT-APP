@@ -279,6 +279,14 @@ async function handleChatTurnUnlocked({
     readyToDeliver: runtimeResult.validation_frame.ready_to_deliver,
     checks: runtimeResult.validation_frame.checks,
   });
+  if (runtimeResult.execution_trace_frame) {
+    await store.audit("execution_trace_recorded", {
+      request_id: bundle.envelope.request_id,
+      status: runtimeResult.execution_trace_frame.status,
+      duration_ms: runtimeResult.execution_trace_frame.duration_ms,
+      counters: runtimeResult.execution_trace_frame.counters,
+    }, { userId, requestId: bundle.envelope.request_id });
+  }
 
   // ── 5. Guard against accidental auto-routing ─────────────────────
   guardAgainstAutoRouting(originalSelection, selectedModel);
@@ -314,6 +322,7 @@ async function handleChatTurnUnlocked({
     artifact_count: runtimeResult.artifact_frame.artifacts.length,
     tool_count: runtimeResult.tool_results.length,
     token_usage: tokenUsage.usage,
+    execution_trace: runtimeResult.execution_trace_frame?.counters || null,
   }, { userId, requestId: bundle.envelope.request_id });
 
   return {
@@ -337,6 +346,7 @@ async function handleChatTurnUnlocked({
       artifact_count: runtimeResult.artifact_frame.artifacts.length,
       validation_score: runtimeResult.validation_frame.aggregate_score,
       token_usage: tokenUsage.usage,
+      execution_trace: runtimeResult.execution_trace_frame?.counters || null,
     },
   };
 }

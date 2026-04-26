@@ -13,6 +13,7 @@ const { createDefaultRegistry } = require("./tool-registry");
 const { evaluateToolPolicy, resolveToolPolicyProfile } = require("./tool-policy");
 const { createRunIdempotencyGuard } = require("./idempotency-guard");
 const { createToolResilienceController } = require("./tool-resilience");
+const { buildExecutionTraceFrame } = require("./execution-trace-frame");
 const { validateArtifact, validateSources, validateCode, validateDocument, validateSafety, composeValidationFrame } = require("./validator-engine");
 
 const DEFAULT_PERMISSIONS = Object.freeze([
@@ -43,6 +44,7 @@ async function runWorkflow({
   }
   const reg = registry || createDefaultRegistry();
   const log = [];
+  const workflowStartedAt = new Date().toISOString();
   const auditTrace = [...(envelope.workflow_graph.audit_trace || [])];
   const evidenceLedger = [...(envelope.workflow_graph.evidence_ledger || [])];
   const toolResults = [];
@@ -231,12 +233,25 @@ async function runWorkflow({
 
   // ── Run the validator engine ──────────────────────────────────────
   const validation_frame = composeValidationFrame(deriveValidatorReports(envelope, artifacts, toolResults), envelope.quality_plan?.minimum_acceptance_score || 0.85);
+  const workflowFinishedAt = new Date().toISOString();
+  const execution_trace_frame = buildExecutionTraceFrame({
+    envelope,
+    log,
+    auditTrace,
+    toolResults,
+    artifactFrame: artifact_frame,
+    validationFrame: validation_frame,
+    startedAt: workflowStartedAt,
+    finishedAt: workflowFinishedAt,
+    toolResilience: toolResilience.snapshot(),
+  });
 
   return {
     request_id: envelope.request_id,
     tool_results: toolResults,
     artifact_frame,
     validation_frame,
+    execution_trace_frame,
     evidence_ledger: evidenceLedger,
     audit_trace: auditTrace,
     log,
@@ -247,6 +262,12 @@ async function runWorkflow({
       tool_resilience: toolResilience.snapshot(),
       artifacts_planned: artifact_frame.artifacts.length,
       ready_to_deliver: validation_frame.ready_to_deliver,
+      execution_trace: {
+        timeline_events: execution_trace_frame.counters.timeline_events,
+        tools_with_errors: execution_trace_frame.counters.tools_with_errors,
+        retries_total: execution_trace_frame.counters.retries_total,
+        duration_ms: execution_trace_frame.duration_ms,
+      },
     },
   };
 }
@@ -340,4 +361,5 @@ module.exports = {
   runWorkflow,
   derivePlannedArtifacts,
   DEFAULT_PERMISSIONS,
+  buildExecutionTraceFrame,
 };

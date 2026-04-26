@@ -9,6 +9,8 @@ Este sprint endurece el nucleo interno de SiraGPT sin tocar la interfaz visual. 
 
 Segunda pasada: convertir la contabilidad en una politica preflight de presupuesto para bloquear solicitudes que excedan limites por plan, turno, conversacion o dia antes de gastar runtime/herramientas.
 
+Tercera pasada: convertir los hechos del runtime en un `execution_trace_frame` seguro para observabilidad, debugging y reporte admin sin registrar texto crudo ni payloads de herramientas.
+
 ## Hitos
 
 ### Hito 1 - Inspeccion y documentacion
@@ -75,6 +77,19 @@ Criterio de aceptacion:
 Validacion:
 
 - `rm -rf .test-dist && node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node --test --test-name-pattern="token budget" .test-dist/tests/sira-token-budget-policy.test.js`
+
+### Hito 6 - Execution Trace Frame
+
+Criterio de aceptacion:
+
+- El runtime emite un `execution_trace_frame` por workflow.
+- El frame contiene timeline, estado por nodo, estado por herramienta, intentos, retries, duracion y contadores.
+- El frame no registra texto del usuario, contenido de adjuntos, inputs crudos ni outputs crudos de herramientas.
+- El controlador de chat audita un resumen `execution_trace_recorded` sin acoplar UI.
+
+Validacion:
+
+- `rm -rf .test-dist && node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node --test --test-name-pattern="execution trace" .test-dist/tests/sira-execution-trace-frame.test.js`
 
 ## Fuera de alcance
 

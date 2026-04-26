@@ -4,7 +4,7 @@ Fecha: 2026-04-26
 
 ## Estado
 
-Segunda pasada completada localmente: token budget preflight implementado y validado.
+Tercera pasada completada localmente: `execution_trace_frame` integrado para observabilidad del runtime sin payloads crudos.
 
 ## Hitos
 
@@ -13,6 +13,7 @@ Segunda pasada completada localmente: token budget preflight implementado y vali
 - Hito 3: completado. Integrada auditoria `token_usage_recorded` en `chat-controller`.
 - Hito 4: completado parcialmente. Tests, build, lint y smoke HTTP pasaron. Browser Use no pudo completar navegacion por timeout del plugin/browser.
 - Hito 5: completado. Politica de presupuesto de tokens por plan/turno/conversacion/dia integrada antes del engine/runtime.
+- Hito 6: completado. Frame de trazabilidad de ejecucion por workflow con contadores, timeline, nodos, herramientas, retries y auditoria resumida.
 
 ## Validaciones ejecutadas
 
@@ -30,8 +31,14 @@ Segunda pasada completada localmente: token budget preflight implementado y vali
 - `curl -L --max-time 10 http://localhost:3001/chat | head -c 500`
 - `rm -rf .test-dist && node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node --test --test-name-pattern="sira token budget" .test-dist/tests/sira-token-budget-policy.test.js`
 - `node --test --test-name-pattern="token budget" .test-dist/tests/sira-token-budget-policy.test.js`
+- `rm -rf .test-dist && node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node --test --test-name-pattern="execution trace" .test-dist/tests/sira-execution-trace-frame.test.js`
+- `npm test`
+- `npm run build`
+- `npm run lint`
+- `PORT=3001 npm run dev`
+- `@browser-use` via Node REPL against `http://localhost:3001/chat`
 - `curl -I --max-time 20 http://localhost:3001/chat`
-- `curl -L --max-time 20 http://localhost:3001/chat | head -c 500`
+- `curl -L --max-time 20 http://localhost:3001/chat | head -c 800`
 
 ## Observaciones
 
@@ -46,3 +53,9 @@ Segunda pasada completada localmente: token budget preflight implementado y vali
 - El comando con patron `sira token budget` valido solo el suite de policy por coincidencia de nombre. Se ejecuto despues `token budget`, que valido policy y controlador: 5 tests, 0 fallos.
 - El bloqueo por presupuesto ocurre despues de persistir el mensaje del usuario y antes de crear envelope/tool runtime, para evitar perdida de contexto y coste innecesario.
 - En la segunda pasada, Browser Use volvio a expirar durante bootstrap del navegador in-app. El primer `curl` tambien expiro mientras Next compilaba `/chat`; el reintento posterior devolvio `HTTP/1.1 200 OK` y HTML de la pagina.
+- En la tercera pasada, la validacion focalizada de execution trace paso con 2 tests y 0 fallos.
+- `npm test` paso con 233 tests y 0 fallos.
+- `npm run build` compilo correctamente.
+- `npm run lint` termino con exit code 0; los warnings reportados son preexistentes en archivos de frontend no modificados por este hito.
+- `@browser-use` fue intentado contra `localhost:3001`, pero el runtime del plugin expiro a los 60s durante bootstrap. El smoke HTTP local confirmo `HTTP/1.1 200 OK` y HTML SSR para `/chat`.
+- El `execution_trace_frame` queda disponible en `runtime.summary.execution_trace` y auditado como `execution_trace_recorded`, sin registrar prompts, adjuntos, inputs de herramientas ni outputs de herramientas.
