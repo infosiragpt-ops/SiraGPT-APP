@@ -32,8 +32,54 @@ const { createInMemoryStorage, createSiraStorage } = require("./storage-schema")
 const { evaluatePolicyForEnvelope, SIRA_CLARIFICATION_POLICY, SIRA_SAFETY_POLICY } = require("./policies");
 const { guardAgainstAutoRouting } = require("./model-adapter");
 const { createDefaultRegistry } = require("./tool-registry");
+const { createSessionActorQueue, buildChatTurnActorKey } = require("./session-actor-queue");
+
+const defaultChatTurnQueue = createSessionActorQueue();
 
 async function handleChatTurn({
+  conversationId,
+  userId,
+  userMessage,
+  attachments = [],
+  history = [],
+  selectedModel,
+  userPlan = "FREE",
+  permissions = ["none", "read_uploaded_file", "write_artifact", "execute_sandboxed_code", "external_api_access"],
+  toolArgs = {},
+  dryRun = true,
+  bypassSessionQueue = false,
+} = {}, deps = {}) {
+  const actorKey = buildChatTurnActorKey({ conversationId, userId });
+  const queue = deps.sessionQueue || defaultChatTurnQueue;
+  if (bypassSessionQueue || !queue || typeof queue.run !== "function") {
+    return handleChatTurnUnlocked({
+      conversationId,
+      userId,
+      userMessage,
+      attachments,
+      history,
+      selectedModel,
+      userPlan,
+      permissions,
+      toolArgs,
+      dryRun,
+    }, deps);
+  }
+  return queue.run(actorKey, () => handleChatTurnUnlocked({
+    conversationId,
+    userId,
+    userMessage,
+    attachments,
+    history,
+    selectedModel,
+    userPlan,
+    permissions,
+    toolArgs,
+    dryRun,
+  }, deps));
+}
+
+async function handleChatTurnUnlocked({
   conversationId,
   userId,
   userMessage,
@@ -207,5 +253,8 @@ async function handleChatTurn({
 
 module.exports = {
   handleChatTurn,
+  handleChatTurnUnlocked,
+  defaultChatTurnQueue,
+  buildChatTurnActorKey,
   POLICIES: { SIRA_CLARIFICATION_POLICY, SIRA_SAFETY_POLICY },
 };
