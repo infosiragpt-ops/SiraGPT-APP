@@ -33,6 +33,7 @@ const { evaluatePolicyForEnvelope, SIRA_CLARIFICATION_POLICY, SIRA_SAFETY_POLICY
 const { guardAgainstAutoRouting } = require("./model-adapter");
 const { createDefaultRegistry } = require("./tool-registry");
 const { createSessionActorQueue, buildChatTurnActorKey } = require("./session-actor-queue");
+const { buildTokenUsageFrame } = require("./token-ledger");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -90,7 +91,7 @@ async function handleChatTurnUnlocked({
   permissions = ["none", "read_uploaded_file", "write_artifact", "execute_sandboxed_code", "external_api_access"],
   toolArgs = {},
   dryRun = true,
-} = {}, { storage = null, registry = null, providers = null } = {}) {
+} = {}, { storage = null, registry = null, providers = null, tokenLedger = null } = {}) {
   if (!userMessage || typeof userMessage !== "string") {
     throw new Error("chat-controller: userMessage required");
   }
@@ -141,6 +142,17 @@ async function handleChatTurnUnlocked({
   const policyVerdict = evaluatePolicyForEnvelope(bundle.envelope);
 
   if (policyVerdict.summary === "ask_user_clarification" || bundle.stage === "needs_clarification") {
+    const clarificationText = "Necesito una aclaración para continuar.";
+    const tokenUsage = await recordTokenUsage({
+      store,
+      tokenLedger,
+      envelope: bundle.envelope,
+      userMessage,
+      attachments,
+      history,
+      selectedModel,
+      responseText: clarificationText,
+    });
     await store.audit("clarification_requested", {
       questions: bundle.envelope.clarification_policy?.questions || [],
       reasons: policyVerdict.clarification.reasons,
@@ -148,9 +160,10 @@ async function handleChatTurnUnlocked({
     persistedIds.assistant_message_id = await store.addMessage({
       conversationId, role: "assistant",
       content: {
-        text: "Necesito una aclaración para continuar.",
+        text: clarificationText,
         clarifying_questions: bundle.envelope.clarification_policy?.questions || [],
         reasons: policyVerdict.clarification.reasons,
+        token_usage: tokenUsage,
       },
       selectedModel,
     });
@@ -161,6 +174,7 @@ async function handleChatTurnUnlocked({
       plan_frame: bundle.plan_frame,
       clarifying_questions: bundle.envelope.clarification_policy?.questions || [],
       policy: policyVerdict,
+      token_usage: tokenUsage,
       persisted_ids: persistedIds,
     };
   }
@@ -212,13 +226,26 @@ async function handleChatTurnUnlocked({
   guardAgainstAutoRouting(originalSelection, selectedModel);
 
   // ── 6. Persist assistant response + audit ────────────────────────
+  const assistantText = bundle.response?.user_visible_summary || bundle.response?.summary || "Tarea preparada.";
+  const tokenUsage = await recordTokenUsage({
+    store,
+    tokenLedger,
+    envelope: bundle.envelope,
+    userMessage,
+    attachments,
+    history,
+    selectedModel,
+    runtimeResult,
+    responseText: assistantText,
+  });
   persistedIds.assistant_message_id = await store.addMessage({
     conversationId, role: "assistant",
     content: {
-      text: bundle.response?.user_visible_summary || bundle.response?.summary || "Tarea preparada.",
+      text: assistantText,
       delivery_mode: bundle.response?.delivery_mode || bundle.envelope.final_answer_contract?.delivery_mode,
       artifacts: runtimeResult.artifact_frame.artifacts,
       ready_to_deliver: runtimeResult.validation_frame.ready_to_deliver,
+      token_usage: tokenUsage,
     },
     selectedModel,
   });
@@ -227,6 +254,7 @@ async function handleChatTurnUnlocked({
     ready_to_deliver: runtimeResult.validation_frame.ready_to_deliver,
     artifact_count: runtimeResult.artifact_frame.artifacts.length,
     tool_count: runtimeResult.tool_results.length,
+    token_usage: tokenUsage.usage,
   }, { userId, requestId: bundle.envelope.request_id });
 
   return {
@@ -241,14 +269,59 @@ async function handleChatTurnUnlocked({
     response: bundle.response,
     runtime: runtimeResult,
     policy: policyVerdict,
+    token_usage: tokenUsage,
     persisted_ids: persistedIds,
     summary: {
       stage: runtimeResult.validation_frame.ready_to_deliver ? "delivered" : "needs_repair",
       tool_count: runtimeResult.tool_results.length,
       artifact_count: runtimeResult.artifact_frame.artifacts.length,
       validation_score: runtimeResult.validation_frame.aggregate_score,
+      token_usage: tokenUsage.usage,
     },
   };
+}
+
+async function recordTokenUsage({
+  store,
+  tokenLedger,
+  envelope,
+  userMessage,
+  attachments,
+  history,
+  selectedModel,
+  runtimeResult = null,
+  responseText = "",
+}) {
+  const tokenUsage = buildTokenUsageFrame({
+    envelope,
+    userMessage,
+    attachments,
+    history,
+    selectedModel,
+    runtimeResult,
+    responseText,
+  });
+
+  if (tokenLedger && typeof tokenLedger.record === "function") {
+    try {
+      tokenLedger.record(tokenUsage);
+    } catch (error) {
+      await store.audit("token_usage_ledger_error", {
+        request_id: tokenUsage.request_id,
+        error: error && error.message ? error.message : String(error),
+      }, { userId: tokenUsage.user_id, requestId: tokenUsage.request_id });
+    }
+  }
+
+  await store.audit("token_usage_recorded", {
+    request_id: tokenUsage.request_id,
+    dimensions: tokenUsage.dimensions,
+    usage: tokenUsage.usage,
+    accounting_method: tokenUsage.accounting_method,
+    estimated: tokenUsage.estimated,
+  }, { userId: tokenUsage.user_id, requestId: tokenUsage.request_id });
+
+  return tokenUsage;
 }
 
 module.exports = {
