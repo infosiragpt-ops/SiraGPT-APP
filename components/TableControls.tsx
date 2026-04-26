@@ -91,7 +91,10 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
         }
     };
     return (
-        <div className="absolute top-2 right-2 z-10 flex items-center space-x-1 rounded-lg bg-background/90 p-1 backdrop-blur-sm border border-border/50 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 ease-in-out transform scale-90 group-hover:scale-100 shadow-sm">
+        <div
+            data-copy-exclude=""
+            className="absolute top-2 right-2 z-10 flex items-center space-x-1 rounded-lg bg-background/90 p-1 backdrop-blur-sm border border-border/50 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 ease-in-out transform scale-90 group-hover:scale-100 shadow-sm"
+        >
             <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                     <Button 

@@ -68,6 +68,12 @@ import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
+import {
+    copyMarkdownToWordClipboard,
+    createWordClipboardPayloadFromSelection,
+    setClipboardDataForWord,
+    stripNonCopyableArtifactBlocks,
+} from "@/lib/rich-clipboard"
 
 // Adjusted truncateUrl function to ensure links are not overly shortened
 const truncateUrl = (url: string, maxLength: number = 30) => {
@@ -839,36 +845,21 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     };
 
-    // Robust copy: always returns a Promise (so MessageActionRail's
-    // success/error pulse fires correctly), uses navigator.clipboard
-    // when allowed, falls back to a hidden textarea + execCommand
-    // when permissions are denied or the API is missing, and surfaces
-    // a real toast on failure instead of silently swallowing errors.
+    // Word-grade copy: write a rich clipboard payload (HTML + plain
+    // text, with RTF when the browser allows it) from the markdown
+    // source, so pasting into Word keeps headings, lists, tables and
+    // emphasis without carrying chat UI borders or buttons.
     const handleGlobalCopy = async () => {
-        const text = String(message.content || "");
-        if (!text) {
+        const source = stripNonCopyableArtifactBlocks(String(message.content || ""));
+        if (!source) {
             toast.error("Nada que copiar.");
             throw new Error("empty_content");
         }
         try {
-            if (typeof navigator !== "undefined" && navigator.clipboard && window.isSecureContext) {
-                await navigator.clipboard.writeText(text);
-            } else {
-                // Legacy fallback for non-secure contexts / older browsers.
-                const ta = document.createElement("textarea");
-                ta.value = text;
-                ta.setAttribute("readonly", "");
-                ta.style.position = "fixed";
-                ta.style.opacity = "0";
-                document.body.appendChild(ta);
-                ta.select();
-                const ok = document.execCommand("copy");
-                document.body.removeChild(ta);
-                if (!ok) throw new Error("execCommand_copy_failed");
-            }
+            await copyMarkdownToWordClipboard(source);
             setIsCopied(true);
             setTimeout(() => setIsCopied(false), 2000);
-            toast.success("Copiado al portapapeles");
+            toast.success("Copiado con formato profesional para Word");
         } catch (err: any) {
             console.error("[copy] failed:", err);
             toast.error(`No se pudo copiar: ${err?.message || "error desconocido"}`);
@@ -1227,6 +1218,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             return null;
         }
 
+        const handleRenderedCopy = (event: React.ClipboardEvent<HTMLDivElement>) => {
+            const payload = createWordClipboardPayloadFromSelection(event.currentTarget, content);
+            if (!payload) return;
+
+            setClipboardDataForWord(event.clipboardData, payload);
+            event.preventDefault();
+            toast.success("Selección copiada con formato para Word");
+        };
+
         return (
             // [&_p:last-child]:!mb-0 trims the trailing 1em margin that
             // `prose-sm` adds to the final paragraph — that margin was
@@ -1236,7 +1236,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 "prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed",
                 "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
                 "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
-            )}>
+            )}
+                data-sgpt-rich-copy-root=""
+                onCopyCapture={handleRenderedCopy}
+            >
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex, rehypeRaw]}
@@ -2499,8 +2502,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     size="icon"
                                     className="h-6 w-6"
                                     onClick={() => {
-                                        navigator.clipboard.writeText(message.content)
-                                        toast.success("Copied!")
+                                        copyMarkdownToWordClipboard(message.content)
+                                            .then(() => toast.success("Copiado con formato para Word"))
+                                            .catch((err) => {
+                                                console.error("[copy] failed:", err)
+                                                toast.error("No se pudo copiar")
+                                            })
                                     }}
                                     title="Copy"
                                 >
@@ -2599,7 +2606,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 messageId={message.id}
                                 chatId={message.chatId}
                                 model={(message as any).model}
-                                content={message.content || ""}
+                                content={stripNonCopyableArtifactBlocks(message.content || "")}
                                 hasError={!!message.error}
                                 isStreaming={isStreaming}
                                 feedback={feedbackSent}
