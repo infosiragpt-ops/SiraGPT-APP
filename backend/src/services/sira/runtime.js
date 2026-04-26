@@ -12,6 +12,7 @@
 const { createDefaultRegistry } = require("./tool-registry");
 const { evaluateToolPolicy, resolveToolPolicyProfile } = require("./tool-policy");
 const { createRunIdempotencyGuard } = require("./idempotency-guard");
+const { createToolResilienceController } = require("./tool-resilience");
 const { validateArtifact, validateSources, validateCode, validateDocument, validateSafety, composeValidationFrame } = require("./validator-engine");
 
 const DEFAULT_PERMISSIONS = Object.freeze([
@@ -63,6 +64,10 @@ async function runWorkflow({
     trace: context.trace || (() => {}),
   };
   const idempotencyGuard = createRunIdempotencyGuard({ envelope });
+  const toolResilience = createToolResilienceController({
+    envelope,
+    sleep: context.resilienceSleep,
+  });
 
   // ── Drive the graph in topological order ─────────────────────────
   while (true) {
@@ -137,7 +142,15 @@ async function runWorkflow({
           });
           continue;
         }
-        const r = await reg.invoke(toolName, input, baseContext);
+        const r = await toolResilience.invoke({
+          registry: reg,
+          toolName,
+          input,
+          context: baseContext,
+          tool,
+          nodeId: next.id,
+          auditTrace,
+        });
         if (idempotency.guarded) {
           idempotencyGuard.remember(idempotency.key, {
             node: next.id,
@@ -231,6 +244,7 @@ async function runWorkflow({
       nodes_executed: completed.size,
       tools_invoked: toolResults.length,
       idempotency_guard: idempotencyGuard.snapshot(),
+      tool_resilience: toolResilience.snapshot(),
       artifacts_planned: artifact_frame.artifacts.length,
       ready_to_deliver: validation_frame.ready_to_deliver,
     },

@@ -367,4 +367,77 @@ describe("sira engine · agent runtime integration", () => {
     assert.equal(result.summary.idempotency_guard.guarded_invocations, 1)
     assert.ok(result.audit_trace.some((event: any) => event.event === "tool_deduplicated"))
   })
+
+  it("retries transient tool failures according to the workflow retry policy", async () => {
+    let executionCount = 0
+    const registry = new SiraToolRegistry()
+    registry.register({
+      name: "flaky_renderer",
+      displayName: "Flaky Renderer",
+      description: "Fails transiently before producing an artifact.",
+      category: "document",
+      riskLevel: "low",
+      permissionsRequired: ["write_artifact"],
+      timeoutMs: 30000,
+      async execute() {
+        executionCount += 1
+        if (executionCount < 3) {
+          return {
+            status: "error",
+            error: { code: "file_generation_error", message: "temporary renderer failure" },
+          }
+        }
+        return {
+          status: "success",
+          output: { executionCount },
+          artifacts: [{
+            artifact_id: "artifact.flaky_renderer",
+            type: "file",
+            format: "docx",
+            filename: "flaky_renderer.docx",
+            status: "ready",
+            download_url: "/artifacts/flaky_renderer.docx",
+          }],
+        }
+      },
+    })
+    const base = await siraEngine.runUserMessage({
+      text: "crea un documento word profesional",
+      attachments: [],
+      dryRun: true,
+    })
+    const envelope = structuredClone(base.envelope)
+    envelope.workflow_graph.retry_policy = {
+      max_retries_per_node: 2,
+      retry_on: ["file_generation_error"],
+      backoff_ms: 0,
+    }
+    envelope.workflow_graph.nodes = [{
+      id: "n1",
+      label: "Render with retry",
+      agent: "artifact_agent",
+      tools: ["flaky_renderer"],
+      depends_on: [],
+      status: "pending",
+    }]
+
+    const result = await siraWorkflowRuntime.runWorkflow({
+      envelope,
+      registry,
+      dryRun: false,
+      context: { resilienceSleep: async () => {} },
+    })
+
+    assert.equal(executionCount, 3)
+    assert.equal(result.tool_results.length, 1)
+    assert.equal(result.tool_results[0].status, "success")
+    assert.equal(result.tool_results[0].metadata.resilience.attempts, 3)
+    assert.equal(result.tool_results[0].metadata.resilience.retries, 2)
+    assert.equal(result.summary.tool_resilience.retries_scheduled, 2)
+    assert.equal(result.summary.tool_resilience.retries_exhausted, 0)
+    assert.equal(
+      result.audit_trace.filter((event: any) => event.event === "tool_retry_scheduled").length,
+      2,
+    )
+  })
 })
