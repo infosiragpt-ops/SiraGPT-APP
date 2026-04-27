@@ -637,6 +637,11 @@ router.post(
     const controller = new AbortController();
     const signal = controller.signal;
     const { streamId } = req.body;
+    // SSE heartbeat handle. Allocated after flushHeaders, cleared in
+    // the outer finally so a long upstream pause (e.g. tool call,
+    // model thinking) plus a silently-dropped client TCP connection
+    // can't keep us streaming tokens to a dead socket.
+    let keepAlive = null;
 
     if (streamId) {
       streamControllers.set(streamId, controller);
@@ -1232,6 +1237,19 @@ router.post(
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
 
+      // SSE comment heartbeat — surfaces silently-dropped client
+      // connections (NAT timeouts, mobile handoffs, sleeping clients)
+      // via a write() failure rather than waiting on the kernel's TCP
+      // keepalive (minutes by default). Matches the cadence used in
+      // /generate-webdev. Cleared in the outer finally below.
+      keepAlive = setInterval(() => {
+        try {
+          res.write(`: ping ${Date.now()}\n\n`);
+        } catch {
+          // Socket already closed — close handler will fire and abort.
+        }
+      }, 15000);
+
       // Server-side stream snapshot so a reload / second tab can resume
       // via GET /api/chats/:chatId/pending-stream. Only cached when we
       // have both an authenticated user and a chatId (the identity the
@@ -1584,6 +1602,11 @@ router.post(
       }
     }
     finally {
+      if (keepAlive) {
+        clearInterval(keepAlive);
+        keepAlive = null;
+      }
+
       if (streamId) {
         streamControllers.delete(streamId);
         console.log(`Stream unregistered for ID: ${streamId}`);
