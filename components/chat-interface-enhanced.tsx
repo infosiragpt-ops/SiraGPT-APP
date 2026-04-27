@@ -101,6 +101,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import MessageComponent from "./message-component"
+import { ErrorBoundary } from "./error-boundary"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
@@ -7476,16 +7477,22 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           <>
 
                             {stableMessages.map((message) => (
-                              <MessageComponent
-                                key={message.id}
-                                message={message}
-                                user={user}
-                                onRegenerate={regenerateMessage}
-                                updateMessageInChat={editAndRegenerate}
-                                isStreaming={false}
-                                onToggleSplitView={handleToggleSplitView}
-                                onDocumentPreview={handleDocumentPreview}
-                              />
+                              // Per-message boundary: a single corrupted
+                              // payload (broken markdown, malformed
+                              // artifact JSON, viewer crash) shows a
+                              // recoverable fallback instead of taking
+                              // down the whole chat list above and below.
+                              <ErrorBoundary key={message.id} label={`message:${message.id}`}>
+                                <MessageComponent
+                                  message={message}
+                                  user={user}
+                                  onRegenerate={regenerateMessage}
+                                  updateMessageInChat={editAndRegenerate}
+                                  isStreaming={false}
+                                  onToggleSplitView={handleToggleSplitView}
+                                  onDocumentPreview={handleDocumentPreview}
+                                />
+                              </ErrorBoundary>
                             ))}
                             {streamingMessage && (
                               // Isolate layout for the streaming bubble so
@@ -7493,16 +7500,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               // message list above. See .streaming-message
                               // in globals.css (contain: layout style).
                               <div className="streaming-message">
-                                <MessageComponent
-                                  key={streamingMessage.id}
-                                  message={streamingMessage}
-                                  user={user}
-                                  onRegenerate={regenerateMessage}
-                                  updateMessageInChat={editAndRegenerate}
-                                  isStreaming={true}
-                                  onToggleSplitView={handleToggleSplitView}
-                                  onDocumentPreview={handleDocumentPreview}
-                                />
+                                <ErrorBoundary label={`message:${streamingMessage.id}:stream`}>
+                                  <MessageComponent
+                                    key={streamingMessage.id}
+                                    message={streamingMessage}
+                                    user={user}
+                                    onRegenerate={regenerateMessage}
+                                    updateMessageInChat={editAndRegenerate}
+                                    isStreaming={true}
+                                    onToggleSplitView={handleToggleSplitView}
+                                    onDocumentPreview={handleDocumentPreview}
+                                  />
+                                </ErrorBoundary>
                               </div>
                             )}
                           </>

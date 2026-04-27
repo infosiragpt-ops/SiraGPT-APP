@@ -113,7 +113,14 @@ function createStubProvider() {
         const score = mode === "hybrid"
           ? rrf(dense, sparse)
           : (mode === "dense" ? dense : sparse);
-        return { id: b.id, text: b.text, score: round3(score), metadata: b.metadata };
+        return {
+          id: b.id,
+          text: b.text,
+          score: round3(score),
+          vectorScore: round3(dense),
+          textScore: round3(sparse),
+          metadata: b.metadata,
+        };
       }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
       return scored.slice(0, topK);
     },

@@ -20,8 +20,13 @@ async function execute({ query, k = DEFAULT_K }, ctx) {
   if (!query || typeof query !== 'string') return { hits: [], error: 'missing query' };
   const take = Math.max(1, Math.min(Number(k) || DEFAULT_K, MAX_K));
 
-  const hits = await rag.retrieve(ctx.userId, ctx.collection || 'default', query, take);
-  return { hits };
+  const result = await rag.retrieveWithTrace(ctx.userId, ctx.collection || 'default', query, take, {
+    useExpansion: true,
+    useHybrid: true,
+    useMMR: true,
+    mmrLambda: 0.72,
+  });
+  return result;
 }
 
 module.exports = { execute };

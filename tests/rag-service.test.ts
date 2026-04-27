@@ -7,6 +7,7 @@ const cjsRequire = createRequire(__filename)
 type Rag = {
   chunk: (text: string, opts?: { size?: number; overlap?: number }) => string[]
   cosine: (a: Float32Array | number[], b: Float32Array | number[]) => number
+  formatRetrievalHit: (hit: Record<string, unknown>, opts?: { includeDiagnostics?: boolean }) => Record<string, any>
   stats: (userId: string, collection: string) => Promise<{ chunks: number; dim: number }>
   EMBED_DIM: number
 }
@@ -87,6 +88,49 @@ describe("rag-service · stats", () => {
     const s = await rag.stats("user-unknown", "empty-collection")
     assert.equal(s.chunks, 0)
     assert.equal(s.dim, rag.EMBED_DIM)
+  })
+})
+
+describe("rag-service · retrieval hit diagnostics", () => {
+  it("strips internal ranking fields unless diagnostics are requested", () => {
+    const clean = rag.formatRetrievalHit({
+      text: "alpha",
+      source: "doc",
+      score: 0.123456789,
+      _idx: 7,
+      semanticRank: 1,
+      textRank: 2,
+      fusedScore: 0.02,
+      vectorScore: 0.91,
+      textScore: 3.2,
+    })
+
+    assert.equal(clean.text, "alpha")
+    assert.equal(clean.score, 0.123457)
+    assert.equal("_idx" in clean, false)
+    assert.equal("semanticRank" in clean, false)
+    assert.equal("diagnostics" in clean, false)
+  })
+
+  it("returns OpenClaw-style vector/text/fusion diagnostics when requested", () => {
+    const explained = rag.formatRetrievalHit({
+      text: "beta",
+      score: 0.02,
+      semanticRank: 4,
+      textRank: 1,
+      vectorScore: 0.74,
+      textScore: 2.5,
+      fusionScore: 0.02,
+      retrievalMode: "hybrid_rrf",
+    }, { includeDiagnostics: true })
+
+    assert.equal(explained.diagnostics.schema_version, "sira.rag_hit_diagnostics.v1")
+    assert.equal(explained.diagnostics.mode, "hybrid_rrf")
+    assert.equal(explained.diagnostics.vectorScore, 0.74)
+    assert.equal(explained.diagnostics.textScore, 2.5)
+    assert.equal(explained.diagnostics.fusionScore, 0.02)
+    assert.equal(explained.diagnostics.semanticRank, 4)
+    assert.equal(explained.diagnostics.textRank, 1)
   })
 })
 

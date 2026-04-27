@@ -132,6 +132,8 @@ describe("rag-adapter", () => {
     ]});
     const hits = await r.query({ collection: "kb2", query: "alpha", queryEmbedding: [1, 0, 0], topK: 2, mode: "hybrid" });
     expect(hits[0].id).toBe("x");
+    expect(typeof hits[0].vectorScore).toBe("number");
+    expect(typeof hits[0].textScore).toBe("number");
   });
 
   test("delete removes ids from a collection", async () => {

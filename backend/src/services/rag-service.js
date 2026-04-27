@@ -47,6 +47,8 @@ const MAX_COLLECTION_CHUNKS = 2000;              // safety cap per (user, collec
 const OVERFETCH_MULTIPLIER = 3;
 const OVERFETCH_FLOOR = 12;
 const OVERFETCH_CEILING = 40;
+const RETRIEVAL_TRACE_SCHEMA_VERSION = 'sira.rag_retrieval_trace.v1';
+const RETRIEVAL_HIT_DIAGNOSTICS_SCHEMA_VERSION = 'sira.rag_hit_diagnostics.v1';
 
 function storeKey(userId, collection) {
   return `${userId || 'anon'}:${collection || 'default'}`;
@@ -232,6 +234,7 @@ async function evictAndCleanOrphans(userId, collection) {
  */
 async function retrieve(userId, collection, query, k = 5, opts = {}) {
   if (!query || typeof query !== 'string') return [];
+  const startedAt = Date.now();
   const key = storeKey(userId, collection);
   const entries = await ragStore.getAll(userId, collection);
   if (!entries || entries.length === 0) return [];
@@ -265,6 +268,8 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     graphGamma = 2,
     graphProximalN = 5,    // how many base-retrieved passages feed the LLM read step
     sessionId = null,      // optional: enables gist memory across turns
+    includeDiagnostics = false,
+    __traceCollector = null,
   } = opts;
 
   // Overfetch a pool to feed downstream MMR/reranker/RRF with real choice.
@@ -280,8 +285,10 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
   // once more. Max-similarity fusion keeps it a single cosine pass per
   // chunk — we don't blend scores, we take the winner.
   const toEmbed = [query];
+  let expansionKeywords = [];
   if (useExpansion) {
     const { expanded, keywords } = expandQuery(query);
+    expansionKeywords = keywords;
     if (keywords.length > 0 && expanded !== query) toEmbed.push(expanded);
   }
   const queryVecs = await embed(toEmbed);
@@ -298,9 +305,16 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       source: e.source,
       title: e.title,
       score: best,
+      vectorScore: best,
+      textScore: 0,
+      fusionScore: best,
+      retrievalMode: 'semantic',
     };
   });
   scored.sort((a, b) => b.score - a.score);
+  scored.forEach((s, rank) => {
+    s.semanticRank = rank + 1;
+  });
 
   let pool;
 
@@ -324,9 +338,13 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       fused.set(s._idx, {
         ...s,
         score: s.score,
-        semRank: rank + 1,
-        bmRank: null,
+        semanticRank: rank + 1,
+        textRank: null,
+        vectorScore: s.vectorScore,
+        textScore: 0,
         fusedScore: wSem / (rrfK + (rank + 1)),
+        fusionScore: wSem / (rrfK + (rank + 1)),
+        retrievalMode: 'hybrid_rrf',
       });
     });
     // Add BM25 ranks.
@@ -335,8 +353,10 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       const existing = fused.get(idx);
       const contrib = wBm / (rrfK + (rank + 1));
       if (existing) {
-        existing.bmRank = rank + 1;
+        existing.textRank = rank + 1;
+        existing.textScore = h.score;
         existing.fusedScore += contrib;
+        existing.fusionScore = existing.fusedScore;
       } else {
         const entry = entries[idx];
         fused.set(idx, {
@@ -345,9 +365,13 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
           source: entry.source,
           title: entry.title,
           score: 0,
-          semRank: null,
-          bmRank: rank + 1,
+          semanticRank: null,
+          textRank: rank + 1,
+          vectorScore: 0,
+          textScore: h.score,
           fusedScore: contrib,
+          fusionScore: contrib,
+          retrievalMode: 'hybrid_rrf',
         });
       }
     });
@@ -357,7 +381,7 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       .slice(0, Math.max(1, cappedPool))
       // Surface the fusion score as `score` so downstream MMR/reranker
       // see a unified metric.
-      .map(e => ({ ...e, score: e.fusedScore }));
+      .map(e => ({ ...e, score: e.fusedScore, fusionScore: e.fusedScore }));
   } else {
     pool = scored.slice(0, Math.max(1, cappedPool));
   }
@@ -396,8 +420,169 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     pool = mmrRerank(pool, { lambda: mmrLambda, k: Math.max(1, k) });
   }
 
-  // Strip internal-only fields before returning.
-  return pool.slice(0, Math.max(1, k)).map(({ _idx, semRank, bmRank, fusedScore, ...rest }) => rest);
+  const hits = pool
+    .slice(0, Math.max(1, k))
+    .map(hit => formatRetrievalHit(hit, { includeDiagnostics }));
+
+  if (__traceCollector && typeof __traceCollector === 'object') {
+    Object.assign(__traceCollector, buildRetrievalTrace({
+      collection,
+      query,
+      requestedK: k,
+      returnedK: hits.length,
+      totalEntries: entries.length,
+      cappedPool,
+      queryVariants: toEmbed.length,
+      expansionKeywords,
+      useExpansion,
+      useHybrid,
+      useMMR,
+      mmrLambda,
+      rerank,
+      useGraph,
+      graphStats: useGraph ? tripleGraph.stats(userId, collection) : null,
+      rrfK,
+      hybridWeights,
+      latencyMs: Date.now() - startedAt,
+    }));
+  }
+
+  return hits;
+}
+
+async function retrieveWithTrace(userId, collection, query, k = 5, opts = {}) {
+  const trace = {};
+  const hits = await retrieve(userId, collection, query, k, {
+    ...opts,
+    includeDiagnostics: true,
+    __traceCollector: trace,
+  });
+  if (!trace.schema_version) {
+    const current = await ragStore.stats(userId, collection).catch(() => ({ chunks: 0 }));
+    Object.assign(trace, buildRetrievalTrace({
+      collection,
+      query,
+      requestedK: k,
+      returnedK: hits.length,
+      totalEntries: current?.chunks || 0,
+      cappedPool: 0,
+      queryVariants: query ? 1 : 0,
+      expansionKeywords: [],
+      useExpansion: Boolean(opts.useExpansion),
+      useHybrid: Boolean(opts.useHybrid),
+      useMMR: Boolean(opts.useMMR),
+      mmrLambda: opts.mmrLambda ?? 0.7,
+      rerank: Boolean(opts.rerank),
+      useGraph: Boolean(opts.useGraph),
+      graphStats: null,
+      rrfK: opts.rrfK ?? 60,
+      hybridWeights: opts.hybridWeights || { semantic: 1, bm25: 1 },
+      latencyMs: 0,
+    }));
+  }
+  return { hits, trace };
+}
+
+function buildRetrievalTrace({
+  collection,
+  query,
+  requestedK,
+  returnedK,
+  totalEntries,
+  cappedPool,
+  queryVariants,
+  expansionKeywords,
+  useExpansion,
+  useHybrid,
+  useMMR,
+  mmrLambda,
+  rerank,
+  useGraph,
+  graphStats,
+  rrfK,
+  hybridWeights,
+  latencyMs,
+}) {
+  return {
+    schema_version: RETRIEVAL_TRACE_SCHEMA_VERSION,
+    collection: collection || 'default',
+    query,
+    mode: useHybrid ? 'hybrid_rrf' : 'semantic',
+    requested_k: requestedK,
+    returned_k: returnedK,
+    candidates: {
+      total: totalEntries,
+      overfetch_pool: cappedPool,
+    },
+    expansion: {
+      enabled: Boolean(useExpansion),
+      query_variants: queryVariants,
+      keywords: Array.isArray(expansionKeywords) ? expansionKeywords.slice(0, 12) : [],
+    },
+    scoring: {
+      vector: true,
+      text: Boolean(useHybrid),
+      fusion: useHybrid ? 'reciprocal_rank_fusion' : 'none',
+      rrf_k: rrfK,
+      weights: {
+        semantic: Number(hybridWeights?.semantic ?? 1),
+        bm25: Number(hybridWeights?.bm25 ?? 1),
+      },
+    },
+    postprocessors: {
+      mmr: Boolean(useMMR),
+      mmr_lambda: Number(mmrLambda),
+      rerank: Boolean(rerank),
+      graph: Boolean(useGraph),
+      graph_triples: graphStats?.triples || 0,
+    },
+    latency_ms: Math.max(0, Number(latencyMs) || 0),
+  };
+}
+
+function formatRetrievalHit(hit, { includeDiagnostics = false } = {}) {
+  const {
+    _idx,
+    semanticRank,
+    semRank,
+    textRank,
+    bmRank,
+    fusedScore,
+    vectorScore,
+    textScore,
+    fusionScore,
+    graphRank,
+    rerankScore,
+    retrievalMode,
+    ...rest
+  } = hit || {};
+
+  const out = {
+    ...rest,
+    score: roundScore(rest.score),
+  };
+
+  if (includeDiagnostics) {
+    out.diagnostics = {
+      schema_version: RETRIEVAL_HIT_DIAGNOSTICS_SCHEMA_VERSION,
+      mode: retrievalMode || (fusedScore != null ? 'hybrid_rrf' : 'semantic'),
+      vectorScore: roundScore(vectorScore ?? rest.score ?? 0),
+      textScore: roundScore(textScore ?? 0),
+      fusionScore: roundScore(fusionScore ?? fusedScore ?? rest.score ?? 0),
+      semanticRank: semanticRank ?? semRank ?? null,
+      textRank: textRank ?? bmRank ?? null,
+      graphRank: graphRank ?? null,
+      rerankScore: typeof rerankScore === 'number' ? roundScore(rerankScore) : null,
+    };
+  }
+
+  return out;
+}
+
+function roundScore(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 1_000_000) / 1_000_000;
 }
 
 /**
@@ -755,6 +940,7 @@ module.exports = {
   ingestCode,
   ingestTriples,
   retrieve,
+  retrieveWithTrace,
   listSources,
   getBySource,
   clear,
@@ -766,6 +952,8 @@ module.exports = {
   expandWithGraph,
   passageLink,
   finalFuseGEAR,
+  buildRetrievalTrace,
+  formatRetrievalHit,
   EMBED_MODEL,
   EMBED_DIM,
 };

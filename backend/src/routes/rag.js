@@ -81,6 +81,8 @@ router.post(
     body('graphGamma').optional().isInt({ min: 1, max: 10 }),
     body('graphProximalN').optional().isInt({ min: 1, max: 20 }),
     body('sessionId').optional().isString().isLength({ max: 128 }),
+    body('includeDiagnostics').optional().isBoolean(),
+    body('includeTrace').optional().isBoolean(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -92,7 +94,7 @@ router.post(
       // Pass the shared OpenAI client when reranking is requested so the
       // reranker uses the same configured key/instance as embeddings.
       const rerankOpenAI = req.body.rerank ? rag.getOpenAI() : null;
-      const hits = await rag.retrieve(req.user.id, collection, req.body.query, k, {
+      const opts = {
         useExpansion: !!req.body.useExpansion,
         useMMR: !!req.body.useMMR,
         mmrLambda: typeof req.body.mmrLambda === 'number' ? req.body.mmrLambda : undefined,
@@ -107,7 +109,14 @@ router.post(
         graphGamma: req.body.graphGamma,
         graphProximalN: req.body.graphProximalN,
         sessionId: req.body.sessionId || null,
-      });
+        includeDiagnostics: !!req.body.includeDiagnostics,
+      };
+      if (req.body.includeTrace) {
+        const result = await rag.retrieveWithTrace(req.user.id, collection, req.body.query, k, opts);
+        res.json({ ok: true, collection, hits: result.hits, trace: result.trace });
+        return;
+      }
+      const hits = await rag.retrieve(req.user.id, collection, req.body.query, k, opts);
       res.json({ ok: true, collection, hits });
     } catch (err) {
       console.error('[rag] retrieve failed:', err);
