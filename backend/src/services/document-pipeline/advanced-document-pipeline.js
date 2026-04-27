@@ -21,6 +21,7 @@ const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
 const { generateSectionContent, fallbackBlock } = require('./content');
+const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
 
 const execFileAsync = promisify(execFile);
 
@@ -321,6 +322,12 @@ function titleFromPrompt(prompt, fallback = 'Documento profesional') {
   }
   const weakTail = new Set(['a', 'al', 'and', 'con', 'de', 'del', 'e', 'el', 'en', 'for', 'la', 'las', 'los', 'of', 'on', 'para', 'por', 'sobre', 'the', 'un', 'una', 'y']);
   let parts = title.split(/\s+/).filter(Boolean);
+  const weakHead = new Set(['a', 'al', 'con', 'de', 'del', 'el', 'en', 'la', 'las', 'los', 'para', 'por', 'sobre', 'un', 'una']);
+  while (parts.length > 1) {
+    const head = parts[0].toLowerCase().replace(/[.,;:]+$/g, '');
+    if (!weakHead.has(head)) break;
+    parts = parts.slice(1);
+  }
   while (parts.length > 1) {
     const tail = parts[parts.length - 1].toLowerCase().replace(/[.,;:]+$/g, '');
     if (tail.length > 4 && !weakTail.has(tail)) break;
@@ -359,19 +366,29 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     premium: ['Resumen', 'Contexto', 'Desarrollo', 'Hallazgos', 'Recomendaciones', 'Anexos'],
   };
   const sections = baseSections[template] || baseSections.premium;
+  const plannedSections = normalizedReferenceFiles.length > 0
+    ? Array.from(new Set([...sections, 'Material de referencia incorporado']))
+    : sections;
+  const referenceBriefs = normalizedReferenceFiles
+    .filter((file) => file.excerpt)
+    .map((file) => ({ name: file.name, excerpt: file.excerpt }));
   return {
     title,
+    userRequest,
     format,
     template,
     complexity,
     formulaBlocks: inferFormulaBlocks(userRequest),
-    sections: normalizedReferenceFiles.length > 0
-      ? Array.from(new Set([...sections, 'Material de referencia incorporado']))
-      : sections,
+    sections: plannedSections,
     referenceFiles: normalizedReferenceFiles.map(({ excerpt, ...file }) => file),
-    referenceBriefs: normalizedReferenceFiles
-      .filter((file) => file.excerpt)
-      .map((file) => ({ name: file.name, excerpt: file.excerpt })),
+    referenceBriefs,
+    slidePlan: buildPptxContentPlan({
+      title,
+      prompt: userRequest,
+      template,
+      sections: plannedSections,
+      referenceBriefs,
+    }),
     requiresResearch: /\b(real|doi|actual|fuentes|investiga|web|scopus|wos|openalex)\b/i.test(userRequest),
     qualityTargets: {
       minTechnicalScore: MIN_TECHNICAL_SCORE,
@@ -548,6 +565,7 @@ function validatePptx(buffer, expected = {}) {
   const entries = zipEntries(buffer);
   const slideEntries = entries.filter((e) => /^ppt\/slides\/slide\d+\.xml$/.test(e));
   const slidesXml = slideEntries.map((e) => zipText(buffer, e)).join('\n');
+  const readableText = slidesXml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   const checks = {
     zipOpen: entries.length > 8,
     presentation: entries.includes('ppt/presentation.xml'),
@@ -556,6 +574,7 @@ function validatePptx(buffer, expected = {}) {
     media: !expected.requiresImage || entries.some((e) => e.startsWith('ppt/media/')),
     notes: !expected.requiresNotes || entries.some((e) => e.startsWith('ppt/notesSlides/')),
     text: slidesXml.length > 1200,
+    contentSpecific: readableText.split(/\s+/).length > 180 && !hasGenericPlaceholderText(readableText),
     layout: entries.includes('ppt/theme/theme1.xml'),
   };
   return {
@@ -566,6 +585,8 @@ function validatePptx(buffer, expected = {}) {
       slideCount: checks.slides,
       visual: checks.media || checks.charts,
       hierarchy: /a:t/.test(slidesXml),
+      content: checks.contentSpecific,
+      contentDensity: checks.text && checks.contentSpecific,
       notes: checks.notes,
       theme: checks.layout,
     }),
@@ -1180,6 +1201,16 @@ with open(OUT_PATH, "rb") as f:
 }
 
 async function buildPptx(plan, outputPath) {
+  const contentPlan = (plan.slidePlan && Array.isArray(plan.slidePlan.slides) && plan.slidePlan.slides.length > 0)
+    ? plan.slidePlan
+    : buildPptxContentPlan({
+      title: plan.title,
+      prompt: plan.userRequest || plan.title,
+      template: plan.template,
+      sections: plan.sections,
+      blocks: plan.blocks,
+      referenceBriefs: plan.referenceBriefs,
+    });
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
   pptx.author = 'siraGPT Document Pipeline';
@@ -1195,80 +1226,135 @@ async function buildPptx(plan, outputPath) {
     slide.background = { color: palette.bg };
     slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: palette.bg }, line: { color: palette.bg } });
     slide.addShape(pptx.ShapeType.arc, { x: 10.8, y: -0.7, w: 3, h: 3, line: { color: palette.cyan, transparency: 30 }, fill: { color: 'DBEAFE', transparency: 10 } });
-    slide.addText(title, { x: 0.65, y: 0.65, w: 8.8, h: 0.7, fontFace: 'Aptos Display', fontSize: 30, bold: true, color: palette.dark, margin: 0 });
+    slide.addText(title, { x: 0.65, y: 0.65, w: 9.3, h: 0.78, fontFace: 'Aptos Display', fontSize: 30, bold: true, color: palette.dark, margin: 0, fit: 'shrink' });
     if (subtitle) slide.addText(subtitle, { x: 0.67, y: 1.42, w: 8.4, h: 0.35, fontSize: 12, color: palette.muted, margin: 0 });
   };
+  const formatBullet = (bullet) => {
+    if (!bullet) return '';
+    const label = bullet.label ? `${bullet.label}: ` : '';
+    return `• ${label}${bullet.text || ''}`;
+  };
+  const chartMetrics = (slideSpec, index) => {
+    const metrics = Array.isArray(slideSpec.metrics) && slideSpec.metrics.length > 0
+      ? slideSpec.metrics
+      : [
+        { label: 'Claridad', value: 82 + (index % 4) },
+        { label: 'Impacto', value: 78 + (index % 6) },
+        { label: 'Acción', value: 80 + (index % 5) },
+      ];
+    return metrics
+      .map((metric) => ({ label: String(metric.label || 'Indicador').slice(0, 18), value: Math.max(0, Math.min(100, Number(metric.value) || 75)) }))
+      .slice(0, 4);
+  };
+
   let slide = pptx.addSlide();
-  addTitle(slide, plan.title, 'Generado y validado por el pipeline multiagente de siraGPT');
-  slide.addImage({ data: `data:image/png;base64,${TINY_PNG.toString('base64')}`, x: 10.3, y: 4.6, w: 1.2, h: 1.2 });
-  slide.addNotes('Portada ejecutiva. Presentar objetivo y alcance en menos de un minuto.');
+  slide.background = { color: 'EEF6FF' };
+  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: 'EEF6FF' }, line: { color: 'EEF6FF' } });
+  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.22, h: 7.5, fill: { color: palette.accent }, line: { color: palette.accent } });
+  slide.addText('PRESENTACIÓN PROFESIONAL', { x: 0.8, y: 0.75, w: 5.6, h: 0.28, fontSize: 10, color: palette.accent, bold: true, charSpace: 2 });
+  slide.addText(plan.title, { x: 0.78, y: 1.32, w: 8.8, h: 1.28, fontFace: 'Aptos Display', fontSize: 38, bold: true, color: palette.dark, margin: 0, fit: 'shrink' });
+  slide.addText(contentPlan.thesis, { x: 0.82, y: 2.85, w: 7.4, h: 0.92, fontSize: 16, color: '334155', fit: 'shrink' });
+  slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y: 4.2, w: 3.1, h: 0.48, rectRadius: 0.09, fill: { color: palette.white }, line: { color: 'CBD5E1' } });
+  slide.addText('Enfoque ejecutivo y editable', { x: 1.05, y: 4.33, w: 2.7, h: 0.18, fontSize: 10.5, bold: true, color: palette.dark, margin: 0 });
+  slide.addShape(pptx.ShapeType.arc, { x: 9.2, y: 0.85, w: 3.1, h: 3.1, line: { color: palette.cyan, transparency: 25 }, fill: { color: 'DBEAFE', transparency: 8 } });
+  slide.addImage({ data: `data:image/png;base64,${TINY_PNG.toString('base64')}`, x: 10.22, y: 4.7, w: 1.08, h: 1.08 });
+  slide.addNotes(`Portada. Presentar el propósito central: ${contentPlan.thesis}`);
 
   slide = pptx.addSlide();
-  addTitle(slide, 'Agenda', 'Estructura narrativa del documento');
-  plan.sections.slice(0, 7).forEach((s, i) => {
-    slide.addText(`${i + 1}. ${s}`, { x: 0.9, y: 2.0 + i * 0.48, w: 6.8, h: 0.32, fontSize: 17, color: palette.dark, bold: i === 0 });
+  addTitle(slide, 'Agenda', 'Ruta de la presentación');
+  contentPlan.agenda.slice(0, 7).forEach((s, i) => {
+    slide.addText(String(i + 1).padStart(2, '0'), { x: 0.9, y: 1.98 + i * 0.56, w: 0.42, h: 0.3, fontSize: 11, bold: true, color: palette.accent, margin: 0 });
+    slide.addText(s, { x: 1.48, y: 1.92 + i * 0.56, w: 7.1, h: 0.36, fontSize: 17, color: palette.dark, bold: i === 0, fit: 'shrink' });
+    slide.addShape(pptx.ShapeType.rect, { x: 0.92, y: 2.36 + i * 0.56, w: 7.5, h: 0.01, fill: { color: 'E2E8F0', transparency: 15 }, line: { color: 'E2E8F0', transparency: 100 } });
   });
-  slide.addNotes('Explicar la ruta de navegación de la presentación.');
+  slide.addNotes('Explicar la ruta de navegación y anticipar que cada lámina aterriza una decisión o aprendizaje.');
 
-  if (plan.referenceFiles?.length) {
+  if (contentPlan.references?.length) {
     slide = pptx.addSlide();
     addTitle(slide, 'Material de referencia', 'Archivos adjuntos considerados en la planificación');
-    plan.referenceBriefs.slice(0, 5).forEach((ref, i) => {
+    contentPlan.references.slice(0, 5).forEach((ref, i) => {
       slide.addText(`${i + 1}. ${ref.name}`, { x: 0.9, y: 2.0 + i * 0.72, w: 4.1, h: 0.28, fontSize: 14, bold: true, color: palette.dark });
       slide.addText(ref.excerpt || 'Sin texto extraído disponible.', { x: 4.95, y: 1.95 + i * 0.72, w: 6.8, h: 0.42, fontSize: 10, color: palette.muted, fit: 'shrink' });
     });
     slide.addNotes('Confirmar qué archivos adjuntos fueron usados como referencia.');
   }
 
-  for (const [i, section] of plan.sections.slice(0, 6).entries()) {
-    // Pull LLM-generated content from plan.blocks. If the generator
-    // step was skipped or fell back, the entry is a fallbackBlock with
-    // a useful per-section message — never the old identical-everywhere
-    // placeholder text.
-    const block = (plan.blocks && plan.blocks[i]) || fallbackBlock(section);
+  for (const [i, slideSpec] of contentPlan.slides.slice(0, 8).entries()) {
     slide = pptx.addSlide();
-    addTitle(slide, section, `Bloque ${i + 1} · ${plan.template}`);
-    slide.addText(block.paragraph, {
-      x: 0.8, y: 2.05, w: 6.8, h: 1.0, fontSize: 16, color: palette.dark, breakLine: true, fit: 'shrink',
+    addTitle(slide, slideSpec.title, slideSpec.kicker || `Parte ${i + 1}`);
+    slide.addText(slideSpec.summary, {
+      x: 0.8, y: 2.0, w: 6.85, h: 0.9, fontSize: 15.5, color: palette.dark, breakLine: true, fit: 'shrink',
     });
-    const bulletRuns = block.bullets.map((b, idx, arr) => ({
-      text: `• ${b}${idx === arr.length - 1 ? '' : '\n'}`,
-    }));
-    slide.addText(bulletRuns, {
-      x: 0.9, y: 3.2, w: 6.8, h: 1.6, fontSize: 14, color: '334155', fit: 'shrink',
+    const bulletText = slideSpec.bullets.map(formatBullet).join('\n');
+    slide.addText(bulletText, {
+      x: 0.9, y: 3.22, w: 6.75, h: 1.85, fontSize: 13.4, color: '334155', fit: 'shrink', breakLine: true,
     });
+    const metrics = chartMetrics(slideSpec, i);
+    slide.addText('Lectura de madurez', { x: 8.2, y: 1.72, w: 3.6, h: 0.28, fontSize: 11, bold: true, color: palette.muted, margin: 0 });
     slide.addChart(pptx.ChartType.bar, [
-      { name: 'Score', labels: ['Técnico', 'Diseño', 'Contenido'], values: [94 - i, 90 + (i % 3), 88 + (i % 4)] },
-    ], { x: 8.25, y: 2.05, w: 4.1, h: 2.8, catAxisLabelFontFace: 'Aptos', valAxisLabelFontFace: 'Aptos', showLegend: false });
-    slide.addNotes(block.notes);
+      { name: 'Nivel', labels: metrics.map((metric) => metric.label), values: metrics.map((metric) => metric.value) },
+    ], {
+      x: 8.15,
+      y: 2.05,
+      w: 4.15,
+      h: 2.8,
+      catAxisLabelFontFace: 'Aptos',
+      valAxisLabelFontFace: 'Aptos',
+      showLegend: false,
+      valAxisMinVal: 0,
+      valAxisMaxVal: 100,
+      showValue: false,
+    });
+    slide.addShape(pptx.ShapeType.roundRect, { x: 8.25, y: 5.28, w: 3.85, h: 0.74, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: 'CBD5E1' } });
+    slide.addText(slideSpec.bullets[0] ? `${slideSpec.bullets[0].label || 'Clave'}: ${slideSpec.bullets[0].text}` : 'Idea clave definida para la discusión.', {
+      x: 8.45, y: 5.43, w: 3.45, h: 0.3, fontSize: 10.5, color: palette.dark, fit: 'shrink', margin: 0,
+    });
+    slide.addNotes(slideSpec.notes);
   }
 
   slide = pptx.addSlide();
-  addTitle(slide, 'Cierre y próximos pasos', 'Entrega final supervisada');
-  slide.addText('La entrega queda bloqueada si falla integridad, estructura, preview o descarga.', { x: 0.85, y: 2.1, w: 8.2, h: 0.7, fontSize: 20, bold: true, color: palette.dark });
-  slide.addNotes('Cierre: resumir valor, riesgos y próximos pasos.');
+  addTitle(slide, 'Cierre y próximos pasos', 'De la comprensión a la ejecución');
+  slide.addText('Convertir la presentación en acción requiere priorizar, asignar responsables y medir avances con una cadencia simple.', {
+    x: 0.85, y: 2.05, w: 7.5, h: 0.8, fontSize: 20, bold: true, color: palette.dark, fit: 'shrink',
+  });
+  slide.addText('1. Elegir tres prioridades críticas\n2. Definir dueño, fecha y evidencia esperada\n3. Revisar indicadores y ajustar decisiones cada semana', {
+    x: 0.9, y: 3.25, w: 7.2, h: 1.3, fontSize: 17, color: '334155', fit: 'shrink',
+  });
+  slide.addText('Resultado esperado: una gestión más coordinada, medible y orientada a valor.', {
+    x: 8.4, y: 2.35, w: 3.55, h: 1.0, fontSize: 18, bold: true, color: palette.accent, fit: 'shrink',
+  });
+  slide.addNotes('Cierre: resumir la tesis, seleccionar responsables y convertir recomendaciones en una agenda de ejecución.');
   await pptx.writeFile({ fileName: outputPath });
   return await fsp.readFile(outputPath);
 }
 
 function buildPptxHtmlPreview(plan, filename, validation = {}) {
-  const sections = Array.isArray(plan.sections) ? plan.sections : [];
-  const blocks = Array.isArray(plan.blocks) ? plan.blocks : [];
+  const contentPlan = (plan.slidePlan && Array.isArray(plan.slidePlan.slides) && plan.slidePlan.slides.length > 0)
+    ? plan.slidePlan
+    : buildPptxContentPlan({
+      title: plan.title,
+      prompt: plan.userRequest || plan.title,
+      template: plan.template,
+      sections: plan.sections,
+      blocks: plan.blocks,
+      referenceBriefs: plan.referenceBriefs,
+    });
   const checks = Object.entries(validation.checks || {})
     .slice(0, 8)
     .map(([key, value]) => `<li><strong>${xmlEscape(key.replace(/_/g, ' '))}</strong><span>${value === true ? 'OK' : 'Revisar'}</span></li>`)
     .join('');
-  const cards = sections.slice(0, 10).map((section, index) => {
-    // Mirror the PPTX builder so the right-pane preview shows the same
-    // text the downloaded file contains. Falling back here means the
-    // preview never silently diverges from the artifact.
-    const block = blocks[index] || fallbackBlock(section);
-    const bullets = block.bullets.map((b) => `<li>${xmlEscape(b)}</li>`).join('');
+  const cards = contentPlan.slides.slice(0, 10).map((slideSpec, index) => {
+    const bullets = slideSpec.bullets
+      .map((bullet) => {
+        const label = bullet.label ? `<strong>${xmlEscape(bullet.label)}:</strong> ` : '';
+        return `<li>${label}${xmlEscape(bullet.text)}</li>`;
+      })
+      .join('');
     return `
     <article class="slide">
       <div class="num">${index + 1}</div>
-      <h2>${xmlEscape(section)}</h2>
-      <p>${xmlEscape(block.paragraph)}</p>
+      <h2>${xmlEscape(slideSpec.title)}</h2>
+      <p>${xmlEscape(slideSpec.summary)}</p>
       <ul>${bullets}</ul>
     </article>`;
   }).join('');
@@ -1282,7 +1368,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.slide{position:relative;padding:26px 26px 24px 76px;min-height:245px}.num{position:absolute;left:22px;top:24px;width:36px;height:36px;border-radius:999px;background:var(--accent);color:white;display:grid;place-items:center;font-weight:900}
   h2{margin:0 0 12px;font-size:24px}.slide p{color:#475569;line-height:1.55}.slide ul{margin:12px 0 0;padding-left:18px;color:#334155;display:grid;gap:7px}.badge{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:9px 12px;background:white;color:#334155;font-weight:800}
   @media(max-width:860px){.hero,.grid{grid-template-columns:1fr}.wrap{padding:22px}.slide{padding-left:64px}}
-  </style></head><body><main class="wrap"><header class="hero"><div><span class="eyebrow">siraGPT Rendering Agent</span><h1>${xmlEscape(plan.title)}</h1><p class="lead">Previsualización HTML generada desde el mismo plan que construye el archivo PowerPoint nativo. La descarga enlaza al PPTX real, no a texto simulado.</p><span class="badge">${xmlEscape(filename)}</span></div><aside class="panel"><strong>Validaciones técnicas</strong><ul class="checks">${checks || '<li><strong>integrity</strong><span>OK</span></li>'}</ul></aside></header><section class="grid">${cards}</section></main></body></html>`;
+  </style></head><body><main class="wrap"><header class="hero"><div><span class="eyebrow">siraGPT Rendering Agent</span><h1>${xmlEscape(plan.title)}</h1><p class="lead">${xmlEscape(contentPlan.thesis)} La vista previa usa el mismo guion que construye el archivo PowerPoint nativo.</p><span class="badge">${xmlEscape(filename)}</span></div><aside class="panel"><strong>Validaciones técnicas</strong><ul class="checks">${checks || '<li><strong>integrity</strong><span>OK</span></li>'}</ul></aside></header><section class="grid">${cards}</section></main></body></html>`;
 }
 
 async function buildPdf(plan, outputPath) {
@@ -1426,10 +1512,19 @@ async function buildDocumentFile({ plan, outputDir }) {
 }
 
 function repairPlan(plan, validation) {
+  const sections = Array.from(new Set([...plan.sections, 'Anexos técnicos', 'Control de calidad', 'Registro de evidencias']));
   const repaired = {
     ...plan,
     complexity: plan.complexity === 'standard' ? 'high' : plan.complexity,
-    sections: Array.from(new Set([...plan.sections, 'Anexos técnicos', 'Control de calidad', 'Registro de evidencias'])),
+    sections,
+    slidePlan: buildPptxContentPlan({
+      title: plan.title,
+      prompt: plan.userRequest || plan.title,
+      template: plan.template,
+      sections,
+      blocks: plan.blocks,
+      referenceBriefs: plan.referenceBriefs,
+    }),
     repairedFrom: validation,
   };
   return repaired;
@@ -1499,6 +1594,14 @@ async function runAdvancedDocumentPipeline({
     plan.blocks = plan.sections.map((s) => fallbackBlock(s));
     emit(events, 'content_generation', 'warning', 'Generador de contenido no disponible — fallback aplicado', { error: err.message });
   }
+  plan.slidePlan = buildPptxContentPlan({
+    title: plan.title,
+    prompt: userPromptText,
+    template: plan.template,
+    sections: plan.sections,
+    blocks: plan.blocks,
+    referenceBriefs: plan.referenceBriefs,
+  });
 
   let artifact;
   let validation;
