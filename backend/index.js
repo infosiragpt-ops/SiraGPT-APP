@@ -129,6 +129,12 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 // Logging
+// Structured JSON logger runs in every environment and auto-attaches
+// `req.id` for correlation; downstream code can use `req.log.info(...)`
+// to inherit that id. Morgan stays in dev for the familiar coloured
+// per-request line during local development.
+const { httpLogger } = require('./src/middleware/logger');
+app.use(httpLogger);
 if (process.env.NODE_ENV !== 'production') {
     app.use(morgan('dev'));
 }

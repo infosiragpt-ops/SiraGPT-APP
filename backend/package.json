@@ -86,6 +86,8 @@
     "pdf-parse": "^1.1.4",
     "pdf-to-img": "^5.0.0",
     "pdfkit": "^0.17.2",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
     "pizzip": "^3.2.0",
     "playwright": "^1.56.1",
     "pptxgenjs": "^4.0.1",
