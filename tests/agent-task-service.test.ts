@@ -35,11 +35,12 @@ describe("agent-task-service · reducer", () => {
     })
 
     assert.equal(state.meta?.taskId, "task-frontend")
-    assert.equal(state.meta?.intentAlignmentProfile?.groundingMode, "source_verification_required")
-    assert.equal((state.meta?.taskPlan as any)?.phases[0].id, "source_research")
+    assert.equal(state.meta?.model, "gpt-4o")
+    assert.deepEqual(state.meta?.tools, ["web_search"])
     assert.equal(state.steps.length, 1)
     assert.equal(state.steps[0].toolCalls.length, 1)
-    assert.equal(state.steps[0].toolCalls[0].output?.preview, "25 fuentes")
+    assert.equal(state.steps[0].toolCalls[0].output?.ok, true)
+    assert.equal("preview" in state.steps[0].toolCalls[0], false)
   })
 
   it("does not drop tool events if a stale stream emits them before step_start", () => {

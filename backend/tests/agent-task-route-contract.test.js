@@ -35,7 +35,7 @@ test('agent task route: stores taskId in meta state for reload/resume', () => {
   assert.equal(state.meta.goal, 'Investiga fuentes');
 });
 
-test('agent task route: stores intent alignment profile in meta state', () => {
+test('agent task route: keeps internal planning profiles out of visible meta state', () => {
   const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
     type: 'meta',
     taskId: 'task-intent',
@@ -46,12 +46,12 @@ test('agent task route: stores intent alignment profile in meta state', () => {
     taskPlan: { phases: [{ id: 'source_research' }] },
   });
 
-  assert.equal(state.meta.intentAlignmentProfile.outputMode, 'inline');
-  assert.equal(state.meta.intentAlignmentProfile.groundingMode, 'source_verification_required');
-  assert.equal(state.meta.taskPlan.phases[0].id, 'source_research');
+  assert.equal(state.meta.taskId, 'task-intent');
+  assert.equal(state.meta.intentAlignmentProfile, undefined);
+  assert.equal(state.meta.taskPlan, undefined);
 });
 
-test('agent task route: stores UniversalTaskContract in meta state', () => {
+test('agent task route: keeps UniversalTaskContract out of visible meta state', () => {
   const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
     type: 'meta',
     taskId: 'task-contract',
@@ -66,11 +66,11 @@ test('agent task route: stores UniversalTaskContract in meta state', () => {
     },
   });
 
-  assert.equal(state.meta.universalTaskContract.pipeline, 'VisualArtifactPipeline');
-  assert.equal(state.meta.universalTaskContract.required_extension, '.svg');
+  assert.equal(state.meta.taskId, 'task-contract');
+  assert.equal(state.meta.universalTaskContract, undefined);
 });
 
-test('agent task route: stores enterprise ExecutionGraph in meta state', () => {
+test('agent task route: keeps enterprise ExecutionGraph out of visible meta state', () => {
   const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
     type: 'meta',
     taskId: 'task-enterprise',
@@ -88,8 +88,9 @@ test('agent task route: stores enterprise ExecutionGraph in meta state', () => {
     },
   });
 
-  assert.equal(state.meta.enterpriseExecutionGraph.graph_id, 'eg_1234567890abcdef');
-  assert.equal(state.meta.enterpriseRuntimeProfile.capabilities.includes('FullStackWebBuilder'), true);
+  assert.equal(state.meta.taskId, 'task-enterprise');
+  assert.equal(state.meta.enterpriseExecutionGraph, undefined);
+  assert.equal(state.meta.enterpriseRuntimeProfile, undefined);
 });
 
 test('agent task route: system prompt includes UniversalTaskContract sovereignty rules', () => {
@@ -175,7 +176,8 @@ test('agent task route: does not drop tool events emitted without a current step
 
   assert.equal(state.steps.length, 1);
   assert.equal(state.steps[0].toolCalls.length, 1);
-  assert.equal(state.steps[0].toolCalls[0].output.preview, '10 sources');
+  assert.equal(state.steps[0].toolCalls[0].output.ok, true);
+  assert.equal(state.steps[0].toolCalls[0].preview, undefined);
 });
 
 test('agent task route: active task lookup is scoped to the owner', () => {

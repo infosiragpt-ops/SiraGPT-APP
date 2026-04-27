@@ -70,7 +70,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
-import { aiService, buildProfessionalCapabilityPrompt, PROFESSIONAL_CAPABILITY_CONTRACTS, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -5470,19 +5470,6 @@ REWRITTEN TEXT:`;
         }
       }
 
-      // Check for vector PPT keywords (Gamma-style)
-      const msgLower = msg.toLowerCase();
-      const isVectorPPT = (
-        msgLower.includes('vector ppt') ||
-        msgLower.includes('vector presentation') ||
-        msgLower.includes('gamma style') ||
-        msgLower.includes('gamma-style') ||
-        msgLower.includes('gamma ppt') ||
-        (msgLower.includes('ppt') && msgLower.includes('no images')) ||
-        (msgLower.includes('ppt') && msgLower.includes('no photos')) ||
-        (msgLower.includes('presentation') && msgLower.includes('vector'))
-      );
-
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
         if (isNewChat) {
           await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent });
@@ -5499,12 +5486,7 @@ REWRITTEN TEXT:`;
           await handleVideoGeneration(msg);
           break;
         case 'ppt':
-          // Check if user wants vector PPT
-          if (isVectorPPT) {
-            await handleVectorPPTGeneration(msg, filesToSend);
-          } else {
-            await handlePPTGeneration(msg, filesToSend);
-          }
+          await handleAgentTask(msg, filesToSend);
           break;
         case 'webdev':
           await handleWebDevGeneration(msg);
@@ -5516,29 +5498,24 @@ REWRITTEN TEXT:`;
           await runContextPipeline(intent);
           break;
         case 'chart':
-        case 'plan':
         case 'math':
         case 'viz':
         case 'doc':
+        case 'web_search':
+        case 'agent_task':
+        case 'text':
+          await handleAgentTask(msg, filesToSend);
+          break;
+        case 'plan':
         case 'artifact':
           await runContextPipeline(intent);
           break;
-        case 'web_search':
-          // The intent classifier already decided this turn is an
-          // information-seeking request. Run the agentic pipeline
-          // automatically — no explicit Web Search toggle required.
-          // handleWebSearch owns the SVG progress UI, the Stop
-          // button wiring, and the persistence; it also creates a
-          // chat if `activeChat` is missing.
-          await handleWebSearch(msg);
-          break;
-        case 'agent_task':
-          // Compound multi-step task — research + code + deliverable
-          // file. Routes to the Claude-style step-card runner.
-          await handleAgentTask(msg, filesToSend);
-          break;
         default:
-          await runContextPipeline(intent);
+          if (shouldRouteThroughAgenticRuntime(intent)) {
+            await handleAgentTask(msg, filesToSend);
+          } else {
+            await runContextPipeline(intent);
+          }
           break;
       }
     } catch (err: any) {
@@ -6858,7 +6835,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           state = { ...state, done: true, error: 'aborted' };
           updateBubble(state);
         } else {
-          throw err;
+          const rawMessage = String(err?.message || 'Agent task failed');
+          const runtimeMessage = /redis|redis_url/i.test(rawMessage)
+            ? 'Runtime agentico no disponible: Redis no está activo.'
+            : rawMessage;
+          state = { ...state, done: true, error: runtimeMessage };
+          updateBubble(state);
         }
       }
 
@@ -6867,6 +6849,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       currentAgentTaskIdRef.current = null;
       if (taskWasAborted || state.error === 'aborted') {
         toast.info('Tarea detenida');
+      } else if (state.error) {
+        toast.error(state.error);
       } else {
         toast.success('Tarea completada');
       }
@@ -7494,7 +7478,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         return (
                           <>
 
-                            {radixViewport ? (
+                            {radixViewport && stableMessages.length > 40 ? (
                               // Virtualized path — only items inside the
                               // visible window (plus a 400px overscan
                               // buffer) get reconciled. customScrollParent

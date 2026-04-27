@@ -16,6 +16,12 @@ function safeJson(value, fallback = null) {
   }
 }
 
+function withoutImmutableFields(data = {}) {
+  const clone = { ...data };
+  delete clone.id;
+  return clone;
+}
+
 async function upsertAgentTask(task = {}) {
   if (!hasModel('agentTask') || !task.taskId || !task.userId) return null;
   const data = {
@@ -40,6 +46,19 @@ async function upsertAgentTask(task = {}) {
       update: data,
     });
   } catch (err) {
+    if (err?.code === 'P2002' && data.jobId) {
+      try {
+        return await prisma.agentTask.update({
+          where: { jobId: data.jobId },
+          data: withoutImmutableFields(data),
+        });
+      } catch (fallbackErr) {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn('[agent-task-persistence] upsert by jobId skipped:', fallbackErr?.message || fallbackErr);
+        }
+        return null;
+      }
+    }
     if (process.env.NODE_ENV !== 'test') {
       console.warn('[agent-task-persistence] upsert skipped:', err?.message || err);
     }
@@ -52,10 +71,17 @@ async function appendAgentTaskEvent(task = {}, event = {}) {
   const seq = Number(event.seq) || Number(task.lastEventSeq) || 0;
   if (!seq) return null;
   try {
+    const parent = await upsertAgentTask({
+      ...task,
+      status: task.status || 'running',
+      state: task.state || task.streamState,
+    });
+    if (!parent) return null;
+    const taskId = String(parent?.id || task.taskId);
     return await prisma.agentTaskEvent.upsert({
-      where: { taskId_seq: { taskId: String(task.taskId), seq } },
+      where: { taskId_seq: { taskId, seq } },
       create: {
-        taskId: String(task.taskId),
+        taskId,
         seq,
         type: String(event.type),
         payload: safeJson(event, {}),

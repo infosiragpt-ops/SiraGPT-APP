@@ -76,6 +76,22 @@ function summarizeForChat(text, policy) {
   return `${intro}\n\nResumen conversacional:\n\n${clipped}`;
 }
 
+function normalizeAgentRuntimeModel(selectedModel) {
+  const displayModel = String(selectedModel || '').trim() || 'gpt-4o';
+  const configuredFallback = String(
+    process.env.AGENT_TASK_OPENAI_MODEL ||
+    process.env.AGENT_TASK_RUNTIME_MODEL ||
+    'gpt-4o-mini'
+  ).trim();
+  const isOpenAICompatible = /^(gpt-|o\d|chatgpt-|ft:gpt-|ft:o)/i.test(displayModel);
+  return {
+    displayModel,
+    runtimeModel: isOpenAICompatible ? displayModel : configuredFallback,
+    runtimeProvider: isOpenAICompatible ? 'selected-openai' : 'openai-fallback',
+    remapped: !isOpenAICompatible,
+  };
+}
+
 async function persistAssistantMessage({
   chatId,
   userId,
@@ -143,6 +159,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     displayGoal,
     files,
   });
+  const runtimeModelProfile = normalizeAgentRuntimeModel(model);
 
   const executionProfile = buildExecutionProfile({ goal, fileIds: files });
   const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal, fileIds: files });
@@ -252,6 +269,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     documentPolicy,
     status: 'running',
   });
+  task.runtimeModel = runtimeModelProfile.runtimeModel;
 
   const artifacts = [];
   const persistProgress = (status = task.status) => {
@@ -317,6 +335,8 @@ async function runAgentTaskJob(payload = {}, job = null) {
     taskId,
     goal: displayGoal,
     model,
+    runtimeModel: runtimeModelProfile.runtimeModel,
+    runtimeProvider: runtimeModelProfile.runtimeProvider,
     tools: tools.map((tool) => tool.name),
     executionProfile,
     intentAlignmentProfile,
@@ -338,6 +358,9 @@ async function runAgentTaskJob(payload = {}, job = null) {
     userId: user.id,
     chatId,
     model,
+    runtimeModel: runtimeModelProfile.runtimeModel,
+    runtimeProvider: runtimeModelProfile.runtimeProvider,
+    modelRemapped: runtimeModelProfile.remapped,
     queue: getQueueName(),
     jobId: job?.id ? String(job.id) : task.jobId,
     traceId: task.traceId,
@@ -424,7 +447,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
       tools,
       maxSteps,
       maxRuntimeMs,
-      model,
+      model: runtimeModelProfile.runtimeModel,
       extraSystem: internals.buildAgentSystemPrompt(
         systemContract,
         files,
@@ -522,6 +545,8 @@ async function runAgentTaskJob(payload = {}, job = null) {
       artifacts,
       metadata: {
         documentPolicy,
+        runtimeModel: runtimeModelProfile.runtimeModel,
+        selectedModel: model,
         executionProfile,
         intentAlignmentProfile,
         taskPlan,

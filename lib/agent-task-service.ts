@@ -72,10 +72,10 @@ export type AgentTaskEvent =
   | { type: "quality_gate"; id?: string; gate?: string; label?: string; passed: boolean; score?: number | null; overallScore?: number | null; summary?: string; message?: string; payload?: Record<string, unknown> | null; ts?: string; seq?: number }
   | { type: "repair_attempt"; attempt?: number; status?: string; message?: string; ts?: string; seq?: number }
   | { type: "document_policy"; policy?: DocumentPolicy; documentPolicy?: DocumentPolicy; seq?: number }
-  | { type: "meta"; taskId?: string; goal: string; model: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
+  | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
   | { type: "step_start"; id: string; label: string; icon?: AgenticIcon }
-  | { type: "tool_call"; stepId: string; tool: string; preview: string; language?: string; codePreview?: string }
-  | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview: string; partial?: boolean }
+  | { type: "tool_call"; stepId: string; tool: string; preview?: string; language?: string; codePreview?: string }
+  | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview?: string; partial?: boolean }
   | { type: "step_done"; id: string; ok: boolean; summary?: string }
   | { type: "file_artifact"; stepId?: string; artifact: AgentArtifact }
   | { type: "final_text"; markdown: string }
@@ -145,7 +145,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
 }
 
 export interface AgentTaskState {
-  meta?: { taskId?: string; goal: string; model: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
+  meta?: { taskId?: string; goal?: string; model?: string; runtimeModel?: string; runtimeProvider?: string; tools?: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
   steps: Array<{
     id: string
     label: string
@@ -153,10 +153,10 @@ export interface AgentTaskState {
     status: "running" | "done" | "error"
     toolCalls: Array<{
       tool: string
-      preview: string
+      preview?: string
       language?: string
       codePreview?: string
-      output?: { ok: boolean; preview: string }
+      output?: { ok: boolean; preview?: string }
     }>
   }>
   artifacts: AgentArtifact[]
@@ -235,7 +235,6 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           id: evt.id || `checkpoint-${(state.checkpoints || []).length + 1}`,
           label: evt.label || evt.message || "Checkpoint",
           status: evt.status || "saved",
-          payload: evt.payload || null,
           ts: evt.ts,
         }].slice(-20),
       }
@@ -248,7 +247,6 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           passed: Boolean(evt.passed),
           score: evt.score ?? evt.overallScore ?? null,
           summary: evt.summary || evt.message || "",
-          payload: evt.payload || null,
           ts: evt.ts,
         }].slice(-20),
       }
@@ -263,7 +261,17 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
         }].slice(-10),
       }
     case "meta":
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, frameworks: evt.frameworks } }
+      return {
+        ...state,
+        meta: {
+          taskId: evt.taskId,
+          goal: evt.goal,
+          model: evt.model,
+          runtimeModel: evt.runtimeModel,
+          runtimeProvider: evt.runtimeProvider,
+          tools: evt.tools,
+        },
+      }
     case "step_start":
       return {
         ...state,
@@ -290,7 +298,7 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
         ...state,
         steps: callSteps.map(s =>
           s.id === callStepId
-            ? { ...s, toolCalls: [...s.toolCalls, { tool: evt.tool, preview: evt.preview, language: evt.language, codePreview: evt.codePreview }] }
+            ? { ...s, toolCalls: [...s.toolCalls, { tool: evt.tool }] }
             : s
         ),
       }
@@ -304,7 +312,7 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           label: evt.tool,
           icon: "thought" as AgenticIcon,
           status: "running" as const,
-          toolCalls: [{ tool: evt.tool, preview: "" }],
+          toolCalls: [{ tool: evt.tool }],
         }]
       return {
         ...state,
@@ -315,12 +323,12 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
           let attached = false
           for (let i = calls.length - 1; i >= 0; i--) {
             if (calls[i].tool === evt.tool && !calls[i].output) {
-              calls[i] = { ...calls[i], output: { ok: evt.ok, preview: evt.preview } }
+              calls[i] = { ...calls[i], output: { ok: evt.ok } }
               attached = true
               break
             }
           }
-          if (!attached) calls.push({ tool: evt.tool, preview: "", output: { ok: evt.ok, preview: evt.preview } })
+          if (!attached) calls.push({ tool: evt.tool, output: { ok: evt.ok } })
           return { ...s, toolCalls: calls }
         }),
       }

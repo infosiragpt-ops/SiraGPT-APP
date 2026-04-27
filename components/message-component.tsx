@@ -1013,7 +1013,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     // the ArtifactCard (inline iframe preview + 4-button rail) in
     // place of the plain syntax-highlighted block.
     const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
-        const match = /language-(\w+)/.exec(className || '');
+        const match = /language-([\w-]+)/.exec(className || '');
         if (!inline && match) {
             const language = match[1];
             const codeString = String(children).replace(/\n$/, '');
@@ -1142,7 +1142,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 return {
                     ...commonProps,
                     code: ({ node, inline, className, children, ...props }: any) => {
-                        const match = /language-(\w+)/.exec(className || '');
+                        const match = /language-([\w-]+)/.exec(className || '');
                         if (!inline && match) {
                             const lang = (match[1] || '').toLowerCase();
                             const codeString = String(children).replace(/\n$/, '');

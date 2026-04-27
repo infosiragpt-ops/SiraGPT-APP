@@ -4,6 +4,7 @@ import { describe, it } from "node:test"
 import {
   aiService,
   buildProfessionalCapabilityPrompt,
+  shouldRouteThroughAgenticRuntime,
   shouldAnswerFromExistingDocument,
 } from "../lib/ai-service"
 
@@ -160,9 +161,19 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(intent, "doc")
   })
 
-  it("does not treat general React explanations as web generation", async () => {
+  it("uses the durable agent as the offline fallback for plain explanations", async () => {
     const intent = await aiService.analyzeIntent("explícame cómo funciona React")
-    assert.equal(intent, "text")
+    assert.equal(intent, "agent_task")
+  })
+
+  it("routes normal chat, research, analysis and documents through the agentic runtime", () => {
+    for (const intent of ["text", "web_search", "doc", "math", "viz", "chart", "agent_task"] as const) {
+      assert.equal(shouldRouteThroughAgenticRuntime(intent), true)
+    }
+
+    for (const intent of ["gmail", "google_services", "image", "video", "figma", "artifact", "webdev", "plan"] as const) {
+      assert.equal(shouldRouteThroughAgenticRuntime(intent), false)
+    }
   })
 
   it("adds professional execution contracts without replacing the user prompt", () => {

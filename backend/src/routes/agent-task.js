@@ -1526,7 +1526,6 @@ function reduceAgentState(state, evt) {
           id: evt.id || `checkpoint-${(state.checkpoints || []).length + 1}`,
           label: evt.label || evt.message || 'Checkpoint',
           status: evt.status || 'saved',
-          payload: evt.payload || null,
           ts: evt.ts || new Date().toISOString(),
         }].slice(-20),
       };
@@ -1539,7 +1538,6 @@ function reduceAgentState(state, evt) {
           passed: Boolean(evt.passed),
           score: evt.score ?? evt.overallScore ?? null,
           summary: evt.summary || evt.message || '',
-          payload: evt.payload || null,
           ts: evt.ts || new Date().toISOString(),
         }].slice(-20),
       };
@@ -1554,7 +1552,17 @@ function reduceAgentState(state, evt) {
         }].slice(-10),
       };
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile, enterpriseToolRuntimePlan: evt.enterpriseToolRuntimePlan, enterpriseQaBoardReview: evt.enterpriseQaBoardReview, agenticOperatingCore: evt.agenticOperatingCore, frameworks: evt.frameworks } };
+      return {
+        ...state,
+        meta: {
+          taskId: evt.taskId,
+          goal: evt.goal,
+          model: evt.model,
+          runtimeModel: evt.runtimeModel,
+          runtimeProvider: evt.runtimeProvider,
+          tools: evt.tools,
+        },
+      };
     case 'step_start':
       return {
         ...state,
@@ -1581,7 +1589,7 @@ function reduceAgentState(state, evt) {
         ...state,
         steps: steps.map(step =>
           step.id === stepId
-            ? { ...step, toolCalls: [...step.toolCalls, { tool: evt.tool, preview: evt.preview, language: evt.language, codePreview: evt.codePreview }] }
+            ? { ...step, toolCalls: [...step.toolCalls, { tool: evt.tool }] }
             : step
         ),
       };
@@ -1595,7 +1603,7 @@ function reduceAgentState(state, evt) {
           label: evt.tool,
           icon: 'thought',
           status: 'running',
-          toolCalls: [{ tool: evt.tool, preview: '' }],
+          toolCalls: [{ tool: evt.tool }],
         }];
       return {
         ...state,
@@ -1605,13 +1613,13 @@ function reduceAgentState(state, evt) {
           let attached = false;
           for (let i = toolCalls.length - 1; i >= 0; i--) {
             if (toolCalls[i].tool === evt.tool && !toolCalls[i].output) {
-              toolCalls[i] = { ...toolCalls[i], output: { ok: evt.ok, preview: evt.preview } };
+              toolCalls[i] = { ...toolCalls[i], output: { ok: evt.ok } };
               attached = true;
               break;
             }
           }
           if (!attached) {
-            toolCalls.push({ tool: evt.tool, preview: '', output: { ok: evt.ok, preview: evt.preview } });
+            toolCalls.push({ tool: evt.tool, output: { ok: evt.ok } });
           }
           return { ...step, toolCalls };
         }),
@@ -1638,8 +1646,65 @@ function reduceAgentState(state, evt) {
 }
 
 function serializeAgentState(state) {
-  const fenced = '```agent-task-state\n' + JSON.stringify(state) + '\n```';
-  return state.finalText ? `${fenced}\n\n${state.finalText}` : fenced;
+  const publicState = toSerializableAgentState(state);
+  const fenced = '```agent-task-state\n' + JSON.stringify(publicState) + '\n```';
+  return publicState.finalText ? `${fenced}\n\n${publicState.finalText}` : fenced;
+}
+
+function toSerializableAgentState(state = {}) {
+  return {
+    steps: (state.steps || []).map((step) => ({
+      id: step.id,
+      label: step.label,
+      icon: step.icon,
+      status: step.status,
+      toolCalls: (step.toolCalls || []).map((call) => ({
+        tool: call.tool,
+        output: call.output ? { ok: call.output.ok } : undefined,
+      })),
+    })),
+    artifacts: state.artifacts || [],
+    finalText: state.finalText || '',
+    done: Boolean(state.done),
+    error: state.error || undefined,
+    stoppedReason: state.stoppedReason || undefined,
+    checkpoints: (state.checkpoints || []).map((checkpoint) => ({
+      id: checkpoint.id,
+      label: checkpoint.label,
+      status: checkpoint.status,
+      ts: checkpoint.ts,
+    })),
+    qualityGates: (state.qualityGates || []).map((gate) => ({
+      id: gate.id,
+      label: gate.label,
+      passed: gate.passed,
+      score: gate.score,
+      summary: gate.summary,
+      ts: gate.ts,
+    })),
+    repairs: state.repairs || [],
+    approvals: (state.approvals || []).map((approval) => ({
+      id: approval.id,
+      status: approval.status,
+      tool: approval.tool,
+      action: approval.action,
+      reason: approval.reason,
+      decision: approval.decision,
+      ts: approval.ts,
+    })),
+    queue: state.queue || undefined,
+    documentPolicy: state.documentPolicy || undefined,
+    meta: state.meta
+      ? {
+        taskId: state.meta.taskId,
+        goal: state.meta.goal,
+        model: state.meta.model,
+        runtimeModel: state.meta.runtimeModel,
+        runtimeProvider: state.meta.runtimeProvider,
+        tools: state.meta.tools,
+      }
+      : undefined,
+  };
 }
 
 router.INTERNAL = {
@@ -1658,6 +1723,7 @@ router.INTERNAL = {
   reduceAgentState,
   shortLabel,
   serializeAgentState,
+  toSerializableAgentState,
 };
 
 module.exports = router;

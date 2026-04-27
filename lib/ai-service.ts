@@ -44,6 +44,21 @@ export const VALID_CHAT_INTENTS: ChatIntent[] = [
   'text',
 ]
 
+export const AGENTIC_RUNTIME_INTENTS: ChatIntent[] = [
+  'agent_task',
+  'text',
+  'web_search',
+  'doc',
+  'ppt',
+  'math',
+  'viz',
+  'chart',
+]
+
+export function shouldRouteThroughAgenticRuntime(intent: ChatIntent): boolean {
+  return AGENTIC_RUNTIME_INTENTS.includes(intent === 'ppt' ? 'ppt' : normalizeRoutingIntent(intent))
+}
+
 export function normalizeRoutingIntent(intent: ChatIntent): ChatIntent {
   // PowerPoint is a downloadable document artifact in the current chat
   // runtime. Keeping "ppt" as a final route lets it fall through to free
@@ -292,7 +307,7 @@ export class AIService {
 
 
   async analyzeIntent(prompt: string): Promise<ChatIntent> {
-    return classifyIntentFastPath(prompt) || 'text'
+    return classifyIntentFastPath(prompt) || 'agent_task'
   }
 
   private async classifyIntentViaSemanticRouter(
@@ -482,7 +497,7 @@ Respond with only one word.
       if (VALID_CHAT_INTENTS.includes(intent as ChatIntent)) {
         return normalizeRoutingIntent(intent as ChatIntent);
       }
-      return 'text'; // Default fallback
+      return 'agent_task'; // Default durable runtime fallback
     } catch (error: any) {
       // If this was explicitly aborted (e.g. user pressed Stop), don't try to
       // recover or return any fallback intent. Let caller decide what to do.
@@ -492,7 +507,7 @@ Respond with only one word.
 
       console.error("Intent classification failed:", error);
       const fallbackIntent = await this.analyzeIntent(prompt);
-      return fallbackIntent || 'text';
+      return fallbackIntent || 'agent_task';
     }
   }
 }
