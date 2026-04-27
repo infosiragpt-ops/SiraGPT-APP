@@ -20,6 +20,7 @@ const PptxGenJS = require('pptxgenjs');
 const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
+const { generateSectionContent, fallbackBlock } = require('./content');
 
 const execFileAsync = promisify(execFile);
 
@@ -1220,22 +1221,26 @@ async function buildPptx(plan, outputPath) {
   }
 
   for (const [i, section] of plan.sections.slice(0, 6).entries()) {
+    // Pull LLM-generated content from plan.blocks. If the generator
+    // step was skipped or fell back, the entry is a fallbackBlock with
+    // a useful per-section message — never the old identical-everywhere
+    // placeholder text.
+    const block = (plan.blocks && plan.blocks[i]) || fallbackBlock(section);
     slide = pptx.addSlide();
     addTitle(slide, section, `Bloque ${i + 1} · ${plan.template}`);
-    slide.addText([
-      { text: 'Resultado esperado: ', options: { bold: true } },
-      { text: 'documento consistente, verificable y listo para entrega.' },
-    ], { x: 0.8, y: 2.05, w: 6.8, h: 0.6, fontSize: 18, color: palette.dark, breakLine: false });
-    slide.addText([
-      { text: '• Jerarquía visual clara\n' },
-      { text: '• Contenido profesional y sin placeholders\n' },
-      { text: '• Validación técnica antes de entrega\n' },
-      { text: '• Métricas y trazabilidad del pipeline' },
-    ], { x: 0.9, y: 2.8, w: 6.8, h: 1.6, fontSize: 16, color: '334155', fit: 'shrink' });
+    slide.addText(block.paragraph, {
+      x: 0.8, y: 2.05, w: 6.8, h: 1.0, fontSize: 16, color: palette.dark, breakLine: true, fit: 'shrink',
+    });
+    const bulletRuns = block.bullets.map((b, idx, arr) => ({
+      text: `• ${b}${idx === arr.length - 1 ? '' : '\n'}`,
+    }));
+    slide.addText(bulletRuns, {
+      x: 0.9, y: 3.2, w: 6.8, h: 1.6, fontSize: 14, color: '334155', fit: 'shrink',
+    });
     slide.addChart(pptx.ChartType.bar, [
       { name: 'Score', labels: ['Técnico', 'Diseño', 'Contenido'], values: [94 - i, 90 + (i % 3), 88 + (i % 4)] },
     ], { x: 8.25, y: 2.05, w: 4.1, h: 2.8, catAxisLabelFontFace: 'Aptos', valAxisLabelFontFace: 'Aptos', showLegend: false });
-    slide.addNotes(`Slide ${i + 3}: enfatizar ${section}.`);
+    slide.addNotes(block.notes);
   }
 
   slide = pptx.addSlide();
@@ -1248,21 +1253,25 @@ async function buildPptx(plan, outputPath) {
 
 function buildPptxHtmlPreview(plan, filename, validation = {}) {
   const sections = Array.isArray(plan.sections) ? plan.sections : [];
+  const blocks = Array.isArray(plan.blocks) ? plan.blocks : [];
   const checks = Object.entries(validation.checks || {})
     .slice(0, 8)
     .map(([key, value]) => `<li><strong>${xmlEscape(key.replace(/_/g, ' '))}</strong><span>${value === true ? 'OK' : 'Revisar'}</span></li>`)
     .join('');
-  const cards = sections.slice(0, 10).map((section, index) => `
+  const cards = sections.slice(0, 10).map((section, index) => {
+    // Mirror the PPTX builder so the right-pane preview shows the same
+    // text the downloaded file contains. Falling back here means the
+    // preview never silently diverges from the artifact.
+    const block = blocks[index] || fallbackBlock(section);
+    const bullets = block.bullets.map((b) => `<li>${xmlEscape(b)}</li>`).join('');
+    return `
     <article class="slide">
       <div class="num">${index + 1}</div>
       <h2>${xmlEscape(section)}</h2>
-      <p>Bloque ${index + 1} generado por la pipeline documental con estructura, criterio visual y validación de entrega.</p>
-      <ul>
-        <li>Jerarquía visual clara</li>
-        <li>Contenido editable en PowerPoint</li>
-        <li>Notas del presentador incluidas</li>
-      </ul>
-    </article>`).join('');
+      <p>${xmlEscape(block.paragraph)}</p>
+      <ul>${bullets}</ul>
+    </article>`;
+  }).join('');
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${xmlEscape(plan.title)}</title><style>
   :root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--accent:#ea580c;--bg:#fff7ed;--card:#fff}
   *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 8% 0,#ffedd5,transparent 34%),linear-gradient(135deg,#fff,#f8fafc);font-family:Aptos,Inter,system-ui,sans-serif;color:var(--ink)}
@@ -1464,7 +1473,32 @@ async function runAdvancedDocumentPipeline({
   emit(events, 'research', 'complete', 'Investigación contextual evaluada', { requiresResearch: /\b(real|doi|actual|fuentes|investiga)\b/i.test(userPromptText) });
   let plan = buildPlan({ prompt: promptText, format: detectedFormat, template: detectedTemplate, complexity, referenceFiles });
   emit(events, 'document_design', 'complete', 'Plantilla premium seleccionada', { template: detectedTemplate, palette: plan.qualityTargets.palette });
-  emit(events, 'content_generation', 'complete', 'Plan estructural creado', { sections: plan.sections.length });
+  emit(events, 'content_generation', 'running', 'Generando contenido por sección con LLM', { sections: plan.sections.length });
+  // Per-section content generation. Without this step every slide falls
+  // back to a hardcoded "Bloque N generado por la pipeline documental…"
+  // placeholder regardless of what the user asked for. The call runs all
+  // sections in parallel, swallows per-section errors via fallbackBlock,
+  // and never aborts the wider pipeline — a content failure degrades to
+  // the old shape rather than killing delivery.
+  try {
+    plan.blocks = await generateSectionContent({
+      prompt: userPromptText,
+      plan,
+      signal,
+      language: /^[a-z]{2}$/i.test(plan.language || '') ? plan.language : 'es',
+    });
+    const failed = plan.blocks.filter((b) => b._error).length;
+    emit(
+      events,
+      'content_generation',
+      failed === 0 ? 'complete' : 'warning',
+      failed === 0 ? 'Contenido por sección generado' : `Contenido generado con ${failed} sección(es) en fallback`,
+      { sections: plan.sections.length, failed }
+    );
+  } catch (err) {
+    plan.blocks = plan.sections.map((s) => fallbackBlock(s));
+    emit(events, 'content_generation', 'warning', 'Generador de contenido no disponible — fallback aplicado', { error: err.message });
+  }
 
   let artifact;
   let validation;
