@@ -19,6 +19,19 @@ const DEFAULT_RETRY_ON = Object.freeze([
   "server_error",
 ]);
 
+const PROVIDER_ALIASES = Object.freeze({
+  gemini: "google",
+  google: "google",
+  "google-gemini": "google",
+  "x-ai": "xai",
+  grok: "xai",
+  deepseek: "deepseek",
+  openrouter: "openrouter",
+  openai: "openai",
+  anthropic: "anthropic",
+  custom: "custom",
+});
+
 const PROVIDER_MANIFESTS = Object.freeze({
   openai: {
     provider: "openai",
@@ -94,8 +107,16 @@ const MODEL_PROVIDER_HINTS = Object.freeze([
   { test: /\//, provider: "openrouter" },
 ]);
 
+let listManifestModels = () => [];
+try {
+  ({ listManifestModels } = require("../model-catalog-manifest"));
+} catch {
+  // The gateway is intentionally usable in isolated tests without the catalog module.
+}
+
 function normalizeProvider(provider, modelId = "") {
   const raw = String(provider || "").trim().toLowerCase();
+  if (raw && PROVIDER_ALIASES[raw]) return PROVIDER_ALIASES[raw];
   if (raw && PROVIDER_MANIFESTS[raw]) return raw;
   const model = String(modelId || "").trim();
   const inferred = MODEL_PROVIDER_HINTS.find((hint) => hint.test.test(model));
@@ -188,6 +209,195 @@ function createGatewayPlan({
       require_openai_shaped_response: true,
     },
   };
+}
+
+function getCatalogModel(provider, modelId) {
+  const normalizedProvider = normalizeProvider(provider, modelId);
+  const providerName = {
+    openai: "OpenAI",
+    google: "Gemini",
+    openrouter: "OpenRouter",
+    deepseek: "DeepSeek",
+  }[normalizedProvider];
+  if (!providerName || !modelId) return null;
+  return listManifestModels({ provider: providerName }).find((model) => model.name === modelId) || null;
+}
+
+function getProviderRuntimeProfile({ provider, modelId, baseUrl } = {}) {
+  const normalizedProvider = normalizeProvider(provider, modelId);
+  const manifest = PROVIDER_MANIFESTS[normalizedProvider] || PROVIDER_MANIFESTS.custom;
+  const catalogModel = getCatalogModel(normalizedProvider, modelId);
+  const compat = catalogModel?.compat || {};
+  const isDeepSeek = normalizedProvider === "deepseek";
+  const isGoogle = normalizedProvider === "google";
+  const isOpenRouter = normalizedProvider === "openrouter";
+  const usesConfiguredEndpoint = Boolean(baseUrl && baseUrl !== manifest.base_url);
+
+  return {
+    schema_version: "sira.provider_runtime_profile.v1",
+    provider: normalizedProvider,
+    model_id: modelId,
+    display_name: manifest.display_name,
+    base_url: baseUrl || manifest.base_url,
+    request_format: manifest.request_format,
+    supports: { ...manifest.supports },
+    supportsStore: !isDeepSeek && !isGoogle && !isOpenRouter && !usesConfiguredEndpoint,
+    supportsDeveloperRole: !isDeepSeek && !isGoogle && !usesConfiguredEndpoint,
+    supportsReasoningEffort: compat.supportsReasoningEffort === true || (!isGoogle && !isOpenRouter),
+    supportsUsageInStreaming: compat.supportsUsageInStreaming === true || normalizedProvider === "openai" || isOpenRouter,
+    maxTokensField: compat.maxTokensField || (normalizedProvider === "openai" ? "max_completion_tokens" : "max_tokens"),
+    maxOutputTokens: catalogModel?.maxTokens || null,
+    contextWindow: catalogModel?.contextLength || null,
+    thinkingFormat: isDeepSeek ? "deepseek" : isOpenRouter ? "openrouter" : "openai",
+    supportsStrictMode: !isGoogle && !isDeepSeek && !usesConfiguredEndpoint,
+    catalog: catalogModel
+      ? {
+          source: catalogModel.syncSource,
+          reasoning: catalogModel.reasoning === true,
+          input: catalogModel.input || ["text"],
+        }
+      : null,
+  };
+}
+
+function buildProviderChatPayload({
+  provider,
+  model,
+  modelId,
+  messages = [],
+  stream = false,
+  responseFormat = "text",
+  tools = [],
+  toolChoice,
+  maxOutputTokens,
+  thinkingLevel,
+  baseUrl,
+  extra = {},
+} = {}) {
+  const resolvedModel = String(model || modelId || "").trim();
+  if (!resolvedModel) throw gatewayError("missing_model_id", "model is required to build provider payload");
+  const runtime = getProviderRuntimeProfile({ provider, modelId: resolvedModel, baseUrl });
+  const sanitizedMessages = sanitizeMessagesForProvider(messages, runtime, thinkingLevel);
+  const payload = {
+    model: resolvedModel,
+    messages: sanitizedMessages,
+    stream: Boolean(stream),
+    ...extra,
+  };
+
+  if (Array.isArray(tools) && tools.length > 0 && runtime.supports.tools) {
+    payload.tools = tools;
+    if (toolChoice) payload.tool_choice = toolChoice;
+  }
+
+  applyResponseFormat(payload, responseFormat, runtime, extra);
+  applyMaxTokens(payload, maxOutputTokens, runtime);
+  applyStreamingUsage(payload, runtime);
+  applyThinkingControls(payload, runtime, thinkingLevel);
+
+  return {
+    schema_version: "sira.provider_chat_payload.v1",
+    provider: runtime.provider,
+    model: resolvedModel,
+    payload,
+    runtime,
+  };
+}
+
+function applyResponseFormat(payload, responseFormat, runtime, extra) {
+  if (!runtime.supports.structured_outputs || runtime.provider === "google") {
+    delete payload.response_format;
+    return;
+  }
+  if (!responseFormat || responseFormat === "text") return;
+
+  if (responseFormat === "json_schema" && extra?.json_schema && runtime.supportsStrictMode) {
+    payload.response_format = {
+      type: "json_schema",
+      json_schema: extra.json_schema,
+    };
+    return;
+  }
+
+  if (responseFormat === "json" || responseFormat === "json_schema") {
+    payload.response_format = { type: "json_object" };
+  }
+}
+
+function applyMaxTokens(payload, maxOutputTokens, runtime) {
+  const requested = Number(maxOutputTokens || 0);
+  if (!Number.isFinite(requested) || requested <= 0) return;
+  const capped = runtime.maxOutputTokens ? Math.min(requested, runtime.maxOutputTokens) : requested;
+  payload[runtime.maxTokensField] = Math.trunc(capped);
+}
+
+function applyStreamingUsage(payload, runtime) {
+  if (!payload.stream || !runtime.supportsUsageInStreaming) return;
+  payload.stream_options = {
+    ...(payload.stream_options || {}),
+    include_usage: true,
+  };
+}
+
+function applyThinkingControls(payload, runtime, thinkingLevel) {
+  if (runtime.thinkingFormat !== "deepseek" || !isDeepSeekV4ModelId(runtime.model_id)) return;
+  if (isDisabledThinkingLevel(thinkingLevel)) {
+    payload.thinking = { type: "disabled" };
+    delete payload.reasoning_effort;
+    delete payload.reasoning;
+    return;
+  }
+  payload.thinking = { type: "enabled" };
+  payload.reasoning_effort = resolveDeepSeekReasoningEffort(thinkingLevel);
+}
+
+function sanitizeMessagesForProvider(messages = [], runtime, thinkingLevel) {
+  const cloned = cloneJson(Array.isArray(messages) ? messages : []);
+  if (runtime.thinkingFormat !== "deepseek" || !isDeepSeekV4ModelId(runtime.model_id)) {
+    stripReasoningContent(cloned);
+    return cloned;
+  }
+  if (isDisabledThinkingLevel(thinkingLevel)) {
+    stripReasoningContent(cloned);
+    return cloned;
+  }
+  ensureDeepSeekToolCallReasoningContent(cloned);
+  return cloned;
+}
+
+function isDeepSeekV4ModelId(modelId) {
+  return modelId === "deepseek-v4-flash" || modelId === "deepseek-v4-pro";
+}
+
+function isDisabledThinkingLevel(thinkingLevel) {
+  const normalized = String(thinkingLevel || "").trim().toLowerCase();
+  return normalized === "off" || normalized === "none" || normalized === "disabled";
+}
+
+function resolveDeepSeekReasoningEffort(thinkingLevel) {
+  const normalized = String(thinkingLevel || "").trim().toLowerCase();
+  return normalized === "xhigh" || normalized === "max" ? "max" : "high";
+}
+
+function stripReasoningContent(messages) {
+  for (const message of messages || []) {
+    if (message && typeof message === "object") {
+      delete message.reasoning_content;
+    }
+  }
+}
+
+function ensureDeepSeekToolCallReasoningContent(messages) {
+  for (const message of messages || []) {
+    if (!message || typeof message !== "object") continue;
+    if (message.role === "assistant" && Array.isArray(message.tool_calls) && !("reasoning_content" in message)) {
+      message.reasoning_content = "";
+    }
+  }
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value || []));
 }
 
 function normalizeFallbacks(fallbacks, primary) {
@@ -316,18 +526,23 @@ function enforceBudget(plan) {
 
 function classifyProviderError(error) {
   const message = String(error?.message || error || "");
-  const status = Number(error?.status || error?.statusCode || error?.code || 0);
-  const code = String(error?.code || "").toLowerCase();
+  const status = Number(error?.status || error?.statusCode || error?.response?.status || 0);
+  const code = String(error?.code || error?.cause?.code || "").toLowerCase();
   let errorClass = "unknown";
   if (status === 401 || status === 403 || code.includes("auth") || message.match(/api key|unauthori[sz]ed|forbidden/i)) {
     errorClass = "auth";
   } else if (status === 429 || code.includes("rate") || message.match(/rate limit|too many requests/i)) {
     errorClass = "rate_limit";
-  } else if (status === 408 || code.includes("timeout") || message.match(/timeout|timed out|aborted/i)) {
+  } else if (status === 408 || code.includes("timeout") || code === "etimedout" || message.match(/timeout|timed out|aborted/i)) {
     errorClass = "timeout";
   } else if (status === 400 || status === 422 || message.match(/invalid request|bad request|schema/i)) {
     errorClass = "bad_request";
-  } else if (status >= 500 || message.match(/overloaded|unavailable|econnreset|socket hang up/i)) {
+  } else if (
+    status === 409 ||
+    status >= 500 ||
+    ["econnreset", "econnrefused", "eai_again", "epipe", "enotfound", "und_err_socket"].includes(code) ||
+    message.match(/overloaded|unavailable|econnreset|socket hang up|fetch failed|network error/i)
+  ) {
     errorClass = "provider_unavailable";
   }
   const retryable = DEFAULT_RETRY_ON.includes(errorClass);
@@ -403,6 +618,9 @@ module.exports = {
   estimateMessageTokens,
   estimateCostUsd,
   createDeployment,
+  getProviderRuntimeProfile,
+  buildProviderChatPayload,
+  sanitizeMessagesForProvider,
   createGatewayPlan,
   dispatchGatewayCall,
   createLiteLLMGateway,

@@ -13,6 +13,10 @@ const vectorPPTService = require('./vector-ppt-service');
 const { fitMessagesToContext } = require('./context-window');
 const { evaluateResponse, buildCorrectivePrompt } = require('./quality-guard');
 const { getBreaker, CircuitBreakerError } = require('./circuit-breaker');
+const {
+    buildProviderChatPayload,
+    classifyProviderError,
+} = require('./ai-product-os/litellm-gateway');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -106,16 +110,12 @@ function selectVisionRuntime(provider, model) {
  * them won't change the outcome and just delays the user-facing error.
  */
 function isTransientProviderError(err) {
-    if (!err) return false;
-    if (err.name === 'AbortError') return false;
-    const status = err.status || err.response?.status;
-    if (status === 429 || status === 408 || status === 409) return true;
-    if (status >= 500 && status < 600) return true;
-    const code = err.code || err.cause?.code;
-    if (['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN', 'EPIPE', 'ENOTFOUND', 'UND_ERR_SOCKET'].includes(code)) return true;
-    const msg = (err.message || '').toLowerCase();
-    if (msg.includes('timeout') || msg.includes('network error') || msg.includes('socket hang up') || msg.includes('fetch failed')) return true;
-    return false;
+    if (!err || err.name === 'AbortError') return false;
+    return classifyProviderError(err).retryable === true;
+}
+
+function currentThinkingLevel() {
+    return process.env.SIRA_THINKING_LEVEL || process.env.DEEPSEEK_V4_THINKING || 'high';
 }
 
 /**
@@ -159,6 +159,10 @@ class AIService {
             return new OpenAI({
                 apiKey: process.env.OPENROUTER_API_KEY,
                 baseURL: "https://openrouter.ai/api/v1",
+                defaultHeaders: {
+                    'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
+                    'X-Title': 'SiraGPT',
+                },
             });
         }
 
@@ -357,7 +361,14 @@ class AIService {
             for (let m = 0; m < modelChain.length; m++) {
                 const currentModel = modelChain[m];
                 const currentProvider = m === 0 ? provider : providerForModel(currentModel);
-                const payload = { model: currentModel, messages: workingMessages, stream: true };
+                const providerPayload = buildProviderChatPayload({
+                    provider: currentProvider,
+                    model: currentModel,
+                    messages: workingMessages,
+                    stream: true,
+                    thinkingLevel: currentThinkingLevel(),
+                });
+                const payload = providerPayload.payload;
 
                 if (hasStreamedAnyContent) break;
 
@@ -464,7 +475,8 @@ class AIService {
 
                         const retryable = isOurTimeout || isTransientProviderError(err) || err.code === 'EMPTY_COMPLETION';
                         const isLastAttemptForModel = attempt >= MAX_ATTEMPTS_PER_MODEL;
-                        const reason = isOurTimeout ? 'first-byte timeout' : (err.status || err.code || err.name || 'unknown');
+                        const classified = classifyProviderError(err);
+                        const reason = isOurTimeout ? 'first-byte timeout' : (classified.error_class || err.status || err.code || err.name || 'unknown');
                         console.warn(`⚠️ ${currentProvider}:${currentModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${reason}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
 
                         if (!retryable || isLastAttemptForModel) break; // break attempt loop → try next model
@@ -530,8 +542,15 @@ class AIService {
                 ...baseMessages.slice(0, -1),
                 { role: 'user', content: correctivePrompt },
             ];
+            const providerPayload = buildProviderChatPayload({
+                provider,
+                model,
+                messages,
+                stream: false,
+                thinkingLevel: currentThinkingLevel(),
+            });
             const resp = await client.chat.completions.create(
-                { model, messages, stream: false },
+                providerPayload.payload,
                 { signal }
             );
             return resp.choices?.[0]?.message?.content || '';

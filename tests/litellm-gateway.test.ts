@@ -35,6 +35,78 @@ describe("litellm gateway · provider normalization and route contracts", () => 
     assert.equal(selected.provider, "google")
     assert.equal(selected.modelId, "gemini-2.5-flash")
   })
+
+  it("builds DeepSeek V4 payloads with OpenClaw-style thinking controls", () => {
+    const built = gateway.buildProviderChatPayload({
+      provider: "DeepSeek",
+      model: "deepseek-v4-flash",
+      stream: true,
+      thinkingLevel: "xhigh",
+      messages: [
+        { role: "user", content: "hola" },
+        { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "search", arguments: "{}" } }] },
+      ],
+    })
+
+    assert.equal(built.provider, "deepseek")
+    assert.equal(built.runtime.contextWindow, 1_000_000)
+    assert.equal(built.runtime.maxOutputTokens, 384_000)
+    assert.equal(built.payload.thinking.type, "enabled")
+    assert.equal(built.payload.reasoning_effort, "max")
+    assert.deepEqual(built.payload.stream_options, { include_usage: true })
+    assert.equal(built.payload.messages[1].reasoning_content, "")
+  })
+
+  it("strips reasoning content when a provider should not receive it", () => {
+    const built = gateway.buildProviderChatPayload({
+      provider: "OpenAI",
+      model: "gpt-4o",
+      messages: [{ role: "assistant", content: "ok", reasoning_content: "hidden" }],
+    })
+
+    assert.equal("reasoning_content" in built.payload.messages[0], false)
+  })
+
+  it("disables DeepSeek V4 thinking explicitly without leaking replayed reasoning", () => {
+    const built = gateway.buildProviderChatPayload({
+      provider: "DeepSeek",
+      model: "deepseek-v4-pro",
+      thinkingLevel: "off",
+      messages: [{ role: "assistant", content: "ok", reasoning_content: "old trace" }],
+    })
+
+    assert.equal(built.payload.thinking.type, "disabled")
+    assert.equal("reasoning_effort" in built.payload, false)
+    assert.equal("reasoning_content" in built.payload.messages[0], false)
+  })
+
+  it("avoids JSON response_format on Gemini OpenAI-compatible calls", () => {
+    const built = gateway.buildProviderChatPayload({
+      provider: "Gemini",
+      model: "gemini-2.5-flash",
+      responseFormat: "json",
+      messages: [{ role: "user", content: "devuelve json" }],
+    })
+
+    assert.equal(built.provider, "google")
+    assert.equal("response_format" in built.payload, false)
+  })
+
+  it("classifies provider transport failures from SDK and HTTP error shapes", () => {
+    const rateLimit = gateway.classifyProviderError({ response: { status: 429 }, message: "too many requests" })
+    const network = gateway.classifyProviderError({ code: "ECONNRESET", message: "socket closed" })
+    const conflict = gateway.classifyProviderError({ status: 409, message: "model busy" })
+    const badRequest = gateway.classifyProviderError({ status: 400, message: "bad request" })
+
+    assert.equal(rateLimit.error_class, "rate_limit")
+    assert.equal(rateLimit.retryable, true)
+    assert.equal(network.error_class, "provider_unavailable")
+    assert.equal(network.retryable, true)
+    assert.equal(conflict.error_class, "provider_unavailable")
+    assert.equal(conflict.retryable, true)
+    assert.equal(badRequest.error_class, "bad_request")
+    assert.equal(badRequest.retryable, false)
+  })
 })
 describe("litellm gateway · dispatch policy", () => {
   it("routes through the selected provider and records an auditable trace", async () => {
