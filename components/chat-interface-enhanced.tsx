@@ -102,6 +102,7 @@ import {
 } from "@/components/ui/tooltip"
 import MessageComponent from "./message-component"
 import { ErrorBoundary } from "./error-boundary"
+import { Virtuoso } from "react-virtuoso"
 import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
@@ -3132,6 +3133,22 @@ function ChatInterfaceContent() {
   // Scroll to bottom only when the chat is changed
   React.useEffect(() => {
     scrollToBottom();
+  }, [currentChat?.id]);
+
+  // Virtualization: hand Virtuoso the existing Radix scroll viewport so
+  // the custom scrollbar + scrollToBottom helper above keep working
+  // unchanged. Only items in the visible window are reconciled, which
+  // is the actual bottleneck on long chats (MessageComponent itself is
+  // already React.memo'd). The ref resolves on first paint, so the
+  // very first render of a long chat falls back to a plain map (one
+  // tick of full-list reconciliation, then Virtuoso owns it).
+  const [radixViewport, setRadixViewport] = React.useState<HTMLElement | null>(null);
+  React.useEffect(() => {
+    if (!scrollAreaRef.current) return;
+    const viewport = scrollAreaRef.current.querySelector(
+      '[data-radix-scroll-area-viewport]'
+    ) as HTMLElement | null;
+    if (viewport) setRadixViewport(viewport);
   }, [currentChat?.id]);
 
   const [isUploading, setIsUploading] = React.useState(false);
@@ -7477,24 +7494,52 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         return (
                           <>
 
-                            {stableMessages.map((message) => (
-                              // Per-message boundary: a single corrupted
-                              // payload (broken markdown, malformed
-                              // artifact JSON, viewer crash) shows a
-                              // recoverable fallback instead of taking
-                              // down the whole chat list above and below.
-                              <ErrorBoundary key={message.id} label={`message:${message.id}`}>
-                                <MessageComponent
-                                  message={message}
-                                  user={user}
-                                  onRegenerate={regenerateMessage}
-                                  updateMessageInChat={editAndRegenerate}
-                                  isStreaming={false}
-                                  onToggleSplitView={handleToggleSplitView}
-                                  onDocumentPreview={handleDocumentPreview}
-                                />
-                              </ErrorBoundary>
-                            ))}
+                            {radixViewport ? (
+                              // Virtualized path — only items inside the
+                              // visible window (plus a 400px overscan
+                              // buffer) get reconciled. customScrollParent
+                              // hands Virtuoso the existing Radix viewport
+                              // so scrollToBottom() above keeps working.
+                              <Virtuoso
+                                data={stableMessages}
+                                customScrollParent={radixViewport}
+                                computeItemKey={(_, m) => m.id}
+                                increaseViewportBy={400}
+                                itemContent={(_, message) => (
+                                  <ErrorBoundary
+                                    key={message.id}
+                                    label={`message:${message.id}`}
+                                  >
+                                    <MessageComponent
+                                      message={message}
+                                      user={user}
+                                      onRegenerate={regenerateMessage}
+                                      updateMessageInChat={editAndRegenerate}
+                                      isStreaming={false}
+                                      onToggleSplitView={handleToggleSplitView}
+                                      onDocumentPreview={handleDocumentPreview}
+                                    />
+                                  </ErrorBoundary>
+                                )}
+                              />
+                            ) : (
+                              // First render before viewport ref resolves —
+                              // identical to the previous non-virtualized
+                              // path. Per-message ErrorBoundary preserved.
+                              stableMessages.map((message) => (
+                                <ErrorBoundary key={message.id} label={`message:${message.id}`}>
+                                  <MessageComponent
+                                    message={message}
+                                    user={user}
+                                    onRegenerate={regenerateMessage}
+                                    updateMessageInChat={editAndRegenerate}
+                                    isStreaming={false}
+                                    onToggleSplitView={handleToggleSplitView}
+                                    onDocumentPreview={handleDocumentPreview}
+                                  />
+                                </ErrorBoundary>
+                              ))
+                            )}
                             {streamingMessage && (
                               // Isolate layout for the streaming bubble so
                               // each token delta doesn't relayout the whole

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { agentTaskStateToUiMessage } from "../lib/agent-task-ai-sdk-bridge"
+import { agentTaskStateToUiMessage, loadVercelAiSdkBridge } from "../lib/agent-task-ai-sdk-bridge"
 import { initialAgentState, reduceEvent } from "../lib/agent-task-service"
 
 describe("agent task AI SDK bridge", () => {
@@ -45,5 +45,15 @@ describe("agent task AI SDK bridge", () => {
     assert.equal(msg.parts[0].type, "text")
     assert.equal((msg.parts[0] as any).text, "Documento listo")
     assert.equal(msg.parts[1].type, "data-agent-task")
+  })
+
+  it("loads the Vercel AI SDK bridge packages from the frontend workspace", async () => {
+    const bridge = await loadVercelAiSdkBridge()
+
+    assert.equal(bridge.ready, true)
+    assert.ok(bridge.exports.ai.length > 0)
+    assert.ok(bridge.exports.openai.length > 0)
+    assert.ok(bridge.exports.langchain.length > 0)
+    assert.ok(bridge.exports.react.length > 0)
   })
 })

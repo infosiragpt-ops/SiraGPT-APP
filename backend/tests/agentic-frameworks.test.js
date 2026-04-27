@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   BACKEND_PACKAGES,
@@ -18,9 +20,9 @@ test('agentic framework SDK imports are available', async () => {
     assert.equal(imports[id].installed, true, `${pkg} should import`);
   }
 
+  const rootLock = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package-lock.json'), 'utf8'));
   for (const pkg of ['ai', '@ai-sdk/openai', '@ai-sdk/langchain', '@ai-sdk/react']) {
-    const mod = await import(pkg);
-    assert.ok(Object.keys(mod).length > 0, `${pkg} should expose exports`);
+    assert.ok(rootLock.packages?.[`node_modules/${pkg}`], `${pkg} should be pinned in the root lockfile`);
   }
 });
 

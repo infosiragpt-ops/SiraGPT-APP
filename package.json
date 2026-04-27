@@ -126,6 +126,7 @@
     "react-plotly.js": "^2.6.0",
     "react-resizable-panels": "^2.1.7",
     "react-syntax-highlighter": "^15.6.1",
+    "react-virtuoso": "^4.18.6",
     "recharts": "^3.2.1",
     "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
