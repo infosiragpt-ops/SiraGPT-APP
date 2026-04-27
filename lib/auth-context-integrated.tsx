@@ -34,6 +34,18 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+const AUTH_CHECK_TIMEOUT_MS = 12000
+
+function withAuthTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof window.setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), AUTH_CHECK_TIMEOUT_MS)
+  })
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) window.clearTimeout(timeoutId)
+  })
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -41,31 +53,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
+    let cancelled = false
+
     const checkAuth = async () => {
       const savedToken = localStorage.getItem('auth-token')
       if (!savedToken) {
-        setIsLoading(false)
+        if (!cancelled) setIsLoading(false)
         return
       }
 
       try {
+        if (cancelled) return
         setToken(savedToken)
         apiClient.setToken(savedToken)
 
-        const response = await apiClient.getCurrentUser()
-        setUser(response.user)
+        const response = await withAuthTimeout(
+          apiClient.getCurrentUser(),
+          'Auth check timed out'
+        )
+        if (!cancelled) setUser(response.user)
       } catch (error) {
         console.error('Auth check failed:', error)
+        if (cancelled) return
         localStorage.removeItem('auth-token')
         apiClient.setToken(null)
         setToken(null)
         setUser(null)
       } finally {
-        setIsLoading(false)
+        if (!cancelled) setIsLoading(false)
       }
     }
 
     checkAuth()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const login = async (email: string, password: string): Promise<boolean> => {

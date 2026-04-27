@@ -26,8 +26,16 @@ export function AuthGuard({ children, requireAdmin = false, requireSuperAdmin = 
 
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center w-full">
-        <Loader2 className="h-8 w-8 animate-spin" />
+      <div className="flex min-h-screen w-full items-center justify-center bg-background text-foreground">
+        <div className="flex flex-col items-center gap-4 px-6 text-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border/60 bg-card shadow-sm">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Cargando Sira GPT</p>
+            <p className="text-xs text-muted-foreground">Preparando tu espacio de trabajo...</p>
+          </div>
+        </div>
       </div>
     )
   }
