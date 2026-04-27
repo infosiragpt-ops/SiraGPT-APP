@@ -59,7 +59,7 @@ describe("model-router", () => {
     });
     expect(r.model).toBeTruthy();
     // The catalog may include any of these cheap-and-fast models.
-    expect(["claude-haiku-4.5", "gpt-5-mini", "gpt-4o", "gemini-2.5-flash", "deepseek-v4-pro", "moonshotai/kimi-k2.6"].includes(r.model.id)).toBe(true);
+    expect(["claude-haiku-4.5", "gpt-5-mini", "gpt-4o", "gemini-2.5-flash", "deepseek-v4-flash", "deepseek-v4-pro", "moonshotai/kimi-k2.6"].includes(r.model.id)).toBe(true);
   });
 
   test("FREE plan filters out PRO-only models", () => {

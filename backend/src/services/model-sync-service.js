@@ -1,5 +1,10 @@
 const axios = require('axios');
 const prisma = require('../config/database');
+const {
+  getProviderCatalogDiagnostics,
+  listManifestModels,
+  mergeProviderModels,
+} = require('./model-catalog-manifest');
 
 class ModelSyncService {
   constructor() {
@@ -26,8 +31,11 @@ class ModelSyncService {
 
       const apiKey = process.env.OPENAI_API_KEY;
       if (!apiKey) {
-        console.warn('⚠️ OpenAI API key not found');
-        return [];
+        console.warn('⚠️ OpenAI API key not found, using static model catalog');
+        const models = listManifestModels({ provider: 'OpenAI' });
+        cache.data = models;
+        cache.lastFetch = now;
+        return models;
       }
 
       console.log('🔄 Fetching OpenAI models...');
@@ -59,14 +67,16 @@ class ModelSyncService {
           apiData: model
         }));
 
-      cache.data = models;
+      const mergedModels = mergeProviderModels(models, 'OpenAI');
+
+      cache.data = mergedModels;
       cache.lastFetch = now;
 
-      console.log(`✅ Fetched ${models.length} OpenAI models`);
-      return models;
+      console.log(`✅ Fetched ${models.length} OpenAI models, ${mergedModels.length} available after catalog merge`);
+      return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching OpenAI models:', error.message);
-      return this.cache.openai.data || [];
+      return this.cache.openai.data || listManifestModels({ provider: 'OpenAI' });
     }
   }
 
@@ -85,8 +95,11 @@ class ModelSyncService {
 
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
-        console.warn('⚠️ Gemini API key not found');
-        return [];
+        console.warn('⚠️ Gemini API key not found, using static model catalog');
+        const models = listManifestModels({ provider: 'Gemini' });
+        cache.data = models;
+        cache.lastFetch = now;
+        return models;
       }
 
       console.log('🔄 Fetching Gemini models...');
@@ -132,14 +145,16 @@ class ModelSyncService {
           };
         });
 
-      cache.data = models;
+      const mergedModels = mergeProviderModels(models, 'Gemini');
+
+      cache.data = mergedModels;
       cache.lastFetch = now;
 
-      console.log(`✅ Fetched ${models.length} Gemini models`);
-      return models;
+      console.log(`✅ Fetched ${models.length} Gemini models, ${mergedModels.length} available after catalog merge`);
+      return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching Gemini models:', error.message);
-      return this.cache.gemini.data || [];
+      return this.cache.gemini.data || listManifestModels({ provider: 'Gemini' });
     }
   }
 
@@ -162,8 +177,11 @@ class ModelSyncService {
 
       const apiKey = process.env.DEEPSEEK_API_KEY;
       if (!apiKey) {
-        console.warn('⚠️ DeepSeek API key not found');
-        return [];
+        console.warn('⚠️ DeepSeek API key not found, using static model catalog');
+        const models = listManifestModels({ provider: 'DeepSeek' });
+        cache.data = models;
+        cache.lastFetch = now;
+        return models;
       }
 
       console.log('🔄 Fetching DeepSeek models...');
@@ -203,14 +221,16 @@ class ModelSyncService {
           apiData: model
         }));
 
-      cache.data = models;
+      const mergedModels = mergeProviderModels(models, 'DeepSeek');
+
+      cache.data = mergedModels;
       cache.lastFetch = now;
 
-      console.log(`✅ Fetched ${models.length} DeepSeek models`);
-      return models;
+      console.log(`✅ Fetched ${models.length} DeepSeek models, ${mergedModels.length} available after catalog merge`);
+      return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching DeepSeek models:', error.message);
-      return this.cache.deepseek.data || [];
+      return this.cache.deepseek.data || listManifestModels({ provider: 'DeepSeek' });
     }
   }
 
@@ -228,10 +248,19 @@ class ModelSyncService {
       }
 
       console.log('🔄 Fetching OpenRouter models...');
+      const apiKey = process.env.OPENROUTER_API_KEY;
+      if (!apiKey) {
+        console.warn('⚠️ OpenRouter API key not found, using static model catalog');
+        const models = listManifestModels({ provider: 'OpenRouter' });
+        cache.data = models;
+        cache.lastFetch = now;
+        return models;
+      }
+
       const response = await axios.get('https://openrouter.ai/api/v1/models', {
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY || ''}`
+          'Authorization': `Bearer ${apiKey}`
         },
         timeout: 15000
       });
@@ -256,14 +285,16 @@ class ModelSyncService {
           apiData: model
         }));
 
-      cache.data = models;
+      const mergedModels = mergeProviderModels(models, 'OpenRouter');
+
+      cache.data = mergedModels;
       cache.lastFetch = now;
 
-      console.log(`✅ Fetched ${models.length} OpenRouter models`);
-      return models;
+      console.log(`✅ Fetched ${models.length} OpenRouter models, ${mergedModels.length} available after catalog merge`);
+      return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching OpenRouter models:', error.message);
-      return this.cache.openrouter.data || [];
+      return this.cache.openrouter.data || listManifestModels({ provider: 'OpenRouter' });
     }
   }
 
@@ -336,9 +367,10 @@ class ModelSyncService {
                 type: model.type,
                 icon: this.getModelIcon(model),
                 lastSynced: new Date(),
-                syncSource: 'api',
+                syncSource: model.syncSource || 'api',
                 contextLength: model.contextLength,
                 pricing: model.pricing,
+                tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
                 // Don't override isActive - let users control this
                 updatedAt: new Date()
               }
@@ -356,10 +388,10 @@ class ModelSyncService {
                 isActive: model.isActive,
                 icon: this.getModelIcon(model),
                 lastSynced: new Date(),
-                syncSource: 'api',
+                syncSource: model.syncSource || 'api',
                 contextLength: model.contextLength,
                 pricing: model.pricing,
-                tags: this.generateTags(model)
+                tags: model.tags && model.tags.length ? model.tags : this.generateTags(model)
               }
             });
             created++;
@@ -392,6 +424,13 @@ class ModelSyncService {
       });
       console.log('🧹 Cleared all model caches');
     }
+  }
+
+  /**
+   * Return static catalog visibility and configuration diagnostics for admin UI.
+   */
+  getModelCatalogDiagnostics(options = {}) {
+    return getProviderCatalogDiagnostics(options);
   }
 
   /**

@@ -123,10 +123,12 @@ router.get('/models/fetch', async (req, res) => {
   try {
     console.log('📡 Admin requested model fetch from all providers');
     const models = await modelSyncService.fetchAllModels();
+    const catalogDiagnostics = modelSyncService.getModelCatalogDiagnostics();
     res.json({ 
       success: true, 
       models,
       count: models.length,
+      catalogDiagnostics,
       providers: {
         openai: models.filter(m => m.provider === 'OpenAI').length,
         gemini: models.filter(m => m.provider === 'Gemini').length,
@@ -140,6 +142,24 @@ router.get('/models/fetch', async (req, res) => {
       success: false, 
       error: 'Failed to fetch models from providers',
       message: error.message 
+    });
+  }
+});
+
+// Static provider model catalog and API-key diagnostics.
+router.get('/models/catalog', async (req, res) => {
+  try {
+    const includeModels = req.query.includeModels === 'true';
+    res.json({
+      success: true,
+      providers: modelSyncService.getModelCatalogDiagnostics({ includeModels }),
+    });
+  } catch (error) {
+    console.error('❌ Error getting model catalog diagnostics:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get model catalog diagnostics',
+      message: error.message
     });
   }
 });
