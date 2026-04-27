@@ -30,6 +30,10 @@ const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
 const { buildLangGraphLayer } = require('./agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
+const {
+  buildUploadedFileContext,
+  serializeMessageAttachments,
+} = require('../message-attachments');
 
 const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -140,6 +144,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     displayGoal,
     systemContract,
     files = [],
+    fileMetadata = [],
     chatId = null,
     model = 'gpt-4o',
     maxSteps = 60,
@@ -368,13 +373,29 @@ async function runAgentTaskJob(payload = {}, job = null) {
   });
 
   let assistantMessageId = existing?.assistantMessageId || null;
+  const uploadedFileContext = await buildUploadedFileContext(prisma, {
+    userId: user.id,
+    fileIds: files,
+  });
   if (chatId && prisma) {
     try {
       const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: user.id } });
       if (chat) {
         if (!existing?.assistantMessageId) {
+          const messageFiles = await serializeMessageAttachments(prisma, {
+            userId: user.id,
+            fileIds: files,
+            clientMetadata: fileMetadata,
+          });
           await prisma.message.create({
-            data: { chatId, role: 'USER', content: displayGoal, timestamp: new Date() },
+            data: {
+              chatId,
+              role: 'USER',
+              content: displayGoal,
+              files: messageFiles.length ? messageFiles : null,
+              timestamp: new Date(),
+              metadata: { source: 'agent-task-user', taskId, fileIds: files },
+            },
           });
         }
         const assistant = assistantMessageId
@@ -460,7 +481,8 @@ async function runAgentTaskJob(payload = {}, job = null) {
         enterpriseRuntimeProfile,
         enterpriseToolRuntimePlan,
         enterpriseQaBoardReview,
-        agenticOperatingCore
+        agenticOperatingCore,
+        uploadedFileContext
       ),
       ctx: toolCtx,
       finalizeGuard: ({ steps }) => validateFinalize(finalizeProfile, steps),

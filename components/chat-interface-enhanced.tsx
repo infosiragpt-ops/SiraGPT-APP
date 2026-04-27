@@ -139,6 +139,79 @@ import {
   shouldCompilePastedTextAsDocument,
 } from "@/lib/long-paste"
 
+const resolveUploadFileId = (file: any): string | null => {
+  if (!file) return null
+  if (typeof file === "string") return file
+  return file.id || file.fileId || file.attachmentId || null
+}
+
+const collectUploadFileIds = (files: any[] = []): string[] =>
+  files.map(resolveUploadFileId).filter((id): id is string => Boolean(id))
+
+const getComposerFileFingerprint = (file: any): string => {
+  const source = typeof File !== "undefined" && file?.file instanceof File ? file.file : file
+  return [
+    file?.name || file?.originalName || file?.filename || source?.name || "",
+    file?.size ?? source?.size ?? "",
+    file?.type || file?.mimeType || source?.type || "",
+    file?.sourceChannel || "",
+  ].join("::")
+}
+
+const isComposerFileUploadPending = (file: any): boolean =>
+  Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
+
+const isComposerFileUploadFailed = (file: any): boolean =>
+  Boolean(file && file.status === "failed")
+
+const sanitizeLongPasteMetaForMessage = (meta: any) => {
+  if (!meta || meta.kind !== "long_paste_document") return null
+  return {
+    kind: "long_paste_document",
+    title: meta.title,
+    filename: meta.filename,
+    preview: meta.preview,
+    originalCharCount: meta.originalCharCount,
+    originalWordCount: meta.originalWordCount,
+    originalLineCount: meta.originalLineCount,
+    createdAt: meta.createdAt,
+  }
+}
+
+const buildAgentFileMetadata = (files: any[] = []) =>
+  files
+    .map((file) => {
+      const id = resolveUploadFileId(file)
+      if (!id) return null
+      const longPasteMeta = getLongPasteMetadata(file)
+      const safeLongPasteMeta = sanitizeLongPasteMetaForMessage(longPasteMeta)
+      const displayName =
+        safeLongPasteMeta?.title ||
+        file?.longPasteTitle ||
+        file?.originalName ||
+        file?.name ||
+        file?.filename ||
+        "archivo"
+
+      return {
+        id,
+        name: displayName,
+        originalName: displayName,
+        filename: file?.filename || file?.name || displayName,
+        mimeType: file?.mimeType || file?.type || file?.contentType || null,
+        type: file?.type || file?.mimeType || file?.contentType || null,
+        size: file?.size ?? null,
+        url: file?.url || null,
+        openaiFileId: file?.openaiFileId || null,
+        sourceChannel: file?.sourceChannel || null,
+        isLongPasteDocument: Boolean(file?.isLongPasteDocument || safeLongPasteMeta),
+        longPasteTitle: safeLongPasteMeta?.title || file?.longPasteTitle || null,
+        longPastePreview: safeLongPasteMeta?.preview || file?.longPastePreview || null,
+        longPasteMeta: safeLongPasteMeta,
+      }
+    })
+    .filter(Boolean)
+
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
 
@@ -3036,6 +3109,26 @@ function ChatInterfaceContent() {
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
 
+  const waitForComposerUploads = React.useCallback(async (initialFiles: any[], timeoutMs = 30000) => {
+    const startedAt = Date.now();
+    const fingerprints = new Set(initialFiles.map(getComposerFileFingerprint).filter(Boolean));
+
+    const pickCurrentFiles = () => {
+      const current = uploadedFilesRef.current.length > 0 ? uploadedFilesRef.current : initialFiles;
+      if (fingerprints.size === 0) return current;
+      const matching = current.filter((file: any) => fingerprints.has(getComposerFileFingerprint(file)));
+      return matching.length > 0 ? matching : current;
+    };
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const current = pickCurrentFiles();
+      if (!current.some(isComposerFileUploadPending)) return [...current];
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+
+    return [...pickCurrentFiles()];
+  }, []);
+
   React.useEffect(() => {
     const onImageRegionEdit = (event: Event) => {
       const detail = (event as CustomEvent).detail || {};
@@ -4427,7 +4520,11 @@ But first, you need to connect your Spotify account securely using the button be
       };
     });
 
-    setUploadedFiles((cur: any[]) => [...cur, ...tempFiles]);
+    setUploadedFiles((cur: any[]) => {
+      const next = [...cur, ...tempFiles];
+      uploadedFilesRef.current = next;
+      return next;
+    });
 
     // Initialize per-temp progress at 0.
     setUploadProgress(prev => {
@@ -4477,10 +4574,14 @@ But first, you need to connect your Spotify account securely using the button be
           status: 'ready' as const,
         }));
         const tempIds = new Set(tempFiles.map(tf => tf.tempId));
-        setUploadedFiles((cur: any[]) => [
-          ...cur.filter((f: any) => !tempIds.has(f.tempId)),
-          ...merged,
-        ]);
+        setUploadedFiles((cur: any[]) => {
+          const next = [
+            ...cur.filter((f: any) => !tempIds.has(f.tempId)),
+            ...merged,
+          ];
+          uploadedFilesRef.current = next;
+          return next;
+        });
 
         setTimeout(() => {
           setUploadProgress(prev => {
@@ -4495,9 +4596,11 @@ But first, you need to connect your Spotify account securely using the button be
       } else {
         // Mark temps as failed so the chip shows a retry button.
         const tempIds = new Set(tempFiles.map(tf => tf.tempId));
-        setUploadedFiles((cur: any[]) =>
-          cur.map(f => tempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: 'Respuesta sin archivos' } : f)
-        );
+        setUploadedFiles((cur: any[]) => {
+          const next = cur.map(f => tempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: 'Respuesta sin archivos' } : f);
+          uploadedFilesRef.current = next;
+          return next;
+        });
         toast.error('La subida falló. Toca el ícono de reintento en el archivo.');
       }
     } catch (error: any) {
@@ -4507,9 +4610,11 @@ But first, you need to connect your Spotify account securely using the button be
       // Mark as failed (don't remove) so the user can retry without
       // re-dragging the file.
       const tempIds = new Set(tempFiles.map(tf => tf.tempId));
-      setUploadedFiles((cur: any[]) =>
-        cur.map(f => tempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: reason } : f)
-      );
+      setUploadedFiles((cur: any[]) => {
+        const next = cur.map(f => tempIds.has(f.tempId) ? { ...f, status: 'failed', uploadError: reason } : f);
+        uploadedFilesRef.current = next;
+        return next;
+      });
       // Previews are intentionally KEPT alive on failure so the chip
       // can render its thumbnail next to the retry button.
     } finally {
@@ -4526,9 +4631,11 @@ But first, you need to connect your Spotify account securely using the button be
       toast.error('No se puede reintentar — el archivo se perdió. Vuelve a arrastrarlo.');
       return;
     }
-    setUploadedFiles((cur: any[]) =>
-      cur.filter(f => f.tempId !== failedFile.tempId && f.id !== failedFile.id)
-    );
+    setUploadedFiles((cur: any[]) => {
+      const next = cur.filter(f => f.tempId !== failedFile.tempId && f.id !== failedFile.id);
+      uploadedFilesRef.current = next;
+      return next;
+    });
     const dt = new DataTransfer();
     dt.items.add(failedFile.file);
     handleAndUploadFiles(dt.files, failedFile.sourceChannel || 'retry');
@@ -4918,9 +5025,31 @@ But first, you need to connect your Spotify account securely using the button be
   ]);
 
   const handleSend = async () => {
-    const composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
+    let composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
     const rawMsg = input.trim();
     if (!rawMsg && composerFiles.length === 0) return;
+
+    if (composerFiles.some(isComposerFileUploadPending)) {
+      toast.info("Terminando de adjuntar el documento...", { duration: 1800 });
+      composerFiles = await waitForComposerUploads(composerFiles);
+    }
+
+    if (composerFiles.some(isComposerFileUploadPending)) {
+      toast.error("El documento todavia se esta subiendo. Intenta enviar de nuevo en unos segundos.");
+      return;
+    }
+
+    if (composerFiles.some(isComposerFileUploadFailed)) {
+      toast.error("No se pudo adjuntar el documento. Reintenta la subida antes de enviar.");
+      return;
+    }
+
+    const missingFileIds = composerFiles.filter((file: any) => !resolveUploadFileId(file));
+    if (missingFileIds.length > 0) {
+      toast.error("El documento no esta listo para enviarse. Vuelve a adjuntarlo si el problema continua.");
+      return;
+    }
+
     const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
 
     const isBusy = isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
@@ -4930,6 +5059,7 @@ But first, you need to connect your Spotify account securely using the button be
       // flip back to idle (see the useEffect watching busy state).
       pendingMsgQueueRef.current.push({ msg, files: composerFiles });
       setInput("");
+      uploadedFilesRef.current = [];
       setUploadedFiles([]);
       const now = Date.now();
       queueBurstTimestampsRef.current = queueBurstTimestampsRef.current.filter(t => now - t < 5000);
@@ -5021,6 +5151,7 @@ REWRITTEN TEXT:`;
       return `${rawPrompt}\n\nImage edit target: modify only the marked region of the attached image. Region in percentages from the image top-left: x=${Math.round(region.x || 0)}%, y=${Math.round(region.y || 0)}%, width=${Math.round(region.width || 0)}%, height=${Math.round(region.height || 0)}%. Keep the rest of the image visually unchanged.`;
     };
     setInput("");
+    uploadedFilesRef.current = [];
     setUploadedFiles([]);
 
     let isNewChat = !currentChat;
@@ -5078,7 +5209,7 @@ REWRITTEN TEXT:`;
             model: selectedModel,
             prompt: msg,
             chatId: activeChat?.id,
-            files: filesToSend?.map(f => f.id) || [],
+            files: collectUploadFileIds(filesToSend),
             streamId,
           },
           (chunk) => {
@@ -5175,7 +5306,7 @@ REWRITTEN TEXT:`;
           model: selectedModel,
           prompt: msg,
           chatId: activeChat?.id,
-          files: filesToSend?.map(f => f.id) || [],
+          files: collectUploadFileIds(filesToSend),
         });
 
         setIsGeneratingExcel(false);
@@ -5324,7 +5455,7 @@ REWRITTEN TEXT:`;
         return;
       }
       if (isImageGenerationActive || chatType === 'image') {
-        await handleImageGeneration(buildImageEditPrompt(msg), filesToSend.map(f => f.id));
+        await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
         return;
       }
       if (isVideoGenerationActive || chatType === 'video') {
@@ -5480,7 +5611,7 @@ REWRITTEN TEXT:`;
 
       switch (intent) {
         case 'image':
-          await handleImageGeneration(buildImageEditPrompt(msg), filesToSend.map(f => f.id));
+          await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
           await handleVideoGeneration(msg);
@@ -6055,7 +6186,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           role: 'USER' as const,
           content: prompt,
           timestamp: new Date().toISOString(),
-          files: filesToSend?.length ? filesToSend.map(f => f.id) : undefined,
+          files: filesToSend?.length ? collectUploadFileIds(filesToSend) : undefined,
         };
         // Add placeholder for AI response
         aiMessagePlaceholder = {
@@ -6101,7 +6232,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
-        files: filesToSend?.map(f => f.id) || [],
+        files: collectUploadFileIds(filesToSend),
         streamId: streamId
       };
 
@@ -6187,7 +6318,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
-        files: files?.map(f => f.id)
+        files: collectUploadFileIds(files || [])
       };
 
       const response = await apiClient.generatePPT(payload);
@@ -6252,7 +6383,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         chatId: newChat?.id || '',
         provider: selectProvider,
         model: selectedModel,
-        files: files?.map(f => f.id) || []
+        files: collectUploadFileIds(files || [])
       };
 
       const response = await apiClient.generateVectorPPT(payload);
@@ -6284,6 +6415,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const next = pendingMsgQueueRef.current.shift();
     if (!next) return;
     setInput(next.msg);
+    uploadedFilesRef.current = next.files || [];
     setUploadedFiles(next.files || []);
     const t = setTimeout(() => { handleSendRef.current(); }, 0);
     return () => clearTimeout(t);
@@ -6782,6 +6914,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           role: 'USER' as const,
           content: goalText,
           timestamp: new Date().toISOString(),
+          files: filesToSend,
         };
         setCurrentChat(prev => prev ? { ...prev, messages: [...(prev.messages || []), userMessage] } : prev);
       }
@@ -6811,11 +6944,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] };
       let taskWasAborted = false;
       try {
+        const fileIds = collectUploadFileIds(filesToSend);
+        const fileMetadata = buildAgentFileMetadata(filesToSend);
         for await (const evt of agentTaskService.runIterator({
           goal: goalText,
           displayGoal: goalText,
           systemContract,
-          files: filesToSend.map((file: any) => file?.id).filter(Boolean),
+          files: fileIds,
+          fileMetadata,
           chatId: activeChat.id,
           model: selectedModel,
           maxSteps: 80,

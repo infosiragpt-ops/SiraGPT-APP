@@ -366,7 +366,7 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
 
     const attachments: AttachmentLike[] = React.useMemo(() => chips.map(f => ({
         id: f.id || f.attachmentId,
-        name: String(f.originalName || f.name || 'archivo'),
+        name: String(f.longPasteTitle || f.longPasteMeta?.title || f.longPasteMetadata?.title || f.originalName || f.name || 'archivo'),
         mimeType: f.mimeType || f.type || null,
         size: f.size ?? null,
         url: f.url || null,

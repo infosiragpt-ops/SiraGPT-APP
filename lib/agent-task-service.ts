@@ -87,6 +87,7 @@ export interface AgentTaskRunArgs {
   displayGoal?: string
   systemContract?: string
   files?: string[]
+  fileMetadata?: any[]
   chatId?: string
   model?: string
   maxSteps?: number

@@ -83,6 +83,11 @@ const {
 } = require('../services/agents/agent-task-queue');
 const { cancelRunningTask } = require('../services/agents/agent-task-worker');
 const agentTaskPersistence = require('../services/agents/agent-task-persistence');
+const {
+  buildUploadedFileContext,
+  normalizeClientMetadata,
+  serializeMessageAttachments,
+} = require('../services/message-attachments');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -374,6 +379,7 @@ router.post(
     const fileIds = Array.isArray(req.body.files)
       ? req.body.files.map(String).filter(Boolean).slice(0, 20)
       : [];
+    const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
     const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds });
     const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
     const universalTaskContract = buildUniversalTaskContract({
@@ -731,6 +737,10 @@ router.post(
         emit(payload);
       },
     };
+    const uploadedFileContext = await buildUploadedFileContext(prisma, {
+      userId: req.user?.id,
+      fileIds,
+    });
 
     // Persist the user turn and a live assistant placeholder up front so a chat
     // reload shows progress instead of losing the trace while the agent keeps
@@ -739,8 +749,20 @@ router.post(
       try {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: req.user.id } });
         if (chat) {
+          const messageFiles = await serializeMessageAttachments(prisma, {
+            userId: req.user.id,
+            fileIds,
+            clientMetadata: clientFileMetadata,
+          });
           await prisma.message.create({
-            data: { chatId, role: 'USER', content: displayGoal, timestamp: new Date() },
+            data: {
+              chatId,
+              role: 'USER',
+              content: displayGoal,
+              files: messageFiles.length ? messageFiles : null,
+              timestamp: new Date(),
+              metadata: { source: 'agent-task-user', taskId, fileIds },
+            },
           });
           const assistant = await prisma.message.create({
             data: {
@@ -797,7 +819,8 @@ router.post(
           enterpriseRuntimeProfile,
           enterpriseToolRuntimePlan,
           enterpriseQaBoardReview,
-          agenticOperatingCore
+          agenticOperatingCore,
+          uploadedFileContext
         ),
         ctx: toolCtx,
         finalizeGuard: ({ steps }) => validateFinalize(finalizeProfile, steps),
@@ -980,6 +1003,7 @@ async function handleQueuedTaskRequest(req, res) {
   const fileIds = Array.isArray(req.body.files)
     ? req.body.files.map(String).filter(Boolean).slice(0, 20)
     : [];
+  const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
   const taskId = crypto.randomUUID();
   const traceId = crypto.randomUUID();
   const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
@@ -1002,6 +1026,7 @@ async function handleQueuedTaskRequest(req, res) {
     displayGoal,
     systemContract,
     files: fileIds,
+    fileMetadata: clientFileMetadata,
     chatId,
     model,
     maxSteps,
@@ -1019,6 +1044,7 @@ async function handleQueuedTaskRequest(req, res) {
     agentGoal,
     systemContract,
     fileIds,
+    fileMetadata: clientFileMetadata,
     model,
     maxSteps,
     maxRuntimeMs,
@@ -1228,7 +1254,8 @@ function buildAgentSystemPrompt(
   enterpriseRuntimeProfile = null,
   enterpriseToolRuntimePlan = null,
   enterpriseQaBoardReview = null,
-  agenticOperatingCore = null
+  agenticOperatingCore = null,
+  uploadedFileContext = ''
 ) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (universalTaskContract) {
@@ -1292,6 +1319,9 @@ function buildAgentSystemPrompt(
   }
   if (fileIds.length) {
     parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering.`);
+  }
+  if (uploadedFileContext) {
+    parts.push(uploadedFileContext);
   }
   return parts.join('\n\n');
 }
