@@ -17,14 +17,30 @@
 const { DEFAULT_REGION } = require("./types");
 const { classifyIntent, rankIntentsWithLLM } = require("./intentClassifier");
 const registry = require("./providerRegistry");
+const cache = require("./cache");
+
+function normalizeTitle(title) {
+  return String(title || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .slice(0, 140);
+}
 
 function dedupeById(results) {
   const seen = new Set();
   const out = [];
   for (const r of results) {
     if (!r || !r.id) continue;
-    if (seen.has(r.id)) continue;
-    seen.add(r.id);
+    const doi = r.metadata && r.metadata.doi ? `doi:${String(r.metadata.doi).toLowerCase()}` : "";
+    const url = r.url ? `url:${String(r.url).replace(/[?#].*$/, "").toLowerCase()}` : "";
+    const title = normalizeTitle(r.title);
+    const titleKey = title ? `title:${title}` : "";
+    const keys = [doi, url, r.id ? `id:${r.id}` : "", titleKey].filter(Boolean);
+    if (keys.some((k) => seen.has(k))) continue;
+    keys.forEach((k) => seen.add(k));
     out.push(r);
   }
   return out;
@@ -50,7 +66,11 @@ function heuristicRank(results, intents) {
 async function runProvider({ provider, query, opts, timeoutMs, now }) {
   const t0 = now();
   try {
-    const hits = await provider.search(query, { ...opts, timeoutMs });
+    const work = provider.search(query, { ...opts, timeoutMs });
+    const hits = await Promise.race([
+      work,
+      new Promise((resolve) => setTimeout(() => resolve([]), timeoutMs)),
+    ]);
     return {
       providerId: provider.id,
       category: provider.category,
@@ -107,6 +127,30 @@ async function runUniversalSearch(args) {
     intents = await rankIntentsWithLLM({ query: args.query, candidates: intents, callLLM: deps.callLLM });
   }
   const classificationMs = now() - p1;
+
+  const cacheKey = { query: args.query, categories: intents, region, provider: "*" };
+  const cacheEnabled = args.cache !== false && !deps.registry;
+  if (cacheEnabled) {
+    const cached = await cache.getCached(cacheKey);
+    if (cached) {
+      return {
+        query: args.query,
+        intents,
+        region,
+        results: cached.results.slice(0, maxResults),
+        providers: [],
+        reranked: false,
+        cacheHit: true,
+        timings: {
+          classificationMs,
+          decompositionMs: 0,
+          retrievalMs: 0,
+          rerankingMs: 0,
+          totalMs: now() - t0,
+        },
+      };
+    }
+  }
 
   // Phase 2 — decompose (phase 2a = identity)
   const p2 = now();
@@ -181,6 +225,10 @@ async function runUniversalSearch(args) {
   const ranked = heuristicRank(deduped, intents).slice(0, maxResults);
   const rerankingMs = now() - p4;
 
+  if (cacheEnabled && ranked.length > 0) {
+    await cache.setCached(cacheKey, ranked, { providers: traces, at: new Date().toISOString() });
+  }
+
   return {
     query: args.query,
     intents,
@@ -188,6 +236,7 @@ async function runUniversalSearch(args) {
     results: ranked,
     providers: traces,
     reranked: false,
+    cacheHit: false,
     timings: {
       classificationMs,
       decompositionMs,
@@ -200,5 +249,5 @@ async function runUniversalSearch(args) {
 
 module.exports = {
   runUniversalSearch,
-  INTERNAL: { dedupeById, heuristicRank, runProvider },
+  INTERNAL: { dedupeById, heuristicRank, normalizeTitle, runProvider },
 };

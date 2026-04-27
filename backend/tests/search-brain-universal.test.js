@@ -260,6 +260,17 @@ test("runUniversalSearch: dedupes by id", () => {
   assert.equal(out[0].title, "first");
 });
 
+test("runUniversalSearch: dedupes by DOI and normalized title", () => {
+  const { dedupeById } = O_INTERNAL;
+  const out = dedupeById([
+    { id: "a", title: "RAG Evaluation", metadata: { doi: "10.1/x" } },
+    { id: "b", title: "Other", metadata: { doi: "10.1/x" } },
+    { id: "c", title: "RAG: Evaluation!" },
+    { id: "d", title: "rag evaluation" },
+  ]);
+  assert.equal(out.length, 1);
+});
+
 test("runUniversalSearch: heuristic rank prioritises primary intent", () => {
   const { heuristicRank } = O_INTERNAL;
   const input = [
@@ -311,6 +322,26 @@ test("index.js: registers Open-Meteo automatically", () => {
   registry.clear();
   delete require.cache[require.resolve("../src/services/searchBrain/universal")];
   const mod = require("../src/services/searchBrain/universal");
-  assert.equal(mod.registry.size(), 1);
+  assert.ok(mod.registry.size() >= 100);
   assert.ok(mod.registry.get("openmeteo"));
+  assert.ok(mod.registry.get("crossref"));
+  assert.ok(mod.registry.get("mercadolibre"));
+});
+
+test("catalog: covers every declared category with metadata", () => {
+  registry.clear();
+  delete require.cache[require.resolve("../src/services/searchBrain/universal")];
+  const mod = require("../src/services/searchBrain/universal");
+  const metadata = mod.registry.listMetadata();
+  for (const category of CATEGORIES) {
+    assert.ok(metadata.some((p) => p.category === category), `missing provider for ${category}`);
+  }
+  assert.ok(metadata.some((p) => p.enabledByDefault === false && p.disabledReason));
+});
+
+test("cache: ttl policy covers volatile and stable categories", () => {
+  const { ttlFor } = require("../src/services/searchBrain/universal/cache");
+  assert.equal(ttlFor(["finance"]), 5 * 60);
+  assert.equal(ttlFor(["academic"]), 30 * 24 * 60 * 60);
+  assert.equal(ttlFor(["academic", "news"]), 30 * 60);
 });

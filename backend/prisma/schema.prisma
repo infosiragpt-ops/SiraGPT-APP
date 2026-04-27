@@ -65,6 +65,7 @@ model User {
   designs     DesignProject[]
   scheduledPosts ScheduledPost[]
   socialConnections SocialConnection[]
+  searchBrainSettings SearchBrainSettings?
   usageAlerts UsageAlert[]
   notifications Notification[]
   subscriptionEvents SubscriptionEvent[]
@@ -658,4 +659,36 @@ model SocialConnection {
   @@unique([userId, platform])
   @@map("social_connections")
   @@index([userId])
+}
+
+model UniversalSearchCache {
+  id               String   @id @default(cuid())
+  queryHash        String
+  intentCategories String[]
+  region           String
+  provider         String
+  resultJson       Json
+  embeddingJson    Json?
+  metadata         Json?
+  cachedAt         DateTime @default(now())
+  ttlSeconds       Int
+
+  @@unique([queryHash, provider])
+  @@index([queryHash])
+  @@index([provider, cachedAt])
+  @@map("universal_search_cache")
+}
+
+model SearchBrainSettings {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  region      String   @default("global")
+  mode        String   @default("local")
+  userEmail   String?
+  keys        Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("search_brain_settings")
 }

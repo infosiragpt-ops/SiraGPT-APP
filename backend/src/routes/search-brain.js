@@ -21,6 +21,14 @@ const {
   searchAcademicForChat,
   DEFAULT_ACADEMIC_SOURCES,
 } = require("../services/searchBrain");
+const {
+  runUniversalSearch,
+  classifyIntent,
+  registry: universalRegistry,
+  settings: universalSettings,
+  CATEGORIES,
+  REGIONS,
+} = require("../services/searchBrain/universal");
 
 const router = express.Router();
 
@@ -61,6 +69,49 @@ function extractMailto(req) {
   const body = req.body || {};
   if (typeof body.mailto === "string" && /@/.test(body.mailto)) return body.mailto.slice(0, 120);
   return process.env.SEARCH_BRAIN_MAILTO || undefined;
+}
+
+function userId(req) {
+  if (req.user && req.user.id) return String(req.user.id);
+  const header = req.header("x-user-id");
+  return typeof header === "string" && header.length > 0 ? header : "anonymous";
+}
+
+function validateUniversalCategories(raw, forced) {
+  if (forced) return [forced];
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw.filter((c) => typeof c === "string" && CATEGORIES.includes(c));
+  return out.length > 0 ? out : undefined;
+}
+
+function validateUniversalRegion(raw) {
+  return typeof raw === "string" && REGIONS.includes(raw) ? raw : undefined;
+}
+
+async function runUniversalEndpoint(req, res, forcedCategory) {
+  try {
+    const body = req.body || {};
+    const q = validateQuery(body.query);
+    if (!q.valid) return res.status(400).json({ error: q.error });
+    const uid = userId(req);
+    const stored = universalSettings.get(uid);
+    const out = await runUniversalSearch({
+      query: q.query,
+      categories: validateUniversalCategories(body.categories, forcedCategory),
+      region: validateUniversalRegion(body.region) || stored.region,
+      language: typeof body.language === "string" ? body.language.slice(0, 8) : undefined,
+      mode: body.mode === "cloud" || body.mode === "local" ? body.mode : stored.mode,
+      keys: { ...stored.keys, ...(body.keys && typeof body.keys === "object" ? body.keys : {}) },
+      userEmail: stored.userEmail || (typeof body.userEmail === "string" ? body.userEmail : undefined),
+      maxResults: validateMaxResults(body.maxResults),
+      timeoutMs: typeof body.timeoutMs === "number" ? Math.min(30000, Math.max(1000, body.timeoutMs)) : undefined,
+      raw: body.raw && typeof body.raw === "object" ? body.raw : undefined,
+      cache: body.cache === false ? false : true,
+    });
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "internal error" });
+  }
 }
 
 function hasUsableEnvKey(...names) {
@@ -148,6 +199,56 @@ router.get("/providers", (_req, res) => {
       },
     ],
   });
+});
+
+router.get("/intents", (_req, res) => {
+  res.json({
+    categories: [...CATEGORIES],
+    regions: [...REGIONS],
+    examples: {
+      academic: "papers sobre RAG y evaluación",
+      jobs: "trabajo data scientist remoto",
+      shopping: "precio laptop i7 en Perú",
+      weather: "clima en Lima mañana",
+      finance: "bitcoin precio mercado",
+      news: "noticias inteligencia artificial hoy",
+    },
+  });
+});
+
+router.get("/universal/providers", (req, res) => {
+  const category = typeof req.query.category === "string" && CATEGORIES.includes(req.query.category) ? req.query.category : undefined;
+  const region = typeof req.query.region === "string" && REGIONS.includes(req.query.region) ? req.query.region : undefined;
+  res.json({ categories: [...CATEGORIES], regions: [...REGIONS], providers: universalRegistry.listMetadata({ category, region }) });
+});
+
+router.post("/universal", (req, res) => runUniversalEndpoint(req, res));
+router.post("/jobs", (req, res) => runUniversalEndpoint(req, res, "jobs"));
+router.post("/shopping", (req, res) => runUniversalEndpoint(req, res, "shopping"));
+router.post("/news", (req, res) => runUniversalEndpoint(req, res, "news"));
+router.post("/finance", (req, res) => runUniversalEndpoint(req, res, "finance"));
+router.post("/weather", (req, res) => runUniversalEndpoint(req, res, "weather"));
+router.post("/travel", (req, res) => runUniversalEndpoint(req, res, "travel"));
+router.post("/government", (req, res) => runUniversalEndpoint(req, res, "government"));
+router.post("/china", (req, res) => runUniversalEndpoint(req, res, "china"));
+
+router.post("/settings/keys", (req, res) => {
+  try {
+    const updated = universalSettings.update(userId(req), { keys: req.body?.keys || req.body || {} });
+    res.json({ keysConfigured: Object.keys(updated.keys) });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "invalid settings" });
+  }
+});
+
+router.post("/settings/region", (req, res) => {
+  const updated = universalSettings.update(userId(req), { region: req.body?.region });
+  res.json({ region: updated.region });
+});
+
+router.post("/settings/mode", (req, res) => {
+  const updated = universalSettings.update(userId(req), { mode: req.body?.mode });
+  res.json({ mode: updated.mode });
 });
 
 router.post("/academic", async (req, res) => {

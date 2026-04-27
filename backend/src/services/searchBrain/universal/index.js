@@ -18,12 +18,16 @@ const { openMeteoProvider } = require("./providers/weather/openMeteo");
 const { openAlexProvider } = require("./providers/academic/openAlex");
 const { scieloProvider } = require("./providers/academic/scielo");
 const { scopusProvider } = require("./providers/academic/scopus");
+const { catalogProviders } = require("./providers/catalog");
 
 // ─── Register built-in providers (idempotent via id key) ─────────────────
 registry.register(openMeteoProvider);
 registry.register(openAlexProvider);
 registry.register(scieloProvider);
 registry.register(scopusProvider);
+for (const provider of catalogProviders) {
+  registry.register(provider);
+}
 
 module.exports = {
   runUniversalSearch,

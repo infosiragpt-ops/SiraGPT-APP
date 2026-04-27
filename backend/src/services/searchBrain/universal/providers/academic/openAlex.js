@@ -80,15 +80,15 @@ const openAlexProvider = {
   region: "global",
   category: "academic",
   license: "CC0",
-  rateLimit: "100 000 credits/day with free API key; 100 req/sec hard cap",
-  requiresKey: true,
+  rateLimit: "Free polite pool with mailto; optional API key for production-scale use",
+  requiresKey: false,
 
   async search(query, opts = {}) {
     if (!query || typeof query !== "string") return [];
     const timeoutMs = opts.timeoutMs || 9000;
     const maxResults = Math.min(50, opts.maxResults || 20);
-    const apiKey = opts.apiKey || process.env.OPENALEX_API_KEY;
-    const mailto = opts.mailto || process.env.OPENALEX_MAILTO;
+    const apiKey = opts.apiKey || opts.keys?.openalex || process.env.OPENALEX_API_KEY;
+    const mailto = opts.mailto || opts.userEmail || process.env.OPENALEX_MAILTO || process.env.SEARCH_BRAIN_MAILTO;
 
     const url = new URL(ENDPOINT);
     url.searchParams.set("search", query);

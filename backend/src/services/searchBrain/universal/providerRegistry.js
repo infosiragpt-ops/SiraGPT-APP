@@ -87,6 +87,8 @@ function listMetadata(filters = {}) {
     license: p.license,
     rateLimit: p.rateLimit,
     requiresKey: Boolean(p.requiresKey),
+    enabledByDefault: p.enabledByDefault !== false,
+    disabledReason: p.metadata && p.metadata.disabledReason ? p.metadata.disabledReason : undefined,
   }));
 }
 
