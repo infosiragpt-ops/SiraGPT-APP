@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const spotifyService = require('../services/spotify-mcp');
 const { PrismaClient } = require('@prisma/client');
+const { encrypt } = require('../utils/encryption');
 const prisma = new PrismaClient();
 const { authenticateToken } = require('../middleware/auth');
 
@@ -32,8 +33,10 @@ router.get('/callback', async (req, res) => {
     await prisma.user.update({
       where: { id: userId },
       data: {
-        // Us object ko JSON string bana kar `spotifyTokens` field mein save karein
-        spotifyTokens: JSON.stringify(tokensToStore),
+        // Stored as AES-CBC ciphertext (`<iv>:<ct>`). Read path in
+        // services/spotify-mcp.js handles both this and the legacy
+        // plain-JSON shape so existing connected users keep working.
+        spotifyTokens: encrypt(JSON.stringify(tokensToStore)),
       },
     });
 

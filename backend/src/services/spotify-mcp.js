@@ -1,5 +1,6 @@
 const SpotifyWebApi = require('spotify-web-api-node');
 const { PrismaClient } = require('@prisma/client');
+const { encrypt, decrypt } = require('../utils/encryption');
 const prisma = new PrismaClient();
 
 const spotifyApi = new SpotifyWebApi({
@@ -7,6 +8,21 @@ const spotifyApi = new SpotifyWebApi({
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
   redirectUri: process.env.SPOTIFY_REDIRECT_URI,
 });
+
+// Defensive read for User.spotifyTokens. New writes are AES-CBC
+// encrypted (format `<iv_hex>:<ciphertext_hex>`). Pre-fix rows were
+// stored as plain JSON and start with `{`. Prefer decrypt; fall back
+// to plaintext so existing connected users don't get forced through
+// a re-auth flow — the next refresh write upgrades them transparently.
+function readSpotifyTokens(stored) {
+  if (typeof stored !== 'string' || stored.length === 0) {
+    throw new Error('Empty Spotify tokens');
+  }
+  if (stored.startsWith('{')) {
+    return JSON.parse(stored);
+  }
+  return JSON.parse(decrypt(stored));
+}
 
 // Helper function to analyze user intent using OpenAI
 async function analyzeIntent(message) {
@@ -139,7 +155,7 @@ const spotifyService = {
           };
           await prisma.user.update({
             where: { id: userId },
-            data: { spotifyTokens: JSON.stringify(updatedTokens) },
+            data: { spotifyTokens: encrypt(JSON.stringify(updatedTokens)) },
           });
 
           console.log("Retrying the original command with the new token...");
@@ -190,7 +206,7 @@ const spotifyService = {
     if (!user || !user.spotifyTokens) {
       return { requiresConnection: true };
     }
-    const tokens = JSON.parse(user.spotifyTokens);
+    const tokens = readSpotifyTokens(user.spotifyTokens);
     spotifyApi.setAccessToken(tokens.access_token);
     spotifyApi.setRefreshToken(tokens.refresh_token);
 
