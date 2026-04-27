@@ -37,7 +37,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const AUTH_CHECK_TIMEOUT_MS = 12000
 
 function withAuthTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
-  let timeoutId: ReturnType<typeof window.setTimeout> | undefined
+  let timeoutId: number | undefined
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = window.setTimeout(() => reject(new Error(message)), AUTH_CHECK_TIMEOUT_MS)
   })
