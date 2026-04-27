@@ -60,6 +60,8 @@ const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
+const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
+const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -251,6 +253,8 @@ const server = app.listen(PORT, () => {
     console.log(`🔗 Health check: http://localhost:${PORT}/health`);
 });
 
+startAgentTaskWorker();
+
 // Initialize WebSocket server for Computer Use
 initializeWebSocketServer(server);
 
@@ -259,5 +263,19 @@ initializeWebSocketServer(server);
 // layer (which would circular-require via the skills registry).
 scheduler.setInvoker(runAgent);
 scheduler.start();
+
+async function shutdown(signal) {
+    console.log(`[shutdown] ${signal} received`);
+    try { scheduler.stop?.(); } catch {}
+    await Promise.allSettled([
+        closeAgentTaskWorker(),
+        closeAgentTaskQueue(),
+        new Promise((resolve) => server.close(resolve)),
+    ]);
+    process.exit(0);
+}
+
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
 
 module.exports = app;

@@ -91,10 +91,22 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       PRISMA_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openwebui
       PORT: 5000
       NODE_ENV: production
+      REDIS_URL: redis://localhost:6379
+      AGENT_QUEUE_NAME: siragpt-agent-tasks-ci
+      AGENT_WORKER_CONCURRENCY: 1
       # Smoke-test-only secrets — never touch real data in CI.
       JWT_SECRET: ci-dummy-jwt-secret-long-enough-for-hs256-32bytes
       SESSION_SECRET: ci-dummy-session-secret-not-used-in-prod
@@ -151,6 +163,9 @@ jobs:
       # start shipping from the team's workflow.
       - name: Prisma · push schema to Postgres service
         run: npx prisma db push --accept-data-loss --skip-generate
+
+      - name: Agentic runtime tests
+        run: node --test tests/document-delivery-policy.test.js tests/agent-task-durable-events.test.js tests/agent-task-queue.test.js
 
       - name: Boot server and verify /health
         run: |

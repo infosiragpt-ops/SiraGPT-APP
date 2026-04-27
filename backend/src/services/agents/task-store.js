@@ -54,6 +54,13 @@ function sanitizeTaskRecord(record = {}) {
     userId: String(record.userId || ''),
     chatId: record.chatId || null,
     assistantMessageId: record.assistantMessageId || null,
+    jobId: record.jobId || null,
+    queueName: record.queueName || record.queue || null,
+    traceId: record.traceId || null,
+    documentPolicy: record.documentPolicy || null,
+    agentGoal: String(record.agentGoal || '').slice(0, 4000),
+    systemContract: String(record.systemContract || '').slice(0, 4000),
+    fileIds: Array.isArray(record.fileIds) ? record.fileIds.map(String).slice(0, 20) : [],
     displayGoal: String(record.displayGoal || '').slice(0, 4000),
     model: record.model || null,
     status: record.status || 'running',
@@ -76,6 +83,7 @@ function sanitizeTaskRecord(record = {}) {
     agenticOperatingCore: record.agenticOperatingCore || null,
     durableExecution: record.durableExecution || null,
     events: trimEvents(record.events, record.eventLimit || DEFAULT_EVENT_LIMIT),
+    lastEventSeq: Number.isFinite(Number(record.lastEventSeq)) ? Number(record.lastEventSeq) : 0,
     stats: record.stats || null,
     artifacts: record.artifacts || [],
     checkpoints: trimEvents(record.checkpoints, 200),
@@ -131,8 +139,16 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
   if (!snapshotLike?.taskId || !snapshotLike?.userId || !event) return null;
   const existing = getTaskSnapshotForUser(snapshotLike.taskId, snapshotLike.userId)
     || sanitizeTaskRecord(snapshotLike);
+  const lastSeq = Number.isFinite(Number(existing.lastEventSeq))
+    ? Number(existing.lastEventSeq)
+    : Math.max(0, ...(existing.events || []).map((evt) => Number(evt.seq) || 0));
+  const seq = Number.isFinite(Number(event.seq)) && Number(event.seq) > 0
+    ? Number(event.seq)
+    : lastSeq + 1;
   const stamped = {
     ...event,
+    id: event.id || `${snapshotLike.taskId}:${seq}`,
+    seq,
     ts: event.ts || nowIso(),
   };
   const events = trimEvents([...(existing.events || []), stamped], options.eventLimit || DEFAULT_EVENT_LIMIT);
@@ -153,6 +169,7 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
     assistantMessageId: snapshotLike.assistantMessageId || existing.assistantMessageId || null,
     streamState: streamState || existing.streamState,
     events,
+    lastEventSeq: seq,
     checkpoints: trimEvents(checkpoints, 200),
     updatedAt: nowIso(),
   };
@@ -166,7 +183,7 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
 }
 
 function shouldCheckpoint(event) {
-  return ['meta', 'step_start', 'step_done', 'file_artifact', 'final_text', 'done', 'error'].includes(event.type);
+  return ['meta', 'queue_status', 'document_policy', 'checkpoint', 'quality_gate', 'repair_attempt', 'step_start', 'step_done', 'file_artifact', 'final_text', 'done', 'error'].includes(event.type);
 }
 
 function markTaskStatus(taskLike, status, patch = {}) {

@@ -69,6 +69,8 @@ model User {
   usageAlerts UsageAlert[]
   notifications Notification[]
   subscriptionEvents SubscriptionEvent[]
+  agentTasks AgentTask[]
+  generatedArtifacts GeneratedArtifact[]
 
   @@map("users")
 }
@@ -159,6 +161,8 @@ model Chat {
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages Message[]
   sharedMessages MessageShare[] @relation("SharedMessages")
+  agentTasks AgentTask[]
+  generatedArtifacts GeneratedArtifact[]
 
   @@index([userId, updatedAt])
   @@map("chats")
@@ -177,9 +181,77 @@ model Message {
 
   // Relations
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  generatedArtifacts GeneratedArtifact[]
 
   @@index([chatId, timestamp])
   @@map("messages")
+}
+
+model AgentTask {
+  id             String   @id @default(cuid())
+  userId         String
+  chatId         String?
+  jobId          String?  @unique
+  status         String   @default("queued")
+  goal           String   @db.Text
+  model          String?
+  traceId        String?
+  documentPolicy Json?
+  state          Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  completedAt    DateTime?
+  cancelledAt    DateTime?
+  failedAt       DateTime?
+
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat      Chat? @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  events    AgentTaskEvent[]
+  artifacts GeneratedArtifact[]
+
+  @@index([userId, updatedAt])
+  @@index([status, updatedAt])
+  @@map("agent_tasks")
+}
+
+model AgentTaskEvent {
+  id        String   @id @default(cuid())
+  taskId    String
+  seq       Int
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  task AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, seq])
+  @@index([taskId, createdAt])
+  @@map("agent_task_events")
+}
+
+model GeneratedArtifact {
+  id          String   @id
+  userId      String
+  taskId      String?
+  chatId      String?
+  messageId   String?
+  filename    String
+  mime        String
+  format      String
+  path        String?
+  sizeBytes   Int
+  previewHtml String?  @db.Text
+  validation  Json?
+  createdAt   DateTime @default(now())
+
+  user    User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task    AgentTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  chat    Chat? @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([taskId, createdAt])
+  @@map("generated_artifacts")
 }
 
 model MessageShare {

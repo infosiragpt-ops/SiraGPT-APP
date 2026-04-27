@@ -18,6 +18,7 @@ const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, Tab
 const PizZip = require('pizzip');
 const PptxGenJS = require('pptxgenjs');
 const PDFDocument = require('pdfkit');
+const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
 
 const execFileAsync = promisify(execFile);
@@ -506,6 +507,38 @@ function validateXlsx(buffer, expected = {}) {
       entries: entries.length,
       sheets: (workbookXml.match(/<sheet\b/g) || []).length,
       charts: entries.filter((e) => e.startsWith('xl/charts/')).length,
+    },
+  };
+}
+
+async function inspectXlsxCorporateStyle(buffer) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const worksheets = workbook.worksheets.map((sheet) => {
+    const header = sheet.getRow(1);
+    const styledHeaderCells = header.values
+      .slice(1)
+      .filter((_, idx) => {
+        const cell = header.getCell(idx + 1);
+        return Boolean(cell.font?.bold || cell.fill?.type || cell.alignment?.horizontal);
+      }).length;
+    return {
+      name: sheet.name,
+      rowCount: sheet.rowCount,
+      columnCount: sheet.columnCount,
+      frozen: Array.isArray(sheet.views) && sheet.views.some((view) => view.state === 'frozen'),
+      styledHeaderCells,
+      autoFilter: Boolean(sheet.autoFilter),
+    };
+  });
+  return {
+    engine: 'exceljs',
+    worksheetCount: worksheets.length,
+    worksheets,
+    corporateChecks: {
+      multiSheet: worksheets.length >= 3,
+      frozenPane: worksheets.some((sheet) => sheet.frozen),
+      styledHeaders: worksheets.some((sheet) => sheet.styledHeaderCells >= Math.min(sheet.columnCount, 3)),
     },
   };
 }
@@ -1435,6 +1468,7 @@ async function runAdvancedDocumentPipeline({
 
   let artifact;
   let validation;
+  let excelJsInspection = null;
   let attempts = 0;
   const attemptRecords = [];
   while (attempts <= maxRepairAttempts) {
@@ -1444,6 +1478,14 @@ async function runAdvancedDocumentPipeline({
     artifact = await buildDocumentFile({ plan, outputDir });
     assertNotAborted(signal);
     emit(events, 'code', 'complete', 'Archivo técnico generado', { filename: artifact.filename, bytes: artifact.buffer.length });
+    if (plan.format === 'xlsx') {
+      try {
+        excelJsInspection = await inspectXlsxCorporateStyle(artifact.buffer);
+        emit(events, 'document_design', 'complete', 'Auditoría ExcelJS de estilo corporativo completada', excelJsInspection);
+      } catch (err) {
+        emit(events, 'document_design', 'warning', 'Auditoría ExcelJS no disponible', { error: err.message });
+      }
+    }
     emit(events, 'rendering', 'complete', 'Agente de renderizado construyó artefacto y preview desde código', {
       format: plan.format,
       engine: plan.format === 'pptx' ? 'PptxGenJS + HTML preview' : 'artifact renderer',
@@ -1451,6 +1493,9 @@ async function runAdvancedDocumentPipeline({
     const expected = expectedFor(plan.format, plan.template, plan.complexity, plan);
     emit(events, 'file_validation', 'running', 'Validando integridad y estructura interna');
     validation = validateDocument({ format: plan.format, buffer: artifact.buffer, expected });
+    if (excelJsInspection) {
+      validation.details = { ...(validation.details || {}), exceljs: excelJsInspection };
+    }
     attemptRecords.push({ attempt: attempts, validation, expected });
     emit(events, 'file_validation', validation.passed ? 'complete' : 'warning', 'Validación técnica calculada', { score: validation.overallScore, technicalScore: validation.technicalScore, qualityScore: validation.qualityScore });
     if (validation.passed) break;
@@ -1586,6 +1631,7 @@ module.exports = {
   INTERNAL: {
     expectedFor,
     buildDocumentFile,
+    inspectXlsxCorporateStyle,
     repairPlan,
     zipEntries,
   },

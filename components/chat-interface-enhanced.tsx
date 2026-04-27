@@ -6796,7 +6796,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         id: `msg-ai-${Date.now() + 1}`,
         chatId: activeChat.id,
         role: 'ASSISTANT' as const,
-        content: '```agent-task-state\n' + JSON.stringify({ ...initialAgentState, steps: [], artifacts: [] }) + '\n```',
+        content: '```agent-task-state\n' + JSON.stringify({ ...initialAgentState, steps: [], artifacts: [], checkpoints: [], qualityGates: [], repairs: [] }) + '\n```',
         timestamp: new Date().toISOString(),
       };
       setCurrentChat(prev => prev ? { ...prev, messages: [...(prev.messages || []), aiMessage] } : prev);
@@ -6814,7 +6814,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       searchAbortControllerRef.current = controller;
       currentAgentTaskIdRef.current = null;
 
-      let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [] };
+      let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], checkpoints: [], qualityGates: [], repairs: [] };
       let taskWasAborted = false;
       try {
         for await (const evt of agentTaskService.runIterator({
@@ -6828,8 +6828,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           maxRuntimeMs: 2 * 60 * 60 * 1000,
           signal: controller.signal,
         })) {
-          if (evt.type === 'meta' && evt.taskId) {
-            currentAgentTaskIdRef.current = evt.taskId;
+          const taskIdFromEvent = (evt as any).taskId;
+          if (taskIdFromEvent) {
+            currentAgentTaskIdRef.current = taskIdFromEvent;
           }
           state = reduceEvent(state, evt);
           updateBubble(state);

@@ -72,6 +72,15 @@ const {
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
 const durableExecutionStore = require('../services/agents/durable-execution-store');
+const { buildDocumentDeliveryPolicy } = require('../services/agents/document-delivery-policy');
+const {
+  cancelQueuedTask,
+  enqueueAgentTask,
+  getQueueName,
+  requireRedisUrl,
+} = require('../services/agents/agent-task-queue');
+const { cancelRunningTask } = require('../services/agents/agent-task-worker');
+const agentTaskPersistence = require('../services/agents/agent-task-persistence');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -143,23 +152,58 @@ router.get('/task/:taskId', authenticateToken, (req, res) => {
   res.json({ ok: true, ...formatTaskPayload(task) });
 });
 
+// ─── GET /api/agent/task/:taskId/events?after=<seq> ────────────────────
+
+router.get('/task/:taskId/events', authenticateToken, (req, res) => {
+  const task = getTaskForUser(req.params.taskId, req.user?.id)
+    || taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
+  if (!task) return res.status(404).json({ error: 'task not found' });
+
+  const allEvents = task.events || [];
+  const afterRaw = String(req.query.after || '0');
+  const numericAfter = Number.parseInt(afterRaw, 10);
+  const after = Number.isFinite(numericAfter)
+    ? numericAfter
+    : (allEvents.find((event) => String(event.id) === afterRaw)?.seq || 0);
+  const events = allEvents.filter((event) => (Number(event.seq) || 0) > after);
+  res.json({
+    ok: true,
+    taskId: task.taskId,
+    status: task.status,
+    queue: task.queueName || getQueueName(),
+    traceId: task.traceId || null,
+    documentPolicy: task.documentPolicy || task.streamState?.documentPolicy || null,
+    events,
+    streamState: task.streamState || null,
+    artifacts: task.artifacts || task.streamState?.artifacts || [],
+  });
+});
+
 // ─── POST /api/agent/task/:taskId/cancel ───────────────────────────────
 
-router.post('/task/:taskId/cancel', authenticateToken, (req, res) => {
+router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
   const task = getTaskForUser(req.params.taskId, req.user?.id);
   if (!task) {
     const snapshot = taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
     if (!snapshot) return res.status(404).json({ error: 'task not found' });
-    if (snapshot.status === 'running') {
+    let queueCancel = null;
+    try { queueCancel = await cancelQueuedTask(snapshot.jobId || snapshot.taskId); } catch { /* redis unavailable */ }
+    const runningCancel = await cancelRunningTask(snapshot.taskId, req.user?.id);
+    if (['queued', 'running'].includes(snapshot.status)) {
+      let streamState = {
+        ...(snapshot.streamState || initialAgentState()),
+        done: true,
+        error: 'Tarea cancelada por el usuario.',
+      };
+      streamState = reduceAgentState(streamState, { type: 'queue_status', taskId: snapshot.taskId, status: 'cancelled', queue: snapshot.queueName || getQueueName(), jobId: snapshot.jobId || snapshot.taskId });
+      const writtenCancel = taskStore.appendTaskEvent(snapshot, { type: 'error', message: 'Tarea cancelada por el usuario.' }, streamState, { eventLimit: TASK_EVENT_LIMIT });
+      await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || { type: 'error', message: 'Tarea cancelada por el usuario.' });
       taskStore.markTaskStatus(snapshot, 'cancelled', {
-        streamState: {
-          ...(snapshot.streamState || {}),
-          done: true,
-          error: 'Tarea cancelada desde una sesión recuperada.',
-        },
+        streamState,
       });
+      await agentTaskPersistence.upsertAgentTask({ ...snapshot, status: 'cancelled', state: streamState });
     }
-    return res.json({ ok: true, taskId: snapshot.taskId, status: 'cancelled' });
+    return res.json({ ok: true, taskId: snapshot.taskId, status: 'cancelled', queueCancel, runningCancel });
   }
   if (task.status !== 'running') {
     return res.json({ ok: true, taskId: task.taskId, status: task.status });
@@ -189,6 +233,66 @@ router.post('/task/:taskId/cancel', authenticateToken, (req, res) => {
   res.json({ ok: true, taskId: task.taskId, status: task.status });
 });
 
+// ─── POST /api/agent/task/:taskId/retry ────────────────────────────────
+
+router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
+  const snapshot = getTaskForUser(req.params.taskId, req.user?.id)
+    || taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
+  if (!snapshot) return res.status(404).json({ error: 'task not found' });
+  if (!['error', 'cancelled'].includes(snapshot.status)) {
+    return res.status(409).json({ error: 'task is not retryable', status: snapshot.status });
+  }
+
+  try {
+    requireRedisUrl();
+    const job = await enqueueAgentTask({
+      taskId: snapshot.taskId,
+      traceId: snapshot.traceId || crypto.randomUUID(),
+      user: { id: req.user?.id, email: req.user?.email },
+      goal: snapshot.agentGoal || snapshot.displayGoal,
+      displayGoal: snapshot.displayGoal,
+      systemContract: snapshot.systemContract || '',
+      files: snapshot.fileIds || [],
+      chatId: snapshot.chatId || null,
+      model: snapshot.model || 'gpt-4o',
+      maxSteps: snapshot.maxSteps || 60,
+      maxRuntimeMs: snapshot.maxRuntimeMs || 2 * 60 * 60 * 1000,
+      retryOf: snapshot.taskId,
+      documentPolicy: snapshot.documentPolicy || null,
+    }, { priority: 1, jobId: `${snapshot.taskId}-retry-${Date.now()}` });
+
+    let streamState = snapshot.streamState || initialAgentState();
+    const retryEvent = {
+      type: 'repair_attempt',
+      attempt: (snapshot.repairs?.length || streamState.repairs?.length || 0) + 1,
+      status: 'queued',
+      message: 'Reintentando desde el último checkpoint durable.',
+    };
+    streamState = reduceAgentState(streamState, retryEvent);
+    const retryWritten = taskStore.appendTaskEvent({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, retryEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    await agentTaskPersistence.appendAgentTaskEvent(retryWritten || snapshot, retryWritten?.events?.[retryWritten.events.length - 1] || retryEvent);
+    const queueEvent = { type: 'queue_status', taskId: snapshot.taskId, status: 'queued', queue: getQueueName(), jobId: String(job.id), position: null };
+    streamState = reduceAgentState(streamState, queueEvent);
+    const queued = taskStore.appendTaskEvent({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, queueEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    taskStore.markTaskStatus({ ...queued, userId: req.user?.id }, 'queued', {
+      jobId: String(job.id),
+      queueName: getQueueName(),
+      streamState,
+    });
+    await agentTaskPersistence.upsertAgentTask({
+      ...snapshot,
+      userId: req.user?.id,
+      status: 'queued',
+      jobId: String(job.id),
+      queueName: getQueueName(),
+      state: streamState,
+    });
+    res.json({ ok: true, taskId: snapshot.taskId, jobId: String(job.id), status: 'queued', queue: getQueueName() });
+  } catch (err) {
+    res.status(503).json({ error: err.message || 'agent retry unavailable' });
+  }
+});
+
 // ─── POST /api/agent/task ───────────────────────────────────────────────
 
 router.post(
@@ -209,6 +313,10 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
     if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+
+    if (process.env.AGENT_TASK_INLINE !== '1') {
+      return handleQueuedTaskRequest(req, res);
+    }
 
     const rawGoal = String(req.body.goal || '');
     const displayGoal = normalizeDisplayGoal(req.body.displayGoal || rawGoal);
@@ -774,6 +882,175 @@ router.post(
 
 // ─── helpers ────────────────────────────────────────────────────────────
 
+async function handleQueuedTaskRequest(req, res) {
+  try {
+    requireRedisUrl();
+  } catch (err) {
+    return res.status(503).json({
+      error: 'REDIS_URL is required for agentic tasks. Configure Redis and restart the backend worker.',
+      detail: err.message,
+    });
+  }
+
+  const rawGoal = String(req.body.goal || '');
+  const displayGoal = normalizeDisplayGoal(req.body.displayGoal || rawGoal);
+  const agentGoal = normalizeDisplayGoal(rawGoal);
+  const systemContract = normalizeSystemContract(
+    req.body.systemContract || extractProfessionalContract(rawGoal)
+  );
+  const fileIds = Array.isArray(req.body.files)
+    ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+    : [];
+  const taskId = crypto.randomUUID();
+  const traceId = crypto.randomUUID();
+  const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
+  const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
+  const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
+  const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
+  const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
+  const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
+  const documentPolicy = buildDocumentDeliveryPolicy({
+    goal: agentGoal,
+    displayGoal,
+    files: fileIds,
+  });
+
+  const payload = {
+    taskId,
+    traceId,
+    user: { id: req.user?.id, email: req.user?.email },
+    goal: agentGoal,
+    displayGoal,
+    systemContract,
+    files: fileIds,
+    chatId,
+    model,
+    maxSteps,
+    maxRuntimeMs,
+    documentPolicy,
+  };
+
+  const job = await enqueueAgentTask(payload);
+  let streamState = initialAgentState();
+  const snapshot = {
+    taskId,
+    userId: req.user?.id,
+    chatId,
+    displayGoal,
+    agentGoal,
+    systemContract,
+    fileIds,
+    model,
+    maxSteps,
+    maxRuntimeMs,
+    status: 'queued',
+    jobId: String(job.id),
+    queueName: getQueueName(),
+    traceId,
+    documentPolicy,
+    streamState,
+    events: [],
+    artifacts: [],
+  };
+  taskStore.writeTaskSnapshot(snapshot);
+
+  const queueEvent = {
+    type: 'queue_status',
+    taskId,
+    status: 'queued',
+    queue: getQueueName(),
+    jobId: String(job.id),
+    position: null,
+    estimatedWaitMs: null,
+  };
+  streamState = reduceAgentState(streamState, queueEvent);
+  let written = taskStore.appendTaskEvent(snapshot, queueEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || snapshot;
+  await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || queueEvent);
+
+  const policyEvent = { type: 'document_policy', policy: documentPolicy };
+  streamState = reduceAgentState(streamState, policyEvent);
+  written = taskStore.appendTaskEvent({ ...written, streamState }, policyEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
+  await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || policyEvent);
+
+  await agentTaskPersistence.upsertAgentTask({
+    ...written,
+    status: 'queued',
+    jobId: String(job.id),
+    queueName: getQueueName(),
+    traceId,
+    documentPolicy,
+    state: streamState,
+  });
+
+  auditLog.audit({
+    event: 'agent_task_queued',
+    taskId,
+    userId: req.user?.id || null,
+    chatId,
+    model,
+    queue: getQueueName(),
+    jobId: String(job.id),
+    traceId,
+    documentPolicy,
+  });
+  metrics.counter('agent_task_invocations_total', { status: 'queued' });
+
+  return streamTaskEvents(req, res, taskId, req.user?.id);
+}
+
+function streamTaskEvents(req, res, taskId, userId) {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+  let clientConnected = true;
+  let lastSeq = 0;
+  const send = (obj) => {
+    if (!clientConnected || res.writableEnded) return;
+    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ }
+  };
+
+  const flush = () => {
+    const snapshot = getTaskForUser(taskId, userId) || taskStore.getTaskSnapshotForUser(taskId, userId);
+    if (!snapshot) {
+      send({ type: 'error', message: 'Tarea no encontrada.' });
+      cleanup();
+      return;
+    }
+    for (const event of snapshot.events || []) {
+      const seq = Number(event.seq) || 0;
+      if (seq <= lastSeq) continue;
+      lastSeq = seq;
+      send(event);
+    }
+    if (['completed', 'cancelled', 'error'].includes(snapshot.status)) {
+      cleanup();
+    }
+  };
+
+  const cleanup = () => {
+    clientConnected = false;
+    clearInterval(poll);
+    clearInterval(heartbeat);
+    try { res.end(); } catch { /* already closed */ }
+  };
+
+  req.on('close', () => {
+    clientConnected = false;
+    clearInterval(poll);
+    clearInterval(heartbeat);
+  });
+
+  const poll = setInterval(flush, 450);
+  const heartbeat = setInterval(() => {
+    if (!clientConnected || res.writableEnded) return;
+    try { res.write(': keep-alive\n\n'); } catch { /* client gone */ }
+  }, 25000);
+  flush();
+}
+
 function shortLabel(s, max = 160) {
   const one = String(s || '').replace(/\s+/g, ' ').trim();
   return one.length > max ? one.slice(0, max) + '…' : one;
@@ -960,9 +1237,15 @@ function createTaskRecord({
   enterpriseQaBoardReview = null,
   agenticOperatingCore = null,
   durableExecution = null,
+  jobId = null,
+  queueName = null,
+  traceId = null,
+  documentPolicy = null,
+  status = 'running',
 }) {
   pruneOldTasks();
   const now = new Date().toISOString();
+  const existingSnapshot = taskStore.getTaskSnapshotForUser(taskId, userId);
   const record = {
     taskId,
     userId: String(userId || ''),
@@ -972,10 +1255,17 @@ function createTaskRecord({
     controller,
     maxSteps,
     maxRuntimeMs,
-    status: 'running',
+    status,
+    jobId,
+    queueName,
+    traceId,
+    documentPolicy,
+    agentGoal: existingSnapshot?.agentGoal || displayGoal,
+    systemContract: existingSnapshot?.systemContract || '',
+    fileIds: existingSnapshot?.fileIds || [],
     createdAt: now,
     updatedAt: now,
-    streamState,
+    streamState: streamState || existingSnapshot?.streamState || initialAgentState(),
     executionProfile,
     intentAlignmentProfile,
     taskPlan,
@@ -992,8 +1282,10 @@ function createTaskRecord({
         checkpointCount: durableExecution.checkpoints?.length || 0,
       }
       : null,
-    events: [],
-    assistantMessageId: null,
+    events: existingSnapshot?.events || [],
+    checkpoints: existingSnapshot?.checkpoints || [],
+    lastEventSeq: existingSnapshot?.lastEventSeq || 0,
+    assistantMessageId: existingSnapshot?.assistantMessageId || null,
   };
   ACTIVE_AGENT_TASKS.set(taskId, record);
   try {
@@ -1014,7 +1306,10 @@ function getTaskForUser(taskId, userId) {
 
 function appendTaskEvent(task, event, streamState) {
   if (!task) return;
-  task.events.push({ ...event, ts: new Date().toISOString() });
+  const lastSeq = Number(task.lastEventSeq || 0) || Math.max(0, ...task.events.map((evt) => Number(evt.seq) || 0));
+  const seq = Number(event.seq) || lastSeq + 1;
+  task.lastEventSeq = seq;
+  task.events.push({ ...event, id: event.id || `${task.taskId}:${seq}`, seq, ts: new Date().toISOString() });
   if (task.events.length > TASK_EVENT_LIMIT) {
     task.events.splice(0, task.events.length - TASK_EVENT_LIMIT);
   }
@@ -1054,9 +1349,15 @@ function formatTaskPayload(task) {
     taskId: task.taskId,
     status: task.status,
     displayGoal: task.displayGoal,
+    agentGoal: task.agentGoal || null,
+    fileIds: task.fileIds || [],
     model: task.model,
     chatId: task.chatId || null,
     assistantMessageId: task.assistantMessageId || null,
+    jobId: task.jobId || null,
+    queue: task.queueName || null,
+    traceId: task.traceId || null,
+    documentPolicy: task.documentPolicy || task.streamState?.documentPolicy || null,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     completedAt: task.completedAt || null,
@@ -1064,6 +1365,7 @@ function formatTaskPayload(task) {
     failedAt: task.failedAt || null,
     streamState: task.streamState,
     events: task.events || [],
+    artifacts: task.artifacts || task.streamState?.artifacts || [],
     executionProfile: task.executionProfile || null,
     intentAlignmentProfile: task.intentAlignmentProfile || null,
     taskPlan: task.taskPlan || null,
@@ -1080,11 +1382,49 @@ function formatTaskPayload(task) {
 }
 
 function initialAgentState() {
-  return { steps: [], artifacts: [], finalText: '', done: false };
+  return { steps: [], artifacts: [], finalText: '', done: false, checkpoints: [], qualityGates: [], repairs: [] };
 }
 
 function reduceAgentState(state, evt) {
   switch (evt.type) {
+    case 'queue_status':
+      return { ...state, queue: { status: evt.status, queue: evt.queue, jobId: evt.jobId, position: evt.position ?? null, estimatedWaitMs: evt.estimatedWaitMs ?? null, updatedAt: evt.ts || new Date().toISOString() } };
+    case 'document_policy':
+      return { ...state, documentPolicy: evt.policy || evt.documentPolicy || null };
+    case 'checkpoint':
+      return {
+        ...state,
+        checkpoints: [...(state.checkpoints || []), {
+          id: evt.id || `checkpoint-${(state.checkpoints || []).length + 1}`,
+          label: evt.label || evt.message || 'Checkpoint',
+          status: evt.status || 'saved',
+          payload: evt.payload || null,
+          ts: evt.ts || new Date().toISOString(),
+        }].slice(-20),
+      };
+    case 'quality_gate':
+      return {
+        ...state,
+        qualityGates: [...(state.qualityGates || []), {
+          id: evt.id || `quality-${(state.qualityGates || []).length + 1}`,
+          label: evt.label || evt.gate || 'Validación',
+          passed: Boolean(evt.passed),
+          score: evt.score ?? evt.overallScore ?? null,
+          summary: evt.summary || evt.message || '',
+          payload: evt.payload || null,
+          ts: evt.ts || new Date().toISOString(),
+        }].slice(-20),
+      };
+    case 'repair_attempt':
+      return {
+        ...state,
+        repairs: [...(state.repairs || []), {
+          attempt: evt.attempt || (state.repairs || []).length + 1,
+          status: evt.status || 'running',
+          message: evt.message || 'Reparación automática',
+          ts: evt.ts || new Date().toISOString(),
+        }].slice(-10),
+      };
     case 'meta':
       return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile, enterpriseToolRuntimePlan: evt.enterpriseToolRuntimePlan, enterpriseQaBoardReview: evt.enterpriseQaBoardReview, agenticOperatingCore: evt.agenticOperatingCore } };
     case 'step_start':
@@ -1183,10 +1523,12 @@ router.INTERNAL = {
   extractProfessionalContract,
   formatTaskPayload,
   getTaskForUser,
+  inferIconFor,
   initialAgentState,
   normalizeDisplayGoal,
   normalizeSystemContract,
   reduceAgentState,
+  shortLabel,
   serializeAgentState,
 };
 
