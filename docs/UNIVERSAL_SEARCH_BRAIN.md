@@ -37,6 +37,8 @@ curl http://localhost:5000/api/search-brain/intents
 Settings endpoints:
 
 ```bash
+curl http://localhost:5000/api/search-brain/settings
+
 curl -X POST http://localhost:5000/api/search-brain/settings/region \
   -H 'Content-Type: application/json' -d '{"region":"latam"}'
 
@@ -44,7 +46,7 @@ curl -X POST http://localhost:5000/api/search-brain/settings/mode \
   -H 'Content-Type: application/json' -d '{"mode":"local"}'
 
 curl -X POST http://localhost:5000/api/search-brain/settings/keys \
-  -H 'Content-Type: application/json' -d '{"core":"FREE_CORE_KEY","newsapi":"FREE_NEWSAPI_KEY"}'
+  -H 'Content-Type: application/json' -d '{"keys":{"core":"FREE_CORE_KEY","newsapi":"FREE_NEWSAPI_KEY"},"userEmail":"research@example.com"}'
 ```
 
 ## Provider Coverage
@@ -86,7 +88,17 @@ Prisma model `UniversalSearchCache` stores normalized result JSON by query hash,
 - social/china: 1 hour
 - web/media/geo/food: 24 hours
 
-`SearchBrainSettings` stores per-user mode, preferred region, polite-pool email and optional keys.
+`SearchBrainSettings` stores per-user mode, preferred region, polite-pool email and optional keys. Optional key values are encrypted with `backend/src/utils/encryption.js` when `ENCRYPTION_KEY` is configured. Public settings responses only expose `keysConfigured`, never raw key values.
+
+Provider metadata separates:
+
+- `active`: provider can be queried now.
+- `configured`: provider has no key requirement or a usable key is present.
+- `requiresKey`: provider needs an optional/free key.
+- `scrapingOptIn`: provider is blocked unless explicitly enabled in a future legal/robots-aware flow.
+- `disabledReason`: why a provider is cataloged but not active.
+
+Search responses include `failedProviders`, `totalCandidates` and `dedupedCandidates` so the UI can show degraded-but-successful searches without hiding source failures.
 
 ## Legal and Operational Notes
 

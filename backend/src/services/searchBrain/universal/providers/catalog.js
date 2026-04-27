@@ -50,6 +50,7 @@ function noKeyJsonProvider(meta, buildUrl, pickItems, mapItem) {
 function optionalKeyJsonProvider(meta, keyName, buildUrl, pickItems, mapItem) {
   return {
     ...meta,
+    metadata: { ...(meta.metadata || {}), keyName },
     requiresKey: true,
     async search(query, opts = {}) {
       const key = opts.keys?.[keyName] || opts.keys?.[meta.id] || process.env[`SEARCH_BRAIN_${keyName.toUpperCase()}_KEY`];

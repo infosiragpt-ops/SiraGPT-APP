@@ -15,6 +15,8 @@ const settings = require("../src/services/searchBrain/universal/settings");
 const { runUniversalSearch, INTERNAL: O_INTERNAL } = require("../src/services/searchBrain/universal/orchestrator");
 const { CATEGORIES, REGIONS } = require("../src/services/searchBrain/universal/types");
 
+process.env.SEARCH_BRAIN_SETTINGS_DISABLE_PRISMA = "1";
+
 // ─── Intent classifier ───────────────────────────────────────────────────
 
 test("classifyIntent: weather query", () => {
@@ -106,38 +108,68 @@ test("registry: listMetadata never exposes search()", () => {
   assert.equal(typeof meta[0].search, "undefined");
 });
 
+test("registry: list excludes key-gated providers until configured", () => {
+  registry.clear();
+  registry.register(stubProvider({ id: "free", category: "news", requiresKey: false }));
+  registry.register(stubProvider({ id: "keyed", category: "news", requiresKey: true, metadata: { keyName: "keyed" } }));
+  assert.deepEqual(registry.list({ category: "news" }).map((p) => p.id), ["free"]);
+  assert.deepEqual(registry.list({ category: "news", keys: { keyed: "abc" } }).map((p) => p.id).sort(), ["free", "keyed"]);
+});
+
+test("registry: metadata distinguishes active, configured, disabled and scraping opt-in", () => {
+  registry.clear();
+  registry.register(stubProvider({ id: "free", category: "web", requiresKey: false }));
+  registry.register(stubProvider({ id: "keyed", category: "web", requiresKey: true, metadata: { keyName: "keyed" } }));
+  registry.register(stubProvider({ id: "scrape", category: "web", license: "scraping-opt-in", enabledByDefault: false, metadata: { disabledReason: "opt in" } }));
+  const meta = registry.listMetadata({ keys: { keyed: "abc" } });
+  assert.equal(meta.find((p) => p.id === "free").active, true);
+  assert.equal(meta.find((p) => p.id === "keyed").configured, true);
+  assert.equal(meta.find((p) => p.id === "scrape").active, false);
+  assert.equal(meta.find((p) => p.id === "scrape").scrapingOptIn, true);
+});
+
 // ─── Settings ────────────────────────────────────────────────────────────
 
-test("settings: defaults when user unknown", () => {
-  settings.clear();
-  const s = settings.get("nobody");
+test("settings: defaults when user unknown", async () => {
+  await settings.clear();
+  const s = await settings.get("nobody");
   assert.equal(s.region, "global");
   assert.equal(s.mode, "local");
   assert.deepEqual(s.keys, {});
 });
 
-test("settings: update region + keys, unset empty key", () => {
-  settings.clear();
-  settings.update("u1", { region: "spain", keys: { adzuna: "abc" } });
-  assert.equal(settings.get("u1").region, "spain");
-  assert.equal(settings.get("u1").keys.adzuna, "abc");
-  settings.update("u1", { keys: { adzuna: "" } });
-  assert.equal(settings.get("u1").keys.adzuna, undefined);
+test("settings: update region + encrypted keys, unset empty key", async () => {
+  process.env.ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  await settings.clear();
+  await settings.update("u1", { region: "spain", keys: { adzuna: "abc" } });
+  assert.equal((await settings.get("u1")).region, "spain");
+  assert.equal((await settings.get("u1")).keys.adzuna, "abc");
+  await settings.update("u1", { keys: { adzuna: "" } });
+  assert.equal((await settings.get("u1")).keys.adzuna, undefined);
 });
 
-test("settings: publicView hides key values", () => {
-  settings.clear();
-  settings.update("u2", { keys: { brave: "secret" } });
-  const v = settings.publicView("u2");
+test("settings: publicView hides key values", async () => {
+  process.env.ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  await settings.clear();
+  await settings.update("u2", { keys: { brave: "secret" } });
+  const v = await settings.publicView("u2");
   assert.deepEqual(v.keysConfigured, ["brave"]);
   assert.equal(v.brave, undefined);
 });
 
-test("settings: ignores invalid region/mode", () => {
-  settings.clear();
-  settings.update("u3", { region: "mars", mode: "offline" });
-  assert.equal(settings.get("u3").region, "global");
-  assert.equal(settings.get("u3").mode, "local");
+test("settings: ignores invalid region/mode", async () => {
+  await settings.clear();
+  await settings.update("u3", { region: "mars", mode: "offline" });
+  assert.equal((await settings.get("u3")).region, "global");
+  assert.equal((await settings.get("u3")).mode, "local");
+});
+
+test("settings: refuses to persist keys when ENCRYPTION_KEY is missing", async () => {
+  const prior = process.env.ENCRYPTION_KEY;
+  delete process.env.ENCRYPTION_KEY;
+  await settings.clear("u4");
+  await assert.rejects(() => settings.update("u4", { keys: { core: "secret" } }), /ENCRYPTION_KEY/);
+  if (prior) process.env.ENCRYPTION_KEY = prior;
 });
 
 // ─── Orchestrator ────────────────────────────────────────────────────────
@@ -227,6 +259,9 @@ test("runUniversalSearch: provider error recorded, others survive", async () => 
   assert.match(badTrace.error, /boom/);
   assert.equal(goodTrace.ok, true);
   assert.equal(out.results.length, 1);
+  assert.equal(out.failedProviders.length, 1);
+  assert.equal(out.totalCandidates, 1);
+  assert.equal(out.dedupedCandidates, 1);
 });
 
 test("runUniversalSearch: respects maxResults cap", async () => {
@@ -276,7 +311,7 @@ test("runUniversalSearch: heuristic rank prioritises primary intent", () => {
   const input = [
     { id: "1", category: "web", title: "A", datePublished: "2020-01-01" },
     { id: "2", category: "weather", title: "B", datePublished: "2020-01-01" },
-    { id: "3", category: "weather", title: "C", datePublished: "2024-01-01" },
+    { id: "3", category: "weather", title: "C", datePublished: new Date().toISOString() },
   ];
   const out = heuristicRank(input, ["weather"]);
   assert.equal(out[0].id, "3");

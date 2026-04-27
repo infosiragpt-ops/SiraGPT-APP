@@ -94,7 +94,7 @@ async function runUniversalEndpoint(req, res, forcedCategory) {
     const q = validateQuery(body.query);
     if (!q.valid) return res.status(400).json({ error: q.error });
     const uid = userId(req);
-    const stored = universalSettings.get(uid);
+    const stored = await universalSettings.get(uid);
     const out = await runUniversalSearch({
       query: q.query,
       categories: validateUniversalCategories(body.categories, forcedCategory),
@@ -147,10 +147,10 @@ router.get("/providers", (_req, res) => {
         id: "openalex",
         name: "OpenAlex",
         license: "CC0",
-        requiresKey: true,
-        configured: Boolean(process.env.OPENALEX_API_KEY),
-        env: ["OPENALEX_API_KEY", "OPENALEX_MAILTO"],
-        rateLimitNote: "API key required for production-scale use; include mailto/contact.",
+        requiresKey: false,
+        configured: true,
+        env: ["OPENALEX_MAILTO", "SEARCH_BRAIN_MAILTO"],
+        rateLimitNote: "No API key required; include mailto/contact for polite pool.",
       },
       {
         id: "scielo",
@@ -219,7 +219,21 @@ router.get("/intents", (_req, res) => {
 router.get("/universal/providers", (req, res) => {
   const category = typeof req.query.category === "string" && CATEGORIES.includes(req.query.category) ? req.query.category : undefined;
   const region = typeof req.query.region === "string" && REGIONS.includes(req.query.region) ? req.query.region : undefined;
-  res.json({ categories: [...CATEGORIES], regions: [...REGIONS], providers: universalRegistry.listMetadata({ category, region }) });
+  universalSettings.get(userId(req))
+    .then((stored) => res.json({
+      categories: [...CATEGORIES],
+      regions: [...REGIONS],
+      providers: universalRegistry.listMetadata({ category, region, keys: stored.keys }),
+    }))
+    .catch((err) => res.status(500).json({ error: err instanceof Error ? err.message : "internal error" }));
+});
+
+router.get("/settings", async (req, res) => {
+  try {
+    res.json(await universalSettings.publicView(userId(req)));
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "internal error" });
+  }
 });
 
 router.post("/universal", (req, res) => runUniversalEndpoint(req, res));
@@ -232,23 +246,35 @@ router.post("/travel", (req, res) => runUniversalEndpoint(req, res, "travel"));
 router.post("/government", (req, res) => runUniversalEndpoint(req, res, "government"));
 router.post("/china", (req, res) => runUniversalEndpoint(req, res, "china"));
 
-router.post("/settings/keys", (req, res) => {
+router.post("/settings/keys", async (req, res) => {
   try {
-    const updated = universalSettings.update(userId(req), { keys: req.body?.keys || req.body || {} });
-    res.json({ keysConfigured: Object.keys(updated.keys) });
+    const body = req.body || {};
+    await universalSettings.update(userId(req), {
+      keys: body.keys || body || {},
+      userEmail: typeof body.userEmail === "string" ? body.userEmail : undefined,
+    });
+    res.json(await universalSettings.publicView(userId(req)));
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "invalid settings" });
   }
 });
 
-router.post("/settings/region", (req, res) => {
-  const updated = universalSettings.update(userId(req), { region: req.body?.region });
-  res.json({ region: updated.region });
+router.post("/settings/region", async (req, res) => {
+  try {
+    const updated = await universalSettings.update(userId(req), { region: req.body?.region });
+    res.json({ region: updated.region });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "invalid settings" });
+  }
 });
 
-router.post("/settings/mode", (req, res) => {
-  const updated = universalSettings.update(userId(req), { mode: req.body?.mode });
-  res.json({ mode: updated.mode });
+router.post("/settings/mode", async (req, res) => {
+  try {
+    const updated = await universalSettings.update(userId(req), { mode: req.body?.mode });
+    res.json({ mode: updated.mode });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "invalid settings" });
+  }
 });
 
 router.post("/academic", async (req, res) => {

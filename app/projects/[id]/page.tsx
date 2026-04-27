@@ -76,8 +76,10 @@ export default function ProjectDetailPage() {
   const [chatSearch, setChatSearch] = React.useState("")
   const [debouncedChatSearch, setDebouncedChatSearch] = React.useState("")
   const [launching, setLaunching] = React.useState(false)
+  const [composerUploading, setComposerUploading] = React.useState(false)
   const [instructionsOpen, setInstructionsOpen] = React.useState(false)
   const [shareOpen, setShareOpen] = React.useState(false)
+  const composerFileRef = React.useRef<HTMLInputElement | null>(null)
 
   const reload = React.useCallback(async () => {
     setLoading(true)
@@ -167,6 +169,12 @@ export default function ProjectDetailPage() {
       // tweak the prompt on the way in.
       try {
         sessionStorage.setItem(`project-prefill:${chat.id}`, draft)
+        sessionStorage.setItem(`project-prefill-context:${chat.id}`, JSON.stringify({
+          projectId: project.id,
+          files: project.files.map(f => ({ id: f.id, name: f.originalName })),
+          hasInstructions: Boolean(project.instructions),
+          memoryCount: memories.length,
+        }))
       } catch {
         /* private-mode / quota-exceeded — non-fatal, worst case is a lost draft */
       }
@@ -179,6 +187,32 @@ export default function ProjectDetailPage() {
 
   function openRecentChat(chatId: string) {
     router.push(`/chat?id=${chatId}`)
+  }
+
+  async function handleComposerFiles(files: FileList | null) {
+    if (!project || !files || files.length === 0) return
+    setComposerUploading(true)
+    try {
+      const fd = new FormData()
+      Array.from(files).slice(0, 10).forEach((file) => fd.append("files", file))
+      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
+      const res = await fetch(`${API_ROOT}/files/upload`, {
+        method: "POST",
+        body: fd,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
+      if (!res.ok) throw new Error(`upload failed (${res.status})`)
+      const out = await res.json()
+      const uploaded: Array<{ id: string }> = out.files || []
+      for (const file of uploaded) await projectsService.attachFile(project.id, file.id)
+      await reload()
+      toast.success(t("filesAttached", { count: uploaded.length }))
+    } catch (err: any) {
+      toast.error(err?.message || t("uploadFailed"))
+    } finally {
+      setComposerUploading(false)
+      if (composerFileRef.current) composerFileRef.current.value = ""
+    }
   }
 
   if (loading) return <LoadingState />
@@ -251,10 +285,36 @@ export default function ProjectDetailPage() {
                   disabled={launching}
                   className="border-0 resize-none bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-base"
                 />
+                <div className="flex flex-wrap gap-1.5 px-3 pb-2">
+                  <span className="rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+                    {project.files.length} archivos
+                  </span>
+                  <span className="rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
+                    {memories.length} memorias
+                  </span>
+                  <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", project.instructions ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
+                    {project.instructions ? "Instrucciones activas" : "Sin instrucciones"}
+                  </span>
+                </div>
                 <div className="flex items-center justify-between px-2 pb-2">
-                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                    <Plus className="h-4 w-4" />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground"
+                    disabled={composerUploading}
+                    onClick={() => composerFileRef.current?.click()}
+                    aria-label={t("attachFile")}
+                  >
+                    {composerUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
                   </Button>
+                  <input
+                    ref={composerFileRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => handleComposerFiles(e.target.files)}
+                  />
                   <Button
                     type="submit"
                     disabled={!draft.trim() || launching}

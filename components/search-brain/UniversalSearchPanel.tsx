@@ -4,7 +4,8 @@ import * as React from "react"
 import {
   BookOpen, Briefcase, ShoppingCart, Newspaper, DollarSign, Cloud, Plane,
   Home, UtensilsCrossed, Heart, GraduationCap, Scale, Landmark, Users,
-  Globe, Search, Loader2, ExternalLink, Copy,
+  Globe, Search, Loader2, ExternalLink, Copy, AlertTriangle, Settings2,
+  CheckCircle2, XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -12,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { buildApa, buildSynthesis, categoryActionLabel, formatYear } from "@/lib/search-brain-ui"
 import { cn } from "@/lib/utils"
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
@@ -58,15 +60,102 @@ type Result = {
   metadata?: Record<string, any>
 }
 
+type ProviderTrace = {
+  providerId: string
+  category: string
+  ok: boolean
+  count: number
+  durationMs: number
+  error?: string
+}
+
+type ProviderMeta = {
+  id: string
+  category: string
+  region: string
+  requiresKey: boolean
+  configured: boolean
+  active: boolean
+  disabledReason?: string
+}
+
+type PublicSettings = {
+  region: string
+  mode: "local" | "cloud"
+  userEmail: string | null
+  keysConfigured: string[]
+}
+
+function authHeaders(json = true): HeadersInit {
+  const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
+  return {
+    ...(json ? { "Content-Type": "application/json" } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
 export function UniversalSearchPanel() {
   const [query, setQuery] = React.useState("")
   const [region, setRegion] = React.useState("global")
+  const [mode, setMode] = React.useState<"local" | "cloud">("local")
   const [categories, setCategories] = React.useState<string[]>([])
   const [loading, setLoading] = React.useState(false)
   const [response, setResponse] = React.useState<any | null>(null)
+  const [settings, setSettings] = React.useState<PublicSettings | null>(null)
+  const [providers, setProviders] = React.useState<ProviderMeta[]>([])
+
+  const providerStats = React.useMemo(() => {
+    const active = providers.filter((p) => p.active).length
+    const configured = providers.filter((p) => p.configured).length
+    const keyGated = providers.filter((p) => p.requiresKey && !p.configured).length
+    return { active, configured, keyGated, total: providers.length }
+  }, [providers])
+
+  React.useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const [settingsRes, providersRes] = await Promise.all([
+          fetch(`${API_ROOT}/search-brain/settings`, { credentials: "include", headers: authHeaders(false) }),
+          fetch(`${API_ROOT}/search-brain/universal/providers`, { credentials: "include", headers: authHeaders(false) }),
+        ])
+        const settingsJson = await settingsRes.json().catch(() => null)
+        const providersJson = await providersRes.json().catch(() => null)
+        if (cancelled) return
+        if (settingsRes.ok && settingsJson) {
+          setSettings(settingsJson)
+          setRegion(settingsJson.region || "global")
+          setMode(settingsJson.mode === "cloud" ? "cloud" : "local")
+        }
+        if (providersRes.ok && Array.isArray(providersJson?.providers)) setProviders(providersJson.providers)
+      } catch {
+        if (!cancelled) toast.error("No se pudo cargar configuración de SearchBrain")
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
 
   function toggleCategory(id: string) {
     setCategories((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id])
+  }
+
+  async function updateSetting(kind: "region" | "mode", value: string) {
+    if (kind === "region") setRegion(value)
+    if (kind === "mode") setMode(value === "cloud" ? "cloud" : "local")
+    try {
+      const res = await fetch(`${API_ROOT}/search-brain/settings/${kind}`, {
+        method: "POST",
+        credentials: "include",
+        headers: authHeaders(),
+        body: JSON.stringify({ [kind]: value }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const settingsRes = await fetch(`${API_ROOT}/search-brain/settings`, { credentials: "include", headers: authHeaders(false) })
+      if (settingsRes.ok) setSettings(await settingsRes.json())
+    } catch {
+      toast.error("No se pudo guardar la configuración")
+    }
   }
 
   async function runSearch(e?: React.FormEvent) {
@@ -75,20 +164,16 @@ export function UniversalSearchPanel() {
     setLoading(true)
     setResponse(null)
     try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
       const res = await fetch(`${API_ROOT}/search-brain/universal`, {
         method: "POST",
         credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: authHeaders(),
         body: JSON.stringify({
           query: query.trim(),
           region,
           categories: categories.length ? categories : undefined,
           maxResults: 18,
-          mode: "local",
+          mode,
         }),
       })
       const json = await res.json().catch(() => ({}))
@@ -102,19 +187,21 @@ export function UniversalSearchPanel() {
   }
 
   const results: Result[] = Array.isArray(response?.results) ? response.results : []
-  const synthesis = buildSynthesis(query, results)
+  const traces: ProviderTrace[] = Array.isArray(response?.providers) ? response.providers : []
+  const failed: ProviderTrace[] = Array.isArray(response?.failedProviders) ? response.failedProviders : traces.filter((p) => !p.ok)
+  const synthesis = buildSynthesis(query, results, Boolean(response?.reranked))
 
   return (
-    <div className="mx-auto grid min-h-screen max-w-7xl grid-cols-1 gap-5 px-4 py-6 lg:grid-cols-[1fr_360px] lg:px-8">
+    <div className="mx-auto grid min-h-screen max-w-7xl grid-cols-1 gap-5 px-4 py-6 lg:grid-cols-[1fr_380px] lg:px-8">
       <main className="space-y-4">
         <header className="space-y-2">
           <h1 className="text-3xl font-serif tracking-tight">UniversalSearchBrain</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            Búsqueda académica, web y vertical con proveedores gratuitos o de registro libre. En modo local, las consultas salen desde el servidor donde corre siraGPT.
+            Búsqueda académica, web y vertical con trazabilidad por proveedor, cache y ranking auditado.
           </p>
         </header>
 
-        <form onSubmit={runSearch} className="rounded-2xl border bg-card p-3 shadow-sm">
+        <form onSubmit={runSearch} className="rounded-xl border bg-card p-3 shadow-sm">
           <div className="flex gap-2">
             <Input
               value={query}
@@ -132,7 +219,7 @@ export function UniversalSearchPanel() {
               <button
                 key={r.id}
                 type="button"
-                onClick={() => setRegion(r.id)}
+                onClick={() => updateSetting("region", r.id)}
                 className={cn("rounded-full border px-3 py-1 text-xs font-medium", region === r.id ? "bg-foreground text-background" : "bg-background hover:bg-muted")}
               >
                 {r.label}
@@ -160,9 +247,10 @@ export function UniversalSearchPanel() {
 
         {response && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <Badge variant="secondary">{response.results?.length || 0} resultados</Badge>
+            <Badge variant="secondary">{results.length} resultados</Badge>
             <Badge variant="outline">Intents: {(response.intents || []).join(", ")}</Badge>
             <Badge variant="outline">{response.cacheHit ? "cache" : "live"}</Badge>
+            <Badge variant="outline">{response.dedupedCandidates ?? results.length}/{response.totalCandidates ?? results.length} candidatos</Badge>
             <span>{response.timings?.totalMs || 0} ms</span>
           </div>
         )}
@@ -179,7 +267,36 @@ export function UniversalSearchPanel() {
       <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Síntesis</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base"><Settings2 className="h-4 w-4" /> Configuración</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="flex rounded-lg border p-1">
+              {(["local", "cloud"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => updateSetting("mode", m)}
+                  className={cn("flex-1 rounded-md px-3 py-1.5 text-xs font-medium", mode === m ? "bg-foreground text-background" : "hover:bg-muted")}
+                >
+                  {m === "local" ? "Modo local" : "Modo cloud"}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <Metric label="Activos" value={providerStats.active} />
+              <Metric label="Configurados" value={providerStats.configured} />
+              <Metric label="Con key" value={providerStats.keyGated} />
+            </div>
+            <div className="rounded-lg border p-3 text-xs text-muted-foreground">
+              {mode === "local" ? "Las consultas salen desde el servidor donde corre siraGPT." : "En cloud, la IP saliente es la del servidor desplegado."}
+              {settings?.keysConfigured?.length ? <div className="mt-2">Keys: {settings.keysConfigured.join(", ")}</div> : null}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Síntesis auditada</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <p className="text-muted-foreground">{synthesis}</p>
@@ -192,7 +309,41 @@ export function UniversalSearchPanel() {
             </div>
           </CardContent>
         </Card>
+
+        {response && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Trazas</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-xs">
+              {traces.slice(0, 12).map((trace) => (
+                <div key={trace.providerId} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5">
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    {trace.ok ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : <XCircle className="h-3.5 w-3.5 text-red-600" />}
+                    <span className="truncate">{trace.providerId}</span>
+                  </span>
+                  <span className="text-muted-foreground">{trace.count} · {trace.durationMs}ms</span>
+                </div>
+              ))}
+              {failed.length > 0 && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-amber-900">
+                  <AlertTriangle className="mr-1 inline h-3.5 w-3.5" />
+                  {failed.length} proveedor(es) fallaron sin detener la búsqueda.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </aside>
+    </div>
+  )
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border p-2">
+      <div className="text-lg font-semibold">{value}</div>
+      <div className="text-[11px] text-muted-foreground">{label}</div>
     </div>
   )
 }
@@ -200,6 +351,7 @@ export function UniversalSearchPanel() {
 function ResultCard({ item, index }: { item: Result; index: number }) {
   const price = typeof item.price === "number" ? `${item.currency || "USD"} ${item.price.toLocaleString()}` : null
   const apa = buildApa(item)
+  const label = categoryActionLabel(item.category)
 
   async function copyApa() {
     try {
@@ -222,19 +374,21 @@ function ResultCard({ item, index }: { item: Result; index: number }) {
             <Badge variant="secondary">[{index + 1}] {item.category}</Badge>
             <Badge variant="outline">{item.sourceProvider}</Badge>
             {price && <Badge>{price}</Badge>}
-            {item.metadata?.openAccess && <Badge className="bg-emerald-600">OA</Badge>}
+            {item.metadata?.openAccess || item.metadata?.isOa ? <Badge className="bg-emerald-600">OA</Badge> : null}
+            {item.metadata?.searchBrainScore ? <Badge variant="outline">score {item.metadata.searchBrainScore}</Badge> : null}
           </div>
           <h2 className="text-base font-semibold leading-snug">{item.title}</h2>
           {item.snippet && <p className="line-clamp-3 text-sm text-muted-foreground">{item.snippet}</p>}
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {item.author && <span>{item.author}</span>}
             {item.location && <span>{item.location}</span>}
-            {item.datePublished && <span>{new Date(item.datePublished).getFullYear() || item.datePublished}</span>}
+            {item.datePublished && <span>{formatYear(item.datePublished)}</span>}
+            {item.metadata?.citationCount ? <span>{item.metadata.citationCount} citas</span> : null}
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {item.url && (
               <Button size="sm" variant="outline" asChild>
-                <a href={item.url} target="_blank" rel="noreferrer"><ExternalLink className="mr-1.5 h-3.5 w-3.5" /> Abrir</a>
+                <a href={item.url} target="_blank" rel="noreferrer"><ExternalLink className="mr-1.5 h-3.5 w-3.5" /> {label}</a>
               </Button>
             )}
             {item.category === "academic" && (
@@ -245,19 +399,4 @@ function ResultCard({ item, index }: { item: Result; index: number }) {
       </CardContent>
     </Card>
   )
-}
-
-function buildApa(item: Result) {
-  const year = item.metadata?.year || (item.datePublished ? new Date(item.datePublished).getFullYear() : "s. f.")
-  const author = item.author || "Autor desconocido"
-  const venue = item.metadata?.venue || item.metadata?.journal || item.sourceProvider
-  const doi = item.metadata?.doi ? ` https://doi.org/${item.metadata.doi}` : item.url ? ` ${item.url}` : ""
-  return `${author} (${year}). ${item.title}. ${venue}.${doi}`
-}
-
-function buildSynthesis(query: string, results: Result[]) {
-  if (!query.trim()) return "La síntesis aparecerá aquí con citas numeradas cuando ejecutes una búsqueda."
-  if (results.length === 0) return "Sin resultados todavía. UniversalSearchBrain consultará proveedores activos y mostrará trazabilidad por fuente."
-  const top = results.slice(0, 3).map((r, i) => `[${i + 1}] ${r.title}`).join("; ")
-  return `Para “${query}”, las fuentes mejor rankeadas son ${top}. Usa los enlaces numerados para auditar cada resultado.`
 }

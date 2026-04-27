@@ -18,6 +18,7 @@
     "../lib/app-wrapper-routes.ts",
     "../lib/long-paste.ts",
     "../lib/message-preservation.ts",
-    "../lib/attachment-url.ts"
+    "../lib/attachment-url.ts",
+    "../lib/search-brain-ui.ts"
   ]
 }

@@ -65,6 +65,10 @@
  * @property {Region} region
  * @property {UnifiedResult[]} results
  * @property {ProviderTrace[]} providers
+ * @property {ProviderTrace[]} [failedProviders]
+ * @property {number} [totalCandidates]
+ * @property {number} [dedupedCandidates]
+ * @property {boolean} [cacheHit]
  * @property {boolean} reranked
  * @property {{ classificationMs: number, decompositionMs: number, retrievalMs: number, rerankingMs: number, totalMs: number }} timings
  */

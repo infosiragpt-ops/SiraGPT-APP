@@ -23,10 +23,47 @@ function addDays(date, days) {
   return d;
 }
 
+function normalizePlatforms(raw) {
+  const platforms = Array.isArray(raw) && raw.length
+    ? raw
+      .filter((p) => typeof p === "string")
+      .map((p) => p.toLowerCase())
+      .filter((p) => /^(facebook|instagram|youtube|tiktok|linkedin)$/.test(p))
+      .slice(0, 8)
+    : ["instagram"];
+  return [...new Set(platforms)];
+}
+
+function buildSeriesPostData({ userId, prompt, paletteName, days, platforms, start, batchId, referenceImages }) {
+  const rows = [];
+  for (let i = 0; i < days; i += 1) {
+    rows.push({
+      userId,
+      prompt: `${prompt.trim()}\n\nDía ${i + 1} de ${days}: genera una variación profesional coherente con la serie.`,
+      caption: null,
+      platforms,
+      scheduledAt: addDays(start, i),
+      status: "scheduled",
+      batchId,
+      referenceImages,
+      config: {
+        paletteName: paletteName || "Profesional",
+        generationMode: "automatic_series",
+        dayIndex: i + 1,
+        totalDays: days,
+      },
+    });
+  }
+  return rows;
+}
+
 router.get("/", async (req, res) => {
   try {
+    const batchId = typeof req.query.batchId === "string" && req.query.batchId.trim()
+      ? req.query.batchId.trim()
+      : undefined;
     const posts = await prisma.scheduledPost.findMany({
-      where: { userId: req.user.id },
+      where: { userId: req.user.id, ...(batchId ? { batchId } : {}) },
       orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }],
       take: 100,
     });
@@ -34,6 +71,29 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("[social-posts] list error:", err);
     res.status(500).json({ error: "Failed to list scheduled posts" });
+  }
+});
+
+router.get("/connections", async (req, res) => {
+  try {
+    const connections = await prisma.socialConnection.findMany({
+      where: { userId: req.user.id },
+      select: {
+        id: true,
+        platform: true,
+        accountId: true,
+        accountName: true,
+        profile: true,
+        scopes: true,
+        expiresAt: true,
+        updatedAt: true,
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+    res.json({ connections });
+  } catch (err) {
+    console.error("[social-posts] connections error:", err);
+    res.status(500).json({ error: "Failed to list social connections" });
   }
 });
 
@@ -50,32 +110,26 @@ router.post(
     try {
       if (validationFail(req, res)) return;
       const days = Math.min(Math.max(Number(req.body.days || 1), 1), 60);
-      const platforms = Array.isArray(req.body.platforms) && req.body.platforms.length
-        ? req.body.platforms.filter((p) => typeof p === "string").slice(0, 8)
-        : ["instagram"];
+      const platforms = normalizePlatforms(req.body.platforms);
+      if (platforms.length === 0) return res.status(400).json({ error: "At least one supported platform is required" });
       const start = req.body.startDate ? new Date(`${req.body.startDate}T14:00:00.000Z`) : new Date(Date.now() + 24 * 60 * 60 * 1000);
       const batchId = crypto.randomUUID();
       const referenceImages = Array.isArray(req.body.referenceImages) ? req.body.referenceImages.slice(0, 8) : [];
 
       const posts = [];
-      for (let i = 0; i < days; i += 1) {
+      const rows = buildSeriesPostData({
+        userId: req.user.id,
+        prompt: req.body.prompt,
+        paletteName: req.body.paletteName,
+        days,
+        platforms,
+        start,
+        batchId,
+        referenceImages,
+      });
+      for (const data of rows) {
         const post = await prisma.scheduledPost.create({
-          data: {
-            userId: req.user.id,
-            prompt: `${req.body.prompt.trim()}\n\nDía ${i + 1} de ${days}: genera una variación profesional coherente con la serie.`,
-            caption: null,
-            platforms,
-            scheduledAt: addDays(start, i),
-            status: "scheduled",
-            batchId,
-            referenceImages,
-            config: {
-              paletteName: req.body.paletteName || "Profesional",
-              generationMode: "automatic_series",
-              dayIndex: i + 1,
-              totalDays: days,
-            },
-          },
+          data,
         });
         posts.push(post);
       }
@@ -111,3 +165,4 @@ router.get("/connect/:platform", async (req, res) => {
 });
 
 module.exports = router;
+module.exports.INTERNAL = { addDays, buildSeriesPostData, normalizePlatforms };

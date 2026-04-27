@@ -46,21 +46,104 @@ function dedupeById(results) {
   return out;
 }
 
+function domainFromUrl(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function credibilityScore(url) {
+  const domain = domainFromUrl(url);
+  if (!domain) return 0.45;
+  if (/(^|\.)gov$|\.gov\.|who\.int$|nih\.gov$|cdc\.gov$|sec\.gov$/.test(domain)) return 0.95;
+  if (/\.edu$|\.ac\.[a-z]{2}$|pubmed\.ncbi\.nlm\.nih\.gov$|arxiv\.org$|crossref\.org$|openalex\.org$|semanticscholar\.org$|doaj\.org$/.test(domain)) return 0.9;
+  if (/reuters\.com$|apnews\.com$|bbc\.(com|co\.uk)$|theguardian\.com$|nytimes\.com$|nature\.com$|science\.org$|plos\.org$/.test(domain)) return 0.82;
+  if (/wikipedia\.org$|wikidata\.org$|worldbank\.org$|clinicaltrials\.gov$|rxnav\.nlm\.nih\.gov$/.test(domain)) return 0.76;
+  if (/reddit\.com$|4chan\.org$|twitter\.com$|x\.com$|tiktok\.com$|instagram\.com$/.test(domain)) return 0.35;
+  if (domain.endsWith(".org")) return 0.62;
+  if (domain.endsWith(".com") || domain.endsWith(".net")) return 0.5;
+  return 0.45;
+}
+
+function recencyScore(datePublished, category) {
+  if (!datePublished) return 0;
+  const t = Date.parse(datePublished);
+  if (!Number.isFinite(t)) return 0;
+  const ageDays = Math.max(0, (Date.now() - t) / 86400000);
+  const windows = {
+    finance: 14,
+    weather: 3,
+    news: 45,
+    jobs: 90,
+    shopping: 180,
+    social: 30,
+    academic: 3650,
+  };
+  const windowDays = windows[category] || 730;
+  return Math.max(0, 1 - ageDays / windowDays);
+}
+
+function providerBaseScore(providerId) {
+  const trusted = {
+    openalex: 0.92,
+    crossref: 0.9,
+    "semantic-scholar": 0.86,
+    pubmed: 0.9,
+    doaj: 0.82,
+    arxiv: 0.8,
+    europepmc: 0.86,
+    scielo: 0.78,
+    datacite: 0.82,
+    opencitations: 0.76,
+    unpaywall: 0.74,
+    gdelt: 0.72,
+    "google-news-rss": 0.7,
+    "sec-edgar": 0.86,
+    worldbank: 0.84,
+    coingecko: 0.78,
+    frankfurter: 0.78,
+    openmeteo: 0.82,
+    nominatim: 0.76,
+    mercadolibre: 0.68,
+    remoteok: 0.62,
+    remotive: 0.62,
+  };
+  return trusted[providerId] || 0.55;
+}
+
+function scoreResult(result, intents, index) {
+  const categoryRank = intents.indexOf(result.category);
+  const intentScore = categoryRank >= 0 ? 40 - categoryRank * 4 : 8;
+  const providerScore = providerBaseScore(result.sourceProvider) * 18;
+  const domainScore = credibilityScore(result.url) * 14;
+  const recency = recencyScore(result.datePublished, result.category) * 10;
+  const metadata = result.metadata || {};
+  const doiScore = metadata.doi ? 6 : 0;
+  const oaScore = metadata.openAccess || metadata.isOa || metadata.pdfUrl ? 4 : 0;
+  const citationCount = Number(metadata.citationCount || metadata.citedByCount || 0);
+  const citationScore = citationCount > 0 ? Math.min(8, Math.log10(citationCount + 1) * 2.5) : 0;
+  const freshnessPenalty = index * 0.015;
+  return Math.max(0, intentScore + providerScore + domainScore + recency + doiScore + oaScore + citationScore - freshnessPenalty);
+}
+
 /**
  * Heuristic rank: results from the matched-intent category come first,
  * ties broken by `datePublished` desc. Preserves retrieval order
  * within each bucket (providers returned them in an order they liked).
  */
 function heuristicRank(results, intents) {
-  const priority = new Map(intents.map((c, i) => [c, i]));
-  return [...results].sort((a, b) => {
-    const pa = priority.has(a.category) ? priority.get(a.category) : Number.MAX_SAFE_INTEGER;
-    const pb = priority.has(b.category) ? priority.get(b.category) : Number.MAX_SAFE_INTEGER;
-    if (pa !== pb) return pa - pb;
-    const da = a.datePublished ? Date.parse(a.datePublished) : 0;
-    const db = b.datePublished ? Date.parse(b.datePublished) : 0;
-    return db - da;
-  });
+  return results
+    .map((r, index) => ({
+      ...r,
+      metadata: {
+        ...(r.metadata || {}),
+        searchBrainScore: Number(scoreResult(r, intents, index).toFixed(3)),
+        credibilityScore: Number(credibilityScore(r.url).toFixed(3)),
+      },
+    }))
+    .sort((a, b) => (b.metadata.searchBrainScore || 0) - (a.metadata.searchBrainScore || 0));
 }
 
 async function runProvider({ provider, query, opts, timeoutMs, now }) {
@@ -116,7 +199,6 @@ async function runUniversalSearch(args) {
   const region = args.region || DEFAULT_REGION;
   const maxResults = Math.min(Math.max(args.maxResults || 15, 1), 50);
   const timeoutMs = args.timeoutMs || 8000;
-  const mode = args.mode === "cloud" ? "cloud" : "local";
 
   // Phase 1 — classify
   const p1 = now();
@@ -138,7 +220,10 @@ async function runUniversalSearch(args) {
         intents,
         region,
         results: cached.results.slice(0, maxResults),
-        providers: [],
+        providers: cached.metadata.providers || [],
+        failedProviders: cached.metadata.failedProviders || [],
+        totalCandidates: cached.metadata.totalCandidates || cached.results.length,
+        dedupedCandidates: cached.metadata.dedupedCandidates || cached.results.length,
         reranked: false,
         cacheHit: true,
         timings: {
@@ -161,7 +246,7 @@ async function runUniversalSearch(args) {
   const p3 = now();
   const providers = [];
   for (const category of intents) {
-    const matches = reg.list({ category, region, keysOnly: mode === "cloud" ? undefined : false });
+    const matches = reg.list({ category, region, keys: args.keys || {} });
     providers.push(...matches);
   }
   // de-duplicate providers (same id across multiple category filters)
@@ -191,6 +276,7 @@ async function runUniversalSearch(args) {
   const settled = await Promise.allSettled(tasks);
 
   const traces = [];
+  const failedProviders = [];
   const pooled = [];
   const byProvider = new Map();
   for (const s of settled) {
@@ -216,17 +302,28 @@ async function runUniversalSearch(args) {
     }
     pooled.push(...v.hits);
   }
-  for (const trace of byProvider.values()) traces.push(trace);
+  for (const trace of byProvider.values()) {
+    traces.push(trace);
+    if (!trace.ok || trace.error) failedProviders.push(trace);
+  }
   const retrievalMs = now() - p3;
 
   // Phase 4 — rerank (heuristic only in phase 2a)
   const p4 = now();
+  const totalCandidates = pooled.length;
   const deduped = dedupeById(pooled);
+  const dedupedCandidates = deduped.length;
   const ranked = heuristicRank(deduped, intents).slice(0, maxResults);
   const rerankingMs = now() - p4;
 
   if (cacheEnabled && ranked.length > 0) {
-    await cache.setCached(cacheKey, ranked, { providers: traces, at: new Date().toISOString() });
+    await cache.setCached(cacheKey, ranked, {
+      providers: traces,
+      failedProviders,
+      totalCandidates,
+      dedupedCandidates,
+      at: new Date().toISOString(),
+    });
   }
 
   return {
@@ -235,6 +332,9 @@ async function runUniversalSearch(args) {
     region,
     results: ranked,
     providers: traces,
+    failedProviders,
+    totalCandidates,
+    dedupedCandidates,
     reranked: false,
     cacheHit: false,
     timings: {
@@ -249,5 +349,5 @@ async function runUniversalSearch(args) {
 
 module.exports = {
   runUniversalSearch,
-  INTERNAL: { dedupeById, heuristicRank, normalizeTitle, runProvider },
+  INTERNAL: { credibilityScore, dedupeById, heuristicRank, normalizeTitle, runProvider, scoreResult },
 };
