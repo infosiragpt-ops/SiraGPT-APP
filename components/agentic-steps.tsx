@@ -295,15 +295,30 @@ export function AgenticStepsRenderer({ state, className }: Props) {
   const [cancelling, setCancelling] = React.useState(false)
   const summary = React.useMemo(() => summarizeAgentActivity(state), [state])
   const timelineSteps = React.useMemo(() => projectTimelineSteps(state.steps), [state.steps])
+  const runningTimelineStep = React.useMemo(
+    () => [...timelineSteps].reverse().find((step) => step.status === "running"),
+    [timelineSteps],
+  )
   const activePhase = React.useMemo(() => {
-    const runningStep = [...timelineSteps].reverse().find((step) => step.status === "running")
-    return runningStep?.phase || phaseFromStatus(summary.status)
-  }, [summary.status, timelineSteps])
+    return runningTimelineStep?.phase || phaseFromStatus(summary.status)
+  }, [runningTimelineStep?.phase, summary.status])
   const taskId = state.meta?.taskId
   const canCancel = Boolean(taskId && !state.done && !state.error)
   const canRetry = Boolean(taskId && (state.error || summary.status === "cancelled"))
   const hasDeliverable = (state.artifacts?.length || 0) > 0
   const hasValidation = (state.qualityGates?.length || 0) > 0
+  const latestCheckpoint = state.checkpoints?.[state.checkpoints.length - 1]
+  const activeTitle =
+    runningTimelineStep?.label ||
+    (summary.status === "queued" ? "Preparando turno" : summary.status === "repairing" ? "Corrigiendo entrega" : "Pensando")
+  const activeDetail =
+    runningTimelineStep?.detail ||
+    (summary.status === "queued"
+      ? "La tarea está lista para ejecutarse."
+      : summary.status === "verifying"
+        ? "Validando la calidad antes de entregar."
+        : "Analizando la solicitud y preparando la respuesta.")
+  const isMinimalLiveActivity = Boolean(!state.done && !state.error && !hasDeliverable && !hasValidation)
   const isCompactCompletedChat = Boolean(
     state.done &&
     !state.error &&
@@ -346,6 +361,64 @@ export function AgenticStepsRenderer({ state, className }: Props) {
         </span>
         <span className="font-medium text-foreground">{summary.label}</span>
         <span>{plural(summary.stepCount, "paso", "pasos")}</span>
+      </div>
+    )
+  }
+
+  if (isMinimalLiveActivity) {
+    return (
+      <div className={cn("my-3 w-full max-w-xl", className)}>
+        <div className="inline-flex max-w-full items-center gap-3 rounded-2xl border border-border/70 bg-background/95 px-3.5 py-3 shadow-sm">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted/50 text-foreground">
+            <AgentStatusIcon kind={activePhase} className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="rounded-md bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-muted-foreground">
+                {"{}"}
+              </span>
+              <span className="truncate text-sm font-semibold text-foreground">{activeTitle}</span>
+            </div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">{activeDetail}</div>
+          </div>
+          {canCancel && (
+            <button
+              type="button"
+              onClick={cancelTask}
+              disabled={cancelling}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+            >
+              {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
+              Cancelar
+            </button>
+          )}
+        </div>
+
+        <details className="group mt-2 max-w-xl rounded-xl border border-transparent text-xs text-muted-foreground open:border-border/60 open:bg-muted/10">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-2 py-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground">
+            <span className="font-mono text-[11px]">{"{}"}</span>
+            <span>Ver actividad</span>
+            <span className="text-muted-foreground/70">
+              {summary.stepCount > 0 ? plural(summary.stepCount, "paso", "pasos") : "iniciando"}
+              {summary.toolCount > 0 ? ` · ${plural(summary.toolCount, "herramienta", "herramientas")}` : ""}
+            </span>
+          </summary>
+          <div className="space-y-2 px-3 pb-3 pt-1">
+            {timelineSteps.slice(-4).map((step) => (
+              <div key={step.id} className="flex items-center gap-2">
+                <AgentStatusIcon kind={step.status === "error" ? "error" : step.status === "done" ? "done" : step.phase} className="h-4 w-4" />
+                <span className="font-medium text-foreground">{step.label}</span>
+                {step.detail && <span className="truncate">{step.detail}</span>}
+              </div>
+            ))}
+            {latestCheckpoint && (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Activity className="h-3.5 w-3.5" />
+                <span className="truncate">{sanitizeAgentText(latestCheckpoint.label, "Progreso guardado")}</span>
+              </div>
+            )}
+          </div>
+        </details>
       </div>
     )
   }

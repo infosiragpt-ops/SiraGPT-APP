@@ -161,13 +161,19 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(intent, "doc")
   })
 
-  it("uses the durable agent as the offline fallback for plain explanations", async () => {
+  it("keeps plain explanations on the fast conversational route", async () => {
     const intent = await aiService.analyzeIntent("explícame cómo funciona React")
-    assert.equal(intent, "agent_task")
+    assert.equal(intent, "text")
   })
 
-  it("routes normal chat, research, analysis and documents through the agentic runtime", () => {
-    for (const intent of ["text", "web_search", "doc", "math", "viz", "chart", "agent_task"] as const) {
+  it("keeps lightweight chat fast and routes professional work through the agentic runtime", async () => {
+    const greetingIntent = await aiService.classifyIntent("hola")
+    const explanationIntent = await aiService.classifyIntent("explícame cómo funciona React")
+    assert.equal(greetingIntent, "text")
+    assert.equal(explanationIntent, "text")
+    assert.equal(shouldRouteThroughAgenticRuntime("text"), false)
+
+    for (const intent of ["web_search", "doc", "math", "viz", "chart", "agent_task"] as const) {
       assert.equal(shouldRouteThroughAgenticRuntime(intent), true)
     }
 

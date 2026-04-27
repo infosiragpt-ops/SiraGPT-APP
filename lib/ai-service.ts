@@ -46,7 +46,6 @@ export const VALID_CHAT_INTENTS: ChatIntent[] = [
 
 export const AGENTIC_RUNTIME_INTENTS: ChatIntent[] = [
   'agent_task',
-  'text',
   'web_search',
   'doc',
   'ppt',
@@ -267,8 +266,85 @@ const ROUTING_PATTERNS = {
   figma: /\b(figma|wireframe|user flow|design system|diagrama de producto|prototipo navegable)\b/i,
 }
 
+const LIGHTWEIGHT_CHAT_RE =
+  /^(hola|hello|hi|hey|buenas|buenos dias|buenos días|buenas tardes|buenas noches|que tal|qué tal|como estas|cómo estás|gracias|ok|okay|vale|si|sí|no)[\s.!?¿¡]*$/i
+
+export function isLightweightConversationalPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return true
+  if (LIGHTWEIGHT_CHAT_RE.test(normalized)) return true
+
+  const words = normalized.split(/\s+/).filter(Boolean)
+  if (words.length <= 4 && !/[?¿]/.test(normalized)) {
+    const hasWorkIntent = [
+      ROUTING_PATTERNS.externalResearch,
+      ROUTING_PATTERNS.realtimeLookup,
+      ROUTING_PATTERNS.deliverableFile,
+      ROUTING_PATTERNS.dataWork,
+      ROUTING_PATTERNS.codeWork,
+      ROUTING_PATTERNS.doc,
+      ROUTING_PATTERNS.viz,
+      ROUTING_PATTERNS.math,
+      ROUTING_PATTERNS.artifact,
+      ROUTING_PATTERNS.webdev,
+    ].some((pattern) => pattern.test(normalized))
+    return !hasWorkIntent
+  }
+
+  return false
+}
+
+export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files: any[] = []): boolean {
+  const normalized = normalizePrompt(prompt)
+  if (files.length > 0) return true
+  if (isLightweightConversationalPrompt(normalized)) return false
+
+  const words = normalized.split(/\s+/).filter(Boolean)
+  if (words.length >= 80) return true
+
+  return [
+    ROUTING_PATTERNS.externalResearch,
+    ROUTING_PATTERNS.deliverableFile,
+    ROUTING_PATTERNS.dataWork,
+    ROUTING_PATTERNS.longRunningAgent,
+  ].some((pattern) => pattern.test(normalized))
+}
+
+export function shouldUseFastTextRoute(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return true
+  if (isLightweightConversationalPrompt(normalized)) return true
+
+  const hasExplicitWorkIntent = [
+    ROUTING_PATTERNS.gmail,
+    ROUTING_PATTERNS.googleServices,
+    ROUTING_PATTERNS.realtimeLookup,
+    ROUTING_PATTERNS.externalResearch,
+    ROUTING_PATTERNS.deliverableFile,
+    ROUTING_PATTERNS.dataWork,
+    ROUTING_PATTERNS.codeWork,
+    ROUTING_PATTERNS.longRunningAgent,
+    ROUTING_PATTERNS.architecturePlan,
+    ROUTING_PATTERNS.artifact,
+    ROUTING_PATTERNS.math,
+    ROUTING_PATTERNS.doc,
+    ROUTING_PATTERNS.viz,
+    ROUTING_PATTERNS.image,
+    ROUTING_PATTERNS.video,
+    ROUTING_PATTERNS.webdev,
+    ROUTING_PATTERNS.figma,
+  ].some((pattern) => pattern.test(normalized))
+
+  if (hasExplicitWorkIntent) return false
+
+  const words = normalized.split(/\s+/).filter(Boolean)
+  return words.length <= 60
+}
+
 export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const lc = normalizePrompt(prompt)
+
+  if (isLightweightConversationalPrompt(lc)) return 'text'
 
   if (ROUTING_PATTERNS.gmail.test(lc)) return 'gmail'
   if (ROUTING_PATTERNS.googleServices.test(lc)) return 'google_services'
@@ -307,7 +383,7 @@ export class AIService {
 
 
   async analyzeIntent(prompt: string): Promise<ChatIntent> {
-    return classifyIntentFastPath(prompt) || 'agent_task'
+    return classifyIntentFastPath(prompt) || 'text'
   }
 
   private async classifyIntentViaSemanticRouter(
@@ -376,6 +452,13 @@ export class AIService {
       return 'text';
     }
 
+    const deterministicIntent = classifyIntentFastPath(prompt);
+    if (deterministicIntent) return normalizeRoutingIntent(deterministicIntent);
+
+    if (shouldUseFastTextRoute(prompt)) {
+      return 'text';
+    }
+
     const semanticIntent = await this.classifyIntentViaSemanticRouter(prompt, conversationHistory, signal);
     if (semanticIntent) {
       if (semanticIntent === 'doc' && shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
@@ -383,9 +466,6 @@ export class AIService {
       }
       return normalizeRoutingIntent(semanticIntent);
     }
-
-    const deterministicIntent = classifyIntentFastPath(prompt);
-    if (deterministicIntent) return normalizeRoutingIntent(deterministicIntent);
 
     try {
 

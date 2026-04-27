@@ -70,7 +70,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
-import { aiService, buildProfessionalCapabilityPrompt, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -5634,8 +5634,14 @@ REWRITTEN TEXT:`;
         case 'doc':
         case 'web_search':
         case 'agent_task':
-        case 'text':
           await handleAgentTask(msg, filesToSend);
+          break;
+        case 'text':
+          if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
+            await handleAgentTask(msg, filesToSend);
+          } else {
+            await runContextPipeline(intent);
+          }
           break;
         case 'plan':
         case 'artifact':
