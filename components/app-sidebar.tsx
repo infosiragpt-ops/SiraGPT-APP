@@ -183,7 +183,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/post', '/design', '/library',
+      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -532,7 +532,6 @@ export function AppSidebar() {
   const handleGPTsClick = () => navigate("/gpts")
   const handleParaphraseClick = () => navigate("/parafraseo")
   const handleProjectsClick = () => navigate("/projects")
-  const handlePostClick = () => navigate("/post")
   const handleDesignClick = () => navigate("/design")
   const handleLibraryClick = () => navigate("/library")
 
@@ -708,7 +707,6 @@ export function AppSidebar() {
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
-  const isOnPostPage = activePathname.startsWith('/post')
   const isOnDesignPage = activePathname.startsWith('/design')
 
   return (
@@ -923,28 +921,6 @@ export function AppSidebar() {
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
               <p>{t("projects")}</p>
-            </TooltipContent>
-          </Tooltip>
-
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
-                onPointerDown={() => markNavigationIntent('/post')}
-                onClick={handlePostClick}
-                onMouseEnter={() => prefetchOnHover('/post')}
-                className={cn(
-                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnPostPage && "bg-accent text-accent-foreground",
-                  pendingHref === '/post' && "opacity-70"
-                )}
-                variant="default"
-              >
-                <CalendarDays className="h-4 w-4 text-orange-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("post")}</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>{t("post")}</p>
             </TooltipContent>
           </Tooltip>
 
