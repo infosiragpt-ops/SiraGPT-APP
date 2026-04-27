@@ -3,8 +3,9 @@ const GRAPH_NODES = ['plan', 'retrieve', 'execute_tools', 'generate_document', '
 async function buildLangGraphLayer({ taskId, documentPolicy } = {}) {
   try {
     const mod = await import('@langchain/langgraph');
-    const { Annotation, StateGraph, START, END } = mod;
+    const { Annotation, StateGraph, START, END, MemorySaver } = mod;
     if (!Annotation || !StateGraph || !START || !END) throw new Error('LangGraph primitives unavailable');
+    const checkpointer = typeof MemorySaver === 'function' ? new MemorySaver() : null;
 
     const State = Annotation.Root({
       stage: Annotation({
@@ -33,13 +34,15 @@ async function buildLangGraphLayer({ taskId, documentPolicy } = {}) {
       .addEdge('verify', 'finalize')
       .addEdge('repair', 'verify')
       .addEdge('finalize', END)
-      .compile();
+      .compile(checkpointer ? { checkpointer } : undefined);
 
     return {
       enabled: true,
       provider: '@langchain/langgraph',
       taskId,
       nodes: GRAPH_NODES,
+      checkpointer: checkpointer ? 'MemorySaver' : 'file-backed-task-store',
+      humanInTheLoop: true,
       graph,
     };
   } catch (err) {

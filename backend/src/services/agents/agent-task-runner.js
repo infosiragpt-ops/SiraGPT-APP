@@ -29,6 +29,7 @@ const { getQueueName } = require('./agent-task-queue');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
 const { buildLangGraphLayer } = require('./agentic-langgraph');
+const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
 
 const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -290,6 +291,13 @@ async function runAgentTaskJob(payload = {}, job = null) {
   emit({ type: 'document_policy', policy: documentPolicy });
 
   const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
+  const tools = buildTaskTools();
+  const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
+  emit({
+    type: 'framework_status',
+    taskId,
+    ...frameworkStatus,
+  });
   emit({
     type: 'checkpoint',
     label: langGraphLayer.enabled ? 'LangGraph durable listo' : 'Grafo durable fallback listo',
@@ -298,11 +306,12 @@ async function runAgentTaskJob(payload = {}, job = null) {
       provider: langGraphLayer.provider,
       enabled: langGraphLayer.enabled,
       nodes: langGraphLayer.nodes,
+      checkpointer: langGraphLayer.checkpointer || null,
+      humanInTheLoop: Boolean(langGraphLayer.humanInTheLoop),
       fallback: langGraphLayer.fallback || null,
     },
   });
 
-  const tools = buildTaskTools();
   emit({
     type: 'meta',
     taskId,
@@ -318,6 +327,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     enterpriseToolRuntimePlan,
     enterpriseQaBoardReview,
     agenticOperatingCore,
+    frameworks: frameworkStatus,
     taskContract,
     taskContractSource,
   });
@@ -521,6 +531,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
         enterpriseToolRuntimePlan,
         enterpriseQaBoardReview,
         agenticOperatingCore,
+        frameworks: frameworkStatus,
         durableExecution: enterpriseRuntimeProfile.durableExecution,
         stoppedReason: result.stoppedReason,
         maxSteps,

@@ -73,6 +73,8 @@ const {
 } = require('../services/agents/agentic-operating-core');
 const durableExecutionStore = require('../services/agents/durable-execution-store');
 const { buildDocumentDeliveryPolicy } = require('../services/agents/document-delivery-policy');
+const { buildLangGraphLayer } = require('../services/agents/agentic-langgraph');
+const { buildAgenticFrameworkStatus } = require('../services/agents/agentic-frameworks');
 const {
   cancelQueuedTask,
   enqueueAgentTask,
@@ -178,6 +180,51 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
     artifacts: task.artifacts || task.streamState?.artifacts || [],
   });
 });
+
+// ─── POST /api/agent/task/:taskId/approval ────────────────────────────
+
+router.post(
+  '/task/:taskId/approval',
+  [
+    body('decision').isIn(['approve', 'reject', 'edit']).withMessage('decision must be approve, reject or edit'),
+    body('payload').optional().isObject(),
+  ],
+  authenticateToken,
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const task = getTaskForUser(req.params.taskId, req.user?.id)
+      || taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
+    if (!task) return res.status(404).json({ error: 'task not found' });
+
+    const event = {
+      type: 'human_approval_resolved',
+      taskId: task.taskId,
+      approvalId: req.body.payload?.approvalId || `approval-${Date.now()}`,
+      decision: req.body.decision,
+      payload: req.body.payload || {},
+      resolvedBy: req.user?.id || null,
+    };
+    const streamState = reduceAgentState(task.streamState || initialAgentState(), event);
+    const written = taskStore.appendTaskEvent(task, event, streamState, { eventLimit: TASK_EVENT_LIMIT }) || task;
+    task.streamState = streamState;
+    task.events = written.events || task.events || [];
+    task.lastEventSeq = written.lastEventSeq || task.lastEventSeq || 0;
+    await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || event);
+    await agentTaskPersistence.upsertAgentTask({ ...written, status: task.status || written.status, state: streamState });
+
+    metrics.counter('agent_task_human_approvals_total', { decision: req.body.decision });
+    auditLog.audit({
+      event: 'agent_task_human_approval_resolved',
+      taskId: task.taskId,
+      userId: req.user?.id || null,
+      decision: req.body.decision,
+      approvalId: event.approvalId,
+    });
+    res.json({ ok: true, taskId: task.taskId, approvalId: event.approvalId, decision: req.body.decision });
+  }
+);
 
 // ─── POST /api/agent/task/:taskId/cancel ───────────────────────────────
 
@@ -466,6 +513,11 @@ router.post(
     const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
     const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
     const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
+    const documentPolicy = buildDocumentDeliveryPolicy({
+      goal: agentGoal,
+      displayGoal,
+      files: fileIds,
+    });
     let streamState = initialAgentState();
     const task = createTaskRecord({
       taskId,
@@ -487,6 +539,7 @@ router.post(
       enterpriseQaBoardReview,
       agenticOperatingCore,
       durableExecution,
+      documentPolicy,
     });
     metrics.counter('agent_task_invocations_total', { status: 'started' });
     auditLog.audit({
@@ -529,6 +582,8 @@ router.post(
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const tools = buildTaskTools();
+    const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
+    const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
     const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
 
     let assistantMessageId = null;
@@ -561,6 +616,8 @@ router.post(
               enterpriseToolRuntimePlan,
               enterpriseQaBoardReview,
               agenticOperatingCore,
+              documentPolicy,
+              frameworks: frameworkStatus,
               durableExecution: enterpriseRuntimeProfile.durableExecution,
               maxSteps,
               maxRuntimeMs,
@@ -599,6 +656,25 @@ router.post(
       return applied;
     };
 
+    emit({ type: 'document_policy', policy: documentPolicy });
+    emit({
+      type: 'framework_status',
+      taskId,
+      ...frameworkStatus,
+    });
+    emit({
+      type: 'checkpoint',
+      label: langGraphLayer.enabled ? 'LangGraph durable listo' : 'Grafo durable fallback listo',
+      status: 'saved',
+      payload: {
+        provider: langGraphLayer.provider,
+        enabled: langGraphLayer.enabled,
+        nodes: langGraphLayer.nodes,
+        checkpointer: langGraphLayer.checkpointer || null,
+        humanInTheLoop: Boolean(langGraphLayer.humanInTheLoop),
+        fallback: langGraphLayer.fallback || null,
+      },
+    });
     emit({
       type: 'meta',
       taskId,
@@ -614,6 +690,7 @@ router.post(
       enterpriseToolRuntimePlan,
       enterpriseQaBoardReview,
       agenticOperatingCore,
+      frameworks: frameworkStatus,
       taskContract,
       taskContractSource,
     });
@@ -686,6 +763,8 @@ router.post(
               enterpriseToolRuntimePlan,
               enterpriseQaBoardReview,
               agenticOperatingCore,
+              documentPolicy,
+              frameworks: frameworkStatus,
               durableExecution: enterpriseRuntimeProfile.durableExecution,
               maxSteps,
               maxRuntimeMs,
@@ -1382,7 +1461,18 @@ function formatTaskPayload(task) {
 }
 
 function initialAgentState() {
-  return { steps: [], artifacts: [], finalText: '', done: false, checkpoints: [], qualityGates: [], repairs: [] };
+  return {
+    steps: [],
+    artifacts: [],
+    finalText: '',
+    done: false,
+    checkpoints: [],
+    qualityGates: [],
+    repairs: [],
+    frameworks: null,
+    observability: null,
+    approvals: [],
+  };
 }
 
 function reduceAgentState(state, evt) {
@@ -1391,6 +1481,44 @@ function reduceAgentState(state, evt) {
       return { ...state, queue: { status: evt.status, queue: evt.queue, jobId: evt.jobId, position: evt.position ?? null, estimatedWaitMs: evt.estimatedWaitMs ?? null, updatedAt: evt.ts || new Date().toISOString() } };
     case 'document_policy':
       return { ...state, documentPolicy: evt.policy || evt.documentPolicy || null };
+    case 'framework_status':
+      return {
+        ...state,
+        frameworks: evt.frameworks ? { active: evt.active, frameworks: evt.frameworks, version: evt.version } : evt,
+        observability: evt.observability || state.observability || null,
+      };
+    case 'human_approval_required':
+      return {
+        ...state,
+        approvals: [...(state.approvals || []), {
+          id: evt.approvalId || `approval-${(state.approvals || []).length + 1}`,
+          status: 'pending',
+          tool: evt.tool || null,
+          action: evt.action || null,
+          reason: evt.reason || '',
+          payload: evt.payload || null,
+          ts: evt.ts || new Date().toISOString(),
+        }].slice(-20),
+      };
+    case 'human_approval_resolved': {
+      const approvalId = evt.approvalId || `approval-${(state.approvals || []).length + 1}`;
+      const approvals = state.approvals || [];
+      const found = approvals.some((approval) => approval.id === approvalId);
+      const resolved = {
+        id: approvalId,
+        status: evt.decision || 'resolved',
+        decision: evt.decision,
+        payload: evt.payload || null,
+        resolvedBy: evt.resolvedBy || null,
+        ts: evt.ts || new Date().toISOString(),
+      };
+      return {
+        ...state,
+        approvals: found
+          ? approvals.map((approval) => approval.id === approvalId ? { ...approval, ...resolved } : approval)
+          : [...approvals, resolved].slice(-20),
+      };
+    }
     case 'checkpoint':
       return {
         ...state,
@@ -1426,7 +1554,7 @@ function reduceAgentState(state, evt) {
         }].slice(-10),
       };
     case 'meta':
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile, enterpriseToolRuntimePlan: evt.enterpriseToolRuntimePlan, enterpriseQaBoardReview: evt.enterpriseQaBoardReview, agenticOperatingCore: evt.agenticOperatingCore } };
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, universalTaskContract: evt.universalTaskContract, enterpriseExecutionGraph: evt.enterpriseExecutionGraph, enterpriseRuntimeProfile: evt.enterpriseRuntimeProfile, enterpriseToolRuntimePlan: evt.enterpriseToolRuntimePlan, enterpriseQaBoardReview: evt.enterpriseQaBoardReview, agenticOperatingCore: evt.agenticOperatingCore, frameworks: evt.frameworks } };
     case 'step_start':
       return {
         ...state,

@@ -72,6 +72,14 @@ function createRagAdapter({ provider = null, vendor = "stub" } = {}) {
   };
 }
 
+function createConfiguredRagAdapter(options = {}) {
+  const requested = options.vendor || process.env.AGENTIC_RAG_PROVIDER || "internal";
+  if (requested === "llamaindex") {
+    return createRagAdapter({ vendor: "llamaindex", provider: createLlamaIndexProvider(options) });
+  }
+  return createRagAdapter({ vendor: "stub", provider: createStubProvider() });
+}
+
 function validateProvider(p) {
   for (const m of ["ingest", "query", "delete", "listCollections", "collectionInfo"]) {
     if (typeof p[m] !== "function") throw new Error(`rag-adapter: provider missing ${m}()`);
@@ -145,6 +153,62 @@ function createStubProvider() {
   };
 }
 
+function createLlamaIndexProvider() {
+  const fallback = createStubProvider();
+  const documentsByCollection = new Map();
+  let llamaindexMod = null;
+
+  async function getLlamaIndex() {
+    if (llamaindexMod) return llamaindexMod;
+    llamaindexMod = await import("llamaindex");
+    return llamaindexMod;
+  }
+
+  return {
+    supports_hybrid: true,
+    supports_filter: true,
+    supports_metadata: true,
+    supports_streaming_ingest: false,
+    provider_kind: "llamaindex-safe",
+
+    async ingest({ collection, documents, embedder }) {
+      const mod = await getLlamaIndex();
+      const Document = mod.Document;
+      if (typeof Document !== "function") throw new Error("llamaindex provider: Document export unavailable");
+      const llamaDocs = documents
+        .filter((d) => d && d.id && typeof d.text === "string")
+        .map((d) => new Document({ text: d.text, id_: d.id, metadata: d.metadata || {} }));
+      documentsByCollection.set(collection, llamaDocs);
+      return fallback.ingest({ collection, documents, embedder });
+    },
+
+    async query(args) {
+      // The live LlamaIndex query engine requires configured embeddings/LLM
+      // and may call external APIs. Keep production safe by default: store
+      // canonical LlamaIndex Document objects, then rank locally unless the
+      // caller explicitly wires a live provider later.
+      await getLlamaIndex();
+      return fallback.query(args);
+    },
+
+    delete(args) {
+      return fallback.delete(args);
+    },
+    listCollections() {
+      return fallback.listCollections();
+    },
+    collectionInfo(collection) {
+      const info = fallback.collectionInfo(collection);
+      if (!info) return null;
+      return {
+        ...info,
+        provider: "llamaindex",
+        llamaDocumentCount: documentsByCollection.get(collection)?.length || 0,
+      };
+    },
+  };
+}
+
 function matchesFilter(metadata, filter) {
   if (!metadata || !filter) return true;
   for (const [k, v] of Object.entries(filter)) {
@@ -178,6 +242,8 @@ function rrf(dense, sparse) {
 function round3(n) { return Math.round(n * 1000) / 1000; }
 
 module.exports = {
+  createConfiguredRagAdapter,
+  createLlamaIndexProvider,
   createRagAdapter,
   createStubProvider,
   VENDORS,

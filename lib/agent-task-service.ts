@@ -45,13 +45,34 @@ export interface QueueStatus {
   updatedAt?: string
 }
 
+export interface AgentFrameworkStatus {
+  version?: string
+  active?: Record<string, unknown>
+  frameworks?: Record<string, any>
+}
+
+export interface AgentApprovalState {
+  id: string
+  status: string
+  decision?: "approve" | "reject" | "edit" | string
+  tool?: string | null
+  action?: string | null
+  reason?: string
+  payload?: Record<string, unknown> | null
+  resolvedBy?: string | null
+  ts?: string
+}
+
 export type AgentTaskEvent =
   | { type: "queue_status"; taskId?: string; status: QueueStatus["status"]; queue?: string; jobId?: string; position?: number | null; estimatedWaitMs?: number | null; ts?: string; seq?: number }
+  | { type: "framework_status"; taskId?: string; version?: string; active?: Record<string, unknown>; frameworks?: Record<string, any>; observability?: Record<string, unknown> | null; ts?: string; seq?: number }
+  | { type: "human_approval_required"; taskId?: string; approvalId?: string; tool?: string; action?: string; reason?: string; payload?: Record<string, unknown> | null; ts?: string; seq?: number }
+  | { type: "human_approval_resolved"; taskId?: string; approvalId?: string; decision: "approve" | "reject" | "edit" | string; payload?: Record<string, unknown> | null; resolvedBy?: string | null; ts?: string; seq?: number }
   | { type: "checkpoint"; id?: string; label?: string; message?: string; status?: string; payload?: Record<string, unknown> | null; ts?: string; seq?: number }
   | { type: "quality_gate"; id?: string; gate?: string; label?: string; passed: boolean; score?: number | null; overallScore?: number | null; summary?: string; message?: string; payload?: Record<string, unknown> | null; ts?: string; seq?: number }
   | { type: "repair_attempt"; attempt?: number; status?: string; message?: string; ts?: string; seq?: number }
   | { type: "document_policy"; policy?: DocumentPolicy; documentPolicy?: DocumentPolicy; seq?: number }
-  | { type: "meta"; taskId?: string; goal: string; model: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown> }
+  | { type: "meta"; taskId?: string; goal: string; model: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
   | { type: "step_start"; id: string; label: string; icon?: AgenticIcon }
   | { type: "tool_call"; stepId: string; tool: string; preview: string; language?: string; codePreview?: string }
   | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview: string; partial?: boolean }
@@ -124,7 +145,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
 }
 
 export interface AgentTaskState {
-  meta?: { taskId?: string; goal: string; model: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown> }
+  meta?: { taskId?: string; goal: string; model: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
   steps: Array<{
     id: string
     label: string
@@ -141,6 +162,9 @@ export interface AgentTaskState {
   artifacts: AgentArtifact[]
   queue?: QueueStatus
   documentPolicy?: DocumentPolicy | null
+  frameworks?: AgentFrameworkStatus | null
+  observability?: Record<string, unknown> | null
+  approvals: AgentApprovalState[]
   checkpoints: Array<{ id: string; label: string; status: string; payload?: Record<string, unknown> | null; ts?: string }>
   qualityGates: Array<{ id: string; label: string; passed: boolean; score?: number | null; summary?: string; payload?: Record<string, unknown> | null; ts?: string }>
   repairs: Array<{ attempt: number; status: string; message: string; ts?: string }>
@@ -166,6 +190,44 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
       }
     case "document_policy":
       return { ...state, documentPolicy: evt.policy || evt.documentPolicy || null }
+    case "framework_status":
+      return {
+        ...state,
+        frameworks: { version: evt.version, active: evt.active, frameworks: evt.frameworks },
+        observability: evt.observability || state.observability || null,
+      }
+    case "human_approval_required":
+      return {
+        ...state,
+        approvals: [...(state.approvals || []), {
+          id: evt.approvalId || `approval-${(state.approvals || []).length + 1}`,
+          status: "pending",
+          tool: evt.tool || null,
+          action: evt.action || null,
+          reason: evt.reason || "",
+          payload: evt.payload || null,
+          ts: evt.ts,
+        }].slice(-20),
+      }
+    case "human_approval_resolved": {
+      const approvalId = evt.approvalId || `approval-${(state.approvals || []).length + 1}`
+      const approvals = state.approvals || []
+      const found = approvals.some(a => a.id === approvalId)
+      const resolved: AgentApprovalState = {
+        id: approvalId,
+        status: evt.decision || "resolved",
+        decision: evt.decision,
+        payload: evt.payload || null,
+        resolvedBy: evt.resolvedBy || null,
+        ts: evt.ts,
+      }
+      return {
+        ...state,
+        approvals: found
+          ? approvals.map(a => a.id === approvalId ? { ...a, ...resolved } : a)
+          : [...approvals, resolved].slice(-20),
+      }
+    }
     case "checkpoint":
       return {
         ...state,
@@ -201,7 +263,7 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
         }].slice(-10),
       }
     case "meta":
-      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan } }
+      return { ...state, meta: { taskId: evt.taskId, goal: evt.goal, model: evt.model, tools: evt.tools, executionProfile: evt.executionProfile, intentAlignmentProfile: evt.intentAlignmentProfile, taskPlan: evt.taskPlan, frameworks: evt.frameworks } }
     case "step_start":
       return {
         ...state,
@@ -286,6 +348,7 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
 export const initialAgentState: AgentTaskState = {
   steps: [],
   artifacts: [],
+  approvals: [],
   checkpoints: [],
   qualityGates: [],
   repairs: [],
@@ -301,7 +364,7 @@ export interface RunStreamCallbacks {
 }
 
 export async function runStream(args: AgentTaskRunArgs, cbs: RunStreamCallbacks = {}): Promise<AgentTaskState> {
-  let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], checkpoints: [], qualityGates: [], repairs: [] }
+  let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] }
   try {
     for await (const evt of runIterator(args)) {
       cbs.onEvent?.(evt)
@@ -351,6 +414,23 @@ export async function retryTask(taskId: string): Promise<{ ok: boolean; taskId?:
   return { ok: true, taskId: payload?.taskId, jobId: payload?.jobId, status: payload?.status, queue: payload?.queue }
 }
 
+export async function resolveApproval(
+  taskId: string,
+  decision: "approve" | "reject" | "edit",
+  payload: Record<string, unknown> = {},
+): Promise<{ ok: boolean; taskId?: string; approvalId?: string; decision?: string; error?: string }> {
+  const resp = await fetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/approval`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...authHeader() },
+    body: JSON.stringify({ decision, payload }),
+  })
+  let data: any = null
+  try { data = await resp.json() } catch { data = null }
+  if (!resp.ok) return { ok: false, error: data?.error || `HTTP ${resp.status}` }
+  return { ok: true, taskId: data?.taskId, approvalId: data?.approvalId, decision: data?.decision }
+}
+
 export async function getTaskEvents(taskId: string, after = 0): Promise<{ ok: boolean; events: AgentTaskEvent[]; status?: string; streamState?: AgentTaskState; error?: string }> {
   const resp = await fetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/events?after=${encodeURIComponent(String(after))}`, {
     method: "GET",
@@ -363,4 +443,4 @@ export async function getTaskEvents(taskId: string, after = 0): Promise<{ ok: bo
   return { ok: true, events: payload?.events || [], status: payload?.status, streamState: payload?.streamState }
 }
 
-export const agentTaskService = { runIterator, runStream, reduceEvent, initialAgentState, cancelTask, retryTask, getTaskEvents }
+export const agentTaskService = { runIterator, runStream, reduceEvent, initialAgentState, cancelTask, retryTask, resolveApproval, getTaskEvents }

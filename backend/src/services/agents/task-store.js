@@ -183,7 +183,7 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
 }
 
 function shouldCheckpoint(event) {
-  return ['meta', 'queue_status', 'document_policy', 'checkpoint', 'quality_gate', 'repair_attempt', 'step_start', 'step_done', 'file_artifact', 'final_text', 'done', 'error'].includes(event.type);
+  return ['meta', 'queue_status', 'document_policy', 'framework_status', 'human_approval_required', 'human_approval_resolved', 'checkpoint', 'quality_gate', 'repair_attempt', 'step_start', 'step_done', 'file_artifact', 'final_text', 'done', 'error'].includes(event.type);
 }
 
 function markTaskStatus(taskLike, status, patch = {}) {

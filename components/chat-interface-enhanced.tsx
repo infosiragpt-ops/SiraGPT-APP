@@ -6796,7 +6796,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         id: `msg-ai-${Date.now() + 1}`,
         chatId: activeChat.id,
         role: 'ASSISTANT' as const,
-        content: '```agent-task-state\n' + JSON.stringify({ ...initialAgentState, steps: [], artifacts: [], checkpoints: [], qualityGates: [], repairs: [] }) + '\n```',
+        content: '```agent-task-state\n' + JSON.stringify({ ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] }) + '\n```',
         timestamp: new Date().toISOString(),
       };
       setCurrentChat(prev => prev ? { ...prev, messages: [...(prev.messages || []), aiMessage] } : prev);
@@ -6814,7 +6814,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       searchAbortControllerRef.current = controller;
       currentAgentTaskIdRef.current = null;
 
-      let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], checkpoints: [], qualityGates: [], repairs: [] };
+      let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] };
       let taskWasAborted = false;
       try {
         for await (const evt of agentTaskService.runIterator({

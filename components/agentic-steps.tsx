@@ -235,7 +235,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
 
   return (
     <div className={cn("space-y-1.5", className)}>
-      {(state.queue || state.documentPolicy) && (
+      {(state.queue || state.documentPolicy || state.frameworks || state.approvals?.length > 0) && (
         <div className="mb-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
           <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
             {state.queue && (
@@ -253,6 +253,24 @@ export function AgenticStepsRenderer({ state, className }: Props) {
             )}
             {state.queue?.queue && (
               <span className="truncate">Queue: {state.queue.queue}</span>
+            )}
+            {state.frameworks?.active && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background px-2 py-1">
+                <Activity className="h-3.5 w-3.5" />
+                Stack
+                <span className="font-semibold text-foreground">
+                  {String((state.frameworks.active as any).orchestration || "agentic")}
+                </span>
+              </span>
+            )}
+            {state.approvals?.length > 0 && (
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background px-2 py-1">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                HITL
+                <span className="font-semibold text-foreground">
+                  {state.approvals.filter(a => a.status === "pending").length} pendientes
+                </span>
+              </span>
             )}
           </div>
           {state.documentPolicy?.reason && (
