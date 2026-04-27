@@ -4,6 +4,7 @@ import React from "react"
 import { Loader2, X, AlertCircle, Download, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { downloadHref, downloadUrlAsFile } from "@/lib/utils"
+import { toast } from "sonner"
 
 /**
  * DocumentPreview — right-pane viewer for generated documents.
@@ -200,6 +201,7 @@ async function renderXlsx(buffer: ArrayBuffer) {
 
 export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [state, setState] = React.useState<State>({ kind: "loading" })
+  const [isDownloading, setIsDownloading] = React.useState(false)
   const previewUrl = React.useMemo(() => typeof url === "string" ? url : url.url, [url])
   const downloadUrl = React.useMemo(() => typeof url === "string" ? previewUrl : (url.downloadUrl || url.url), [previewUrl, url])
   const format = React.useMemo(() => inferFormat(previewUrl), [previewUrl])
@@ -209,16 +211,27 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   }, [downloadUrl, format, url])
 
   const download = React.useCallback(async () => {
+    if (isDownloading) return
+    setIsDownloading(true)
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
       await downloadUrlAsFile(downloadUrl, filename, {
         credentials: "include",
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       })
-    } catch {
-      downloadHref(downloadUrl, filename)
+      toast.success("Descarga iniciada")
+    } catch (error) {
+      console.error("[DocumentPreview] download failed:", error)
+      try {
+        downloadHref(downloadUrl, filename)
+        toast.success("Descarga iniciada")
+      } catch {
+        toast.error("No se pudo descargar el documento")
+      }
+    } finally {
+      setIsDownloading(false)
     }
-  }, [downloadUrl, filename])
+  }, [downloadUrl, filename, isDownloading])
 
   React.useEffect(() => {
     if (!previewUrl) return
@@ -340,11 +353,12 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             variant="ghost"
             size="icon"
             onClick={download}
+            disabled={isDownloading}
             className="h-8 w-8 shrink-0"
-            title="Descargar"
-            aria-label="Descargar"
+            title={isDownloading ? "Descargando" : "Descargar"}
+            aria-label={isDownloading ? "Descargando" : "Descargar"}
           >
-            <Download className="h-4 w-4" />
+            {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
           </Button>
           <Button
             variant="ghost"

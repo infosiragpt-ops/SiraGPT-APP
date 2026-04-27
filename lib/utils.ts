@@ -93,7 +93,7 @@ export function downloadBlob(blob: Blob, filename: string): void {
   link.rel = "noopener"
   link.style.display = "none"
   document.body.appendChild(link)
-  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }))
+  link.click()
   document.body.removeChild(link)
   window.setTimeout(() => URL.revokeObjectURL(url), 1500)
 }
@@ -126,7 +126,7 @@ export function downloadHref(href: string, filename: string): void {
   link.rel = "noopener"
   link.style.display = "none"
   document.body.appendChild(link)
-  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }))
+  link.click()
   document.body.removeChild(link)
 }
 
@@ -147,7 +147,6 @@ export async function downloadUrlAsFile(href: string, filename: string, init?: R
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     downloadBlob(await response.blob(), filename)
   } catch (error) {
-    downloadHref(href, filename)
     throw error
   }
 }

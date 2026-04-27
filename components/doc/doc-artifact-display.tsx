@@ -27,12 +27,13 @@ import * as React from "react"
 import {
   FileText, FileSpreadsheet, Download, FileCode2,
   Presentation as PresentationIcon, Code2, ChevronDown, ChevronUp,
-  Eye, EyeOff,
+  Eye, EyeOff, Loader2,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 import { downloadUrlAsFile } from "@/lib/utils"
+import { toast } from "sonner"
 
 interface DocFile {
   type: "doc"
@@ -96,6 +97,7 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
   // compact and open the split panel only on user click.
   const [previewOpen, setPreviewOpen] = React.useState<boolean>(anyPreview && !onDocumentPreview)
   const [codeOpen, setCodeOpen] = React.useState(false)
+  const [isDownloading, setIsDownloading] = React.useState(false)
 
   function preview() {
     if (onDocumentPreview && hasHtmlPreview) {
@@ -118,8 +120,17 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
   }
 
   async function download() {
-    if (!available) return
-    await downloadUrlAsFile(doc.dataUrl as string, doc.filename)
+    if (!available || isDownloading) return
+    setIsDownloading(true)
+    try {
+      await downloadUrlAsFile(doc.dataUrl as string, doc.filename)
+      toast.success("Descarga iniciada")
+    } catch (error) {
+      console.error("[DocArtifactDisplay] download failed:", error)
+      toast.error("No se pudo descargar el documento")
+    } finally {
+      setIsDownloading(false)
+    }
   }
 
   const Icon = meta.Icon
@@ -163,11 +174,15 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
           <Button
             variant="default" size="sm"
             onClick={download}
-            disabled={!available}
+            disabled={!available || isDownloading}
             className="h-8"
           >
-            <Download className="h-3.5 w-3.5" />
-            <span className="ml-1 hidden text-[11.5px] sm:inline">Descargar</span>
+            {isDownloading
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <Download className="h-3.5 w-3.5" />}
+            <span className="ml-1 hidden text-[11.5px] sm:inline">
+              {isDownloading ? "Descargando" : "Descargar"}
+            </span>
           </Button>
         </div>
       </div>
