@@ -159,6 +159,7 @@ model Chat {
   messages Message[]
   sharedMessages MessageShare[] @relation("SharedMessages")
 
+  @@index([userId, updatedAt])
   @@map("chats")
 }
 
@@ -176,6 +177,7 @@ model Message {
   // Relations
   chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
+  @@index([chatId, timestamp])
   @@map("messages")
 }
 
@@ -219,6 +221,7 @@ model File {
   projectId   String?
   project     Project?   @relation("ProjectFiles", fields: [projectId], references: [id], onDelete: SetNull)
 
+  @@index([userId, createdAt])
   @@map("files")
 }
 
