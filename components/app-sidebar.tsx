@@ -32,7 +32,6 @@ import {
   CalendarDays,
   FolderKanban,
   Palette,
-  Globe,
   Loader2,
   PenSquare,
   Shield,
@@ -184,7 +183,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/search-brain', '/post', '/design', '/library',
+      '/chat', '/gpts', '/parafraseo', '/projects', '/post', '/design', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -533,7 +532,6 @@ export function AppSidebar() {
   const handleGPTsClick = () => navigate("/gpts")
   const handleParaphraseClick = () => navigate("/parafraseo")
   const handleProjectsClick = () => navigate("/projects")
-  const handleSearchBrainClick = () => navigate("/search-brain")
   const handlePostClick = () => navigate("/post")
   const handleDesignClick = () => navigate("/design")
   const handleLibraryClick = () => navigate("/library")
@@ -710,7 +708,6 @@ export function AppSidebar() {
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
-  const isOnSearchBrainPage = activePathname.startsWith('/search-brain')
   const isOnPostPage = activePathname.startsWith('/post')
   const isOnDesignPage = activePathname.startsWith('/design')
 
@@ -926,28 +923,6 @@ export function AppSidebar() {
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
               <p>{t("projects")}</p>
-            </TooltipContent>
-          </Tooltip>
-
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
-                onPointerDown={() => markNavigationIntent('/search-brain')}
-                onClick={handleSearchBrainClick}
-                onMouseEnter={() => prefetchOnHover('/search-brain')}
-                className={cn(
-                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnSearchBrainPage && "bg-accent text-accent-foreground",
-                  pendingHref === '/search-brain' && "opacity-70"
-                )}
-                variant="default"
-              >
-                <Globe className="h-4 w-4 text-blue-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("searchBrain")}</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>{t("searchBrain")}</p>
             </TooltipContent>
           </Tooltip>
 
