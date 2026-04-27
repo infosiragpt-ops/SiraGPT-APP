@@ -22,6 +22,9 @@
     "seed": "js-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.js"
   },
   "dependencies": {
+    "@ai-sdk/langchain": "2.0.174",
+    "@ai-sdk/openai": "3.0.53",
+    "@ai-sdk/react": "3.0.170",
     "@elevenlabs/elevenlabs-js": "^2.25.1",
     "@fal-ai/client": "^1.6.2",
     "@google/genai": "^1.20.0",
@@ -33,6 +36,7 @@
     "@llamaindex/workflow-core": "1.3.4",
     "@prisma/client": "^6.11.1",
     "@tarikjabiri/dxf": "^2.8.9",
+    "ai": "6.0.168",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "axios": "^1.11.0",
