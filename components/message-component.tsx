@@ -122,6 +122,10 @@ const isDocumentLikeAttachment = (file: any) => {
     return !!(getAttachmentName(file) || file?.id || file?.attachmentId);
 };
 
+const formatAgentTaskUserContent = (content: string) => {
+    return String(content || "").replace(/^🤖\s*Tarea:\s*/i, "").trim();
+};
+
 const getDocumentChipIcon = (name: string) => {
     const extension = name.split('.').pop()?.toLowerCase();
     if (extension === 'doc' || extension === 'docx') {
@@ -1056,6 +1060,17 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         // Memoize ReactMarkdown components to prevent unnecessary re-renders
         const components = useMemo(() => {
             const commonProps = {
+                pre: ({ children }: any) => {
+                    const child = React.Children.toArray(children)[0]
+                    const childProps = React.isValidElement(child) ? (child.props as any) : null
+                    if (
+                        typeof childProps?.className === "string" &&
+                        childProps.className.includes("language-agent-task-state")
+                    ) {
+                        return <>{children}</>
+                    }
+                    return <pre>{children}</pre>
+                },
                 p: ({ children }: any) => <p className="mb-4 text-base leading-7">{children}</p>,
                 ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
                 ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
@@ -2491,7 +2506,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                         </div>
                                     </div>
                                 ) : (
-                                    <MessageContent content={message.content} />
+                                    <MessageContent content={formatAgentTaskUserContent(message.content)} />
                                 )}
                             </Card>
                         )}
@@ -2502,7 +2517,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     size="icon"
                                     className="h-6 w-6"
                                     onClick={() => {
-                                        copyMarkdownToWordClipboard(message.content)
+                                        copyMarkdownToWordClipboard(formatAgentTaskUserContent(message.content))
                                             .then(() => toast.success("Copiado con formato para Word"))
                                             .catch((err) => {
                                                 console.error("[copy] failed:", err)

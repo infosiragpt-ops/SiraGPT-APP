@@ -5,6 +5,7 @@ import {
   Activity,
   AlertTriangle,
   Ban,
+  Braces,
   CheckCircle2,
   Clock3,
   Download,
@@ -15,6 +16,7 @@ import {
   RefreshCcw,
   ShieldCheck,
   Sparkles,
+  Terminal,
   Wrench,
   XCircle,
 } from "lucide-react"
@@ -108,7 +110,7 @@ function StatusIcon({ status }: { status: AgentActivityStatus | "step-running" |
 
 function StatusPill({ status, label }: { status: AgentActivityStatus; label: string }) {
   return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold", STATUS_STYLES[status])}>
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLES[status])}>
       <StatusIcon status={status} />
       {label}
     </span>
@@ -164,10 +166,10 @@ function ArtifactCard({ artifact }: { artifact: AgentArtifact }) {
   const sizeKb = Math.max(1, Math.round((artifact.sizeBytes || 0) / 1024))
 
   return (
-    <div className="rounded-lg border border-border/70 bg-background p-3 shadow-sm">
+    <div className="rounded-md border border-border/60 bg-background/70 p-2.5">
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
-          <FileCheck2 className="h-5 w-5" />
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/60 text-muted-foreground">
+          <FileCheck2 className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-foreground">{artifact.filename}</div>
@@ -194,7 +196,7 @@ function ArtifactCard({ artifact }: { artifact: AgentArtifact }) {
         </div>
       </div>
       {artifact.previewHtml && (
-        <div className="mt-3 max-h-72 overflow-auto rounded-md border border-border/50 bg-muted/10">
+        <div className="mt-2 max-h-64 overflow-auto rounded-md border border-border/50 bg-muted/10">
           <div dangerouslySetInnerHTML={{ __html: artifact.previewHtml }} />
         </div>
       )}
@@ -217,13 +219,13 @@ function TimelineRow({
 }) {
   return (
     <div className="relative flex gap-3">
-      <div className="flex w-6 shrink-0 justify-center">
+      <div className="flex w-6 shrink-0 justify-center text-muted-foreground">
         <div className={cn(
-          "mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border bg-background",
-          status === "done" && "border-emerald-200 text-emerald-700 dark:border-emerald-900/70 dark:text-emerald-200",
-          status === "running" && "border-blue-200 text-blue-700 dark:border-blue-900/70 dark:text-blue-200",
-          status === "error" && "border-red-200 text-red-700 dark:border-red-900/70 dark:text-red-200",
-          (!status || status === "muted") && "border-border text-muted-foreground",
+          "mt-0.5 flex h-6 w-6 items-center justify-center bg-background",
+          status === "done" && "text-emerald-600",
+          status === "running" && "text-blue-600",
+          status === "error" && "text-red-600",
+          (!status || status === "muted") && "text-muted-foreground",
         )}>
           {icon}
         </div>
@@ -232,7 +234,7 @@ function TimelineRow({
         <div className="flex flex-wrap items-center gap-2">
           <div className="text-sm font-medium text-foreground">{label}</div>
           {badges.map((badge) => (
-            <span key={badge} className="rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <span key={badge} className="rounded-md bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
               {badge}
             </span>
           ))}
@@ -247,17 +249,17 @@ function ValidationSummary({ state }: { state: AgentTaskState }) {
   if (!state.qualityGates?.length) return null
   const passed = state.qualityGates.filter((gate) => gate.passed).length
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/10 p-3">
+    <div className="rounded-md border border-border/60 bg-muted/10 p-2.5">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <ShieldCheck className="h-4 w-4 text-emerald-600" />
+        <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+          <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
           Validaciones
         </div>
         <span className="text-xs font-medium text-muted-foreground">{passed}/{state.qualityGates.length} aprobadas</span>
       </div>
       <div className="grid gap-1.5 sm:grid-cols-2">
         {state.qualityGates.slice(-6).map((gate) => (
-          <div key={gate.id} className="flex items-center gap-2 rounded-md bg-background px-2.5 py-1.5 text-xs">
+          <div key={gate.id} className="flex items-center gap-2 rounded-md bg-background px-2 py-1 text-xs">
             {gate.passed ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />}
             <span className="min-w-0 flex-1 truncate">{sanitizeAgentText(gate.label, "Validación")}</span>
             {typeof gate.score === "number" && <span className="text-muted-foreground">{formatQualityScore(gate.score)}</span>}
@@ -276,6 +278,15 @@ export function AgenticStepsRenderer({ state, className }: Props) {
   const taskId = state.meta?.taskId
   const canCancel = Boolean(taskId && !state.done && !state.error)
   const canRetry = Boolean(taskId && (state.error || summary.status === "cancelled"))
+  const hasDeliverable = (state.artifacts?.length || 0) > 0
+  const hasValidation = (state.qualityGates?.length || 0) > 0
+  const isCompactCompletedChat = Boolean(
+    state.done &&
+    !state.error &&
+    !hasDeliverable &&
+    !hasValidation &&
+    state.documentPolicy?.mode !== "doc_required"
+  )
 
   const cancelTask = React.useCallback(async () => {
     if (!taskId || cancelling) return
@@ -303,24 +314,41 @@ export function AgenticStepsRenderer({ state, className }: Props) {
     }
   }, [retrying, taskId])
 
+  if (isCompactCompletedChat) {
+    return (
+      <div className={cn("my-2 flex items-center gap-2 text-xs text-muted-foreground", className)}>
+        <span className="inline-flex h-5 w-5 items-center justify-center text-muted-foreground">
+          <Braces className="h-4 w-4" />
+        </span>
+        <span className="font-medium text-foreground">{summary.label}</span>
+        <span>{plural(summary.stepCount, "paso", "pasos")}</span>
+      </div>
+    )
+  }
+
   return (
-    <div className={cn("rounded-xl border border-border/70 bg-background p-4 shadow-sm", className)}>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className={cn("my-2 w-full max-w-2xl bg-transparent p-0 shadow-none", className)}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded-md bg-muted/40 px-2 py-1 text-xs font-medium text-muted-foreground">
+              <Braces className="h-3.5 w-3.5" />
+              Proceso
+            </span>
             <StatusPill status={summary.status} label={summary.label} />
-            {state.documentPolicy && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/20 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
+            {state.documentPolicy && state.documentPolicy.mode !== "chat_only" && (
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-muted/40 px-2 py-1 text-[11px] font-medium text-muted-foreground">
                 <FileText className="h-3.5 w-3.5" />
-                {state.documentPolicy.mode === "chat_only" ? "Chat" : "Documento"}
+                Documento
                 <span className="uppercase text-foreground">{state.documentPolicy.format}</span>
               </span>
             )}
           </div>
-          <div className="mt-3 text-sm font-semibold text-foreground">
-            Se ejecutaron {plural(summary.stepCount, "paso", "pasos")}, se usaron {plural(summary.toolCount, "herramienta", "herramientas")}
+          <div className="mt-2 text-xs font-medium text-muted-foreground">
+            <span className="text-foreground">{plural(summary.stepCount, "paso", "pasos")}</span>
+            <span className="mx-1.5">·</span>
+            <span>{plural(summary.toolCount, "herramienta", "herramientas")}</span>
           </div>
-          <div className="mt-1 text-xs leading-5 text-muted-foreground">{summary.description}</div>
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -329,7 +357,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
               type="button"
               onClick={cancelTask}
               disabled={cancelling}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border/70 px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/60 px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
             >
               {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
               Cancelar
@@ -340,7 +368,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
               type="button"
               onClick={retryTask}
               disabled={retrying}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border/70 px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/60 px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
             >
               {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
               Reintentar
@@ -349,10 +377,10 @@ export function AgenticStepsRenderer({ state, className }: Props) {
         </div>
       </div>
 
-      <div className="mt-4 border-l border-border/60 pl-3">
-        {state.queue && (
+      <div className="mt-3 border-l border-border/60 pl-3">
+        {state.queue && !state.done && (
           <TimelineRow
-            icon={state.queue.status === "running" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}
+            icon={state.queue.status === "running" ? <Terminal className="h-3.5 w-3.5" /> : <Clock3 className="h-3.5 w-3.5" />}
             label={state.queue.status === "queued" ? "En cola" : state.queue.status === "running" ? "Ejecutando tarea" : sanitizeAgentText(state.queue.status, "Estado de cola")}
             detail={[state.queue.queue ? `Cola ${state.queue.queue}` : null, etaLabel(state.queue.estimatedWaitMs)].filter(Boolean).join(" · ") || undefined}
             status={state.queue.status === "running" ? "running" : state.queue.status === "error" ? "error" : "muted"}
@@ -365,7 +393,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
               key={step.id}
               icon={
                 step.status === "running"
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ? <Terminal className="h-3.5 w-3.5" />
                   : step.status === "error"
                     ? <XCircle className="h-3.5 w-3.5" />
                     : <CheckCircle2 className="h-3.5 w-3.5" />
@@ -399,9 +427,9 @@ export function AgenticStepsRenderer({ state, className }: Props) {
       </div>
 
       {(state.checkpoints?.length || 0) > 0 && (
-        <div className="mt-3 flex items-center gap-2 rounded-lg border border-border/60 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-          <Activity className="h-4 w-4 text-foreground" />
-          <span className="font-medium text-foreground">Último checkpoint:</span>
+        <div className="mt-2 flex items-center gap-2 rounded-md bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
+          <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="font-medium text-foreground">Checkpoint:</span>
           <span className="min-w-0 truncate">{sanitizeAgentText(state.checkpoints[state.checkpoints.length - 1]?.label, "Progreso guardado")}</span>
         </div>
       )}

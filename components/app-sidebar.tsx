@@ -109,6 +109,13 @@ const LG_ITEM = cn(
 )
 const LG_SEP = "my-1 bg-white/30 dark:bg-white/10"
 
+const formatSidebarChatTitle = (value: unknown) => {
+  return String(value || "")
+    .replace(/^🤖\s*Tarea:\s*/i, "{} ")
+    .replace(/^🤖\s*/i, "{} ")
+    .trim()
+}
+
 // Generation Types with enhanced functionality
 const generationTypes = [
   {
@@ -1012,7 +1019,7 @@ export function AppSidebar() {
 
                       const renderChatItem = (chat: any) => {
                         const isEditing = editingChatId === chat.id
-                        const displayTitle = optimisticUpdates[chat.id] || chat.title
+                        const displayTitle = formatSidebarChatTitle(optimisticUpdates[chat.id] || chat.title)
                         const isTruncated = displayTitle.length > 25
                         // Per-chat streaming indicator — drives the small
                         // blue spinner that sits to the left of the 3-dot

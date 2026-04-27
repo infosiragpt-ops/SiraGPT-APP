@@ -6757,7 +6757,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: `🤖 Tarea: ${goalText.substring(0, 30)}`,
+          title: `{} ${goalText.substring(0, 30)}`,
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -6780,7 +6780,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
           role: 'USER' as const,
-          content: `🤖 Tarea: ${goalText}`,
+          content: goalText,
           timestamp: new Date().toISOString(),
         };
         setCurrentChat(prev => prev ? { ...prev, messages: [...(prev.messages || []), userMessage] } : prev);
