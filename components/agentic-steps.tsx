@@ -7,7 +7,6 @@ import {
   Ban,
   Braces,
   CheckCircle2,
-  Clock3,
   Download,
   ExternalLink,
   FileCheck2,
@@ -15,12 +14,9 @@ import {
   Loader2,
   RefreshCcw,
   ShieldCheck,
-  Sparkles,
-  Terminal,
-  Wrench,
-  XCircle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/agent-status-icons"
 import { agentTaskService, type AgentArtifact, type AgentTaskState } from "@/lib/agent-task-service"
 import {
   formatQualityScore,
@@ -41,6 +37,7 @@ interface TimelineStepProjection {
   label: string
   detail?: string
   status: "running" | "done" | "error"
+  phase: AgentStatusIconKind
   count: number
 }
 
@@ -66,17 +63,51 @@ function etaLabel(ms?: number | null) {
   return `${Math.ceil(seconds / 60)}m estimados`
 }
 
+function phaseFromTool(tool?: string | null): AgentStatusIconKind {
+  const normalized = String(tool || "").toLowerCase()
+  if (!normalized) return "thinking"
+  if (/(verify|valid|quality|gate|audit|check|run_tests)/i.test(normalized)) return "verifying"
+  if (/(repair|regen|fix|corrig|repar)/i.test(normalized)) return "repairing"
+  if (/(python|bash|code|sandbox|script|lint|build|dev|terminal|exec)/i.test(normalized)) return "coding"
+  if (/(search|rag|retrieve|source|web|investig|self_rag)/i.test(normalized)) return "thinking"
+  return "working"
+}
+
+function phaseFromStep(step: AgentTaskState["steps"][number], label: string): AgentStatusIconKind {
+  const firstTool = step.toolCalls?.[0]?.tool
+  if (firstTool) return phaseFromTool(firstTool)
+  const raw = `${step.icon || ""} ${step.label || ""} ${label}`.toLowerCase()
+  if (/(plan|analiz|analy|think|thought|pens)/i.test(raw)) return "thinking"
+  if (/(verify|valid|quality|gate|verific|validac|check)/i.test(raw)) return "verifying"
+  if (/(repair|regen|corrig|repar)/i.test(raw)) return "repairing"
+  if (/(code|codig|python|bash|sandbox|script|test|build|lint|terminal)/i.test(raw)) return "coding"
+  if (/(final|resumen|ready|listo)/i.test(raw)) return "done"
+  return "working"
+}
+
+function phaseFromStatus(status: AgentActivityStatus): AgentStatusIconKind {
+  if (status === "queued" || status === "idle") return "queued"
+  if (status === "verifying") return "verifying"
+  if (status === "repairing") return "repairing"
+  if (status === "completed") return "done"
+  if (status === "error") return "error"
+  if (status === "cancelled") return "error"
+  return "working"
+}
+
 function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProjection[] {
   const source = steps?.length ? steps : [{ id: "initial", label: "Analizando solicitud", status: "running" as const, toolCalls: [] }]
   const projected: TimelineStepProjection[] = []
 
   for (const step of source) {
     const tools = Array.from(new Set((step.toolCalls || []).map((call) => toolToProfessionalLabel(call.tool)))).slice(0, 2)
+    const label = professionalStepLabel(step)
     const item: TimelineStepProjection = {
       id: step.id,
-      label: professionalStepLabel(step),
+      label,
       detail: tools.length ? tools.join(" · ") : undefined,
       status: step.status === "running" ? "running" : step.status === "error" ? "error" : "done",
+      phase: phaseFromStep(step, label),
       count: 1,
     }
     const previous = projected[projected.length - 1]
@@ -97,21 +128,10 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function StatusIcon({ status }: { status: AgentActivityStatus | "step-running" | "step-done" | "step-error" }) {
-  if (status === "running" || status === "step-running") return <Loader2 className="h-4 w-4 animate-spin" />
-  if (status === "completed" || status === "step-done") return <CheckCircle2 className="h-4 w-4" />
-  if (status === "error" || status === "step-error") return <XCircle className="h-4 w-4" />
-  if (status === "repairing") return <Wrench className="h-4 w-4" />
-  if (status === "verifying") return <ShieldCheck className="h-4 w-4" />
-  if (status === "cancelled") return <Ban className="h-4 w-4" />
-  if (status === "queued") return <Clock3 className="h-4 w-4" />
-  return <Sparkles className="h-4 w-4" />
-}
-
-function StatusPill({ status, label }: { status: AgentActivityStatus; label: string }) {
+function StatusPill({ status, label, phase }: { status: AgentActivityStatus; label: string; phase?: AgentStatusIconKind }) {
   return (
     <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLES[status])}>
-      <StatusIcon status={status} />
+      <AgentStatusIcon kind={phase || phaseFromStatus(status)} className="h-4 w-4" />
       {label}
     </span>
   )
@@ -275,6 +295,10 @@ export function AgenticStepsRenderer({ state, className }: Props) {
   const [cancelling, setCancelling] = React.useState(false)
   const summary = React.useMemo(() => summarizeAgentActivity(state), [state])
   const timelineSteps = React.useMemo(() => projectTimelineSteps(state.steps), [state.steps])
+  const activePhase = React.useMemo(() => {
+    const runningStep = [...timelineSteps].reverse().find((step) => step.status === "running")
+    return runningStep?.phase || phaseFromStatus(summary.status)
+  }, [summary.status, timelineSteps])
   const taskId = state.meta?.taskId
   const canCancel = Boolean(taskId && !state.done && !state.error)
   const canRetry = Boolean(taskId && (state.error || summary.status === "cancelled"))
@@ -335,7 +359,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
               <Braces className="h-3.5 w-3.5" />
               Proceso
             </span>
-            <StatusPill status={summary.status} label={summary.label} />
+            <StatusPill status={summary.status} label={summary.label} phase={activePhase} />
             {state.documentPolicy && state.documentPolicy.mode !== "chat_only" && (
               <span className="inline-flex items-center gap-1.5 rounded-md bg-muted/40 px-2 py-1 text-[11px] font-medium text-muted-foreground">
                 <FileText className="h-3.5 w-3.5" />
@@ -380,7 +404,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
       <div className="mt-3 border-l border-border/60 pl-3">
         {state.queue && !state.done && (
           <TimelineRow
-            icon={state.queue.status === "running" ? <Terminal className="h-3.5 w-3.5" /> : <Clock3 className="h-3.5 w-3.5" />}
+            icon={<AgentStatusIcon kind={state.queue.status === "running" ? "working" : "queued"} className="h-4 w-4" />}
             label={state.queue.status === "queued" ? "En cola" : state.queue.status === "running" ? "Ejecutando tarea" : sanitizeAgentText(state.queue.status, "Estado de cola")}
             detail={[state.queue.queue ? `Cola ${state.queue.queue}` : null, etaLabel(state.queue.estimatedWaitMs)].filter(Boolean).join(" · ") || undefined}
             status={state.queue.status === "running" ? "running" : state.queue.status === "error" ? "error" : "muted"}
@@ -391,13 +415,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
           return (
             <TimelineRow
               key={step.id}
-              icon={
-                step.status === "running"
-                  ? <Terminal className="h-3.5 w-3.5" />
-                  : step.status === "error"
-                    ? <XCircle className="h-3.5 w-3.5" />
-                    : <CheckCircle2 className="h-3.5 w-3.5" />
-              }
+              icon={<AgentStatusIcon kind={step.status === "error" ? "error" : step.status === "done" ? "done" : step.phase} className="h-4 w-4" />}
               label={step.label}
               detail={step.detail}
               status={step.status}
@@ -409,7 +427,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
         {state.repairs?.slice(-3).map((repair) => (
           <TimelineRow
             key={`${repair.attempt}-${repair.ts || repair.message}`}
-            icon={<Wrench className="h-3.5 w-3.5" />}
+            icon={<AgentStatusIcon kind={repair.status === "completed" ? "done" : "repairing"} className="h-4 w-4" />}
             label={`Reparación automática ${repair.attempt}`}
             detail={sanitizeAgentText(repair.message, "Regenerando la entrega para corregir validaciones.")}
             status={repair.status === "completed" ? "done" : "running"}
@@ -418,7 +436,7 @@ export function AgenticStepsRenderer({ state, className }: Props) {
 
         {state.done && !state.error && (
           <TimelineRow
-            icon={<CheckCircle2 className="h-3.5 w-3.5" />}
+            icon={<AgentStatusIcon kind="done" className="h-4 w-4" />}
             label="Listo"
             detail="La respuesta final y los documentos quedaron disponibles."
             status="done"
