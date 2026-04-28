@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useCallback, useContext, useEffect, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 import { apiClient } from "./api"
 
 interface User {
@@ -51,11 +51,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const authEpochRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
 
     const checkAuth = async () => {
+      const checkEpoch = authEpochRef.current
+      const isCurrentCheck = () => !cancelled && authEpochRef.current === checkEpoch
       const savedToken = localStorage.getItem('auth-token')
       if (!savedToken) {
         if (!cancelled) setIsLoading(false)
@@ -63,7 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        if (cancelled) return
+        if (!isCurrentCheck()) return
         setToken(savedToken)
         apiClient.setToken(savedToken)
 
@@ -71,16 +74,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           apiClient.getCurrentUser(),
           'Auth check timed out'
         )
-        if (!cancelled) setUser(response.user)
+        if (isCurrentCheck()) setUser(response.user)
       } catch (error) {
         console.error('Auth check failed:', error)
-        if (cancelled) return
+        if (!isCurrentCheck()) return
         localStorage.removeItem('auth-token')
         apiClient.setToken(null)
         setToken(null)
         setUser(null)
       } finally {
-        if (!cancelled) setIsLoading(false)
+        if (isCurrentCheck()) setIsLoading(false)
       }
     }
 
@@ -92,12 +95,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const login = async (email: string, password: string): Promise<boolean> => {
+    const loginEpoch = ++authEpochRef.current
     setIsLoading(true)
     try {
       const response = await apiClient.login({ email: email.trim(), password })
       if (!response?.user || !response?.token) {
         throw new Error('Invalid login response')
       }
+      if (authEpochRef.current !== loginEpoch) return false
       apiClient.setToken(response.token)
       setUser(response.user)
       setToken(response.token)
@@ -106,14 +111,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Login failed:', error)
       return false
     } finally {
-      setIsLoading(false)
+      if (authEpochRef.current === loginEpoch) setIsLoading(false)
     }
   }
 
   const register = async (name: string, email: string, password: string): Promise<boolean> => {
+    const registerEpoch = ++authEpochRef.current
     setIsLoading(true)
     try {
       const response = await apiClient.register({ name, email, password })
+      if (authEpochRef.current !== registerEpoch) return false
       setUser(response.user)
       setToken(response.token)
       return true
@@ -121,13 +128,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Registration failed:', error)
       return false
     } finally {
-      setIsLoading(false)
+      if (authEpochRef.current === registerEpoch) setIsLoading(false)
     }
   }
 
   const loginWithToken = async (token: string): Promise<boolean> => {
     if (!token) return false;
 
+    const tokenLoginEpoch = ++authEpochRef.current
     setIsLoading(true);
     try {
       // Step 1: Token ko localStorage aur apiClient mein set karein
@@ -137,6 +145,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Step 2: User ka data hasil karein
       const response = await apiClient.getCurrentUser();
+
+      if (authEpochRef.current !== tokenLoginEpoch) return false;
 
       // Step 3: User ki state ko update karein
       setUser(response.user);
@@ -152,11 +162,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       return false;
     } finally {
-      setIsLoading(false);
+      if (authEpochRef.current === tokenLoginEpoch) setIsLoading(false);
     }
   };
 
   const logout = async () => {
+    authEpochRef.current += 1
     try {
       await apiClient.logout()
     } catch (error) {
