@@ -808,7 +808,6 @@ const ActionsDropdown = ({
   handleWordConnectorToggle,
   handleExcelConnectorToggle,
   closeAllToolsAndConnectors,
-  onAddLinkRequest,
 
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -953,25 +952,6 @@ const ActionsDropdown = ({
             accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg"
             onChange={handleFilesSelected}
           />
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            onSelect={(event) => {
-              event.preventDefault();
-              onAddLinkRequest?.();
-              setIsOpen(false);
-            }}
-            disabled={isMenuDisabled}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-sky-100 dark:bg-sky-900/20 flex items-center justify-center">
-                <Link2 className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-              </div>
-              <div className="flex-1">
-                <div className="liquid-label font-medium text-sm">Agregar enlace</div>
-                <div className="text-xs text-muted-foreground">URL como contexto</div>
-              </div>
-            </div>
-          </DropdownMenuItem>
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -3052,8 +3032,6 @@ function ChatInterfaceContent() {
   } = useChat()
 
   const [input, setInput] = React.useState("")
-  const [linkDialogOpen, setLinkDialogOpen] = React.useState(false)
-  const [linkInput, setLinkInput] = React.useState("")
   const [isRecording, setIsRecording] = React.useState(false)
   const [isDictationTranscribing, setIsDictationTranscribing] = React.useState(false)
   const inputRef = React.useRef("")
@@ -3346,8 +3324,6 @@ function ChatInterfaceContent() {
     setSelectedWordText(null);
     setUploadedFiles([]);
     setInput('');
-    setLinkInput('');
-    setLinkDialogOpen(false);
 
     // Clear Computer Use state
     if (clearReasoning) clearReasoning();
@@ -3747,26 +3723,6 @@ But first, you need to connect your Spotify account securely using the button be
     });
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   }, []);
-
-  const addLinkToComposer = React.useCallback(() => {
-    const candidate = linkInput.trim();
-    if (!candidate) {
-      toast.error("Ingresa un enlace");
-      return;
-    }
-    const normalized = candidate.startsWith("www.") ? `https://${candidate}` : candidate;
-    try {
-      const parsed = new URL(normalized);
-      if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("invalid-protocol");
-      setInput((prev) => appendTextToken(prev, parsed.toString()));
-      setIsWebSearchActive(true);
-      setLinkInput("");
-      setLinkDialogOpen(false);
-      window.setTimeout(() => textareaRef.current?.focus(), 0);
-    } catch {
-      toast.error("Enlace no válido");
-    }
-  }, [linkInput]);
 
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -7060,39 +7016,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         </button>
       )}
 
-      <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
-        <DialogContent className="max-w-md rounded-2xl">
-          <DialogHeader>
-            <DialogTitle>Agregar enlace</DialogTitle>
-            <DialogDescription>
-              El enlace quedará en el mensaje y se usará con búsqueda web activa.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Input
-              value={linkInput}
-              onChange={(event) => setLinkInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  addLinkToComposer();
-                }
-              }}
-              placeholder="https://..."
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>
-              Cancelar
-            </Button>
-            <Button type="button" onClick={addLinkToComposer}>
-              Agregar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <div ref={splitContainerRef} className="flex flex-1 overflow-hidden w-full relative">
         {/* Left pane — chat. When a right-side tool panel is active we
             share width with it via the resizable divider; otherwise we
@@ -7362,7 +7285,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleWordConnectorToggle={handleWordConnectorToggle}
                           handleExcelConnectorToggle={handleExcelConnectorToggle}
                           closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                          onAddLinkRequest={() => setLinkDialogOpen(true)}
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
@@ -7764,7 +7686,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleWordConnectorToggle={handleWordConnectorToggle}
                               handleExcelConnectorToggle={handleExcelConnectorToggle}
                               closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                              onAddLinkRequest={() => setLinkDialogOpen(true)}
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
