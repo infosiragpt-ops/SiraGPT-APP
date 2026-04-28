@@ -9,9 +9,21 @@ const usageMonitor = require('../services/usage-monitor');
 // const emailService = require('../services/email'); // Commented out temporarily
 const prorationService = require('../services/proration');
 const subscriptionAnalyticsService = require('../services/subscription-analytics');
+const { serializeBigIntFields } = require('../utils/bigint-serializer');
 const axios = require('axios');
 
 const router = express.Router();
+
+// Stripe sometimes returns timestamps as BigInt in newer SDK versions.
+// Multiplying a BigInt by a Number throws "Cannot mix BigInt and other types",
+// and `new Date(undefined)` produces an Invalid Date that Prisma rejects.
+// Funnel every Stripe-unix-seconds → Date conversion through this helper.
+function toDateFromUnix(seconds) {
+  if (seconds === null || seconds === undefined) return null;
+  const ms = Number(seconds) * 1000;
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms);
+}
 
 // Rate limiting for payment endpoints
 const paymentLimiter = rateLimit({
@@ -542,13 +554,13 @@ router.get('/stripe/invoices', authenticateToken, async (req, res) => {
         id: inv.id,
         number: inv.number,
         status: inv.status,
-        amountPaid: (inv.amount_paid || 0) / 100,
+        amountPaid: Number(inv.amount_paid || 0) / 100,
         currency: inv.currency,
         hostedInvoiceUrl: inv.hosted_invoice_url,
         invoicePdf: inv.invoice_pdf,
-        created: new Date(inv.created * 1000),
-        periodStart: inv.lines.data[0]?.period?.start ? new Date(inv.lines.data[0].period.start * 1000) : null,
-        periodEnd: inv.lines.data[0]?.period?.end ? new Date(inv.lines.data[0].period.end * 1000) : null
+        created: toDateFromUnix(inv.created),
+        periodStart: toDateFromUnix(inv.lines.data[0]?.period?.start),
+        periodEnd: toDateFromUnix(inv.lines.data[0]?.period?.end)
       }))
     });
   } catch (error) {
@@ -826,14 +838,18 @@ async function handleCheckoutSessionCompleted(session) {
 
 async function handleInvoicePaymentSucceeded(invoice) {
   try {
+    if (!invoice?.subscription) {
+      // One-off invoice (not tied to a subscription) — nothing to update.
+      return;
+    }
     const subscription = await stripeService.retrieveSubscription(invoice.subscription);
     const customerId = invoice.customer;
-    
+
     // Find user by customer ID
     const user = await prisma.user.findUnique({
       where: { stripeCustomerId: customerId }
     });
-    
+
     if (!user) {
       console.error('User not found for customer:', customerId);
       return;
@@ -844,23 +860,23 @@ async function handleInvoicePaymentSucceeded(invoice) {
       where: { id: user.id },
       data: {
         subscriptionStatus: subscription.status,
-        subscriptionEndDate: new Date(subscription.current_period_end * 1000)
+        subscriptionEndDate: toDateFromUnix(subscription.current_period_end)
       }
     });
 
     // Reset monthly usage for new billing period
     await usageMonitor.resetMonthlyUsage(user.id);
-    
+
     // Record subscription event
     await prisma.subscriptionEvent.create({
       data: {
         userId: user.id,
         eventType: 'payment_succeeded',
-        eventData: {
+        eventData: serializeBigIntFields({
           invoiceId: invoice.id,
-          amount: invoice.amount_paid / 100,
+          amount: Number(invoice.amount_paid) / 100,
           currency: invoice.currency
-        }
+        })
       }
     });
 
@@ -900,31 +916,33 @@ async function handleInvoicePaymentFailed(invoice) {
     //   nextRetry: 'Within 24 hours'
     // }); // Commented out temporarily
     
+    const amountDue = Number(invoice.amount_due) / 100;
+
     // Create in-app notification
     await prisma.notification.create({
       data: {
         userId: user.id,
         type: 'payment_failed',
         title: 'Payment Failed',
-        message: `Your payment of $${invoice.amount_due / 100} could not be processed. We'll retry automatically.`,
+        message: `Your payment of $${amountDue} could not be processed. We'll retry automatically.`,
         severity: 'warning',
-        metadata: {
+        metadata: serializeBigIntFields({
           invoiceId: invoice.id,
-          amount: invoice.amount_due / 100
-        }
+          amount: amountDue
+        })
       }
     });
-    
+
     // Record subscription event
     await prisma.subscriptionEvent.create({
       data: {
         userId: user.id,
         eventType: 'payment_failed',
-        eventData: {
+        eventData: serializeBigIntFields({
           invoiceId: invoice.id,
-          amount: invoice.amount_due / 100,
+          amount: amountDue,
           reason: invoice.last_finalization_error?.message || 'Payment declined'
-        }
+        })
       }
     });
 
@@ -955,7 +973,7 @@ async function handleSubscriptionCreated(subscription) {
       data: {
         stripeSubscriptionId: subscription.id,
         subscriptionStatus: subscription.status,
-        subscriptionEndDate: new Date(subscription.current_period_end * 1000)
+        subscriptionEndDate: toDateFromUnix(subscription.current_period_end)
       }
     });
 
@@ -1002,7 +1020,7 @@ async function handleSubscriptionUpdated(subscription) {
       where: { id: user.id },
       data: {
         subscriptionStatus: subscription.status,
-        subscriptionEndDate: new Date(subscription.current_period_end * 1000)
+        subscriptionEndDate: toDateFromUnix(subscription.current_period_end)
       }
     });
 
@@ -1035,7 +1053,7 @@ async function handleSubscriptionDeleted(subscription) {
          monthlyLimit: 1000,
         monthlyCallLimit: 3,
         subscriptionStatus: 'canceled',
-        subscriptionEndDate: new Date(subscription.ended_at * 1000)
+        subscriptionEndDate: toDateFromUnix(subscription.ended_at)
         // monthlyCallLimit: NOT UPDATED - preserve current usage
       }
     });
@@ -1074,9 +1092,9 @@ router.get('/subscription', authenticateToken, async (req, res) => {
           stripeSubscription: {
             id: subscription.id,
             status: subscription.status,
-            currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+            currentPeriodEnd: toDateFromUnix(subscription.current_period_end),
             cancelAtPeriodEnd: subscription.cancel_at_period_end,
-            nextInvoiceDate: subscription.status === 'active' ? new Date(subscription.current_period_end * 1000) : null
+            nextInvoiceDate: subscription.status === 'active' ? toDateFromUnix(subscription.current_period_end) : null
           }
         };
       } catch (error) {
@@ -1119,7 +1137,7 @@ router.post('/subscription/cancel', subscriptionLimiter, authenticateToken, asyn
       subscription: {
         id: subscription.id,
         cancelAtPeriodEnd: subscription.cancel_at_period_end,
-        currentPeriodEnd: new Date(subscription.current_period_end * 1000)
+        currentPeriodEnd: toDateFromUnix(subscription.current_period_end)
       }
     });
 

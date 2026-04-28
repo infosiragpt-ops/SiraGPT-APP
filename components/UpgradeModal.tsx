@@ -72,31 +72,37 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
       if (onSubscribe) {
         await onSubscribe(plan)
-      } else {
-        if (!currentUser) {
-          toast.error("Please sign in to subscribe")
-          return
-        }
-
-        // Create Stripe checkout session
-        try {
-          const response = await apiClient.createStripePayment({ plan })
-
-          if (response.url) {
-            // Redirect to Stripe Checkout
-            window.location.href = response.url
-            return // Don't close modal or update state since we're redirecting
-          } else {
-            throw new Error('No checkout URL received')
-          }
-        } catch (error: any) {
-          console.error("Stripe checkout error:", error)
-
-        }
+        return
       }
+
+      if (!currentUser) {
+        toast.error("Please sign in to subscribe")
+        return
+      }
+
+      const response = await apiClient.createStripePayment({ plan })
+
+      if (!response?.url) {
+        throw new Error("No checkout URL received")
+      }
+
+      window.location.href = response.url
     } catch (err: any) {
       console.error("subscribe error", err)
-      toast.error(err?.message || "Subscription failed")
+      const status = err?.status ?? err?.statusCode
+      const data = err?.errorData
+
+      if (status === 503 || /not configured/i.test(err?.message || "")) {
+        toast.error(
+          data?.message ||
+            "Payment processing isn't configured yet. Please contact support.",
+          { duration: 6000 }
+        )
+      } else if (status === 401) {
+        toast.error("Your session expired — please sign in again.")
+      } else {
+        toast.error(err?.message || "Subscription failed")
+      }
     } finally {
       setLoadingPlan(null)
     }
