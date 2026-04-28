@@ -71,6 +71,7 @@ model User {
   subscriptionEvents SubscriptionEvent[]
   agentTasks AgentTask[]
   generatedArtifacts GeneratedArtifact[]
+  documentAnalyses DocumentAnalysis[]
 
   @@map("users")
 }
@@ -282,6 +283,9 @@ model File {
 
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentAnalysis DocumentAnalysis?
+  documentChunks DocumentChunk[]
+  documentTables DocumentTable[]
 
   customGptId String?
   customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id],onDelete: SetNull)
@@ -296,6 +300,86 @@ model File {
 
   @@index([userId, createdAt])
   @@map("files")
+}
+
+model DocumentAnalysis {
+  id          String   @id @default(cuid())
+  userId      String
+  fileId      String   @unique
+  status      String   @default("pending")
+  language    String?
+  mimeType    String?
+  pageCount   Int?
+  sheetCount  Int?
+  slideCount  Int?
+  charCount   Int      @default(0)
+  chunkCount  Int      @default(0)
+  tableCount  Int      @default(0)
+  summary     String?  @db.Text
+  textCoverage Json?
+  ocr         Json?
+  warnings    Json?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file   File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  chunks DocumentChunk[]
+  tables DocumentTable[]
+
+  @@index([userId, updatedAt])
+  @@map("document_analyses")
+}
+
+model DocumentChunk {
+  id           String   @id @default(cuid())
+  analysisId   String
+  fileId       String
+  ordinal      Int
+  sourceType   String
+  sourceLabel  String?
+  pageNumber   Int?
+  sheetName    String?
+  slideNumber  Int?
+  sectionTitle String?
+  text         String   @db.Text
+  charCount    Int      @default(0)
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  analysis DocumentAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  file     File             @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId, ordinal])
+  @@index([fileId, ordinal])
+  @@map("document_chunks")
+}
+
+model DocumentTable {
+  id          String   @id @default(cuid())
+  analysisId  String
+  fileId      String
+  ordinal     Int
+  sourceType  String
+  sourceLabel String?
+  pageNumber  Int?
+  sheetName   String?
+  slideNumber Int?
+  title       String?
+  columns     String[]
+  rowCount    Int      @default(0)
+  preview     Json?
+  markdown    String?  @db.Text
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  analysis DocumentAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  file     File             @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId, ordinal])
+  @@index([fileId, ordinal])
+  @@map("document_tables")
 }
 
 model Payment {
