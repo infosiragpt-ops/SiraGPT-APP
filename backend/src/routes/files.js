@@ -4,6 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
+const documentIntelligence = require('../services/document-intelligence');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
 const operationalRag = require('../services/rag/operational-runtime');
@@ -56,6 +57,39 @@ function scheduleDefaultRagIndex(userId, fileRecord) {
   });
 
   return true;
+}
+
+function serializeOcrMeta(result = {}) {
+  const ocr = result.ocr || {};
+  return {
+    ocrStatus: ocr.status || 'skipped',
+    ocrConfidence: typeof ocr.confidence === 'number' ? ocr.confidence : null,
+    ocrProvider: ocr.provider || null,
+  };
+}
+
+function serializeAnalysisMeta(analysis = null) {
+  if (!analysis) {
+    return {
+      analysisStatus: 'skipped',
+      analysisId: null,
+      textCoverage: null,
+      pageCount: null,
+      sheetCount: null,
+      slideCount: null,
+      tablesDetected: 0,
+    };
+  }
+  return {
+    analysisStatus: analysis.status || 'unknown',
+    analysisId: analysis.id || null,
+    textCoverage: analysis.textCoverage || null,
+    pageCount: analysis.pageCount || null,
+    sheetCount: analysis.sheetCount || null,
+    slideCount: analysis.slideCount || null,
+    tablesDetected: analysis.tableCount || 0,
+    analysisSummary: analysis.summary || null,
+  };
 }
 
 /**
@@ -149,6 +183,18 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
         });
 
         const ragQueued = scheduleDefaultRagIndex(req.user.id, fileRecord);
+        const ocrMeta = serializeOcrMeta(result);
+        let analysis = null;
+        try {
+          analysis = await documentIntelligence.analyzeFile(prisma, {
+            userId: req.user.id,
+            fileRecord,
+            extractionResult: result,
+            force: true,
+          });
+        } catch (analysisError) {
+          console.warn('[files] document analysis failed:', analysisError.message || analysisError);
+        }
 
         processedFiles.push({
           id: fileRecord.id,
@@ -158,6 +204,8 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
           url: `/uploads/${req.user.id}/${file.filename}`,
           thumbnailUrl: thumbnailPath ? `/uploads/${req.user.id}/${path.basename(thumbnailPath)}` : null,
           extractedText: result.extractedText,
+          ...ocrMeta,
+          ...serializeAnalysisMeta(analysis),
           openaiFileId: openaiFileId,
           ragIndexed: ragQueued ? 'queued' : 'skipped',
           success: result.success,
@@ -170,6 +218,9 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
           size: file.size,
           type: file.mimetype,
           success: false,
+          ocrStatus: 'failed',
+          ocrConfidence: 0,
+          ocrProvider: null,
           error: error.message
         });
       }
@@ -231,6 +282,114 @@ router.get('/', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get files error:', error);
     res.status(500).json({ error: 'Failed to fetch files' });
+  }
+});
+
+// Get structured document analysis
+router.get('/:id/analysis', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      select: { id: true },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+
+    let analysis = await documentIntelligence.getAnalysisForFile(prisma, {
+      userId: req.user.id,
+      fileId: file.id,
+    });
+    if (!analysis) {
+      analysis = await documentIntelligence.analyzeFile(prisma, {
+        userId: req.user.id,
+        fileId: file.id,
+      });
+    }
+    res.json({ analysis });
+  } catch (error) {
+    console.error('Get analysis error:', error);
+    res.status(500).json({ error: 'Failed to fetch file analysis', detail: error.message });
+  }
+});
+
+// Force structured document analysis refresh
+router.post('/:id/analyze', authenticateToken, async (req, res) => {
+  try {
+    const analysis = await documentIntelligence.analyzeFile(prisma, {
+      userId: req.user.id,
+      fileId: req.params.id,
+      force: true,
+    });
+    res.json({ analysis });
+  } catch (error) {
+    const status = /not found/i.test(error.message) ? 404 : 500;
+    console.error('Analyze file error:', error);
+    res.status(status).json({ error: 'Failed to analyze file', detail: error.message });
+  }
+});
+
+// Retrieve grounded evidence chunks for a document
+router.get('/:id/evidence', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      select: { id: true },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+
+    let analysis = await documentIntelligence.getAnalysisForFile(prisma, {
+      userId: req.user.id,
+      fileId: file.id,
+    });
+    if (!analysis) {
+      analysis = await documentIntelligence.analyzeFile(prisma, {
+        userId: req.user.id,
+        fileId: file.id,
+      });
+    }
+
+    const result = await documentIntelligence.retrieveEvidence(prisma, {
+      userId: req.user.id,
+      fileId: file.id,
+      query: req.query.query || '',
+      limit: req.query.limit || 8,
+    });
+    res.json({
+      analysis: result.analysis || analysis,
+      evidence: result.evidence,
+    });
+  } catch (error) {
+    console.error('Get evidence error:', error);
+    res.status(500).json({ error: 'Failed to fetch document evidence', detail: error.message });
+  }
+});
+
+// Get normalized tables for a document
+router.get('/:id/tables', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      select: { id: true },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+
+    let tables = await documentIntelligence.getTablesForFile(prisma, {
+      userId: req.user.id,
+      fileId: file.id,
+    });
+    if (!tables.length) {
+      await documentIntelligence.analyzeFile(prisma, {
+        userId: req.user.id,
+        fileId: file.id,
+      });
+      tables = await documentIntelligence.getTablesForFile(prisma, {
+        userId: req.user.id,
+        fileId: file.id,
+      });
+    }
+    res.json({ tables });
+  } catch (error) {
+    console.error('Get tables error:', error);
+    res.status(500).json({ error: 'Failed to fetch document tables', detail: error.message });
   }
 });
 

@@ -1,28 +1,26 @@
 const mammoth = require('mammoth');
 const XLSX = require('xlsx');
 const pdf = require('pdf-parse');
-const officeParser = require('officeparser');
-
-const { createWorker } = require('tesseract.js');
 const sharp = require('sharp');
 const fs = require('fs').promises;
-const path = require('path');
-const pdfToImage = async (filePath) => {
-  const { pdf } = await import('pdf-to-img');
-  return pdf(filePath);
-};
+const ocrEngine = require('./ocr-engine');
 
 class FileProcessor {
   async processFile(file) {
     try {
       const { mimetype, path: filePath, originalname } = file;
       let extractedText = '';
+      let ocr = ocrEngine.skipped('not_ocr_applicable').ocr;
 
       console.log(`Processing file: ${originalname}, type: ${mimetype}, path: ${filePath}`);
 
       switch (mimetype) {
         case 'application/pdf':
-          extractedText = await this.processPDF(filePath);
+          {
+            const result = await this.processPDF(filePath, { detailed: true });
+            extractedText = result.extractedText;
+            ocr = result.ocr;
+          }
           break;
 
         case 'application/msword':
@@ -42,10 +40,20 @@ class FileProcessor {
           break;
 
         case 'image/jpeg':
+        case 'image/jpg':
         case 'image/png':
         case 'image/gif':
         case 'image/webp':
-          extractedText = await this.processImage(filePath);
+        case 'image/bmp':
+        case 'image/tiff':
+        case 'image/svg+xml':
+        case 'image/heic':
+        case 'image/heif':
+          {
+            const result = await this.processImage(filePath, { detailed: true, mimeType: mimetype });
+            extractedText = result.extractedText;
+            ocr = result.ocr;
+          }
           break;
 
         case 'application/vnd.ms-powerpoint':
@@ -58,11 +66,12 @@ class FileProcessor {
           extractedText = `File "${originalname}" uploaded successfully. Content type: ${mimetype}`;
       }
 
-      console.log(`File processing complete for ${originalname}: ${extractedText.length} characters extracted`);
+      console.log(`File processing complete for ${originalname}: ${String(extractedText || '').length} characters extracted`);
 
       return {
         success: true,
         extractedText,
+        ocr,
         fileInfo: {
           name: originalname,
           type: mimetype,
@@ -74,15 +83,19 @@ class FileProcessor {
       return {
         success: false,
         error: error.message,
-        extractedText: `Error processing file: ${error.message}`
+        extractedText: `Error processing file: ${error.message}`,
+        ocr: {
+          status: 'failed',
+          confidence: 0,
+          provider: null,
+          reason: error.message,
+        },
       };
     }
   }
 
 
-  async processPDF(filePath) {
-    const { franc } = await import('franc');
-
+  async processPDF(filePath, options = {}) {
     try {
       const dataBuffer = await fs.readFile(filePath);
       const data = await pdf(dataBuffer);
@@ -94,62 +107,22 @@ class FileProcessor {
       // count lines itself.
       if (data.text.trim().length > 100) {
         const header = `PDF document — ${data.numpages} page(s), ${data.text.length} characters extracted\n---\n`;
-        return header + data.text;
+        const extractedText = header + data.text;
+        const ocr = {
+          status: 'skipped',
+          confidence: null,
+          provider: 'pdf_text_layer',
+          reason: 'embedded_text_layer',
+          pages: data.numpages,
+        };
+        return options.detailed ? { extractedText, ocr } : extractedText;
       }
 
-      console.log(`Detected scanned PDF → running OCR...`);
-
-      const { pdf: pdfToImg } = await import('pdf-to-img');
-      const pages = await pdfToImg(filePath, { scale: 2 }); // high-resolution conversion
-
-      let ocrText = '';
-
-      // 🧠 Use a single worker for speed (preload multiple languages)
-      const worker = await createWorker('eng+spa'); // ✅ no logger here
-
-      for await (const page of pages) {
-        const optimized = await sharp(page)
-          .greyscale()
-          .normalize()
-          .sharpen()
-          .png()
-          .toBuffer();
-
-        const { data: { text } } = await worker.recognize(optimized);
-        ocrText += text.trim() + '\n';
-      }
-
-      await worker.terminate();
-
-      // 🧠 Optional: Auto language detection (fast)
-      const langCode = franc(ocrText);
-      const detectedLang = langCode === 'spa' ? 'Spanish' :
-        langCode === 'eng' ? 'English' : 'Unknown';
-      console.log(`Detected language: ${detectedLang}`);
-
-      // 🔁 If OCR was done in wrong language (e.g. Spanish text with low confidence), retry once
-      if (detectedLang === 'Spanish' && !ocrText.match(/[áéíóúñ]/i)) {
-        console.log('Re-running OCR with Spanish focus...');
-        const workerSpa = await createWorker('spa');
-        let spaText = '';
-        for await (const page of pages) {
-          const optimized = await sharp(page)
-            .greyscale()
-            .normalize()
-            .sharpen()
-            .png()
-            .toBuffer();
-          const { data: { text } } = await workerSpa.recognize(optimized);
-          spaText += text.trim() + '\n';
-        }
-        await workerSpa.terminate();
-        if (spaText.trim().length > ocrText.trim().length / 2) {
-          ocrText = spaText;
-        }
-      }
-
-      console.log(`✅ OCR complete: ${ocrText.length} chars extracted`);
-      return ocrText || 'No text detected in image PDF';
+      console.log(`Detected scanned PDF -> running hybrid OCR...`);
+      const result = await ocrEngine.extractFromPdfImages(filePath);
+      const extractedText = result.text || 'No text detected in image PDF';
+      console.log(`OCR complete: ${extractedText.length} chars extracted`);
+      return options.detailed ? { extractedText, ocr: result.ocr } : extractedText;
     } catch (error) {
       console.error(`❌ PDF processing error for ${filePath}:`, error);
       throw new Error(`PDF processing failed: ${error.message}`);
@@ -276,37 +249,35 @@ class FileProcessor {
     }
   }
 
-  async processImage(filePath) {
+  async processImage(filePath, options = {}) {
     try {
-      // Optimize image for OCR
-      const optimizedPath = filePath + '_optimized.png';
-      await sharp(filePath)
-        .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
-        .greyscale()
-        .normalize()
-        .png()
-        .toFile(optimizedPath);
-
-      // Perform OCR
-      const worker = await createWorker('eng');
-      const { data: { text } } = await worker.recognize(optimizedPath);
-      await worker.terminate();
-
-      // Clean up optimized image
-      try {
-        await fs.unlink(optimizedPath);
-      } catch (e) {
-        // Ignore cleanup errors
+      const result = await ocrEngine.extractFromImage(filePath, {
+        mimeType: options.mimeType || 'image/png',
+      });
+      if (options.detailed) {
+        return {
+          extractedText: result.text || '',
+          ocr: result.ocr,
+        };
       }
-
-      return text || 'No text found in image';
+      return result.text || '';
     } catch (error) {
       throw new Error(`Image OCR processing failed: ${error.message}`);
     }
   }
 
+  _normalizeOcrText(text) {
+    return String(text || '')
+      .split(/\r?\n/)
+      .map(line => line.replace(/[ \t]+/g, ' ').trim())
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
   async processPowerPoint(filePath) {
     try {
+      const officeParser = require('officeparser');
       const text = await officeParser.parseOfficeAsync(filePath);
       console.log(`PowerPoint file processed: ${filePath}, length: ${text.length}`);
       return text;

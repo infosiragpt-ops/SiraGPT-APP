@@ -199,12 +199,78 @@ async function renderXlsx(buffer: ArrayBuffer) {
   return previewShell(`<div class="sgpt-preview">${sections.join("")}</div>`)
 }
 
+async function renderPptx(buffer: ArrayBuffer) {
+  const mod = await import("jszip")
+  const JSZip = mod.default || mod
+  const zip = await JSZip.loadAsync(buffer)
+  const slideNames = Object.keys(zip.files)
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+    .sort((a, b) => {
+      const ai = Number(a.match(/slide(\d+)\.xml/i)?.[1] || 0)
+      const bi = Number(b.match(/slide(\d+)\.xml/i)?.[1] || 0)
+      return ai - bi
+    })
+    .slice(0, 40)
+
+  const parser = typeof DOMParser !== "undefined" ? new DOMParser() : null
+  const slides: string[] = []
+
+  for (let index = 0; index < slideNames.length; index += 1) {
+    const xml = await zip.files[slideNames[index]].async("text")
+    let texts: string[] = []
+
+    if (parser) {
+      const doc = parser.parseFromString(xml, "application/xml")
+      texts = Array.from(doc.getElementsByTagName("a:t"))
+        .map((node) => node.textContent?.trim() || "")
+        .filter(Boolean)
+    } else {
+      texts = Array.from(xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g))
+        .map((match) => match[1]?.replace(/&amp;/g, "&").trim() || "")
+        .filter(Boolean)
+    }
+
+    const title = texts[0] || `Diapositiva ${index + 1}`
+    const bullets = texts.slice(1, 9)
+      .map((text) => `<li>${escapeHtml(text)}</li>`)
+      .join("")
+    slides.push(`
+      <section class="sgpt-slide">
+        <div class="sgpt-slide-kicker">Diapositiva ${index + 1}</div>
+        <h2>${escapeHtml(title)}</h2>
+        ${bullets ? `<ul>${bullets}</ul>` : `<p class="sgpt-muted">Sin texto extra en esta diapositiva.</p>`}
+      </section>
+    `)
+  }
+
+  const body = slides.length
+    ? slides.join("")
+    : `<section class="sgpt-slide"><h2>Presentación</h2><p class="sgpt-muted">No se detectó texto legible en las diapositivas. Descarga el archivo para abrirlo en PowerPoint.</p></section>`
+
+  return previewShell(`
+    <style>
+      .sgpt-deck { max-width:980px; margin:0 auto; }
+      .sgpt-slide { min-height:420px; margin:0 auto 24px; border:1px solid #e5e7eb; border-radius:24px; background:#fff; padding:42px 48px; box-shadow:0 24px 70px rgba(15,23,42,.08); }
+      .sgpt-slide-kicker { color:#ea580c; font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:800; margin-bottom:18px; }
+      .sgpt-slide h2 { color:#111827; font-size:34px; line-height:1.12; margin:0 0 24px; letter-spacing:0; }
+      .sgpt-slide ul { margin:0; padding-left:22px; color:#334155; font-size:19px; line-height:1.55; }
+      .sgpt-slide li { margin:0 0 10px; }
+    </style>
+    <div class="sgpt-preview sgpt-deck">${body}</div>
+  `)
+}
+
 export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [state, setState] = React.useState<State>({ kind: "loading" })
   const [isDownloading, setIsDownloading] = React.useState(false)
   const previewUrl = React.useMemo(() => typeof url === "string" ? url : url.url, [url])
   const downloadUrl = React.useMemo(() => typeof url === "string" ? previewUrl : (url.downloadUrl || url.url), [previewUrl, url])
-  const format = React.useMemo(() => inferFormat(previewUrl), [previewUrl])
+  const format = React.useMemo(() => {
+    const fromUrl = inferFormat(previewUrl)
+    if (fromUrl !== "unknown") return fromUrl
+    if (typeof url !== "string" && url.filename) return inferFormat(url.filename)
+    return fromUrl
+  }, [previewUrl, url])
   const filename = React.useMemo(() => {
     if (typeof url !== "string" && url.filename) return url.filename
     return inferFilename(downloadUrl, format)
@@ -267,15 +333,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       }
     }
 
-    if (format === "pptx") {
-      setState({
-        kind: "unsupported",
-        message: "PowerPoint no tiene una vista previa directa estable en el navegador. Descarga el archivo para abrirlo en PowerPoint, Keynote o Google Slides.",
-      })
-      return
-    }
-
-    if (!["docx", "doc", "xlsx", "csv"].includes(format)) {
+    if (!["docx", "doc", "xlsx", "csv", "pptx"].includes(format)) {
       setState({ kind: "unsupported", message: "Formato no soportado para previsualización." })
       return
     }
@@ -305,6 +363,13 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
         if (format === "xlsx") {
           const html = await renderXlsx(buffer)
+          if (cancelled) return
+          setState({ kind: "html", html, warnings: [] })
+          return
+        }
+
+        if (format === "pptx") {
+          const html = await renderPptx(buffer)
           if (cancelled) return
           setState({ kind: "html", html, warnings: [] })
           return

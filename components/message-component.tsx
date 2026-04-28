@@ -1024,7 +1024,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             if (language === 'agent-task-state') {
                 try {
                     const state = JSON.parse(codeString);
-                    return <AgenticStepsRenderer state={state} />;
+                    return <AgenticStepsRenderer state={state} onDocumentPreview={onDocumentPreview} />;
                 } catch {
                     return null;
                 }
@@ -1168,7 +1168,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             if (lang === 'agent-task-state') {
                                 try {
                                     const state = JSON.parse(codeString);
-                                    return <AgenticStepsRenderer state={state} />;
+                                    return <AgenticStepsRenderer state={state} onDocumentPreview={onDocumentPreview} />;
                                 } catch {
                                     return null;
                                 }

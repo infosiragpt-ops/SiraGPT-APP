@@ -1,3 +1,9 @@
+const fs = require('fs');
+const path = require('path');
+const ocrEngine = require('./ocr-engine');
+
+const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
+
 function compactString(value, max = 120000) {
   if (typeof value !== 'string') return null;
   if (value.length <= max) return value;
@@ -7,6 +13,113 @@ function compactString(value, max = 120000) {
 function safeText(value, fallback = '') {
   if (typeof value !== 'string') return fallback;
   return value.trim() || fallback;
+}
+
+function isImageFile(row = {}) {
+  const mime = String(row.mimeType || row.type || '').toLowerCase();
+  const name = String(row.originalName || row.filename || '').toLowerCase();
+  return mime.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|tiff?|svg)$/i.test(name);
+}
+
+function hasUsefulExtractedText(value) {
+  return ocrEngine.hasUsefulText(value);
+}
+
+const TRANSCRIPTION_RE = /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcripcion|transcribe|transcript|transcription)\b/i;
+const EXPLICIT_TRANSCRIPTION_FILE_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint)\b|\b(?:exporta(?:r|me)?|descarga(?:r|me)?|genera(?:r|me)?|crea(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|archivo\s+descargable)\b/i;
+
+function isPlainTranscriptionRequest(value) {
+  const text = String(value || '');
+  return TRANSCRIPTION_RE.test(text) && !EXPLICIT_TRANSCRIPTION_FILE_OUTPUT_RE.test(text);
+}
+
+function isReadableFileCandidate(row = {}) {
+  if (hasUsefulExtractedText(row.extractedText)) return true;
+  const mime = String(row.mimeType || row.type || '').toLowerCase();
+  const name = String(row.originalName || row.filename || '').toLowerCase();
+  return (
+    mime.startsWith('image/') ||
+    mime === 'application/pdf' ||
+    mime.startsWith('text/') ||
+    /officedocument|msword|presentation|spreadsheet|wordprocessingml/.test(mime) ||
+    /\.(png|jpe?g|webp|gif|bmp|tiff?|svg|pdf|txt|md|docx?|pptx?|xlsx?|csv)$/i.test(name)
+  );
+}
+
+function extractFileIdsFromMessageFiles(input) {
+  if (!input) return [];
+  let value = input;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+
+  const ids = [];
+  const visit = (node) => {
+    if (!node) return;
+    if (typeof node === 'string') {
+      ids.push(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    if (typeof node === 'object') {
+      const id = node.id || node.fileId || node.attachmentId;
+      if (id) ids.push(String(id));
+      if (Array.isArray(node.files)) node.files.forEach(visit);
+      if (Array.isArray(node.attachments)) node.attachments.forEach(visit);
+    }
+  };
+
+  visit(value);
+  return Array.from(new Set(ids.map(String).filter(Boolean))).slice(0, 20);
+}
+
+function resolveStoredFilePath(row = {}, userId = '') {
+  const candidates = [];
+  if (row.path) {
+    candidates.push(row.path);
+    candidates.push(path.resolve(row.path));
+  }
+  if (row.filename && userId) {
+    candidates.push(path.join(BACKEND_ROOT, 'uploads', String(userId), row.filename));
+    candidates.push(path.join(process.cwd(), 'uploads', String(userId), row.filename));
+    candidates.push(path.join(process.cwd(), 'backend', 'uploads', String(userId), row.filename));
+  }
+  return candidates.find((candidate) => {
+    try {
+      return candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  }) || null;
+}
+
+async function ensureImageOcr(prisma, row, userId) {
+  if (!row || !isImageFile(row) || hasUsefulExtractedText(row.extractedText)) return row;
+  const filePath = resolveStoredFilePath(row, userId);
+  if (!filePath) return row;
+
+  try {
+    const result = await ocrEngine.extractFromImage(filePath, { mimeType: row.mimeType || row.type || 'image/png' });
+    const extractedText = result.text || '';
+    if (!hasUsefulExtractedText(extractedText)) return row;
+    if (prisma?.file?.update) {
+      await prisma.file.update({
+        where: { id: row.id },
+        data: { extractedText },
+      }).catch(() => null);
+    }
+    return { ...row, extractedText, ocr: result.ocr };
+  } catch (err) {
+    console.warn(`[message-attachments] image OCR fallback failed for ${row.id}:`, err?.message || err);
+    return row;
+  }
 }
 
 function normalizeClientLongPasteMeta(file = {}) {
@@ -67,6 +180,7 @@ async function loadFileRows(prisma, userId, fileIds = []) {
         originalName: true,
         mimeType: true,
         size: true,
+        path: true,
         extractedText: true,
         openaiFileId: true,
       },
@@ -74,6 +188,66 @@ async function loadFileRows(prisma, userId, fileIds = []) {
   } catch {
     return [];
   }
+}
+
+async function resolveTranscriptionFileIds(prisma, {
+  userId,
+  chatId = null,
+  providedFileIds = [],
+  recentWindowMs = 15 * 60 * 1000,
+} = {}) {
+  const provided = Array.from(new Set((Array.isArray(providedFileIds) ? providedFileIds : []).map(String).filter(Boolean))).slice(0, 20);
+  if (provided.length > 0 || !prisma || !userId) return provided;
+
+  if (chatId && prisma.chat?.findFirst && prisma.message?.findMany) {
+    const chat = await prisma.chat.findFirst({
+      where: { id: String(chatId), userId },
+      select: { id: true },
+    }).catch(() => null);
+
+    if (chat) {
+      const messages = await prisma.message.findMany({
+        where: { chatId: chat.id },
+        orderBy: { timestamp: 'desc' },
+        take: 30,
+        select: { files: true },
+      }).catch(() => []);
+
+      const ids = [];
+      for (const message of messages) {
+        ids.push(...extractFileIdsFromMessageFiles(message.files));
+      }
+
+      const unique = Array.from(new Set(ids.map(String).filter(Boolean))).slice(0, 20);
+      if (unique.length > 0) {
+        const rows = await loadFileRows(prisma, userId, unique);
+        const allowed = new Set(rows.filter(isReadableFileCandidate).map((row) => row.id));
+        const resolved = unique.filter((id) => allowed.has(id)).slice(0, 8);
+        if (resolved.length > 0) return resolved;
+      }
+    }
+  }
+
+  if (prisma.file?.findMany) {
+    const recentSince = new Date(Date.now() - recentWindowMs);
+    const recent = await prisma.file.findMany({
+      where: { userId, createdAt: { gte: recentSince } },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: {
+        id: true,
+        filename: true,
+        originalName: true,
+        mimeType: true,
+        extractedText: true,
+      },
+    }).catch(() => []);
+
+    const candidates = recent.filter(isReadableFileCandidate);
+    if (candidates.length === 1) return [candidates[0].id];
+  }
+
+  return [];
 }
 
 async function serializeMessageAttachments(prisma, { userId, fileIds = [], clientMetadata = [] } = {}) {
@@ -105,7 +279,7 @@ async function serializeMessageAttachments(prisma, { userId, fileIds = [], clien
       type: mimeType || null,
       size: row?.size ?? meta.size ?? null,
       url: row?.filename ? `/uploads/${userId}/${row.filename}` : (meta.url || null),
-      extractedText: compactString(row?.extractedText || null, 120000),
+      extractedText: compactString(hasUsefulExtractedText(row?.extractedText) ? row.extractedText : null, 120000),
       openaiFileId: row?.openaiFileId || meta.openaiFileId || null,
       sourceChannel: meta.sourceChannel || null,
       isLongPasteDocument: Boolean(meta.isLongPasteDocument || longPasteMeta || longPasteTitle),
@@ -120,7 +294,8 @@ async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars
   const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 8);
   if (ids.length === 0) return '';
   const rows = await loadFileRows(prisma, userId, ids);
-  const withText = rows.filter((row) => safeText(row.extractedText, '').length > 0);
+  const enrichedRows = await Promise.all(rows.map((row) => ensureImageOcr(prisma, row, userId)));
+  const withText = enrichedRows.filter((row) => hasUsefulExtractedText(row.extractedText));
   if (withText.length === 0) return '';
 
   const perFileBudget = Math.max(1500, Math.floor(maxChars / withText.length));
@@ -144,8 +319,46 @@ async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars
   ].join('\n');
 }
 
+async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], maxChars = 120000 } = {}) {
+  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 8);
+  if (ids.length === 0) return '';
+
+  const rows = await loadFileRows(prisma, userId, ids);
+  const enrichedRows = await Promise.all(rows.map((row) => ensureImageOcr(prisma, row, userId)));
+  const withText = enrichedRows
+    .map((row) => ({
+      id: row.id,
+      name: safeText(row.originalName || row.filename || row.id, 'Archivo'),
+      text: safeText(row.extractedText, ''),
+    }))
+    .filter((row) => hasUsefulExtractedText(row.text));
+
+  if (withText.length === 0) return '';
+
+  if (withText.length === 1) {
+    return withText[0].text.slice(0, maxChars).trim();
+  }
+
+  const perFileBudget = Math.max(1500, Math.floor(maxChars / withText.length));
+  return withText.map((row, index) => {
+    const clipped = row.text.length > perFileBudget;
+    return [
+      `### ${row.name || `Archivo ${index + 1}`}`,
+      '',
+      row.text.slice(0, perFileBudget).trim(),
+      clipped ? '\n[Transcripcion truncada por limite de longitud.]' : '',
+    ].filter(Boolean).join('\n');
+  }).join('\n\n---\n\n').trim();
+}
+
 module.exports = {
+  buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
+  extractFileIdsFromMessageFiles,
+  ensureImageOcr,
+  hasUsefulExtractedText,
+  isPlainTranscriptionRequest,
   normalizeClientMetadata,
+  resolveTranscriptionFileIds,
   serializeMessageAttachments,
 };
