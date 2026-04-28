@@ -722,6 +722,18 @@ class ApiClient {
     return this.request(endpoint);
   }
 
+  async getOpenClawStatus() {
+    return this.request('/openclaw/status');
+  }
+
+  async getOpenClawNativeSession() {
+    return this.request('/openclaw/native-session');
+  }
+
+  async bootstrapOpenClawWorkspace() {
+    return this.request('/openclaw/bootstrap', { method: 'POST' });
+  }
+
   // Payment endpoints
   async createStripePayment(data: { plan: string }) {
     return this.request('/payments/stripe', {

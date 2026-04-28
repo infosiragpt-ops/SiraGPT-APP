@@ -30,7 +30,18 @@
     "projects": "Proyectos",
     "searchBrain": "Buscar",
     "post": "POST",
-    "design": "Diseño"
+    "design": "Diseño",
+    "openclaw": "OpenClaw"
+  },
+  "openclaw": {
+    "loginRequired": "Inicia sesión para usar OpenClaw",
+    "loginRequiredDescription": "La instancia se asigna por usuario y se gobierna por el plan activo.",
+    "planLockedTitle": "OpenClaw no está incluido en tu plan",
+    "planLockedDescription": "Mejora tu plan para activar el workspace aislado y los modelos OpenClaw.",
+    "viewPlans": "Ver planes",
+    "retry": "Reintentar",
+    "errorTitle": "No se pudo cargar OpenClaw",
+    "errorFallback": "Inténtalo de nuevo en unos segundos."
   },
   "projects": {
     "title": "Proyectos",
