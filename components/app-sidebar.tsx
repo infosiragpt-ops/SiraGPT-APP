@@ -90,6 +90,7 @@ import { cn, downloadBlob } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
+import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
 import { apiClient } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -114,6 +115,85 @@ const formatSidebarChatTitle = (value: unknown) => {
     .replace(/^🤖\s*Tarea:\s*/i, "{} ")
     .replace(/^🤖\s*/i, "{} ")
     .trim()
+}
+
+type SidebarNavItemProps = {
+  href: string
+  label: React.ReactNode
+  tooltip: React.ReactNode
+  icon: React.ComponentType<{ className?: string }>
+  iconClassName: string
+  active: boolean
+  pending: boolean
+  sidebarState: "open" | "closed"
+  markNavigationIntent: (href: string) => void
+  prefetchOnHover: (href: string) => void
+  onNavigate?: () => void
+}
+
+function SidebarNavItem({
+  href,
+  label,
+  tooltip,
+  icon: Icon,
+  iconClassName,
+  active,
+  pending,
+  sidebarState,
+  markNavigationIntent,
+  prefetchOnHover,
+  onNavigate,
+}: SidebarNavItemProps) {
+  return (
+    <Tooltip delayDuration={300}>
+      <TooltipTrigger asChild>
+        <SidebarMenuButton
+          asChild
+          isActive={active}
+          className={cn(
+            "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
+            active && "bg-accent text-accent-foreground",
+            pending && "opacity-70"
+          )}
+          variant="default"
+        >
+          <Link
+            href={href}
+            prefetch
+            scroll={false}
+            aria-current={active ? "page" : undefined}
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1"
+            onPointerDown={() => markNavigationIntent(href)}
+            onFocus={() => markNavigationIntent(href)}
+            onMouseEnter={() => prefetchOnHover(href)}
+            onClick={onNavigate}
+          >
+            <Icon className={cn("h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]", iconClassName)} />
+            <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">
+              {label}
+            </span>
+          </Link>
+        </SidebarMenuButton>
+      </TooltipTrigger>
+      <TooltipContent side="right" className={sidebarState === "open" ? "hidden" : ""}>
+        <p>{tooltip}</p>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
+function OpenClawLogo({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-4 w-4 items-center justify-center text-[15px] leading-none",
+        className,
+      )}
+      aria-hidden="true"
+    >
+      🦞
+    </span>
+  )
 }
 
 // Generation Types with enhanced functionality
@@ -190,7 +270,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/library',
+      '/chat', '/gpts', '/openclaw', '/parafraseo', '/projects', '/design', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -536,12 +616,6 @@ export function AppSidebar() {
     setUpgradeOpen(true)
   }
 
-  const handleGPTsClick = () => navigate("/gpts")
-  const handleParaphraseClick = () => navigate("/parafraseo")
-  const handleProjectsClick = () => navigate("/projects")
-  const handleDesignClick = () => navigate("/design")
-  const handleLibraryClick = () => navigate("/library")
-
   const startPinnedGptChat = async (gptId: string) => {
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
@@ -712,6 +786,7 @@ export function AppSidebar() {
   const isOnChatPage = activePathname.startsWith('/chat')
   const isOnLibraryPage = activePathname.startsWith('/library')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
+  const isOnOpenClawPage = activePathname.startsWith('/openclaw')
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   const isOnDesignPage = activePathname.startsWith('/design')
@@ -748,17 +823,26 @@ export function AppSidebar() {
           </div>
           <div className="flex items-center gap-1">
             {/* <NotificationCenter /> */} {/* Commented out to stop repeated API calls */}
-            <SidebarTrigger />
+            <SidebarTrigger
+              aria-label="Ocultar barra lateral"
+              title="Ocultar barra lateral"
+              className="h-8 w-8 rounded-full border border-border/60 bg-background text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
+            >
+              <PanelLeft className="h-4 w-4" />
+            </SidebarTrigger>
           </div>
         </div>
         {/* Jab sidebar close ho to sirf yeh logo dikhega (hover effect ke saath) */}
         <div className={cn("relative", state === "open" && "hidden")}>
           <div
-            className="group flex h-8 w-8 items-center justify-center rounded-lg bg-primary cursor-pointer"
+            className="group flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-border/60 bg-background text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground"
             onClick={toggleSidebar}
+            role="button"
+            aria-label="Mostrar barra lateral"
+            title="Mostrar barra lateral"
           >
-            <Bot className="h-4 w-4 text-primary-foreground transition-opacity group-hover:opacity-0" />
-            <PanelLeft className="h-4 w-4 text-primary-foreground absolute opacity-0 transition-opacity group-hover:opacity-100" />
+            <Bot className="h-4 w-4 transition-opacity group-hover:opacity-0" />
+            <PanelLeft className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
           </div>
         </div>
       </SidebarHeader>
@@ -838,125 +922,99 @@ export function AppSidebar() {
             </TooltipContent>
           </Tooltip>
 
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
-                onPointerDown={() => markNavigationIntent('/library')}
-                onClick={handleLibraryClick}
-                onMouseEnter={() => prefetchOnHover('/library')}
-                className={cn(
-                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnLibraryPage && "bg-accent text-accent-foreground",
-                  pendingHref === '/library' && "opacity-70"
-                )}
-                variant="default"
-              >
-                <Images className="h-4 w-4 text-amber-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("library")}</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>{t("library")}</p>
-            </TooltipContent>
-          </Tooltip>
+          <SidebarNavItem
+            href="/library"
+            label={t("library")}
+            tooltip={t("library")}
+            icon={Images}
+            iconClassName="text-amber-500"
+            active={isOnLibraryPage}
+            pending={pendingHref === '/library'}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
 
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
-                onPointerDown={() => markNavigationIntent('/gpts')}
-                onClick={handleGPTsClick}
-                onMouseEnter={() => prefetchOnHover('/gpts')}
-                className={cn(
-                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnGPTsPage && "bg-accent text-accent-foreground",
-                  pendingHref === '/gpts' && "opacity-70"
-                )}
-                variant="default"
-              >
-                <LayoutGrid className="h-4 w-4 text-emerald-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("gpts")}</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>{t("gpts")}</p>
-            </TooltipContent>
-          </Tooltip>
+          <SidebarNavItem
+            href="/gpts"
+            label={t("gpts")}
+            tooltip={t("gpts")}
+            icon={LayoutGrid}
+            iconClassName="text-emerald-500"
+            active={isOnGPTsPage}
+            pending={pendingHref === '/gpts'}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
 
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
-                onPointerDown={() => markNavigationIntent('/parafraseo')}
-                onClick={handleParaphraseClick}
-                onMouseEnter={() => prefetchOnHover('/parafraseo')}
-                className={cn(
-                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnParaphrasePage && "bg-accent text-accent-foreground",
-                  pendingHref === '/parafraseo' && "opacity-70"
-                )}
-                variant="default"
-              >
-                <Sparkles className="h-4 w-4 text-teal-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">Parafraseo</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>Parafraseo</p>
-            </TooltipContent>
-          </Tooltip>
+          <SidebarNavItem
+            href="/openclaw"
+            label={t("openclaw")}
+            tooltip={t("openclaw")}
+            icon={OpenClawLogo}
+            iconClassName="text-rose-500"
+            active={isOnOpenClawPage}
+            pending={pendingHref === '/openclaw'}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
+
+          <SidebarNavItem
+            href="/parafraseo"
+            label="Parafraseo"
+            tooltip="Parafraseo"
+            icon={Sparkles}
+            iconClassName="text-teal-500"
+            active={isOnParaphrasePage}
+            pending={pendingHref === '/parafraseo'}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
 
           {/* Projects — file-bucket workspaces. Placed right after GPTs
               because both are "context-rich chat entry points": GPTs
               are reusable personas, Projects are task-scoped bundles.
               Same interaction / hover language as every other nav row
               so the sidebar reads as one coherent column. */}
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
-                onPointerDown={() => markNavigationIntent('/projects')}
-                onClick={handleProjectsClick}
-                onMouseEnter={() => prefetchOnHover('/projects')}
-                className={cn(
-                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnProjectsPage && "bg-accent text-accent-foreground",
-                  pendingHref === '/projects' && "opacity-70"
-                )}
-                variant="default"
-              >
-                <FolderKanban className="h-4 w-4 text-rose-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("projects")}</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>{t("projects")}</p>
-            </TooltipContent>
-          </Tooltip>
+          <SidebarNavItem
+            href="/projects"
+            label={t("projects")}
+            tooltip={t("projects")}
+            icon={FolderKanban}
+            iconClassName="text-rose-500"
+            active={isOnProjectsPage}
+            pending={pendingHref === '/projects'}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
 
           {/* Design — siraGPT's Claude-Design-style canvas, placed
               right under Projects since both are workspace-shaped
               artifacts (design extends the workflow with a visual
               output surface). Palette icon keeps it distinct from
               FolderKanban without clashing visually. */}
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
-                onPointerDown={() => markNavigationIntent('/design')}
-                onClick={handleDesignClick}
-                onMouseEnter={() => prefetchOnHover('/design')}
-                className={cn(
-                  "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-                  isOnDesignPage && "bg-accent text-accent-foreground",
-                  pendingHref === '/design' && "opacity-70"
-                )}
-                variant="default"
-              >
-                <Palette className="h-4 w-4 text-fuchsia-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("design")}</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>{t("design")}</p>
-            </TooltipContent>
-          </Tooltip>
+          <SidebarNavItem
+            href="/design"
+            label={t("design")}
+            tooltip={t("design")}
+            icon={Palette}
+            iconClassName="text-fuchsia-500"
+            active={isOnDesignPage}
+            pending={pendingHref === '/design'}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
 
         </TooltipProvider>
 
@@ -968,6 +1026,17 @@ export function AppSidebar() {
         onScroll={handleScroll}
       >
         <SidebarSeparator />
+
+        {/* Folders dropdown — projects act as the user's "carpetas". Sits
+            above the recent-chats list so the user can pick a workspace
+            scope before browsing individual conversations. Hidden when
+            the sidebar is collapsed to icon mode (no room for the tree). */}
+        {selectedType === "Text Chat" && (
+          <SidebarFoldersDropdown
+            collapsed={state === "closed"}
+            onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
+        )}
 
         {/* Recent Chats - Only show for Text Chat */}
         {selectedType === "Text Chat" && (
@@ -1066,16 +1135,17 @@ export function AppSidebar() {
                                 </div>
                               ) : (
                                 <>
-                                  <TooltipProvider>
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <SidebarMenuButton
-                                          isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
-                                          onClick={() => !isEditing && handleChatClick(chat.id)}
-                                          className={cn(
-                                            "h-8 min-w-0 flex-1 justify-start py-0 pr-1 transition-all",
-                                          )}
-                                        >
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <SidebarMenuButton
+                                        isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
+                                        aria-current={currentChat?.id === chat.id && pathname.startsWith('/chat') ? 'page' : undefined}
+                                        onClick={() => !isEditing && handleChatClick(chat.id)}
+                                        className={cn(
+                                          "h-8 min-w-0 flex-1 justify-start py-0 pr-1 transition-all",
+                                          "focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1",
+                                        )}
+                                      >
                                           <div className="flex items-center gap-2 min-w-0 flex-1">
                                             <span className="text-sm flex-1 truncate">
                                               {displayTitle}
@@ -1098,15 +1168,14 @@ export function AppSidebar() {
                                               {formatChatTimeCompact(chat.updatedAt)}
                                             </span>
                                           </div>
-                                        </SidebarMenuButton>
-                                      </TooltipTrigger>
-                                      {isTruncated && (
-                                        <TooltipContent side="right" className="max-w-xs">
-                                          <p className="break-words">{displayTitle}</p>
-                                        </TooltipContent>
-                                      )}
-                                    </Tooltip>
-                                  </TooltipProvider>
+                                      </SidebarMenuButton>
+                                    </TooltipTrigger>
+                                    {isTruncated && (
+                                      <TooltipContent side="right" className="max-w-xs">
+                                        <p className="break-words">{displayTitle}</p>
+                                      </TooltipContent>
+                                    )}
+                                  </Tooltip>
                                   {isStreaming && (
                                     <span
                                       className="flex h-8 w-7 shrink-0 items-center justify-center"

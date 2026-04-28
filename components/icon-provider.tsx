@@ -75,7 +75,7 @@ export const iconMap: { [key: string]: IconConfig } = {
         filter: "brightness(0) saturate(100%) invert(30%) sepia(88%) saturate(2833%) hue-rotate(310deg) brightness(99%) contrast(95%)",
         preserveColor: true,
     },
-    DeepseekLogo: { type: 'png', imagePath: '/icons/deepseek-whale.svg', preserveColor: true },    // DeepSeek whale icon
+    DeepseekLogo: { type: 'png', imagePath: '/icons/deepseek.png', preserveColor: true },    // DeepSeek whale icon
     GrokLogo: { type: 'png', imagePath: '/icons/grok.png', preserveColor: true },            // Official Grok/xAI Logo
     OpenRouterLogo: { type: 'png', imagePath: '/icons/openrouter.png', preserveColor: true }, // Official OpenRouter Logo
     GeminiLogo: { type: 'png', imagePath: '/icons/gemini.svg', preserveColor: true },        // Official Gemini/Google AI Logo

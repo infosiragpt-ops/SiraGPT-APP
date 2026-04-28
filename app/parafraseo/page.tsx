@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Check, Clipboard, Copy, Eraser, Languages, Loader2, Sparkles } from "lucide-react"
+import { Check, Copy, Eraser, Languages, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -23,6 +23,9 @@ const MODES = [
 
 const LANGUAGES = ["Spanish", "English", "Portuguese", "French", "German", "Italian"] as const
 
+type ParaphraseMode = (typeof MODES)[number]["id"]
+type ParaphraseLanguage = (typeof LANGUAGES)[number]
+
 function countWords(text: string) {
   return text.trim().split(/\s+/).filter(Boolean).length
 }
@@ -34,8 +37,8 @@ function countChars(text: string) {
 export default function ParafraseoPage() {
   const [input, setInput] = React.useState("")
   const [output, setOutput] = React.useState("")
-  const [mode, setMode] = React.useState<(typeof MODES)[number]["id"]>("standard")
-  const [language, setLanguage] = React.useState<(typeof LANGUAGES)[number]>("Spanish")
+  const [mode, setMode] = React.useState<ParaphraseMode>("standard")
+  const [language, setLanguage] = React.useState<ParaphraseLanguage>("Spanish")
   const [customInstruction, setCustomInstruction] = React.useState("")
   const [loading, setLoading] = React.useState(false)
   const [copied, setCopied] = React.useState(false)
@@ -87,53 +90,47 @@ export default function ParafraseoPage() {
     window.setTimeout(() => setCopied(false), 1600)
   }, [output])
 
-  const clearAll = React.useCallback(() => {
+  const clearDraft = React.useCallback(() => {
     setInput("")
-    setOutput("")
-    setCopied(false)
   }, [])
 
   return (
     <main className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex min-h-[66px] shrink-0 items-center gap-3 border-b border-border/60 bg-background px-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300">
-            <Sparkles className="h-4 w-4" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="truncate text-[15px] font-semibold leading-tight">Parafraseo</h1>
-            <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="truncate">DeepSeek V4 Pro</span>
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
-              <span className="truncate">Editor profesional</span>
-            </div>
-          </div>
+      <header className="flex min-h-[56px] shrink-0 items-center gap-4 border-b border-border/60 bg-background/95 px-5 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+          <h1 className="truncate text-[15px] font-semibold leading-none tracking-normal">Parafraseo</h1>
+          <span className="hidden h-6 shrink-0 items-center rounded-full border border-border bg-muted/25 px-2.5 text-[11px] font-medium text-muted-foreground sm:inline-flex">
+            DeepSeek V4 Pro
+          </span>
         </div>
 
         <div className="ml-auto flex min-w-0 items-center gap-2">
-          <div className="hidden items-center rounded-full border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground md:flex">
+          <div className="hidden h-8 items-center rounded-full border border-border/70 bg-background px-3 text-[11px] font-medium text-muted-foreground md:flex">
             <span>{inputWords} palabras</span>
             <span className="mx-2 h-3 w-px bg-border" />
             <span>{countChars(input)} caracteres</span>
           </div>
-          <Button variant="ghost" size="icon" onClick={clearAll} title="Limpiar" aria-label="Limpiar">
-            <Eraser className="h-4 w-4" />
-          </Button>
-          <Button onClick={paraphrase} disabled={loading || !input.trim()} className="h-9 rounded-full bg-emerald-600 px-4 text-white hover:bg-emerald-700">
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+          <Button
+            onClick={paraphrase}
+            disabled={loading || !input.trim()}
+            className="h-8 rounded-full bg-foreground px-4 text-xs font-semibold text-background shadow-none hover:bg-foreground/90"
+          >
+            {loading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
             Parafrasear
           </Button>
         </div>
       </header>
 
       <div className="flex shrink-0 items-center gap-3 overflow-x-auto border-b border-border/60 bg-background px-5">
-        <span className="shrink-0 text-sm font-medium text-muted-foreground">Modes:</span>
         <div className="flex min-w-max items-center gap-1">
           {MODES.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => setMode(item.id)}
+              aria-pressed={mode === item.id}
+              title={`Usar modo ${item.label}`}
               className={cn(
                 "relative h-12 px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground",
                 mode === item.id && "text-emerald-700 dark:text-emerald-300",
@@ -150,8 +147,8 @@ export default function ParafraseoPage() {
             <Languages className="h-4 w-4 text-muted-foreground" />
             <select
               value={language}
-              onChange={(event) => setLanguage(event.target.value as (typeof LANGUAGES)[number])}
-              className="bg-transparent text-sm font-medium outline-none"
+              onChange={(event) => setLanguage(event.target.value as ParaphraseLanguage)}
+              className="cursor-pointer bg-transparent text-sm font-medium outline-none"
               aria-label="Idioma"
             >
               {LANGUAGES.map((item) => (
@@ -175,6 +172,19 @@ export default function ParafraseoPage() {
 
       <section className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
         <div className="relative flex min-h-0 min-w-0 flex-col border-b border-border/60 md:border-b-0 md:border-r">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={clearDraft}
+            disabled={!input.trim()}
+            title="Limpiar borrador"
+            aria-label="Limpiar borrador"
+            className="absolute right-5 top-5 z-10 h-8 rounded-full border border-border/70 bg-background/90 px-3 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur hover:bg-muted hover:text-foreground disabled:opacity-40"
+          >
+            <Eraser className="mr-1.5 h-3.5 w-3.5" />
+            Borrador
+          </Button>
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
@@ -185,7 +195,7 @@ export default function ParafraseoPage() {
               }
             }}
             placeholder="Inserta tu texto aqui..."
-            className="min-h-0 flex-1 resize-none bg-background px-10 py-8 text-[16px] leading-8 text-foreground outline-none placeholder:text-muted-foreground/55"
+            className="min-h-0 flex-1 resize-none bg-background px-10 py-8 pr-36 text-[16px] leading-8 text-foreground outline-none placeholder:text-muted-foreground/55"
           />
           <div className="flex h-14 shrink-0 items-center justify-between border-t border-border/60 px-5">
             <span className="rounded-full border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground">
@@ -193,7 +203,7 @@ export default function ParafraseoPage() {
             </span>
             <Button onClick={paraphrase} disabled={loading || !input.trim()} className="h-9 rounded-full bg-emerald-600 px-5 text-white hover:bg-emerald-700">
               {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Rephrase
+              Parafrasear
             </Button>
           </div>
         </div>

@@ -15,7 +15,6 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { motion } from "framer-motion"
 import { Plus, Palette, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -101,13 +100,12 @@ export function CreatePanel() {
               )}
             >
               {t.label}
-              {tab === t.key && (
-                <motion.span
-                  layoutId="design-tab-underline"
-                  className="absolute inset-x-0 -bottom-px h-0.5 bg-foreground"
-                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                />
-              )}
+              <span
+                className={cn(
+                  "absolute inset-x-0 -bottom-px h-0.5 origin-center bg-foreground transition-transform duration-150 ease-out",
+                  tab === t.key ? "scale-x-100" : "scale-x-0",
+                )}
+              />
             </button>
           ))}
         </nav>
