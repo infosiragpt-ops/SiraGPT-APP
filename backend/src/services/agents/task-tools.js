@@ -25,6 +25,7 @@ const {
   MIN_TECHNICAL_SCORE,
   validateDocument,
 } = require('../document-pipeline/advanced-document-pipeline');
+const documentIntelligence = require('../document-intelligence');
 
 // Resolve the agentic batch lazily so unit tests that don't need
 // search don't pay the module-load cost or need OpenRouter creds.
@@ -705,6 +706,177 @@ const selfRagAnswer = {
   },
 };
 
+// ─── Tool 5c: Document Intelligence ────────────────────────────────────
+
+function resolveToolFileIds(inputFileIds, ctx = {}) {
+  const ids = Array.isArray(inputFileIds) && inputFileIds.length
+    ? inputFileIds
+    : (Array.isArray(ctx.fileIds) ? ctx.fileIds : []);
+  return Array.from(new Set(ids.map(String).filter(Boolean))).slice(0, 12);
+}
+
+function getPrismaForTool(ctx = {}) {
+  if (ctx.prisma) return ctx.prisma;
+  try { return require('../../config/database'); } catch { return null; }
+}
+
+const docintelAnalyze = {
+  name: 'docintel_analyze',
+  description: 'Analyze uploaded documents with the siraGPT Document Intelligence layer: MIME-aware text extraction, OCR evidence, structural chunks, table detection, and coverage. Use when the user says analiza, resume, transcribe, extrae, que dice, segun el documento, or asks about attached files.',
+  parameters: {
+    type: 'object',
+    properties: {
+      fileIds: { type: 'array', items: { type: 'string' }, description: 'File ids to analyze. Defaults to the current task attachments.' },
+      force: { type: 'boolean', description: 'Force a fresh analysis even if one exists.' },
+    },
+    additionalProperties: false,
+  },
+  async execute({ fileIds = [], force = false } = {}, ctx = {}) {
+    const prisma = getPrismaForTool(ctx);
+    const ids = resolveToolFileIds(fileIds, ctx);
+    ctx.onEvent?.({ type: 'tool_call', tool: 'docintel_analyze', preview: `${ids.length} archivo(s)` });
+    if (!prisma || !ctx.userId) {
+      return { ok: false, error: 'docintel_analyze requires prisma and authenticated userId' };
+    }
+    const analyses = [];
+    for (const fileId of ids) {
+      const analysis = await documentIntelligence.analyzeFile(prisma, {
+        userId: ctx.userId,
+        fileId,
+        force,
+      });
+      analyses.push({
+        id: analysis.id,
+        fileId: analysis.fileId,
+        status: analysis.status,
+        summary: analysis.summary,
+        charCount: analysis.charCount,
+        chunkCount: analysis.chunkCount,
+        tableCount: analysis.tableCount,
+        textCoverage: analysis.textCoverage,
+        warnings: analysis.warnings || [],
+      });
+    }
+    ctx.onEvent?.({
+      type: 'document_analysis',
+      analysisIds: analyses.map((item) => item.id).filter(Boolean),
+      evidenceRefs: analyses.map((item) => ({ analysisId: item.id, fileId: item.fileId, status: item.status })),
+      summary: `${analyses.length} analisis documental(es)`,
+    });
+    ctx.onEvent?.({ type: 'tool_output', tool: 'docintel_analyze', ok: true, preview: `${analyses.length} analisis listo(s)` });
+    return { ok: true, analyses, _preview: `${analyses.length} documento(s) analizados` };
+  },
+};
+
+const docintelRetrieve = {
+  name: 'docintel_retrieve',
+  description: 'Retrieve grounded evidence chunks from analyzed documents. Returns text snippets with page/sheet/slide/section references. Use before answering factual questions about uploaded files.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Evidence query.' },
+      fileIds: { type: 'array', items: { type: 'string' }, description: 'File ids. Defaults to current attachments.' },
+      limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Max evidence chunks per file.' },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+  async execute({ query, fileIds = [], limit = 8 }, ctx = {}) {
+    const prisma = getPrismaForTool(ctx);
+    const ids = resolveToolFileIds(fileIds, ctx);
+    ctx.onEvent?.({ type: 'tool_call', tool: 'docintel_retrieve', preview: previewText(query, 240) });
+    if (!prisma || !ctx.userId) {
+      return { ok: false, error: 'docintel_retrieve requires prisma and authenticated userId' };
+    }
+    const evidence = [];
+    const analysisIds = [];
+    for (const fileId of ids) {
+      const analysis = await documentIntelligence.analyzeFile(prisma, {
+        userId: ctx.userId,
+        fileId,
+      });
+      if (analysis?.id) analysisIds.push(analysis.id);
+      const result = await documentIntelligence.retrieveEvidence(prisma, {
+        userId: ctx.userId,
+        fileId,
+        query,
+        limit,
+      });
+      evidence.push(...(result.evidence || []));
+    }
+    const clipped = evidence.slice(0, Math.max(1, Math.min(Number(limit) || 8, 20)));
+    ctx.onEvent?.({
+      type: 'document_analysis',
+      analysisIds,
+      evidenceRefs: clipped.map((item) => ({
+        analysisId: item.analysisId,
+        chunkId: item.id,
+        fileId: item.fileId,
+        sourceLabel: item.sourceLabel,
+      })),
+      summary: `${clipped.length} evidencia(s) recuperada(s)`,
+    });
+    ctx.onEvent?.({ type: 'tool_output', tool: 'docintel_retrieve', ok: true, preview: `${clipped.length} fragmentos con evidencia` });
+    return {
+      ok: true,
+      evidence: clipped.map((item) => ({
+        id: item.id,
+        fileId: item.fileId,
+        analysisId: item.analysisId,
+        sourceType: item.sourceType,
+        sourceLabel: item.sourceLabel,
+        pageNumber: item.pageNumber,
+        sheetName: item.sheetName,
+        slideNumber: item.slideNumber,
+        sectionTitle: item.sectionTitle,
+        text: previewText(item.text, 1800),
+        score: item.score,
+      })),
+      _preview: `${clipped.length} fragmentos recuperados`,
+    };
+  },
+};
+
+const docintelExtractTables = {
+  name: 'docintel_extract_tables',
+  description: 'Return normalized tables detected in uploaded spreadsheets, CSV files, Word/PDF markdown tables, and document extracts. Use for KPI, tablas, calculos, datos, and Excel-style analysis.',
+  parameters: {
+    type: 'object',
+    properties: {
+      fileIds: { type: 'array', items: { type: 'string' }, description: 'File ids. Defaults to current attachments.' },
+      limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Max tables to return.' },
+    },
+    additionalProperties: false,
+  },
+  async execute({ fileIds = [], limit = 10 } = {}, ctx = {}) {
+    const prisma = getPrismaForTool(ctx);
+    const ids = resolveToolFileIds(fileIds, ctx);
+    ctx.onEvent?.({ type: 'tool_call', tool: 'docintel_extract_tables', preview: `${ids.length} archivo(s)` });
+    if (!prisma || !ctx.userId) {
+      return { ok: false, error: 'docintel_extract_tables requires prisma and authenticated userId' };
+    }
+    const tables = [];
+    for (const fileId of ids) {
+      await documentIntelligence.analyzeFile(prisma, { userId: ctx.userId, fileId });
+      const fileTables = await documentIntelligence.getTablesForFile(prisma, { userId: ctx.userId, fileId });
+      tables.push(...fileTables.map((table) => ({
+        id: table.id,
+        fileId: table.fileId,
+        sourceType: table.sourceType,
+        sourceLabel: table.sourceLabel,
+        sheetName: table.sheetName,
+        title: table.title,
+        columns: table.columns,
+        rowCount: table.rowCount,
+        preview: table.preview,
+      })));
+    }
+    const clipped = tables.slice(0, Math.max(1, Math.min(Number(limit) || 10, 20)));
+    ctx.onEvent?.({ type: 'tool_output', tool: 'docintel_extract_tables', ok: true, preview: `${clipped.length} tabla(s)` });
+    return { ok: true, tables: clipped, _preview: `${clipped.length} tabla(s) normalizadas` };
+  },
+};
+
 // ─── Tool 6: verify_artifact (self-supervision) ─────────────────────────
 //
 // Reads an artifact the agent just created back from disk and returns
@@ -963,7 +1135,19 @@ const runTests = {
  * `tools` parameter.
  */
 function buildTaskTools() {
-  return [pythonExec, bashExec, webSearch, createDocument, ragRetrieve, selfRagAnswer, verifyArtifact, runTests];
+  return [
+    pythonExec,
+    bashExec,
+    webSearch,
+    createDocument,
+    ragRetrieve,
+    selfRagAnswer,
+    docintelAnalyze,
+    docintelRetrieve,
+    docintelExtractTables,
+    verifyArtifact,
+    runTests,
+  ];
 }
 
 module.exports = {
@@ -971,5 +1155,23 @@ module.exports = {
   saveArtifact,
   ARTIFACT_DIR,
   EXTENSION_TO_MIME,
-  INTERNAL: { pythonExec, bashExec, webSearch, createDocument, ragRetrieve, selfRagAnswer, verifyArtifact, runTests, previewText, artifactIdFor, metadataPathFor, summarisePreview, validateAgentArtifactBuffer, assertArtifactValidation },
+  INTERNAL: {
+    pythonExec,
+    bashExec,
+    webSearch,
+    createDocument,
+    ragRetrieve,
+    selfRagAnswer,
+    docintelAnalyze,
+    docintelRetrieve,
+    docintelExtractTables,
+    verifyArtifact,
+    runTests,
+    previewText,
+    artifactIdFor,
+    metadataPathFor,
+    summarisePreview,
+    validateAgentArtifactBuffer,
+    assertArtifactValidation,
+  },
 };

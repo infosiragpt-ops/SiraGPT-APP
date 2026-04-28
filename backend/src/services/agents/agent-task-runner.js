@@ -56,6 +56,9 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
         'verify_artifact',
         'rag_retrieve',
         'self_rag_answer',
+        'docintel_analyze',
+        'docintel_retrieve',
+        'docintel_extract_tables',
         'python_exec',
         'run_tests',
       ].includes(tool))
@@ -569,6 +572,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
       enterpriseExecutionGraph,
       enterpriseRuntimeProfile,
       enterpriseToolRuntimePlan,
+      prisma,
       onEvent: (evt) => {
         const payloadEvent = { ...evt, stepId: evt.stepId || currentStepId };
         if (evt.type === 'file_artifact' && evt.artifact) {

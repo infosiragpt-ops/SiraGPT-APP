@@ -403,7 +403,7 @@ async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars
 
   return [
     'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
-    'Usa este contenido para responder sobre el documento pegado/subido. Si necesitas mas detalle, llama rag_retrieve.',
+    'Usa este contenido para responder sobre el documento pegado/subido. Para evidencia estructurada llama docintel_retrieve/docintel_extract_tables; para busqueda semantica general llama rag_retrieve.',
     '',
     blocks.join('\n\n---\n\n'),
   ].join('\n');
