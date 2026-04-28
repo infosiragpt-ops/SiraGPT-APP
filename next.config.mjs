@@ -24,6 +24,15 @@ const nextConfig = {
       ...config.resolve.alias,
       canvas: false,
     }
+    config.watchOptions = {
+      ...config.watchOptions,
+      ignored: [
+        '**/.git/**',
+        '**/.next/**',
+        '**/backend/**',
+        '**/node_modules/**',
+      ],
+    }
     return config
   },
 }
