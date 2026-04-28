@@ -183,11 +183,81 @@ async function loadFileRows(prisma, userId, fileIds = []) {
         path: true,
         extractedText: true,
         openaiFileId: true,
+        documentAnalysis: {
+          select: {
+            id: true,
+            status: true,
+            summary: true,
+            textCoverage: true,
+            ocr: true,
+            warnings: true,
+            pageCount: true,
+            sheetCount: true,
+            slideCount: true,
+            chunkCount: true,
+            tableCount: true,
+            chunks: {
+              orderBy: { ordinal: 'asc' },
+              take: 4,
+              select: {
+                id: true,
+                ordinal: true,
+                sourceType: true,
+                sourceLabel: true,
+                pageNumber: true,
+                sheetName: true,
+                slideNumber: true,
+                sectionTitle: true,
+                text: true,
+              },
+            },
+            tables: {
+              orderBy: { ordinal: 'asc' },
+              take: 3,
+              select: {
+                id: true,
+                ordinal: true,
+                sourceType: true,
+                sourceLabel: true,
+                sheetName: true,
+                title: true,
+                columns: true,
+                rowCount: true,
+                preview: true,
+              },
+            },
+          },
+        },
       },
     });
   } catch {
     return [];
   }
+}
+
+async function ensureDocumentAnalysis(prisma, row, userId) {
+  if (!row || row.documentAnalysis || !prisma?.documentAnalysis) return row;
+  try {
+    const documentIntelligence = require('./document-intelligence');
+    const analysis = await documentIntelligence.analyzeFile(prisma, {
+      userId,
+      fileRecord: row,
+    });
+    return { ...row, documentAnalysis: analysis };
+  } catch (err) {
+    console.warn(`[message-attachments] document analysis unavailable for ${row.id}:`, err?.message || err);
+    return row;
+  }
+}
+
+function analysisChunksToText(analysis, maxChars = 120000) {
+  const chunks = Array.isArray(analysis?.chunks) ? analysis.chunks : [];
+  const text = chunks
+    .map((chunk) => safeText(chunk.text, ''))
+    .filter(Boolean)
+    .join('\n\n---\n\n')
+    .trim();
+  return compactString(text, maxChars);
 }
 
 async function resolveTranscriptionFileIds(prisma, {
@@ -294,21 +364,41 @@ async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars
   const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 8);
   if (ids.length === 0) return '';
   const rows = await loadFileRows(prisma, userId, ids);
-  const enrichedRows = await Promise.all(rows.map((row) => ensureImageOcr(prisma, row, userId)));
+  const ocrRows = await Promise.all(rows.map((row) => ensureImageOcr(prisma, row, userId)));
+  const enrichedRows = await Promise.all(ocrRows.map((row) => ensureDocumentAnalysis(prisma, row, userId)));
   const withText = enrichedRows.filter((row) => hasUsefulExtractedText(row.extractedText));
   if (withText.length === 0) return '';
 
   const perFileBudget = Math.max(1500, Math.floor(maxChars / withText.length));
   const blocks = withText.map((row, index) => {
+    const analysis = row.documentAnalysis || null;
+    const chunks = Array.isArray(analysis?.chunks) ? analysis.chunks : [];
+    const tables = Array.isArray(analysis?.tables) ? analysis.tables : [];
     const text = safeText(row.extractedText, '').slice(0, perFileBudget);
     const clipped = row.extractedText.length > text.length ? '\n[Extracto truncado; usa rag_retrieve si necesitas mas contexto.]' : '';
+    const evidence = chunks.length
+      ? [
+        '',
+        'Evidencia estructurada disponible:',
+        ...chunks.map((chunk) => `- ${chunk.sourceLabel || chunk.sectionTitle || `Fragmento ${chunk.ordinal}`}: ${safeText(chunk.text, '').slice(0, 500).replace(/\s+/g, ' ')}`),
+      ].join('\n')
+      : '';
+    const tableSummary = tables.length
+      ? [
+        '',
+        'Tablas detectadas:',
+        ...tables.map((table) => `- ${table.title || table.sourceLabel || `Tabla ${table.ordinal}`}: ${table.rowCount || 0} filas, columnas: ${(table.columns || []).slice(0, 12).join(', ')}`),
+      ].join('\n')
+      : '';
     return [
       `### Archivo adjunto ${index + 1}: ${row.originalName || row.id}`,
       `id: ${row.id}`,
       `tipo: ${row.mimeType || 'desconocido'}`,
+      analysis?.id ? `analysisId: ${analysis.id}` : null,
+      analysis?.summary ? `resumen tecnico: ${analysis.summary}` : null,
       '',
-      text + clipped,
-    ].join('\n');
+      text + clipped + evidence + tableSummary,
+    ].filter(Boolean).join('\n');
   });
 
   return [
@@ -324,12 +414,13 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
   if (ids.length === 0) return '';
 
   const rows = await loadFileRows(prisma, userId, ids);
-  const enrichedRows = await Promise.all(rows.map((row) => ensureImageOcr(prisma, row, userId)));
+  const ocrRows = await Promise.all(rows.map((row) => ensureImageOcr(prisma, row, userId)));
+  const enrichedRows = await Promise.all(ocrRows.map((row) => ensureDocumentAnalysis(prisma, row, userId)));
   const withText = enrichedRows
     .map((row) => ({
       id: row.id,
       name: safeText(row.originalName || row.filename || row.id, 'Archivo'),
-      text: safeText(row.extractedText, ''),
+      text: safeText(row.extractedText, '') || analysisChunksToText(row.documentAnalysis, maxChars),
     }))
     .filter((row) => hasUsefulExtractedText(row.text));
 
