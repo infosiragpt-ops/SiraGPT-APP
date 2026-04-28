@@ -19,6 +19,7 @@ export interface AgentArtifact {
   id: string
   filename: string
   mime: string
+  format?: string | null
   sizeBytes: number
   downloadUrl: string
   previewHtml?: string | null

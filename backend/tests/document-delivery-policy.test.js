@@ -46,6 +46,30 @@ test('DocumentDeliveryPolicy keeps short conversational turns in chat', () => {
   assert.equal(policy.autoGenerate, false);
 });
 
+test('DocumentDeliveryPolicy keeps plain transcription requests in chat', () => {
+  const transcript = Array.from({ length: 1200 }, (_, idx) => `linea${idx}`).join(' ');
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'transcribir este archivo',
+    finalText: transcript,
+    files: ['uploaded-file-id'],
+  });
+
+  assert.equal(policy.mode, 'chat_only');
+  assert.equal(policy.autoGenerate, false);
+  assert.equal(policy.thresholds.transcriptionOnly, true);
+});
+
+test('DocumentDeliveryPolicy still creates a file when transcription asks for Word', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'transcribir este archivo en Word profesional',
+    files: ['uploaded-file-id'],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+});
+
 test('detectFormat honors explicit requested format', () => {
   assert.equal(detectFormat('Haz un informe', 'pdf'), 'pdf');
 });

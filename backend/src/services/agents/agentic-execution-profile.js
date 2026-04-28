@@ -18,6 +18,8 @@ const PATTERNS = {
   code: /\b(c[oó]digo|code|programa|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|autocorrige|auto corrige)\b/i,
   computation: /\b(calcula(?:r)?|analiza(?:r)?|procesa(?:r)?|limpia(?:r)?|estad[ií]stica|cronbach|spearman|anova|regresi[oó]n|correlaci[oó]n|likert|dataset|csv|datos|tabla|f[oó]rmula|matriz|integral|derivada|probabilidad)\b/i,
   strictEvidence: /\b(100%|extremadamente preciso|precisi[oó]n|verifica(?:r)?|validar|reales|doi|open access|acceso abierto|20|30|40|50|100|miles|202[0-9]|art[ií]culos cient[ií]ficos)\b/i,
+  transcription: /\b(transcrib(?:e|ir|eme|irme|elo|elo|alo|al[oó]|irlo)?|transcripci[oó]n|transcript|transcribe)\b/i,
+  explicitTranscriptionArtifact: /\b(?:en|como|a|formato)\s+(?:un|una|el|la)?\s*(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|csv|markdown|html|archivo|documento)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|csv|markdown|html)\b/i,
 };
 
 function normalize(text) {
@@ -37,13 +39,18 @@ function buildExecutionProfile({ goal, fileIds = [] } = {}) {
   const rawGoal = String(goal || '');
   const normalized = normalize(rawGoal);
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
+  const plainTranscription =
+    (PATTERNS.transcription.test(rawGoal) || PATTERNS.transcription.test(normalized))
+    && !(PATTERNS.explicitTranscriptionArtifact.test(rawGoal) || PATTERNS.explicitTranscriptionArtifact.test(normalized));
+  const documentRequested = PATTERNS.document.test(rawGoal) || PATTERNS.document.test(normalized);
   const capabilities = {
     needsResearch: PATTERNS.research.test(rawGoal) || PATTERNS.research.test(normalized),
-    needsDocument: PATTERNS.document.test(rawGoal) || PATTERNS.document.test(normalized),
+    needsDocument: documentRequested && !plainTranscription,
     needsPrivateContext: hasFiles || PATTERNS.privateFiles.test(rawGoal) || PATTERNS.privateFiles.test(normalized),
     needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized),
     needsComputation: PATTERNS.computation.test(rawGoal) || PATTERNS.computation.test(normalized),
     strictEvidence: PATTERNS.strictEvidence.test(rawGoal) || PATTERNS.strictEvidence.test(normalized),
+    plainTranscription,
   };
 
   const requiredTools = [];

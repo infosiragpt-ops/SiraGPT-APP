@@ -86,6 +86,7 @@ const agentTaskPersistence = require('../services/agents/agent-task-persistence'
 const {
   buildUploadedFileContext,
   normalizeClientMetadata,
+  resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../services/message-attachments');
 
@@ -105,7 +106,8 @@ Rules:
 - When the user refers to uploaded/private documents, previous project knowledge, PDFs, or "según mis archivos":
     · If they want a CONCRETE ANSWER grounded on those docs (a question, a claim, a quote, a number) → call self_rag_answer. It runs the Self-RAG reflection-token loop (ISREL/ISSUP/ISUSE per segment, beam ranking) and returns a cited answer you can quote verbatim in finalize — do NOT rewrite supported segments, only compose around them.
     · If you only need RAW CHUNKS to combine with other data (build a table, cross-check with web_search, etc.) → call rag_retrieve instead.
-- When the user asks for a file (Excel, Word, PPT, PDF), use create_document. Write a complete Python script that writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab.
+- When the user asks to transcribe ("transcribir", "transcribe", "transcripción") and there is uploaded or pasted content, return the readable content verbatim, preserving line breaks and headings when useful. Do NOT explain what transcription is, do NOT summarize, and do NOT create a Word/PDF/PPT/Excel unless the user explicitly asks for that output format. If no readable text is available, say that clearly and ask for a readable file/audio/image.
+- When the user asks for a file (Excel, Word, PPT, PDF), use create_document. The deliverable must be authored by executable code, not placeholder prose: write a complete Python script that builds the real content, visual hierarchy, tables/slides/sections and writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab.
 - Use python_exec for data wrangling, verification, numeric work — ANY time you'd otherwise "estimate" a number.
 - For academic/scientific/market research, collect enough evidence first, keep DOI/URL/year/journal/source metadata, and separate verified findings from assumptions.
 - For strict academic deliverables (for example "40 articles", "only DOI", "only open access", "only Latin America", "2022-2026"), do not pad the file with weak or unverified sources. Refine web_search queries until the requested count is met; if verified sources are still fewer than requested, state the exact verified count and label the missing gap instead of inventing rows.
@@ -376,9 +378,16 @@ router.post(
     const systemContract = normalizeSystemContract(
       req.body.systemContract || extractProfessionalContract(rawGoal)
     );
-    const fileIds = Array.isArray(req.body.files)
+    let fileIds = Array.isArray(req.body.files)
       ? req.body.files.map(String).filter(Boolean).slice(0, 20)
       : [];
+    if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
+      fileIds = await resolveTranscriptionFileIds(prisma, {
+        userId: req.user?.id,
+        chatId: typeof req.body.chatId === 'string' ? req.body.chatId : null,
+        providedFileIds: fileIds,
+      });
+    }
     const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
     const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds });
     const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
@@ -1000,9 +1009,16 @@ async function handleQueuedTaskRequest(req, res) {
   const systemContract = normalizeSystemContract(
     req.body.systemContract || extractProfessionalContract(rawGoal)
   );
-  const fileIds = Array.isArray(req.body.files)
+  let fileIds = Array.isArray(req.body.files)
     ? req.body.files.map(String).filter(Boolean).slice(0, 20)
     : [];
+  if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
+    fileIds = await resolveTranscriptionFileIds(prisma, {
+      userId: req.user?.id,
+      chatId: typeof req.body.chatId === 'string' ? req.body.chatId : null,
+      providedFileIds: fileIds,
+    });
+  }
   const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
   const taskId = crypto.randomUUID();
   const traceId = crypto.randomUUID();
@@ -1235,6 +1251,11 @@ function normalizeDisplayGoal(text) {
   return (withoutContract || raw.replace(/\s+/g, ' ').trim()).slice(0, 4000);
 }
 
+function isTranscriptionRequest(text) {
+  return /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcripcion|transcribe|transcript|transcription)\b/i
+    .test(String(text || ''));
+}
+
 function normalizeSystemContract(text) {
   return String(text || '')
     .replace(/\s+/g, ' ')
@@ -1318,7 +1339,7 @@ function buildAgentSystemPrompt(
     parts.push(buildExecutionProfilePrompt(executionProfile));
   }
   if (fileIds.length) {
-    parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering.`);
+    parts.push(`Uploaded/reference file ids available to tools: ${fileIds.join(', ')}. If the user asks about their content, call rag_retrieve before answering. If the user asks to transcribe, produce the exact readable text from the uploaded/pasted content; do not create a document unless the prompt explicitly requests Word/PDF/PPT/Excel.`);
   }
   if (uploadedFileContext) {
     parts.push(uploadedFileContext);

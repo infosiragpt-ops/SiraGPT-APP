@@ -82,6 +82,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation 
   fs.writeFileSync(metadataPathFor(id), JSON.stringify({
     id,
     filename: clean,
+    format: ext,
     ownerUserId: ownerUserId || null,
     chatId: chatId || null,
     mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
@@ -92,6 +93,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation 
   return {
     id,
     filename: clean,
+    format: ext,
     mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
     sizeBytes: buf.length,
     path: full,
@@ -484,6 +486,7 @@ const createDocument = {
       artifact: {
         id: artifact.id,
         filename: artifact.filename,
+        format: artifact.format,
         mime: artifact.mime,
         sizeBytes: artifact.sizeBytes,
         downloadUrl: artifact.downloadUrl,
@@ -506,6 +509,7 @@ const createDocument = {
       id: artifact.id,
       artifactId: artifact.id,
       filename: artifact.filename,
+      format: artifact.format,
       sizeBytes: artifact.sizeBytes,
       mime: artifact.mime,
       downloadUrl: artifact.downloadUrl,

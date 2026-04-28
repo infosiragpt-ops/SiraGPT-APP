@@ -23,6 +23,7 @@ const {
 const rag = require('../services/rag-service');
 const operationalRag = require('../services/rag/operational-runtime');
 const feedbackLedger = require('../services/agents/feedback-ledger');
+const modelRouter = require('../services/ai-product-os/model-router');
 const {
   buildUniversalTaskContract,
   buildUniversalContractPrompt,
@@ -161,27 +162,99 @@ function isDirectDeepSeekModel(modelName) {
   return /^deepseek-(v\d|chat|reasoner)/i.test(String(modelName || '').trim());
 }
 
-const PARAPHRASE_MODES = new Set(['standard', 'humanize', 'formal', 'academic', 'simple', 'creative', 'expand', 'shorten', 'custom']);
+const PARAPHRASE_MODE_GUIDANCE = Object.freeze({
+  standard: 'Reescribe con claridad, naturalidad y tono profesional, conservando la intención original.',
+  humanize: 'Haz que el texto suene humano, fluido y menos mecánico; elimina rigidez, repeticiones y frases artificiales sin añadir ideas nuevas.',
+  formal: 'Eleva el registro a un tono formal, sobrio y profesional; prioriza precisión, cortesía y estructura limpia.',
+  academic: 'Usa estilo académico claro, preciso y argumentativo; mejora cohesión conceptual sin inventar citas, autores ni referencias.',
+  simple: 'Simplifica el texto para máxima comprensión, manteniendo exactitud y sin perder datos importantes.',
+  creative: 'Dale una formulación más expresiva, atractiva y dinámica, conservando el significado y evitando exageraciones.',
+  expand: 'Amplía ligeramente las ideas para mejorar contexto, transición y fluidez, sin inventar datos ni conclusiones.',
+  shorten: 'Reduce y compacta el texto, manteniendo el mensaje central, nombres propios, cifras y matices relevantes.',
+  custom: null,
+});
+
+const PARAPHRASE_MODES = new Set(Object.keys(PARAPHRASE_MODE_GUIDANCE));
+
+const PARAPHRASE_LANGUAGES = Object.freeze({
+  spanish: {
+    id: 'Spanish',
+    nativeName: 'español',
+    instruction: 'Usa español profesional, natural y correcto para un lector hispanohablante.',
+  },
+  english: {
+    id: 'English',
+    nativeName: 'English',
+    instruction: 'Use polished, natural, professional English.',
+  },
+  portuguese: {
+    id: 'Portuguese',
+    nativeName: 'português',
+    instruction: 'Use português profissional, natural e correto.',
+  },
+  french: {
+    id: 'French',
+    nativeName: 'français',
+    instruction: 'Utilise un français professionnel, naturel et correct.',
+  },
+  german: {
+    id: 'German',
+    nativeName: 'Deutsch',
+    instruction: 'Verwende professionelles, natürliches und korrektes Deutsch.',
+  },
+  italian: {
+    id: 'Italian',
+    nativeName: 'italiano',
+    instruction: 'Usa un italiano professionale, naturale e corretto.',
+  },
+});
+
+const PARAPHRASE_LANGUAGE_ALIASES = Object.freeze({
+  es: 'spanish',
+  espanol: 'spanish',
+  español: 'spanish',
+  spanish: 'spanish',
+  en: 'english',
+  ingles: 'english',
+  inglés: 'english',
+  english: 'english',
+  pt: 'portuguese',
+  portugues: 'portuguese',
+  português: 'portuguese',
+  portuguese: 'portuguese',
+  fr: 'french',
+  frances: 'french',
+  francés: 'french',
+  french: 'french',
+  de: 'german',
+  aleman: 'german',
+  alemán: 'german',
+  german: 'german',
+  it: 'italian',
+  italiano: 'italian',
+  italian: 'italian',
+});
+
+function normalizeParaphraseLanguage(language) {
+  const raw = String(language || 'Spanish').trim();
+  const normalized = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const key = PARAPHRASE_LANGUAGE_ALIASES[normalized] || 'spanish';
+  return PARAPHRASE_LANGUAGES[key] || PARAPHRASE_LANGUAGES.spanish;
+}
 
 function buildParaphraseInstructions({ mode, language, customInstruction }) {
-  const modeGuidance = {
-    standard: 'Reescribe con claridad, naturalidad y tono profesional, conservando la intención original.',
-    humanize: 'Haz que el texto suene humano, fluido y menos mecánico, sin exagerar ni añadir ideas no presentes.',
-    formal: 'Eleva el registro a un tono formal, sobrio y profesional.',
-    academic: 'Usa estilo académico claro, preciso y argumentativo, sin inventar citas ni referencias.',
-    simple: 'Simplifica el texto para máxima comprensión, manteniendo exactitud.',
-    creative: 'Dale una formulación más expresiva y atractiva, conservando el significado.',
-    expand: 'Amplía ligeramente las ideas para mejorar contexto y transición, sin inventar datos.',
-    shorten: 'Reduce y compacta el texto, manteniendo el mensaje central.',
-    custom: String(customInstruction || '').trim() || 'Aplica una paráfrasis profesional y natural.',
-  };
+  const targetLanguage = normalizeParaphraseLanguage(language);
+  const modeGuidance = mode === 'custom'
+    ? String(customInstruction || '').trim() || 'Aplica una paráfrasis profesional y natural.'
+    : PARAPHRASE_MODE_GUIDANCE[mode] || PARAPHRASE_MODE_GUIDANCE.standard;
 
   return [
     'Eres un editor profesional especializado en paráfrasis humanizada.',
-    `Modo: ${mode}. ${modeGuidance[mode] || modeGuidance.standard}`,
-    `Idioma de salida: ${language || 'Español'}.`,
+    `Modo activo: ${mode}. ${modeGuidance}`,
+    `Idioma final obligatorio: ${targetLanguage.id} (${targetLanguage.nativeName}). ${targetLanguage.instruction}`,
     'Reglas estrictas:',
     '- Devuelve únicamente el texto parafraseado; no expliques el proceso.',
+    `- Toda la salida debe estar en ${targetLanguage.nativeName}. Si el texto original está en otro idioma, tradúcelo mientras lo parafraseas.`,
     '- Conserva nombres propios, cifras, fechas, términos técnicos y significado.',
     '- No añadas información nueva, no inventes fuentes y no cambies la postura del texto.',
     '- Mejora cohesión, ritmo, naturalidad, gramática y puntuación.',
@@ -216,7 +289,7 @@ router.post(
     const text = String(req.body.text || '').trim();
     const requestedMode = String(req.body.mode || 'standard').trim().toLowerCase();
     const mode = PARAPHRASE_MODES.has(requestedMode) ? requestedMode : 'standard';
-    const language = String(req.body.language || 'Español').trim();
+    const targetLanguage = normalizeParaphraseLanguage(req.body.language);
     const customInstruction = String(req.body.customInstruction || '').trim();
     const model = 'deepseek-v4-pro';
 
@@ -227,7 +300,7 @@ router.post(
         temperature: mode === 'creative' || mode === 'humanize' ? 0.7 : 0.35,
         max_tokens: Math.min(4096, Math.max(700, Math.ceil(text.length * 1.6))),
         messages: [
-          { role: 'system', content: buildParaphraseInstructions({ mode, language, customInstruction }) },
+          { role: 'system', content: buildParaphraseInstructions({ mode, language: targetLanguage.id, customInstruction }) },
           { role: 'user', content: text },
         ],
       });
@@ -247,7 +320,7 @@ router.post(
         text: output,
         model,
         mode,
-        language,
+        language: targetLanguage.id,
         usage: completion.usage || { total_tokens: totalTokens },
       });
     } catch (error) {
@@ -258,7 +331,7 @@ router.post(
 );
 
 // ✅ Get available AI models
-router.get('/models', async (req, res) => {
+router.get('/models', optionalAuth, async (req, res) => {
   try {
     const { type } = req.query; // Query se 'type' hasil karein (e.g., ?type=TEXT)
 
@@ -336,6 +409,16 @@ router.get('/models', async (req, res) => {
         models = [...virtualImageModels, ...models];
       }
     }
+
+    // Plan gating — drop catalogued models the user's plan can't use, but
+    // leave models not in the catalog untouched (DB-only / virtual entries
+    // keep their existing behavior). Anonymous users default to FREE.
+    const userPlan = req.user?.plan || 'FREE';
+    models = models.filter((m) => {
+      const catalogEntry = modelRouter.getModel(m.name);
+      if (!catalogEntry) return true;
+      return catalogEntry.plans.includes(userPlan);
+    });
 
     res.json({ models });
   } catch (error) {
@@ -718,6 +801,24 @@ router.post(
 
       let actualProvider = provider; // ✅ NEW: track actual provider
       let openai = createProviderClient(provider);
+
+      // Plan gating — premium models are catalogued in model-router with an
+      // explicit plans whitelist. If the model is in the catalog and the
+      // user's plan isn't on the whitelist, refuse the call. Models not in
+      // the catalog (DB-defined / virtual) keep the prior behavior.
+      if (isAuth) {
+        const catalogEntry = modelRouter.getModel(model);
+        const userPlan = req.user.plan || 'FREE';
+        if (catalogEntry && !catalogEntry.plans.includes(userPlan)) {
+          return res.status(403).json({
+            error: 'plan_does_not_include_model',
+            message: `El modelo "${catalogEntry.id}" requiere un plan ${catalogEntry.plans.join(' o ')}. Tu plan actual: ${userPlan}.`,
+            requiredPlans: catalogEntry.plans,
+            currentPlan: userPlan,
+            upgradeRequired: true,
+          });
+        }
+      }
 
       // ✅ Check monthly limit
       if (isAuth) {

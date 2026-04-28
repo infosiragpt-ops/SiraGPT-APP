@@ -140,13 +140,19 @@ async function runSearchBrain(options) {
   const timeoutMs = options.timeoutMs || 8000;
   const retrieve = deps.retrieve || retrieveFromProvider;
 
-  // Phase 1 — decompose
+  // Phase 1 — decompose. Skip when caller asks (or when the request is so
+  // narrow that paying ~9s of LLM time for sub-queries gives nothing back —
+  // single provider + tiny maxResults can't benefit from query expansion).
+  const skipDecomposition = options.decompose === false
+    || (sources.length <= 1 && maxResults <= 3);
   const p1 = now();
-  const decomposed = await decomposeQuery({
-    query: options.query,
-    language: options.language,
-    callLLM: deps.callLLM,
-  });
+  const decomposed = skipDecomposition
+    ? []
+    : await decomposeQuery({
+        query: options.query,
+        language: options.language,
+        callLLM: deps.callLLM,
+      });
   const decompositionMs = now() - p1;
 
   // Phase 2 — parallel retrieve
@@ -162,11 +168,15 @@ async function runSearchBrain(options) {
   });
   const retrievalMs = now() - p2;
 
-  // Phase 3 — rerank
+  // Phase 3 — rerank. Same narrow-request heuristic as decomposition:
+  // a single provider returning ≤3 results doesn't gain anything from
+  // an LLM rerank pass and the latency cost dwarfs the value.
+  const skipRerank = options.rerank === false
+    || (sources.length <= 1 && maxResults <= 3);
   const p3 = now();
   let ranked = deduped;
   let reranked = false;
-  if (options.rerank !== false && deps.callLLM) {
+  if (!skipRerank && deps.callLLM) {
     const res = await rerankResults({
       query: options.query,
       results: deduped,

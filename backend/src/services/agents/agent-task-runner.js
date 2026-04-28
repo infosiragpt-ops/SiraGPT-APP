@@ -31,7 +31,10 @@ const { generateAutoDocument } = require('./auto-document-delivery');
 const { buildLangGraphLayer } = require('./agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
 const {
+  buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
+  isPlainTranscriptionRequest,
+  resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../message-attachments');
 
@@ -152,7 +155,8 @@ async function runAgentTaskJob(payload = {}, job = null) {
   } = payload;
   if (!taskId) throw new Error('agent task payload missing taskId');
   if (!user?.id) throw new Error('agent task payload missing user.id');
-  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured');
+  const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
+  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest) throw new Error('OPENAI_API_KEY not configured');
 
   const internals = routeInternals();
   const controller = new AbortController();
@@ -175,18 +179,20 @@ async function runAgentTaskJob(payload = {}, job = null) {
   const finalizeProfile = buildFinalizeProfile(executionProfile, universalTaskContract);
   let taskContract = deriveLegacyTaskContract(universalTaskContract);
   let taskContractSource = 'fallback';
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  try {
-    const resolved = await resolveTaskContract({
-      goal,
-      openai,
-      fileIds: files,
-      fallback: () => deriveLegacyTaskContract(universalTaskContract),
-    });
-    taskContract = enforceLegacyTaskContract(resolved.contract || taskContract, universalTaskContract);
-    taskContractSource = resolved.source || taskContractSource;
-  } catch (err) {
-    console.warn('[agent-task-runner] task-contract resolver failed:', err?.message);
+  const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+  if (!plainTranscriptionRequest && openai) {
+    try {
+      const resolved = await resolveTaskContract({
+        goal,
+        openai,
+        fileIds: files,
+        fallback: () => deriveLegacyTaskContract(universalTaskContract),
+      });
+      taskContract = enforceLegacyTaskContract(resolved.contract || taskContract, universalTaskContract);
+      taskContractSource = resolved.source || taskContractSource;
+    } catch (err) {
+      console.warn('[agent-task-runner] task-contract resolver failed:', err?.message);
+    }
   }
 
   const taskPlan = buildAgentTaskPlan({
@@ -429,6 +435,126 @@ async function runAgentTaskJob(payload = {}, job = null) {
   const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
 
   try {
+    if (plainTranscriptionRequest) {
+      const transcriptionFileIds = Array.isArray(files) && files.length
+        ? files.map(String).filter(Boolean)
+        : await resolveTranscriptionFileIds(prisma, {
+          userId: user.id,
+          chatId,
+          providedFileIds: files,
+        });
+      const transcriptionText = await buildTranscriptionTextFromFiles(prisma, {
+        userId: user.id,
+        fileIds: transcriptionFileIds,
+      });
+
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: transcriptionText
+          ? 'Solicitud de transcripción literal; se devuelve el texto extraído en el chat.'
+          : 'Solicitud de transcripción literal sin contenido legible disponible.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          transcriptionOnly: true,
+          fileCount: transcriptionFileIds.length,
+          wordCount: transcriptionText ? transcriptionText.split(/\s+/).filter(Boolean).length : 0,
+        },
+      };
+      task.documentPolicy = documentPolicy;
+      emit({ type: 'document_policy', policy: documentPolicy });
+
+      const readStepId = 's1';
+      const finalStepId = 's2';
+      stepIdCounter = 1;
+      emit({ type: 'step_start', id: readStepId, label: 'Leyendo archivo adjunto', icon: 'file-text' });
+      emit({ type: 'step_done', id: readStepId, ok: Boolean(transcriptionText) });
+      emit({
+        type: 'checkpoint',
+        label: transcriptionText ? 'Texto extraído' : 'Sin texto legible',
+        status: transcriptionText ? 'saved' : 'warning',
+        payload: { fileIds: transcriptionFileIds, textLength: transcriptionText.length },
+      });
+      stepIdCounter = 2;
+      emit({ type: 'step_start', id: finalStepId, label: 'Preparando transcripción', icon: 'braces' });
+      emit({ type: 'step_done', id: finalStepId, ok: true });
+
+      const finalMarkdown = transcriptionText || 'No se encontró texto disponible para transcribir en los archivos adjuntos. Por favor, proporciona un archivo legible o más detalles sobre el contenido que deseas transcribir.';
+      emit({ type: 'final_text', markdown: finalMarkdown });
+      const doneEvent = emit({
+        type: 'done',
+        stoppedReason: transcriptionText ? 'transcription_finalize' : 'no_transcription_content',
+        stats: { steps: 2, artifacts: 0 },
+      });
+
+      const status = 'completed';
+      task.status = status;
+      task.updatedAt = new Date().toISOString();
+      const dbMessage = await persistAssistantMessage({
+        chatId,
+        userId: user.id,
+        assistantMessageId,
+        streamState,
+        task,
+        status,
+        artifacts,
+        metadata: {
+          documentPolicy,
+          runtimeModel: runtimeModelProfile.runtimeModel,
+          selectedModel: model,
+          stoppedReason: transcriptionText ? 'transcription_finalize' : 'no_transcription_content',
+          transcriptionFileIds,
+        },
+      });
+      if (dbMessage?.id && doneEvent) {
+        emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
+      }
+
+      taskStore.markTaskStatus(task, status, {
+        streamState,
+        stats: {
+          steps: 2,
+          artifacts: 0,
+          durationMs: Date.now() - startedAt,
+          stoppedReason: transcriptionText ? 'transcription_finalize' : 'no_transcription_content',
+        },
+        artifacts,
+      });
+      if (task.durableExecution?.graphId) {
+        try {
+          durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, status, {
+            stats: {
+              steps: 2,
+              artifacts: 0,
+              durationMs: Date.now() - startedAt,
+              stoppedReason: transcriptionText ? 'transcription_finalize' : 'no_transcription_content',
+            },
+          });
+        } catch (err) {
+          console.warn('[agent-task-runner] durable graph status write failed:', err.message);
+        }
+      }
+      metrics.counter('agent_task_invocations_total', { status });
+      metrics.observe('agent_task_duration_ms', { status }, Date.now() - startedAt);
+      metrics.counter('agent_task_artifacts_total', { status }, 0);
+      persistProgress(status);
+      auditLog.audit({
+        event: 'agent_task_worker_finished',
+        taskId,
+        userId: user.id,
+        chatId,
+        status,
+        stoppedReason: transcriptionText ? 'transcription_finalize' : 'no_transcription_content',
+        steps: 2,
+        artifacts: 0,
+        durationMs: Date.now() - startedAt,
+        transcriptionFileCount: transcriptionFileIds.length,
+        transcriptionTextLength: transcriptionText.length,
+      });
+      return { taskId, status, artifacts: 0 };
+    }
+
     const toolCtx = {
       userId: user.id,
       userEmail: user.email,
@@ -532,6 +658,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
         if (generated?.artifact) artifacts.push({
           id: generated.artifact.id,
           filename: generated.artifact.filename,
+          format: generated.artifact.format,
           mime: generated.artifact.mime,
           sizeBytes: generated.artifact.sizeBytes,
           downloadUrl: generated.artifact.downloadUrl,

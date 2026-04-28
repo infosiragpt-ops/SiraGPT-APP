@@ -8,7 +8,7 @@ import {
   Braces,
   CheckCircle2,
   Download,
-  ExternalLink,
+  Eye,
   FileCheck2,
   FileText,
   Loader2,
@@ -26,10 +26,12 @@ import {
   toolToProfessionalLabel,
   type AgentActivityStatus,
 } from "@/lib/agent-task-presentation"
+import type { DocumentPreviewTarget } from "@/components/document-preview"
 
 interface Props {
   state: AgentTaskState
   className?: string
+  onDocumentPreview?: (target: DocumentPreviewTarget) => void
 }
 
 interface TimelineStepProjection {
@@ -128,6 +130,57 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+function ThinkingBarsSvg({ className }: { className?: string }) {
+  return (
+    <svg
+      version="1.1"
+      id="L9"
+      xmlns="http://www.w3.org/2000/svg"
+      x="0px"
+      y="0px"
+      viewBox="10 40 45 50"
+      xmlSpace="preserve"
+      role="status"
+      aria-label="Pensando"
+      className={cn("h-12 w-12 text-orange-500", className)}
+    >
+      <rect x="20" y="50" width="4" height="10" fill="currentColor">
+        <animateTransform
+          attributeType="xml"
+          attributeName="transform"
+          type="translate"
+          values="0 0; 0 20; 0 0"
+          begin="0"
+          dur="0.6s"
+          repeatCount="indefinite"
+        />
+      </rect>
+      <rect x="30" y="50" width="4" height="10" fill="currentColor">
+        <animateTransform
+          attributeType="xml"
+          attributeName="transform"
+          type="translate"
+          values="0 0; 0 20; 0 0"
+          begin="0.2s"
+          dur="0.6s"
+          repeatCount="indefinite"
+        />
+      </rect>
+      <rect x="40" y="50" width="4" height="10" fill="currentColor">
+        <animateTransform
+          attributeType="xml"
+          attributeName="transform"
+          type="translate"
+          values="0 0; 0 20; 0 0"
+          begin="0.4s"
+          dur="0.6s"
+          repeatCount="indefinite"
+        />
+      </rect>
+    </svg>
+  )
+}
+
 function StatusPill({ status, label, phase }: { status: AgentActivityStatus; label: string; phase?: AgentStatusIconKind }) {
   return (
     <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLES[status])}>
@@ -170,56 +223,119 @@ function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: str
       type="button"
       onClick={download}
       disabled={downloading}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+      className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted disabled:opacity-60"
       title="Descargar documento"
+      aria-label="Descargar documento"
     >
-      {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+      {downloading ? <Loader2 className="h-8 w-8 animate-spin" /> : <Download className="h-9 w-9 stroke-[2.25]" />}
     </button>
   )
 }
 
-function ArtifactCard({ artifact }: { artifact: AgentArtifact }) {
+function artifactDisplayName(artifact: AgentArtifact): string {
+  const format = artifactFormat(artifact)
+  if (format === "docx" || format === "doc") return "Documento Word"
+  if (format === "xlsx" || format === "xls" || format === "csv") return "Hoja de calculo"
+  if (format === "pptx" || format === "ppt") return "Presentacion"
+  if (format === "pdf") return "Documento PDF"
+  return "Archivo generado"
+}
+
+function artifactFormat(artifact: AgentArtifact): string {
+  const explicit = String(artifact.format || "").toLowerCase()
+  if (explicit) return explicit
+  const filenameExt = artifact.filename.includes(".") ? artifact.filename.split(".").pop() || "" : ""
+  if (filenameExt) return filenameExt.toLowerCase()
+  const mime = String(artifact.mime || "").toLowerCase()
+  if (mime.includes("wordprocessingml") || mime.includes("msword")) return "docx"
+  if (mime.includes("spreadsheetml") || mime.includes("excel")) return "xlsx"
+  if (mime.includes("presentationml") || mime.includes("powerpoint")) return "pptx"
+  if (mime.includes("pdf")) return "pdf"
+  return "bin"
+}
+
+function ArtifactFormatIcon({ artifact }: { artifact: AgentArtifact }) {
+  const format = artifactFormat(artifact)
+  if (format === "docx" || format === "doc") {
+    return <img src="/icons/Word.png" alt="Word" className="h-16 w-16 object-contain" />
+  }
+  if (format === "xlsx" || format === "xls" || format === "csv") {
+    return <img src="/icons/Excel.png" alt="Excel" className="h-16 w-16 object-contain" />
+  }
+  if (format === "pptx" || format === "ppt") {
+    return <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-16 w-16 object-contain" />
+  }
+  if (format === "pdf") {
+    return <img src="/icons/pdf.png" alt="PDF" className="h-16 w-16 object-contain" />
+  }
+  return <FileCheck2 className="h-14 w-14 text-slate-700" />
+}
+
+function ArtifactCard({
+  artifact,
+  onDocumentPreview,
+}: {
+  artifact: AgentArtifact
+  onDocumentPreview?: (target: DocumentPreviewTarget) => void
+}) {
   const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
   const href = artifact.downloadUrl.startsWith("http")
     ? artifact.downloadUrl
     : `${apiRoot.replace(/\/api$/, "")}${artifact.downloadUrl}`
   const sizeKb = Math.max(1, Math.round((artifact.sizeBytes || 0) / 1024))
+  const displayName = artifactDisplayName(artifact)
+  const format = artifactFormat(artifact)
+  const formatLabel = format === "bin" ? "archivo" : format.toUpperCase()
+
+  const preview = React.useCallback(() => {
+    if (!onDocumentPreview) {
+      window.open(href, "_blank", "noopener,noreferrer")
+      return
+    }
+
+    const previewUrl = artifact.previewHtml
+      ? `data:text/html;charset=utf-8,${encodeURIComponent(artifact.previewHtml)}`
+      : href
+
+    onDocumentPreview({
+      url: previewUrl,
+      downloadUrl: href,
+      filename: artifact.filename,
+    })
+  }, [artifact.filename, artifact.previewHtml, href, onDocumentPreview])
 
   return (
-    <div className="rounded-md border border-border/60 bg-background/70 p-2.5">
-      <div className="flex items-center gap-3">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/60 text-muted-foreground">
-          <FileCheck2 className="h-4 w-4" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-foreground">{artifact.filename}</div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-            <span>{artifact.mime || "archivo generado"}</span>
-            <span>{sizeKb} KB</span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
-              <ShieldCheck className="h-3 w-3" />
-              Validado
-            </span>
+    <div className="my-2 w-full max-w-xl rounded-2xl border border-border/70 bg-background p-4 shadow-sm">
+      <div className="flex min-w-0 items-center justify-between gap-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl bg-muted/30">
+            <ArtifactFormatIcon artifact={artifact} />
+          </div>
+          <div className="hidden min-w-0 sm:block">
+            <div className="truncate text-sm font-semibold text-foreground">{displayName}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>{formatLabel}</span>
+              <span>{sizeKb} KB</span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
+                <ShieldCheck className="h-3 w-3" />
+                Validado
+              </span>
+            </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/60 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            title="Abrir documento"
+        <div className="ml-auto flex shrink-0 items-center gap-4">
+          <button
+            type="button"
+            onClick={preview}
+            className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted"
+            title="Ver documento"
+            aria-label="Ver documento"
           >
-            <ExternalLink className="h-4 w-4" />
-          </a>
+            <Eye className="h-9 w-9 stroke-[2.25]" />
+          </button>
           <DownloadButton artifact={artifact} href={href} />
         </div>
       </div>
-      {artifact.previewHtml && (
-        <div className="mt-2 max-h-64 overflow-auto rounded-md border border-border/50 bg-muted/10">
-          <div dangerouslySetInnerHTML={{ __html: artifact.previewHtml }} />
-        </div>
-      )}
     </div>
   )
 }
@@ -290,7 +406,7 @@ function ValidationSummary({ state }: { state: AgentTaskState }) {
   )
 }
 
-export function AgenticStepsRenderer({ state, className }: Props) {
+export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Props) {
   const [retrying, setRetrying] = React.useState(false)
   const [cancelling, setCancelling] = React.useState(false)
   const summary = React.useMemo(() => summarizeAgentActivity(state), [state])
@@ -306,26 +422,9 @@ export function AgenticStepsRenderer({ state, className }: Props) {
   const canCancel = Boolean(taskId && !state.done && !state.error)
   const canRetry = Boolean(taskId && (state.error || summary.status === "cancelled"))
   const hasDeliverable = (state.artifacts?.length || 0) > 0
-  const hasValidation = (state.qualityGates?.length || 0) > 0
   const latestCheckpoint = state.checkpoints?.[state.checkpoints.length - 1]
-  const activeTitle =
-    runningTimelineStep?.label ||
-    (summary.status === "queued" ? "Preparando turno" : summary.status === "repairing" ? "Corrigiendo entrega" : "Pensando")
-  const activeDetail =
-    runningTimelineStep?.detail ||
-    (summary.status === "queued"
-      ? "La tarea está lista para ejecutarse."
-      : summary.status === "verifying"
-        ? "Validando la calidad antes de entregar."
-        : "Analizando la solicitud y preparando la respuesta.")
-  const isMinimalLiveActivity = Boolean(!state.done && !state.error && !hasDeliverable && !hasValidation)
-  const isCompactCompletedChat = Boolean(
-    state.done &&
-    !state.error &&
-    !hasDeliverable &&
-    !hasValidation &&
-    state.documentPolicy?.mode !== "doc_required"
-  )
+  const isLiveActivity = Boolean(!state.done && !state.error)
+  const isCompletedActivity = Boolean(state.done && !state.error)
 
   const cancelTask = React.useCallback(async () => {
     if (!taskId || cancelling) return
@@ -353,72 +452,27 @@ export function AgenticStepsRenderer({ state, className }: Props) {
     }
   }, [retrying, taskId])
 
-  if (isCompactCompletedChat) {
+  if (isCompletedActivity) {
+    // Once the task is finished we want a clean answer surface — no
+    // "Completado · N pasos · M herramientas" header and no "Ver
+    // actividad" disclosure. The agent's deliverables still render
+    // when present so the user can keep the file/preview, but if the
+    // run produced no artifacts we render nothing here and let the
+    // message body speak for itself.
+    if (!hasDeliverable) return null
     return (
-      <div className={cn("my-2 flex items-center gap-2 text-xs text-muted-foreground", className)}>
-        <span className="inline-flex h-5 w-5 items-center justify-center text-muted-foreground">
-          <Braces className="h-4 w-4" />
-        </span>
-        <span className="font-medium text-foreground">{summary.label}</span>
-        <span>{plural(summary.stepCount, "paso", "pasos")}</span>
+      <div className={cn("my-2 max-w-2xl space-y-1", className)}>
+        {state.artifacts.map((artifact) => (
+          <ArtifactCard key={artifact.id} artifact={artifact} onDocumentPreview={onDocumentPreview} />
+        ))}
       </div>
     )
   }
 
-  if (isMinimalLiveActivity) {
+  if (isLiveActivity) {
     return (
-      <div className={cn("my-3 w-full max-w-xl", className)}>
-        <div className="inline-flex max-w-full items-center gap-3 rounded-2xl border border-border/70 bg-background/95 px-3.5 py-3 shadow-sm">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted/50 text-foreground">
-            <AgentStatusIcon kind={activePhase} className="h-5 w-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="rounded-md bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-muted-foreground">
-                {"{}"}
-              </span>
-              <span className="truncate text-sm font-semibold text-foreground">{activeTitle}</span>
-            </div>
-            <div className="mt-0.5 truncate text-xs text-muted-foreground">{activeDetail}</div>
-          </div>
-          {canCancel && (
-            <button
-              type="button"
-              onClick={cancelTask}
-              disabled={cancelling}
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-border/70 px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-            >
-              {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
-              Cancelar
-            </button>
-          )}
-        </div>
-
-        <details className="group mt-2 max-w-xl rounded-xl border border-transparent text-xs text-muted-foreground open:border-border/60 open:bg-muted/10">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-2 py-1.5 font-medium text-muted-foreground transition-colors hover:text-foreground">
-            <span className="font-mono text-[11px]">{"{}"}</span>
-            <span>Ver actividad</span>
-            <span className="text-muted-foreground/70">
-              {summary.stepCount > 0 ? plural(summary.stepCount, "paso", "pasos") : "iniciando"}
-              {summary.toolCount > 0 ? ` · ${plural(summary.toolCount, "herramienta", "herramientas")}` : ""}
-            </span>
-          </summary>
-          <div className="space-y-2 px-3 pb-3 pt-1">
-            {timelineSteps.slice(-4).map((step) => (
-              <div key={step.id} className="flex items-center gap-2">
-                <AgentStatusIcon kind={step.status === "error" ? "error" : step.status === "done" ? "done" : step.phase} className="h-4 w-4" />
-                <span className="font-medium text-foreground">{step.label}</span>
-                {step.detail && <span className="truncate">{step.detail}</span>}
-              </div>
-            ))}
-            {latestCheckpoint && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Activity className="h-3.5 w-3.5" />
-                <span className="truncate">{sanitizeAgentText(latestCheckpoint.label, "Progreso guardado")}</span>
-              </div>
-            )}
-          </div>
-        </details>
+      <div className={cn("my-2 flex w-full max-w-2xl items-center", className)}>
+        <ThinkingBarsSvg />
       </div>
     )
   }
@@ -531,7 +585,9 @@ export function AgenticStepsRenderer({ state, className }: Props) {
 
       {state.artifacts?.length > 0 && (
         <div className="mt-3 space-y-2">
-          {state.artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} />)}
+          {state.artifacts.map((artifact) => (
+            <ArtifactCard key={artifact.id} artifact={artifact} onDocumentPreview={onDocumentPreview} />
+          ))}
         </div>
       )}
 

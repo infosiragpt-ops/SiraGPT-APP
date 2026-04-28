@@ -50,6 +50,7 @@ const LEXICON = Object.freeze({
   export: ["exporta", "exportar", "descarga", "descargar", "download", "entrega", "entregar", "formato", "descargable"],
   understand: [
     "lee", "leer", "analiza", "analizar", "resume", "resumen", "resumir",
+    "transcribe", "transcribir", "transcribeme", "transcripcion", "transcript",
     "extrae", "extraer", "identifica", "dime", "cual", "que", "quien",
     "cuando", "donde", "primera", "primer", "palabra", "parrafo", "contenido",
     "segun", "explica", "explicar", "menciona", "dice",

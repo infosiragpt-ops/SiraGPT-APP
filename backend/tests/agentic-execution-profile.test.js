@@ -29,6 +29,20 @@ test('agentic execution profile: requires RAG for uploaded private context', () 
   assert.ok(profile.requiredTools.includes('rag_retrieve'));
 });
 
+test('agentic execution profile: plain transcription does not force document generation', () => {
+  const profile = buildExecutionProfile({
+    goal: 'transcribir este archivo',
+    fileIds: ['file_1'],
+  });
+
+  assert.equal(profile.capabilities.plainTranscription, true);
+  assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.equal(profile.capabilities.needsDocument, false);
+  assert.ok(profile.requiredTools.includes('rag_retrieve'));
+  assert.ok(!profile.requiredTools.includes('create_document'));
+  assert.ok(!profile.requiredTools.includes('verify_artifact'));
+});
+
 test('agentic execution profile: blocks finalize until required tools have succeeded', () => {
   const profile = buildExecutionProfile({
     goal: 'Investiga fuentes y crea un Word validado',

@@ -308,6 +308,7 @@ router.post("/academic/chat", async (req, res) => {
       sources: validateSources(body.sources),
       maxResults: validateMaxResults(body.maxResults) ?? 15,
       rerank: body.rerank === false ? false : true,
+      decompose: body.decompose === false ? false : undefined,
       language: validateLanguage(body.language),
       mailto: extractMailto(req),
       timeoutMs: typeof body.timeoutMs === "number" ? Math.min(30000, Math.max(1000, body.timeoutMs)) : undefined,

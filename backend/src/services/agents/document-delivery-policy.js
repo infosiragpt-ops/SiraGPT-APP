@@ -3,6 +3,8 @@ const SHEET_RE = /\b(excel|xlsx|spreadsheet|tabla|tabular|kpi|dashboard|f[oó]rm
 const DECK_RE = /\b(ppt|pptx|powerpoint|presentaci[oó]n|slides?|diapositivas?|pitch|defensa|exposici[oó]n|deck)\b/i;
 const PDF_RE = /\b(pdf|certificado|formulario|imprimible|constancia|recibo)\b/i;
 const LONG_DELIVERABLE_RE = /\b(extenso|profesional|completo|detallado|profund[oa]|acad[eé]mic[oa]|investigaci[oó]n|an[aá]lisis|estrategia|plan de negocio|consultor[ií]a|entregable)\b/i;
+const TRANSCRIPTION_RE = /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcribe|transcript|transcription)\b/i;
+const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 
 const PALETTES = {
   academic: {
@@ -73,7 +75,8 @@ function detectComplexity(text, estimatedWords) {
   return 'simple';
 }
 
-function classifyMode(text, estimatedWords, format, files = []) {
+function classifyMode(text, estimatedWords, format, files = [], options = {}) {
+  if (options.transcriptionOnly) return 'chat_only';
   const explicitDocument = WORDISH_RE.test(text) || SHEET_RE.test(text) || DECK_RE.test(text) || PDF_RE.test(text);
   if (explicitDocument) return 'doc_required';
   if (estimatedWords >= 900) return 'doc_required';
@@ -89,14 +92,17 @@ function buildDocumentDeliveryPolicy({
   files = [],
   requestedFormat = null,
 } = {}) {
-  const text = compactText(`${goal || ''} ${displayGoal || ''} ${finalText || ''}`);
+  const requestText = compactText(`${goal || ''} ${displayGoal || ''}`);
+  const text = compactText(`${requestText} ${finalText || ''}`);
+  const transcriptionOnly = TRANSCRIPTION_RE.test(requestText) && !EXPLICIT_TRANSCRIPTION_OUTPUT_RE.test(requestText);
   const estimated = estimateWords({ goal, displayGoal, finalText });
   const format = detectFormat(text, requestedFormat);
   const template = detectTemplate(text, format);
-  const mode = classifyMode(text, estimated, format, Array.isArray(files) ? files : []);
+  const mode = classifyMode(text, estimated, format, Array.isArray(files) ? files : [], { transcriptionOnly });
   const tableSignals = SHEET_RE.test(text);
   const complexity = detectComplexity(text, estimated);
   const reason = (() => {
+    if (transcriptionOnly) return 'Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo.';
     if (mode === 'chat_only') return 'Respuesta conversacional corta; no requiere archivo.';
     if (mode === 'doc_suggested') return 'La respuesta tiene suficiente densidad para sugerir un documento profesional.';
     if (estimated >= 900) return 'Respuesta prevista mayor a 900 palabras; documento requerido.';
@@ -118,6 +124,7 @@ function buildDocumentDeliveryPolicy({
       estimatedWords: estimated,
       tableSignals,
       fileCount: Array.isArray(files) ? files.length : 0,
+      transcriptionOnly,
     },
     palette: PALETTES[template] || PALETTES.business,
   };

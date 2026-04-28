@@ -53,6 +53,36 @@ test('input PDF analysis is RAG understanding, not PDF generation', () => {
   assert.ok(contract.required_tools.some((tool) => tool === 'rag_retrieve' || tool === 'self_rag_answer'));
 });
 
+test('plain transcription of an uploaded file stays inline and does not generate DOCX', () => {
+  const contract = buildUniversalTaskContract({
+    rawUserRequest: 'transcribir este archivo',
+    fileIds: ['file_1'],
+  });
+
+  assert.equal(contract.pipeline, 'RAGDocumentUnderstandingPipeline');
+  assert.equal(contract.primary_intent, 'document_understanding');
+  assert.equal(contract.required_extension, null);
+  assert.equal(contract.artifact_required, false);
+  assert.equal(contract.delivery_mode, 'inline-chat');
+  assert.ok(contract.required_tools.includes('self_rag_answer'));
+  assert.ok(!contract.required_tools.includes('create_document'));
+  assert.ok(contract.user_constraints.includes('transcription_mode:verbatim_inline_no_summary_no_document'));
+  assert.ok(contract.ambiguity_score < 0.8);
+});
+
+test('explicit Word transcription still routes to DOCX artifact generation', () => {
+  const contract = buildUniversalTaskContract({
+    rawUserRequest: 'transcribir este archivo en Word profesional',
+    fileIds: ['file_1'],
+  });
+
+  assert.equal(contract.pipeline, 'DocumentPipeline');
+  assert.equal(contract.required_extension, '.docx');
+  assert.equal(contract.artifact_required, true);
+  assert.ok(contract.required_tools.includes('create_document'));
+  assert.ok(contract.required_tools.includes('verify_artifact'));
+});
+
 test('research plus multiple deliverables creates a MultiIntent DAG', () => {
   const contract = buildUniversalTaskContract({
     rawUserRequest: 'Busca 40 artículos reales con DOI, entrégalos en Excel y luego redacta el método en Word',

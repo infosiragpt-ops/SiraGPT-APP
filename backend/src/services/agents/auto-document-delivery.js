@@ -102,6 +102,7 @@ async function generateAutoDocument({
     artifact: {
       id: artifact.id,
       filename: artifact.filename,
+      format: artifact.format || format,
       mime: artifact.mime,
       sizeBytes: artifact.sizeBytes,
       downloadUrl: artifact.downloadUrl,

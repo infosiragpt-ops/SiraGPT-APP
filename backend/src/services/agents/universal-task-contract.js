@@ -528,6 +528,22 @@ function matchAny(raw, patterns) {
   return patterns.some((pattern) => pattern.test(raw) || pattern.test(normalize(raw)));
 }
 
+const TRANSCRIPTION_REQUEST_RE =
+  /\b(transcrib(?:e|ir|eme|irme|elo|alo|irlo)?|transcripci[oó]n|transcripcion|transcript|transcribe)\b/i;
+
+const EXPLICIT_TRANSCRIPTION_ARTIFACT_RE =
+  /\b(?:en|como|a|formato)\s+(?:un|una|el|la)?\s*(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|csv|markdown|md|html|archivo|documento)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|csv|markdown|md|html)\b/i;
+
+function isPlainTranscriptionRequest(raw, explicitExt = null) {
+  const value = String(raw || '');
+  const normalized = normalize(value);
+  return Boolean(
+    !explicitExt
+    && (TRANSCRIPTION_REQUEST_RE.test(value) || TRANSCRIPTION_REQUEST_RE.test(normalized))
+    && !(EXPLICIT_TRANSCRIPTION_ARTIFACT_RE.test(value) || EXPLICIT_TRANSCRIPTION_ARTIFACT_RE.test(normalized))
+  );
+}
+
 const OUTPUT_FORMAT_PATTERNS = [
   { ext: '.svg', pipeline: 'VisualArtifactPipeline', intent: 'visual_artifact', keywords: 'svg' },
   { ext: '.docx', pipeline: 'DocumentPipeline', intent: 'document_generation', keywords: 'docx|word|documento word|ms word' },
@@ -672,6 +688,7 @@ function inferIntentAndPipeline({ raw, fileIds = [], tokenAnalysis = null }) {
   const summarize = matchAny(raw, [/\b(resume|resumen|resumir|sintetiza|summarize)\b/i]);
   const translate = matchAny(raw, [/\b(traduce|traducir|translate)\b/i]);
   const privateFile = hasFiles || matchAny(raw, [/\b(este archivo|este documento|adjunto|cargado|pdf|docx|xlsx|pptx|segun mis archivos|según mis archivos)\b/i]);
+  const plainTranscription = isPlainTranscriptionRequest(raw, explicitExt);
 
   if (explicitExt === '.svg') {
     const svgAsCode = code && /\bcodigo|código|source|xml\b/i.test(n);
@@ -682,6 +699,8 @@ function inferIntentAndPipeline({ raw, fileIds = [], tokenAnalysis = null }) {
   if (explicitExt === '.pptx') return { primary_intent: 'slide_generation', pipeline: 'SlidePipeline' };
   if (explicitExt === '.pdf') return { primary_intent: 'document_generation', pipeline: 'DocumentPipeline' };
   if (explicitExt === '.html' || explicitExt === '.md' || explicitExt === '.json') return { primary_intent: code ? 'code_generation' : 'document_generation', pipeline: code ? 'CodePipeline' : 'DocumentPipeline' };
+  if (plainTranscription && privateFile) return { primary_intent: 'document_understanding', pipeline: 'RAGDocumentUnderstandingPipeline' };
+  if (plainTranscription) return { primary_intent: 'direct_answer', pipeline: 'DirectAnswerPipeline' };
   const tokenRoute = inferRouteFromTokenAnalysis(tokenAnalysis);
   if (tokenRoute) return tokenRoute;
   if (editImage) return { primary_intent: 'image_editing', pipeline: 'ImagePipeline' };
@@ -900,6 +919,7 @@ function buildExecutionPlan({ pipeline, primaryIntent, requiredTools, validation
 function inferAmbiguityScore({ raw, requiredExtension, pipeline, sourceRequirements }) {
   const n = normalize(raw);
   if (!n) return 1;
+  if (isPlainTranscriptionRequest(raw, requiredExtension)) return 0.15;
   if (/\b(archivo|documento|haz algo|lo que sea|cualquier cosa)\b/.test(n) && !requiredExtension) return 0.85;
   if (sourceRequirements.required && /\b(articulos|fuentes|papers)\b/.test(n) && !/\b(\d{1,5}|varios|algunos|lista)\b/.test(n)) return 0.45;
   if (pipeline === 'DirectAnswerPipeline') return 0.15;
@@ -917,6 +937,7 @@ function inferRiskLevel({ sourceRequirements, pipeline, requiredExtension, ambig
 function buildUserConstraints(raw, requiredExtension, sourceRequirements) {
   const constraints = [];
   if (requiredExtension) constraints.push(`required_extension:${requiredExtension}`);
+  if (isPlainTranscriptionRequest(raw, requiredExtension)) constraints.push('transcription_mode:verbatim_inline_no_summary_no_document');
   for (const c of extractCountConstraints(raw)) constraints.push(`requested_count:${c}`);
   if (sourceRequirements.required) constraints.push(`source_verification:${sourceRequirements.verification_policy}`);
   if (sourceRequirements.recency_range) constraints.push(`recency_range:${sourceRequirements.recency_range}`);
