@@ -60,6 +60,9 @@ next-env.d.ts
 # Claude Code agent workspace (local worktrees, personal settings)
 .claude/
 
+# Tesseract trained-data (downloaded at install time, see scripts/download-tesseract-data.sh)
+*.traineddata
+
 # OS
 Thumbs.db
 
