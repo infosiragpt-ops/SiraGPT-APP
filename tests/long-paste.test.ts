@@ -18,6 +18,22 @@ test("long paste classifier compiles dense pasted content into a document", () =
   assert.equal(shouldCompilePastedTextAsDocument(pasted), true)
 })
 
+test("long paste classifier triggers strictly above 8 non-empty lines", () => {
+  const eightLines = Array.from({ length: 8 }, (_, i) => `linea ${i + 1}`).join("\n")
+  const nineLines = Array.from({ length: 9 }, (_, i) => `linea ${i + 1}`).join("\n")
+
+  assert.equal(shouldCompilePastedTextAsDocument(eightLines), false, "8 líneas deben pegarse como texto plano")
+  assert.equal(shouldCompilePastedTextAsDocument(nineLines), true, "9 líneas deben convertirse en documento")
+})
+
+test("long paste classifier ignores blank lines when counting", () => {
+  // 8 non-empty lines separated by blanks → still under the threshold even
+  // though raw line count is higher. Prevents accidental triggers from
+  // double-spaced short messages.
+  const padded = Array.from({ length: 8 }, (_, i) => `linea ${i + 1}`).join("\n\n")
+  assert.equal(shouldCompilePastedTextAsDocument(padded), false)
+})
+
 test("long paste metadata derives a safe title and filename", () => {
   const metadata = buildLongPasteMetadata("FACULTAD DE ARQUITECTURA\n\nContenido académico extenso.", new Date("2026-04-25T15:00:00Z"))
 
