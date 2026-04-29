@@ -18,6 +18,7 @@
 /tmp-smoke/
 /tmp-smoke-tel/
 /.next.broken*/
+/.next.stale*/
 backend/prisma/dev.db
 backend/prisma/*.db-journal
 # scheduler state (generated at runtime by services/scheduler/scheduler.js)

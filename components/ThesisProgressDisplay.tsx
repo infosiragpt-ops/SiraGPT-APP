@@ -8,7 +8,6 @@ import BrowserActivityViewer from '@/components/BrowserActivityViewer'
 import { 
   CheckCircle, 
   AlertCircle, 
-  Loader2, 
   Download, 
   Eye, 
   FileText, 
@@ -21,6 +20,7 @@ import {
 import { apiClient } from '@/lib/api'
 import { toast } from 'sonner'
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface ThesisProgressDisplayProps {
   thesisData: {
     status: 'initializing' | 'searching' | 'generating' | 'completed' | 'error'
@@ -64,7 +64,7 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
       case 'error':
         return <AlertCircle className="h-4 w-4 text-red-500" />
       default:
-        return <Loader2 className="h-4 w-4 animate-spin text-gray-500" />
+        return <ThinkingIndicator size="sm" className="text-gray-500" />
     }
   }
 
@@ -431,7 +431,7 @@ const ThesisProgressDisplay: React.FC<ThesisProgressDisplayProps> = ({
                   className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white"
                 >
                   {isDownloading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <ThinkingIndicator size="sm" />
                   ) : (
                     <Download className="h-4 w-4" />
                   )}

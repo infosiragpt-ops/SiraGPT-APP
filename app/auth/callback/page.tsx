@@ -3,7 +3,7 @@
 import { useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { Loader2 } from "lucide-react"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 function AuthCallbackContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -64,7 +64,7 @@ function AuthCallbackContent() {
   return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="text-center">
-        <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+        <ThinkingIndicator size="lg" className="mx-auto mb-4" />
         <p>Completing authentication...</p>
       </div>
     </div>
@@ -77,7 +77,7 @@ export default function AuthCallback() {
     <Suspense fallback={
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+          <ThinkingIndicator size="lg" className="mx-auto mb-4" />
           <p>Loading...</p>
         </div>
       </div>

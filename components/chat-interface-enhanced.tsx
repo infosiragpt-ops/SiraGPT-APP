@@ -6,7 +6,6 @@ import {
   Paperclip,
   Mic,
   Square,
-  Loader2,
   FileText,
   Video,
   Globe,
@@ -48,8 +47,7 @@ import {
   Flag,
   Settings,
   PenSquare,
-  MessageSquare,
-} from "lucide-react"
+  MessageSquare} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -132,6 +130,7 @@ import { useComputerUse } from "@/hooks/use-computer-use"
 import { WordConnector } from "./WordConnector"
 import { ExcelConnector, type ExcelConnectorRef } from "./ExcelConnector"
 import { resolveModelIconName } from "@/lib/model-icons"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   buildFileOnlyPrompt,
   createLongPasteDocumentFile,
@@ -1492,7 +1491,7 @@ const ActiveOptionsDisplay = ({
                     {isUploading && (
                       <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                         <div className="text-center">
-                          <Loader2 className="h-6 w-6 animate-spin text-white mx-auto mb-1" />
+                          <ThinkingIndicator size="md" className="text-white mx-auto mb-1" />
                           <span className="text-white text-xs font-medium">{Math.round(progress)}%</span>
                         </div>
                       </div>
@@ -4200,7 +4199,7 @@ But first, you need to connect your Spotify account securely using the button be
           )}
         >
           {isDictationTranscribing ? (
-            <Loader2 className="h-[17px] w-[17px] animate-spin" strokeWidth={1.75} />
+            <ThinkingIndicator size="sm" className="h-[17px] w-[17px]" />
           ) : isRecording ? (
             <Square className="h-[14px] w-[14px] fill-current" strokeWidth={0} />
           ) : (
@@ -7384,7 +7383,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     )}
                                   >
                                     {busy ? (
-                                      <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
+                                      <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
                                     ) : (
                                       <Icon className="h-[16px] w-[16px]" strokeWidth={canSend ? 2.25 : 1.75} />
                                     )}
@@ -7413,7 +7412,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               )}
                             >
                               {pendingStop ? (
-                                <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
+                                <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
                               ) : (
                                 <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
                               )}
@@ -7778,7 +7777,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                         )}
                                       >
                                         {busy ? (
-                                          <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
+                                          <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
                                         ) : (
                                           <Icon className="h-[16px] w-[16px]" strokeWidth={canSend ? 2.25 : 1.75} />
                                         )}
@@ -7807,7 +7806,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   )}
                                 >
                                   {pendingStop ? (
-                                    <Loader2 className="h-[15px] w-[15px] animate-spin" strokeWidth={2.25} />
+                                    <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
                                   ) : (
                                     <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
                                   )}

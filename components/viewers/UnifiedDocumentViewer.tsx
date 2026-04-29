@@ -44,7 +44,6 @@ import { Button } from "@/components/ui/button"
 import {
   Download,
   ExternalLink,
-  Loader2,
   AlertTriangle,
   FileText,
   FileSpreadsheet,
@@ -59,8 +58,7 @@ import {
   Copy,
   Maximize2,
   RefreshCw,
-  Reply,
-} from "lucide-react"
+  Reply} from "lucide-react"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -71,6 +69,7 @@ import mammoth from "mammoth"
 import JSZip from "jszip"
 import DOMPurify from "dompurify"
 import { Document as PdfDocument, Page as PdfPage, pdfjs } from "react-pdf"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import "react-pdf/dist/Page/TextLayer.css"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 
@@ -609,7 +608,7 @@ function SkeletonGeneric({ label }: { label?: string }) {
   return (
     <div className="flex h-full items-center justify-center text-muted-foreground">
       <div className="flex flex-col items-center gap-2">
-        <Loader2 className="h-6 w-6 animate-spin" />
+        <ThinkingIndicator size="md" />
         {label ? <span className="text-[12px]">{label}</span> : null}
       </div>
     </div>

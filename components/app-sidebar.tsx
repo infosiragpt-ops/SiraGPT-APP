@@ -95,6 +95,7 @@ import { apiClient } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // import NotificationCenter from "./notification-center" // Commented out to stop repeated API calls
 
 // Shared liquid-glass styles for the user menu dropdown. Keeping them
@@ -1363,7 +1364,7 @@ export function AppSidebar() {
                     {isLoadingMore && (
                       <SidebarMenuItem>
                         <div className="flex items-center justify-center py-3">
-                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                          <ThinkingIndicator size="sm" className="mr-2" />
                           <span className="text-xs text-muted-foreground">{t("loadingMoreChats")}</span>
                         </div>
                       </SidebarMenuItem>

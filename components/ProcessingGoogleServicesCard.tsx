@@ -2,8 +2,9 @@
 
 import React from 'react';
 import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, Calendar, FolderSearch } from "lucide-react";
+import { Calendar, FolderSearch } from "lucide-react";
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface ProcessingGoogleServicesCardProps {
     action: 'calendar' | 'drive';
 }
@@ -50,7 +51,7 @@ const ProcessingGoogleServicesCard: React.FC<ProcessingGoogleServicesCardProps> 
                     </div>
                     <div className="flex-1">
                         <div className="flex items-center gap-2">
-                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                            <ThinkingIndicator size="sm" className="text-muted-foreground" />
                             <p className="text-sm font-medium text-foreground transition-all duration-300">{message}</p>
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">

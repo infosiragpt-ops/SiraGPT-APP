@@ -3,8 +3,8 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { getAuthRedirect } from "@/lib/auth/auth-guard-rules"
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
-import { Loader2 } from "lucide-react"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface AuthGuardProps {
   children: React.ReactNode
   requireAdmin?: boolean
@@ -29,7 +29,7 @@ export function AuthGuard({ children, requireAdmin = false, requireSuperAdmin = 
       <div className="flex min-h-screen w-full items-center justify-center bg-background text-foreground">
         <div className="flex flex-col items-center gap-4 px-6 text-center">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border/60 bg-card shadow-sm">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            <ThinkingIndicator size="md" className="text-primary" />
           </div>
           <div className="space-y-1">
             <p className="text-sm font-medium">Cargando Sira GPT</p>

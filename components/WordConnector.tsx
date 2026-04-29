@@ -17,7 +17,7 @@ import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import Underline from '@tiptap/extension-underline';
 import { Button } from '@/components/ui/button';
-import { Download, Loader2, X, Maximize2, Minimize2, Bold, Italic, Underline as UnderlineIcon, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles, Undo, Redo, FileText, ChevronDown, Image as ImageIcon, Link as LinkIcon, Table as TableIcon, Palette, RotateCcw, RotateCw, Type, Highlighter, Quote, Code, Minus } from 'lucide-react';
+import { Download, X, Maximize2, Minimize2, Bold, Italic, Underline as UnderlineIcon, Strikethrough, AlignLeft, AlignCenter, AlignRight, AlignJustify, List, ListOrdered, Sparkles, Undo, Redo, FileText, ChevronDown, Image as ImageIcon, Link as LinkIcon, Table as TableIcon, Palette, RotateCcw, RotateCw, Type, Highlighter, Quote, Code, Minus } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { toast } from 'sonner';
 import { useChat } from '@/lib/chat-context-integrated';
@@ -49,6 +49,7 @@ interface WordConnectorProps {
 
 import { Extension } from '@tiptap/core';
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // const FontSize = Extension.create({
 //     name: 'fontSize',
 //     addOptions() {
@@ -1014,7 +1015,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
         if (!editor) {
             return (
                 <div className="w-full h-full flex items-center justify-center">
-                    <Loader2 className="h-6 w-6 animate-spin" />
+                    <ThinkingIndicator size="md" />
                 </div>
             );
         }
@@ -1034,7 +1035,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                     </div>
                     <div className="flex items-center gap-1">
                         {isGenerating && (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground mr-1" aria-label="Generating" />
+                            <ThinkingIndicator size="sm" className="h-3.5 w-3.5 text-muted-foreground mr-1" />
                         )}
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -1660,7 +1661,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                             {isBusy && (
                                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm">
                                     <div className="flex items-center gap-2 text-sm text-foreground">
-                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        <ThinkingIndicator size="sm" />
                                         <span>Generating document…</span>
                                     </div>
                                 </div>

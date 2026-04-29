@@ -15,7 +15,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Plus, Palette, Loader2 } from "lucide-react"
+import { Plus, Palette} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   designService, type DesignKind, type DesignFidelity,
 } from "@/lib/design-service"
@@ -169,7 +170,7 @@ export function CreatePanel() {
               tab === "template" && "opacity-50 cursor-not-allowed",
             )}
           >
-            {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {creating ? <ThinkingIndicator size="sm" /> : <Plus className="h-4 w-4" />}
             {tab === "template" ? "Create from template" : "Create"}
           </Button>
 

@@ -11,10 +11,8 @@ import {
   Eye,
   FileCheck2,
   FileText,
-  Loader2,
   RefreshCcw,
-  ShieldCheck,
-} from "lucide-react"
+  ShieldCheck} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/agent-status-icons"
 import { agentTaskService, type AgentArtifact, type AgentTaskState } from "@/lib/agent-task-service"
@@ -28,6 +26,7 @@ import {
 } from "@/lib/agent-task-presentation"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -227,7 +226,7 @@ function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: str
       title="Descargar documento"
       aria-label="Descargar documento"
     >
-      {downloading ? <Loader2 className="h-8 w-8 animate-spin" /> : <Download className="h-9 w-9 stroke-[2.25]" />}
+      {downloading ? <ThinkingIndicator size="lg" /> : <Download className="h-9 w-9 stroke-[2.25]" />}
     </button>
   )
 }
@@ -510,7 +509,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
               disabled={cancelling}
               className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/60 px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
             >
-              {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}
+              {cancelling ? <ThinkingIndicator size="sm" className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
               Cancelar
             </button>
           )}
@@ -521,7 +520,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
               disabled={retrying}
               className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/60 px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
             >
-              {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+              {retrying ? <ThinkingIndicator size="sm" className="h-3.5 w-3.5" /> : <RefreshCcw className="h-3.5 w-3.5" />}
               Reintentar
             </button>
           )}

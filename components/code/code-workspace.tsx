@@ -11,7 +11,7 @@
  */
 
 import * as React from "react"
-import { AlertTriangle, Command, Download, Loader2 } from "lucide-react"
+import { AlertTriangle, Command, Download} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -38,6 +38,7 @@ import {
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { EditorPanel } from "./editor-panel"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 export function CodeWorkspace() {
   const {
     files,
@@ -296,7 +297,7 @@ function Footer() {
           title={fileCount === 0 ? "Sin archivos para exportar" : `Exportar ${fileCount} archivo(s) como ZIP`}
         >
           {exporting ? (
-            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            <ThinkingIndicator size="xs" className="mr-1" />
           ) : (
             <Download className="mr-1 h-3 w-3" />
           )}

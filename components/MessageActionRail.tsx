@@ -4,15 +4,13 @@ import * as React from "react"
 import {
   Check,
   Clipboard,
-  Loader2,
   RefreshCw,
   Share2,
   ThumbsDown,
   ThumbsUp,
   Volume2,
   VolumeX,
-  X as XIcon,
-} from "lucide-react"
+  X as XIcon} from "lucide-react"
 import {
   Tooltip,
   TooltipContent,
@@ -21,6 +19,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 type FeedbackKind = "liked" | "disliked"
 type ActionKind = "copy" | "speak" | "like" | "dislike" | "regenerate" | "share"
 
@@ -138,7 +137,7 @@ function RailButton({
             pulse === "error" && "text-red-500 dark:text-red-400",
           )}
         >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : icon}
+          {loading ? <ThinkingIndicator size="sm" /> : icon}
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" sideOffset={6} className="text-[11.5px] font-medium">

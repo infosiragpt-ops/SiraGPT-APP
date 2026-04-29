@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CalendarDays, CheckCircle2, ImagePlus, Instagram, Linkedin, Loader2, Palette, Send, Youtube } from "lucide-react"
+import { CalendarDays, CheckCircle2, ImagePlus, Instagram, Linkedin, Palette, Send, Youtube } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 const NETWORKS = [
@@ -178,7 +179,7 @@ export default function PostPage() {
               </div>
 
               <Button onClick={schedule} disabled={saving} className="gap-2">
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}
+                {saving ? <ThinkingIndicator size="sm" /> : <CalendarDays className="h-4 w-4" />}
                 Programar contenido automático
               </Button>
             </CardContent>

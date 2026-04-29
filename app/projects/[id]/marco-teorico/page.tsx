@@ -19,7 +19,7 @@
 import * as React from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
-import { ArrowLeft, Play, Square, Download, Save, Loader2, RefreshCw } from "lucide-react"
+import { ArrowLeft, Play, Square, Download, Save, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -35,6 +35,7 @@ import { SourceChart } from "@/components/marco-teorico/source-chart"
 import { SourceCard } from "@/components/marco-teorico/source-card"
 
 import { projectsService, type ProjectDetail } from "@/lib/projects-service"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   generate as mtGenerate,
   save as mtSave,
@@ -230,7 +231,7 @@ export default function MarcoTeoricoPage() {
   }
 
   if (loadingProject) {
-    return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin" /></div>
+    return <div className="min-h-screen flex items-center justify-center"><ThinkingIndicator size="md" /></div>
   }
   if (!project) {
     return <div className="p-10 text-center text-muted-foreground">{t("projectNotFound")}</div>

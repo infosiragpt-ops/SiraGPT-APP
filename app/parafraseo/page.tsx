@@ -1,12 +1,13 @@
 "use client"
 
 import * as React from "react"
-import { Check, Copy, Eraser, Languages, Loader2 } from "lucide-react"
+import { Check, Copy, Eraser, Languages} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 const MODES = [
@@ -116,7 +117,7 @@ export default function ParafraseoPage() {
             disabled={loading || !input.trim()}
             className="h-8 rounded-full bg-foreground px-4 text-xs font-semibold text-background shadow-none hover:bg-foreground/90"
           >
-            {loading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+            {loading ? <ThinkingIndicator size="sm" className="mr-2 h-3.5 w-3.5" /> : null}
             Parafrasear
           </Button>
         </div>
@@ -202,7 +203,7 @@ export default function ParafraseoPage() {
               {inputWords} {inputWords === 1 ? "palabra" : "palabras"}
             </span>
             <Button onClick={paraphrase} disabled={loading || !input.trim()} className="h-9 rounded-full bg-emerald-600 px-5 text-white hover:bg-emerald-700">
-              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {loading ? <ThinkingIndicator size="sm" className="mr-2" /> : null}
               Parafrasear
             </Button>
           </div>

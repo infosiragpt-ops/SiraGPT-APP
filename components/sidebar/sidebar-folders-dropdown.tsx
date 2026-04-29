@@ -24,7 +24,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { ChevronRight, FolderClosed, FolderOpen, Loader2, Plus, RefreshCw, Square, SquareCheck, Terminal } from "lucide-react"
+import { ChevronRight, FolderClosed, FolderOpen, Plus, RefreshCw, Square, SquareCheck, Terminal } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils"
 import { useChat } from "@/lib/chat-context-integrated"
 import { projectsService, type Project, type ProjectChatSummary } from "@/lib/projects-service"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const STORAGE_EXPANDED = "code-workspace:expanded-folders"
 const STORAGE_ACTIVE = "code-workspace:active-folder"
 
@@ -252,7 +253,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
               aria-label="Actualizar carpetas"
               disabled={loading}
             >
-              {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              {loading ? <ThinkingIndicator size="sm" className="h-3.5 w-3.5" /> : <RefreshCw className="h-3.5 w-3.5" />}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="right">
@@ -264,7 +265,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       {open ? (
         loading && folders.length === 0 ? (
           <div className="px-3 py-3 text-center text-xs text-muted-foreground">
-            <Loader2 className="mx-auto mb-1 h-3.5 w-3.5 animate-spin opacity-60" />
+            <ThinkingIndicator size="sm" className="mx-auto mb-1 h-3.5 w-3.5 opacity-60" />
             Cargando…
           </div>
         ) : error ? (
@@ -385,7 +386,7 @@ function FolderRow({
         <div className="ml-4 border-l border-border/40 pl-2">
           {state?.loading ? (
             <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-              <Loader2 className="mr-1 inline h-3 w-3 animate-spin opacity-70" />
+              <ThinkingIndicator size="xs" className="mr-1 inline opacity-70" />
               Cargando chats…
             </div>
           ) : state?.error ? (

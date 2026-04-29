@@ -18,7 +18,7 @@
 
 import * as React from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ArrowLeft, Download, Trash2, Loader2, Check, FileText } from "lucide-react"
+import { ArrowLeft, Download, Trash2, Check, FileText } from "lucide-react"
 import { toast } from "sonner"
 import { formatDistanceToNow } from "date-fns"
 
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { TiptapEditor } from "@/components/editor/tiptap-editor"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   projectDocumentsService, type ProjectDocument,
 } from "@/lib/project-documents-service"
@@ -133,7 +134,7 @@ export default function ProjectDocumentPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <ThinkingIndicator size="md" className="text-muted-foreground" />
       </div>
     )
   }
@@ -235,7 +236,7 @@ function SaveIndicator({
       "flex items-center gap-1.5 text-[11px] shrink-0 transition-opacity",
       status === "error" ? "text-red-500" : "text-muted-foreground",
     )}>
-      {status === "saving" && <Loader2 className="h-3 w-3 animate-spin" />}
+      {status === "saving" && <ThinkingIndicator size="xs" />}
       {status === "saved" && <Check className="h-3 w-3" />}
       <span className="tabular-nums">{text}</span>
     </div>

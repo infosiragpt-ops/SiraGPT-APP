@@ -14,8 +14,7 @@
 import * as React from "react"
 import { useParams, useRouter } from "next/navigation"
 import {
-  ArrowLeft, Download, MoreHorizontal, Trash2, Loader2, Palette,
-} from "lucide-react"
+  ArrowLeft, Download, MoreHorizontal, Trash2, Palette} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -27,6 +26,7 @@ import { CanvasIframe } from "@/components/design/canvas-iframe"
 import { ChatPanel } from "@/components/design/chat-panel"
 import { designService, type DesignDetail, type DesignQualityReport } from "@/lib/design-service"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 export default function DesignCanvasPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
@@ -94,7 +94,7 @@ export default function DesignCanvasPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <ThinkingIndicator size="md" className="text-muted-foreground" />
       </div>
     )
   }

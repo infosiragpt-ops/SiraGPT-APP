@@ -10,7 +10,6 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Input } from "@/components/ui/input"
 import {
-  Loader2,
   Video,
   Play,
   Pause,
@@ -32,6 +31,7 @@ import {
 import { apiClient } from "@/lib/api"
 import { toast } from "sonner"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface VideoOperation {
   operationId: string;
   filename: string;
@@ -299,7 +299,7 @@ export default function VideoGenerationComponent() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'processing': return <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+      case 'processing': return <ThinkingIndicator size="sm" className="text-blue-500" />
       case 'completed': return <CheckCircle className="h-4 w-4 text-green-500" />
       case 'failed': return <XCircle className="h-4 w-4 text-red-500" />
       case 'timeout': return <Timer className="h-4 w-4 text-orange-500" />
@@ -447,7 +447,7 @@ export default function VideoGenerationComponent() {
           >
             {isGenerating ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <ThinkingIndicator size="sm" className="mr-2" />
                 Generating Video...
               </>
             ) : (

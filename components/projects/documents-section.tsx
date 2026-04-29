@@ -13,10 +13,11 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { FileText, Plus, Loader2, Trash2 } from "lucide-react"
+import { FileText, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   projectDocumentsService, type ProjectDocumentSummary,
 } from "@/lib/project-documents-service"
@@ -82,7 +83,7 @@ export function DocumentsSection({ projectId }: Props) {
           disabled={creating}
           aria-label="Nuevo documento"
         >
-          {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+          {creating ? <ThinkingIndicator size="sm" /> : <Plus className="h-4 w-4" />}
         </Button>
       </div>
 

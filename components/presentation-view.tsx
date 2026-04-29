@@ -1,9 +1,10 @@
 "use client"
 
 import { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Download, X, Loader2, FileText } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, X, FileText } from 'lucide-react';
 import { Button } from './ui/button';
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // Define the structure of a slide and presentation
 interface Slide {
     title: string;
@@ -62,7 +63,7 @@ export function PresentationView({ presentation, onClose, isLoading, isVector, c
     if (isLoading) {
         return (
             <div className="w-full h-full bg-background flex flex-col items-center justify-center">
-                <Loader2 className="w-12 h-12 animate-spin text-primary mb-4" />
+                <ThinkingIndicator size="xl" className="text-primary mb-4" />
                 <h2 className="text-2xl font-semibold mb-2">{loadingTitle}</h2>
                 <p className="text-muted-foreground text-center">
                     Please wait while we create your slides.

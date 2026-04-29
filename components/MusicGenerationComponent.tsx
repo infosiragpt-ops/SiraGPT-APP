@@ -9,11 +9,12 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Loader2, Music, Play, Pause, Download, Volume2, Clock, Sparkles } from "lucide-react"
+import { Music, Play, Pause, Download, Volume2, Clock, Sparkles } from "lucide-react"
 import { apiClient } from "@/lib/api"
 import { toast } from "sonner"
 import { useAuth } from "@/lib/auth-context-integrated"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface MusicStyle {
   id: string;
   name: string;
@@ -309,7 +310,7 @@ const downloadMusic = async () => {
       >
         {isGenerating ? (
           <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <ThinkingIndicator size="sm" className="mr-2" />
             Generating Music...
           </>
         ) : (

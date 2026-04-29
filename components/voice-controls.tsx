@@ -20,11 +20,11 @@ import {
   Play,
   Pause,
   Settings,
-  Loader2,
   Square
 } from 'lucide-react'
 import { useVoices } from '@/hooks/use-voices'
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface Voice {
   voiceId: string
   name: string
@@ -350,7 +350,7 @@ useEffect(() => {
       {/* Loading Indicator */}
       {isLoading && (
         <div className="flex items-center">
-          <Loader2 className="w-4 h-4 animate-spin" />
+          <ThinkingIndicator size="sm" />
         </div>
       )}
       </div>

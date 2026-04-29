@@ -13,6 +13,7 @@ import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/hooks/use-toast'
 import apiClient from '@/lib/api'
 import VoiceSelector from './voice-selector'
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
     Mic,
     Play,
@@ -22,7 +23,6 @@ import {
     Upload,
     Volume2,
     Settings,
-    Loader2,
     FileAudio,
     MessageSquare
 } from 'lucide-react'
@@ -369,7 +369,7 @@ export default function SpeechToTextComponent() {
                             {isLoading && (
                                 <Card className="p-4">
                                     <div className="flex items-center justify-center space-x-2">
-                                        <Loader2 className="w-5 h-5 animate-spin" />
+                                        <ThinkingIndicator size="md" />
                                         <span>Transcribing audio...</span>
                                     </div>
                                     <Progress value={undefined} className="mt-2" />

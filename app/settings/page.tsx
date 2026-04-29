@@ -19,9 +19,8 @@ import {
   ArrowLeft, Sliders, Brain, Bell, Sparkles, Plug, Clock, Database,
   ShieldCheck, UserCircle2, Star, Check, Monitor, Moon, Sun,
   LogOut, Download, Trash2, Github, Globe, Linkedin, Mail,
-  ExternalLink, Loader2, Search as SearchIcon, Camera, Plus,
-  AlertTriangle, Laptop,
-} from "lucide-react"
+  ExternalLink, Search as SearchIcon, Camera, Plus,
+  AlertTriangle, Laptop} from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
@@ -29,6 +28,7 @@ import { useTranslations } from "next-intl"
 import { useRouter as useNextRouter } from "next/navigation"
 import { LOCALES } from "@/lib/i18n/locales"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // ────────────────────────────────────────────────────────────
 // Section registry
 // ────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ function SaveIndicator() {
   if (saveStatus === 'saving') {
     return (
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
+        <ThinkingIndicator size="xs" />
         {t("saving")}
       </div>
     )
@@ -649,7 +649,7 @@ function ModelsSection() {
 
       {loading ? (
         <Card className="p-8 text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
-          <Loader2 className="h-4 w-4 animate-spin" />Cargando modelos…
+          <ThinkingIndicator size="sm" />Cargando modelos…
         </Card>
       ) : (
         Object.entries(byProvider).map(([provider, list]) => (
@@ -1041,12 +1041,12 @@ function DataControlsSection() {
         </Row>
         <Row title="Archivar todos los chats" desc="Retira todos los chats de la vista principal">
           <Button variant="outline" size="sm" onClick={archiveAll} disabled={busy === "archive"}>
-            {busy === "archive" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Archivar todo"}
+            {busy === "archive" ? <ThinkingIndicator size="sm" /> : "Archivar todo"}
           </Button>
         </Row>
         <Row title="Borrar historial" desc="Acción irreversible — pedirá doble confirmación">
           <Button variant="destructive" size="sm" onClick={clearHistory} disabled={busy === "clear"}>
-            {busy === "clear" ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Trash2 className="h-4 w-4 mr-1" />Borrar</>}
+            {busy === "clear" ? <ThinkingIndicator size="sm" /> : <><Trash2 className="h-4 w-4 mr-1" />Borrar</>}
           </Button>
         </Row>
       </SectionCard>
@@ -1054,7 +1054,7 @@ function DataControlsSection() {
       <SectionCard title="Tus datos">
         <Row title="Descargar mis datos" desc="Exporta un JSON con tus chats, archivos y configuración">
           <Button variant="outline" size="sm" onClick={downloadData} disabled={exporting}>
-            {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Download className="h-4 w-4 mr-1" />Descargar</>}
+            {exporting ? <ThinkingIndicator size="sm" /> : <><Download className="h-4 w-4 mr-1" />Descargar</>}
           </Button>
         </Row>
         <Row title="Política de privacidad" desc="Revisa cómo manejamos tus datos">
@@ -1104,7 +1104,7 @@ function SecuritySection() {
 
       <SectionCard title="Dispositivos de confianza" desc={sessions ? `${sessions.length} sesión(es) activa(s)` : "Cargando…"}>
         {!sessions ? (
-          <div className="p-5 text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />Cargando sesiones…</div>
+          <div className="p-5 text-sm text-muted-foreground flex items-center gap-2"><ThinkingIndicator size="sm" />Cargando sesiones…</div>
         ) : sessions.length === 0 ? (
           <div className="p-5 text-sm text-muted-foreground">Sin sesiones activas.</div>
         ) : (
@@ -1132,7 +1132,7 @@ function SecuritySection() {
         {others > 0 && (
           <div className="p-5">
             <Button variant="destructive" size="sm" onClick={revokeAll} disabled={revoking}>
-              {revoking ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cerrar sesión en todos los demás dispositivos"}
+              {revoking ? <ThinkingIndicator size="sm" /> : "Cerrar sesión en todos los demás dispositivos"}
             </Button>
           </div>
         )}
@@ -1199,7 +1199,7 @@ function AccountSection() {
           </div>
           <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
           <Button variant="outline" size="sm" onClick={onPickFile} disabled={uploading}>
-            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Camera className="h-4 w-4 mr-1" />Subir foto</>}
+            {uploading ? <ThinkingIndicator size="sm" /> : <><Camera className="h-4 w-4 mr-1" />Subir foto</>}
           </Button>
         </div>
       </SectionCard>

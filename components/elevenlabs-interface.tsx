@@ -22,12 +22,12 @@ import {
   Upload,
   Volume2,
   Settings,
-  Loader2,
   FileAudio,
   MessageSquare
 } from 'lucide-react'
 import { useVoices } from '@/hooks/use-voices'
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface Voice {
   voiceId: string
   name: string
@@ -457,7 +457,7 @@ const { voices, loading: voicesLoading } = useVoices()
               >
                 {isLoading ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <ThinkingIndicator size="sm" className="mr-2" />
                     Generating Audio...
                   </>
                 ) : (
@@ -637,7 +637,7 @@ const { voices, loading: voicesLoading } = useVoices()
               {isLoading && (
                 <Card className="p-4">
                   <div className="flex items-center justify-center space-x-2">
-                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <ThinkingIndicator size="md" />
                     <span>Transcribing audio...</span>
                   </div>
                   <Progress value={undefined} className="mt-2" />

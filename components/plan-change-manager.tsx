@@ -11,7 +11,6 @@ import {
   Calendar, 
   DollarSign,
   Info,
-  Loader2,
   AlertTriangle,
   CheckCircle,
   Sparkles
@@ -20,6 +19,7 @@ import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface PlanChangeModalProps {
   currentPlan: string
   onPlanChanged?: () => void
@@ -226,7 +226,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
             <div className="inline-flex items-center gap-2 bg-white dark:bg-gray-800 px-4 py-2 rounded-full border shadow-sm mb-4">
               <Calculator className="h-5 w-5 text-blue-500" />
               <span className="font-semibold">Billing Preview</span>
-              {loading && <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}
+              {loading && <ThinkingIndicator size="sm" className="text-blue-500" />}
             </div>
             <p className="text-muted-foreground">
               See exactly how this change affects your billing
@@ -236,7 +236,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12 space-y-4">
               <div className="relative">
-                <Loader2 className="h-12 w-12 animate-spin text-blue-500" />
+                <ThinkingIndicator size="xl" className="text-blue-500" />
                 <div className="absolute inset-0 h-12 w-12 rounded-full bg-blue-500/20 animate-pulse" />
               </div>
               <span className="text-lg font-medium">Calculating proration...</span>
@@ -362,7 +362,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                   size="lg"
                   className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
                 >
-                  {executing && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  {executing && <ThinkingIndicator size="sm" className="mr-2" />}
                   {immediate ? 'Change Plan Now' : 'Schedule Change'}
                 </Button>
                 

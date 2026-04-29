@@ -4,9 +4,8 @@ import * as React from "react"
 import {
   BookOpen, Briefcase, ShoppingCart, Newspaper, DollarSign, Cloud, Plane,
   Home, UtensilsCrossed, Heart, GraduationCap, Scale, Landmark, Users,
-  Globe, Search, Loader2, ExternalLink, Copy, AlertTriangle, Settings2,
-  CheckCircle2, XCircle,
-} from "lucide-react"
+  Globe, Search, ExternalLink, Copy, AlertTriangle, Settings2,
+  CheckCircle2, XCircle} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -16,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { buildApa, buildSynthesis, categoryActionLabel, formatYear } from "@/lib/search-brain-ui"
 import { cn } from "@/lib/utils"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 const REGIONS = [
@@ -210,7 +210,7 @@ export function UniversalSearchPanel() {
               className="h-12 border-0 bg-transparent text-base shadow-none focus-visible:ring-0"
             />
             <Button type="submit" disabled={!query.trim() || loading} className="h-12 gap-2">
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              {loading ? <ThinkingIndicator size="sm" /> : <Search className="h-4 w-4" />}
               Buscar
             </Button>
           </div>

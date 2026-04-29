@@ -22,8 +22,7 @@
 //     Upload,
 //     Volume2,
 //     Settings,
-//     Loader2,
-//     FileAudio,
+//     //     FileAudio,
 //     MessageSquare
 // } from 'lucide-react'
 
@@ -360,7 +359,7 @@
 //                             >
 //                                 {isLoading ? (
 //                                     <>
-//                                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+//                                         <ThinkingIndicator size="sm" className="mr-2" />
 //                                         Generating Audio...
 //                                     </>
 //                                 ) : (
@@ -459,7 +458,6 @@ import {
     Pause,
     Download,
     Settings,
-    Loader2,
     MessageSquare,
     Share2,
     Rewind,
@@ -471,6 +469,7 @@ import { useVoices } from '@/hooks/use-voices'
 
 
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // Interfaces
 interface Voice {
     voiceId: string
@@ -725,7 +724,7 @@ const downloadAudio = async () => {
                         >
                             {isLoading ? (
                                 <>
-                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                    <ThinkingIndicator size="sm" className="mr-2" />
                                     Generating Audio...
                                 </>
                             ) : (

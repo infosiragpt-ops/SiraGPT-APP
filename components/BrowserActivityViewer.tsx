@@ -1,12 +1,13 @@
 "use client"
 
 import React, { useState, useEffect, useRef } from 'react'
-import { Minimize2, Maximize2, X, Monitor, ExternalLink, Loader2 } from 'lucide-react'
+import { Minimize2, Maximize2, X, Monitor, ExternalLink} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { apiClient } from '@/lib/api'
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface BrowserActivityViewerProps {
   sessionId: string
   onClose?: () => void
@@ -167,7 +168,7 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
             </Badge>
           )}
           {isLoading && (
-            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+            <ThinkingIndicator size="xs" className="text-muted-foreground" />
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -208,7 +209,7 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
         {isLoading && !activity ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center space-y-3">
-              <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
+              <ThinkingIndicator size="lg" className="text-primary mx-auto" />
               <p className="text-sm text-muted-foreground">Loading browser activity...</p>
             </div>
           </div>

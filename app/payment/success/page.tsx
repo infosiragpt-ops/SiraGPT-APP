@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { CheckCircle, XCircle, Loader2, Crown, Sparkles, ArrowRight, Settings, CreditCard, Calendar, Users } from 'lucide-react'
+import { CheckCircle, XCircle, Crown, Sparkles, ArrowRight, Settings, CreditCard, Calendar, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 function PaymentSuccessContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -123,7 +124,7 @@ function PaymentSuccessContent() {
         <Card className="w-full max-w-md">
           <CardContent className="pt-6">
             <div className="flex flex-col items-center space-y-4">
-              <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+              <ThinkingIndicator size="lg" className="text-blue-600" />
               <h2 className="text-xl font-semibold">Verifying Payment...</h2>
               <p className="text-sm text-muted-foreground text-center">
                 Please wait while we confirm your payment.
@@ -359,7 +360,7 @@ export default function PaymentSuccessPage() {
         <Card className="w-full max-w-md">
           <CardContent className="pt-6">
             <div className="flex flex-col items-center space-y-4">
-              <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+              <ThinkingIndicator size="lg" className="text-blue-600" />
               <h2 className="text-xl font-semibold">Loading...</h2>
               <p className="text-sm text-muted-foreground text-center">
                 Please wait while we load your payment details.

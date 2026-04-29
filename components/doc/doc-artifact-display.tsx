@@ -27,14 +27,14 @@ import * as React from "react"
 import {
   FileText, FileSpreadsheet, Download, FileCode2,
   Presentation as PresentationIcon, Code2, ChevronDown, ChevronUp,
-  Eye, EyeOff, Loader2,
-} from "lucide-react"
+  Eye, EyeOff} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 import { downloadUrlAsFile } from "@/lib/utils"
 import { toast } from "sonner"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface DocFile {
   type: "doc"
   format: "docx" | "xlsx" | "pptx" | "pdf" | "svg" | "csv"
@@ -178,7 +178,7 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
             className="h-8"
           >
             {isDownloading
-              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ? <ThinkingIndicator size="sm" className="h-3.5 w-3.5" />
               : <Download className="h-3.5 w-3.5" />}
             <span className="ml-1 hidden text-[11.5px] sm:inline">
               {isDownloading ? "Descargando" : "Descargar"}

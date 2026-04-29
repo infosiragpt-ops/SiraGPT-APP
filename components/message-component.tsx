@@ -17,7 +17,7 @@ import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
 import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
-    Loader2, Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
+    Video, AlertCircle, CheckCircle, RefreshCw, Wand2, Video as VideoIcon,
     Sparkles, Eye, Presentation as PresentationIcon,
     ExternalLink, Mail, X, Brush, Maximize2
 } from "lucide-react"
@@ -68,6 +68,7 @@ import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
     copyMarkdownToWordClipboard,
     createWordClipboardPayloadFromSelection,
@@ -1743,7 +1744,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
                 {status === 'processing' || status === 'in_progress' ? (
                     <div className="mt-2 flex items-center gap-2 text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <ThinkingIndicator size="sm" />
                         <span>Generating video… This may take 2–5 minutes.</span>
                     </div>
                 ) : null}
@@ -2134,7 +2135,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             return (
                 <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
                     <div className="flex items-center gap-2 text-sm">
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <ThinkingIndicator size="sm" />
                         <span className="font-medium">Generating Presentation...</span>
                     </div>
                     <div className="mt-2 text-xs text-muted-foreground">
@@ -2654,7 +2655,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     <div className="flex-grow overflow-y-auto p-1">
                         {isContentLoading ? (
                             <div className="flex items-center justify-center h-full">
-                                <Loader2 className="h-8 w-8 animate-spin" />
+                                <ThinkingIndicator size="lg" />
                             </div>
                         ) : (
                             <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>
@@ -2676,7 +2677,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     <div className="flex-grow overflow-y-auto p-1">
                         {isContentLoading ? (
                             <div className="flex items-center justify-center h-full">
-                                <Loader2 className="h-8 w-8 animate-spin" />
+                                <ThinkingIndicator size="lg" />
                             </div>
                         ) : (
                             <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>

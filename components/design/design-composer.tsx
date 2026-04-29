@@ -31,8 +31,7 @@
 
 import * as React from "react"
 import {
-  Plus, ShieldAlert, ChevronDown, Brain, Mic, ArrowUp, Loader2, Square, Check,
-} from "lucide-react"
+  Plus, ShieldAlert, ChevronDown, Brain, Mic, ArrowUp, Square, Check} from "lucide-react"
 import { toast } from "sonner"
 import { motion, AnimatePresence } from "framer-motion"
 
@@ -45,6 +44,7 @@ import {
 import { cn } from "@/lib/utils"
 import type { DesignQualityReport } from "@/lib/design-service"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // ─── Models API + curation ────────────────────────────────────────────────
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
@@ -387,7 +387,7 @@ export function DesignComposer({
             exit={{ opacity: 0, height: 0 }}
             className="border-t border-border/60 px-4 py-2 flex items-center gap-2 text-[11px] text-muted-foreground"
           >
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <ThinkingIndicator size="xs" />
             <span>
               {stage === "generating" && "Generando"}
               {stage === "reviewing" && "Revisando calidad"}

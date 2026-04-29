@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useEffect } from 'react'
-import { BookOpen, Plus, X, Loader2, CheckCircle, AlertCircle, Download, Search, FileText } from 'lucide-react'
+import { BookOpen, Plus, X, CheckCircle, AlertCircle, Download, Search, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -10,6 +10,7 @@ import { Progress } from '@/components/ui/progress'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { apiClient } from '@/lib/api'
 import { toast } from 'sonner'
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   Dialog,
   DialogContent,
@@ -160,7 +161,7 @@ const ThesisGenerator: React.FC<ThesisGeneratorProps> = ({ chatId, onComplete })
       case 'error':
         return <AlertCircle className="h-5 w-5 text-red-500" />
       default:
-        return <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />
+        return <ThinkingIndicator size="md" className="text-blue-500" />
     }
   }
 
@@ -218,7 +219,7 @@ const ThesisGenerator: React.FC<ThesisGeneratorProps> = ({ chatId, onComplete })
           >
             {isGenerating ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <ThinkingIndicator size="sm" className="mr-2" />
                 Generating...
               </>
             ) : (

@@ -31,10 +31,9 @@ import { useParams, useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import {
   ArrowLeft, MoreHorizontal, Star, Plus, Send,
-  FileText, Trash2, Lock, Loader2, Paperclip, Pencil,
+  FileText, Trash2, Lock, Paperclip, Pencil,
   Share2, Link as LinkIcon, Check, X, BookOpen,
-  Search, Database, MessageSquare, ShieldCheck,
-} from "lucide-react"
+  Search, Database, MessageSquare, ShieldCheck} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -57,6 +56,7 @@ import {
 } from "@/lib/projects-service"
 import { DocumentsSection } from "@/components/projects/documents-section"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 // ─── Page ─────────────────────────────────────────────────────────────────
@@ -306,7 +306,7 @@ export default function ProjectDetailPage() {
                     onClick={() => composerFileRef.current?.click()}
                     aria-label={t("attachFile")}
                   >
-                    {composerUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+                    {composerUploading ? <ThinkingIndicator size="sm" /> : <Paperclip className="h-4 w-4" />}
                   </Button>
                   <input
                     ref={composerFileRef}
@@ -321,7 +321,7 @@ export default function ProjectDetailPage() {
                     size="sm"
                     className="gap-1.5 h-8"
                   >
-                    {launching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                    {launching ? <ThinkingIndicator size="sm" className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
                     {t("send")}
                   </Button>
                 </div>
@@ -524,7 +524,7 @@ function ProjectChatsSection({
             La búsqueda queda aislada a este proyecto.
           </p>
         </div>
-        {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        {loading && <ThinkingIndicator size="sm" className="text-muted-foreground" />}
       </div>
 
       <div className="relative">
@@ -710,7 +710,7 @@ function FilesSection({
           disabled={uploading}
           aria-label={t("attachFile")}
         >
-          {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+          {uploading ? <ThinkingIndicator size="sm" /> : <Plus className="h-4 w-4" />}
         </Button>
         <input
           ref={fileInputRef}

@@ -17,12 +17,13 @@
  */
 
 import * as React from "react"
-import { FilePlus2, Loader2, Pencil, RotateCcw, Trash2 } from "lucide-react"
+import { FilePlus2, Pencil, RotateCcw, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 export function FileTreePanel() {
   const {
     files,
@@ -77,7 +78,7 @@ export function FileTreePanel() {
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
         {sortedPaths.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            <Loader2 className="mx-auto mb-2 h-4 w-4 animate-spin opacity-60" />
+            <ThinkingIndicator size="sm" className="mx-auto mb-2 opacity-60" />
             Cargando workspace…
           </div>
         ) : (

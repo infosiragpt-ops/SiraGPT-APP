@@ -14,12 +14,13 @@
 import * as React from "react"
 import dynamic from "next/dynamic"
 import { toast } from "sonner"
-import { Download, Loader2, Sparkles, RefreshCw } from "lucide-react"
+import { Download, Sparkles, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { planService } from "@/lib/plan-service"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const PlanViewer = dynamic(
   () => import("@/components/plan/plan-viewer").then(m => m.PlanViewer),
   { ssr: false, loading: () => <div className="h-full w-full" /> },
@@ -140,7 +141,7 @@ export default function PlanPage() {
             className="w-full"
           >
             {loading ? (
-              <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />Generando…</>
+              <><ThinkingIndicator size="sm" className="mr-2 h-3.5 w-3.5" />Generando…</>
             ) : dxf ? (
               <><RefreshCw className="mr-2 h-3.5 w-3.5" />Regenerar</>
             ) : (

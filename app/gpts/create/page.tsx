@@ -20,7 +20,6 @@ import {
   Database,
   ImageIcon,
   Code,
-  Loader2,
   Sparkles,
   BookOpen,
   Briefcase,
@@ -30,8 +29,7 @@ import {
   Heart,
   Gamepad2,
   TrendingUp,
-  Star,
-} from "lucide-react"
+  Star} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -48,6 +46,7 @@ import { useChat } from "@/lib/chat-context-integrated"
 import { toast } from "sonner"
 import { gptsService, type CustomGPT } from "@/lib/gpts-service"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // Categories - matching the GPTs page
 const categories = [
   { name: "Writing", icon: <BookOpen className="w-4 h-4" /> },
@@ -506,7 +505,7 @@ export default function CreateGPTPage() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+          <ThinkingIndicator size="lg" className="mx-auto mb-4" />
           <p className="text-muted-foreground">Loading GPT...</p>
         </div>
       </div>

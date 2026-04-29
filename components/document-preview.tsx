@@ -1,11 +1,12 @@
 "use client"
 
 import React from "react"
-import { Loader2, X, AlertCircle, Download, FileText } from "lucide-react"
+import { X, AlertCircle, Download, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { toast } from "sonner"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 /**
  * DocumentPreview — right-pane viewer for generated documents.
  *
@@ -423,7 +424,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             title={isDownloading ? "Descargando" : "Descargar"}
             aria-label={isDownloading ? "Descargando" : "Descargar"}
           >
-            {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
           </Button>
           <Button
             variant="ghost"
@@ -441,7 +442,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       <div className="scroll-contain min-h-0 flex-1 overflow-auto bg-muted/10">
         {state.kind === "loading" && (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <ThinkingIndicator size="sm" />
             Cargando vista previa…
           </div>
         )}

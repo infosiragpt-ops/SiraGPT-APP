@@ -12,12 +12,12 @@ import {
   DollarSign,
   Calendar,
   ArrowUpDown,
-  Loader2,
   RefreshCw
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { apiClient } from '@/lib/api'
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface AnalyticsData {
   revenue: {
     mrr: number
@@ -120,7 +120,7 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
             disabled={loading}
           >
             {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <ThinkingIndicator size="sm" />
             ) : (
               <RefreshCw className="h-4 w-4" />
             )}
@@ -131,7 +131,7 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
       {loading && !analytics ? (
         <Card>
           <CardContent className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin mr-2" />
+            <ThinkingIndicator size="lg" className="mr-2" />
             <span>Loading analytics...</span>
           </CardContent>
         </Card>

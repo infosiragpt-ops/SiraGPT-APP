@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState } from 'react'
-import { CheckCircle, AlertCircle, Loader2, Download, FileText, Search, Clock, BookOpen, Eye } from 'lucide-react'
+import { CheckCircle, AlertCircle, Download, FileText, Search, Clock, BookOpen, Eye } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { apiClient } from '@/lib/api'
 import { toast } from 'sonner'
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   Dialog,
   DialogContent,
@@ -67,7 +68,7 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
       case 'generating':
         return <FileText className="h-5 w-5 text-blue-500 animate-pulse" />
       default:
-        return <Loader2 className="h-5 w-5 text-gray-500 animate-spin" />
+        return <ThinkingIndicator size="md" className="text-gray-500" />
     }
   }
 
@@ -194,7 +195,7 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
                 >
                   {isDownloading ? (
                     <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <ThinkingIndicator size="sm" className="mr-2" />
                       Downloading...
                     </>
                   ) : (
@@ -268,7 +269,7 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
               <Button onClick={handleDownload} disabled={isDownloading}>
                 {isDownloading ? (
                   <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    <ThinkingIndicator size="sm" className="mr-2" />
                     Downloading...
                   </>
                 ) : (

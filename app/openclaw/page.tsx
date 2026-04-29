@@ -6,11 +6,9 @@ import { useTranslations } from "next-intl"
 import {
   AlertTriangle,
   CheckCircle2,
-  Loader2,
   RefreshCw,
   Settings2,
-  ShieldCheck,
-} from "lucide-react"
+  ShieldCheck} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -18,6 +16,7 @@ import { apiClient } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { cn } from "@/lib/utils"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 type OpenClawStatus = {
   release: {
     tag: string
@@ -257,7 +256,7 @@ export default function OpenClawPage() {
           onClick={() => void bootstrapWorkspace()}
           disabled={working}
         >
-          {working ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Settings2 className="mr-2 h-3.5 w-3.5" />}
+          {working ? <ThinkingIndicator size="sm" className="mr-2 h-3.5 w-3.5" /> : <Settings2 className="mr-2 h-3.5 w-3.5" />}
           Preparar
         </Button>
       </header>
@@ -283,7 +282,7 @@ export default function OpenClawPage() {
 
           {loading || (session?.frameUrl && !nativeStoragePrimed) ? (
             <OpenClawFrameOverlay
-              icon={<Loader2 className="h-5 w-5 animate-spin" />}
+              icon={<ThinkingIndicator size="md" />}
               title="Cargando interfaz nativa"
               description="SiraGPT esta conectando el gateway local de OpenClaw."
             />

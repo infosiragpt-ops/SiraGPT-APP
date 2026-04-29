@@ -14,9 +14,10 @@
 
 import * as React from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Check, Loader2, AlertCircle, Circle } from "lucide-react"
+import { Check, AlertCircle, Circle } from "lucide-react"
 import { cn } from "@/lib/utils"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 export type PhaseKey = "search" | "validate" | "synthesize" | "format"
 export type PhaseStatus = "pending" | "running" | "done" | "error"
 
@@ -105,7 +106,7 @@ function PhaseIcon({ status }: { status: PhaseStatus }) {
   if (status === "running") {
     return (
       <span className={cn(base, "text-foreground")}>
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <ThinkingIndicator size="sm" />
       </span>
     )
   }

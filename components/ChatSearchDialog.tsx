@@ -14,6 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useRouter, usePathname } from "next/navigation"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface ChatSearchDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -245,7 +246,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                 {/* Loading indicator for infinite scroll */}
                 {isLoadingMore && !searchQuery && (
                   <div className="flex items-center justify-center py-4">
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    <ThinkingIndicator size="sm" className="mr-2" />
                     <span className="text-sm text-muted-foreground">Loading more chats...</span>
                   </div>
                 )}

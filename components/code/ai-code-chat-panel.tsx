@@ -29,14 +29,12 @@ import {
   CircleHelp,
   Image as ImageIcon,
   ListChecks,
-  Loader2,
   Mic,
   Plus,
   Send,
   Server,
   Sparkles,
-  StopCircle,
-} from "lucide-react"
+  StopCircle} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -62,6 +60,7 @@ import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-wor
 
 import { DiffView } from "./diff-view"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 type ChatTurn = {
   id: string
   role: "user" | "assistant"
@@ -438,7 +437,7 @@ function ChatBubble({
     >
       <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
         {isUser ? "Tú" : "Asistente"}
-        {turn.streaming ? <Loader2 className="ml-2 inline h-3 w-3 animate-spin" /> : null}
+        {turn.streaming ? <ThinkingIndicator size="xs" className="ml-2 inline" /> : null}
       </div>
       <div className="whitespace-pre-wrap text-sm leading-relaxed">
         {/* Strip fenced blocks from the prose so the user does not see

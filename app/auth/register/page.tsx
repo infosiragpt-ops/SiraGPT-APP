@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Eye, EyeOff, Loader2 } from "lucide-react"
+import { Eye, EyeOff} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -13,6 +13,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 export default function RegisterPage() {
   const t = useTranslations("auth")
   const [showPassword, setShowPassword] = React.useState(false)
@@ -206,7 +207,7 @@ export default function RegisterPage() {
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <ThinkingIndicator size="sm" className="mr-2" />
                   {t("signingIn")}
                 </>
               ) : (

@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Calendar, FolderOpen, CheckCircle2, XCircle, Loader2, AlertCircle } from 'lucide-react';
+import { Calendar, FolderOpen, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface GoogleServicesConnectionCardProps {
     onConnectionChange?: (isConnected: boolean) => void;
 }
@@ -166,7 +167,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
         return (
             <Card className="w-full">
                 <CardContent className="p-6 flex items-center justify-center">
-                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    <ThinkingIndicator size="md" className="text-muted-foreground" />
                 </CardContent>
             </Card>
         );
@@ -258,7 +259,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                         >
                             {isConnecting ? (
                                 <>
-                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    <ThinkingIndicator size="sm" className="mr-2" />
                                     Connecting...
                                 </>
                             ) : (
