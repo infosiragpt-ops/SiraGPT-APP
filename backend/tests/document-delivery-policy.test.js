@@ -27,16 +27,17 @@ test('DocumentDeliveryPolicy requires PPTX for presentation work', () => {
   assert.equal(policy.template, 'pitch');
 });
 
-test('DocumentDeliveryPolicy requires DOCX for long academic responses', () => {
+test('DocumentDeliveryPolicy suggests DOCX for long document analysis without forcing generation', () => {
   const finalText = Array.from({ length: 950 }, (_, idx) => `palabra${idx}`).join(' ');
   const policy = buildDocumentDeliveryPolicy({
     goal: 'Analiza esta tesis de manera académica.',
     finalText,
   });
 
-  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.mode, 'doc_suggested');
   assert.equal(policy.format, 'docx');
   assert.equal(policy.template, 'academic');
+  assert.equal(policy.autoGenerate, false);
 });
 
 test('DocumentDeliveryPolicy keeps short conversational turns in chat', () => {
@@ -72,4 +73,18 @@ test('DocumentDeliveryPolicy still creates a file when transcription asks for Wo
 
 test('detectFormat honors explicit requested format', () => {
   assert.equal(detectFormat('Haz un informe', 'pdf'), 'pdf');
+});
+
+test('DocumentDeliveryPolicy ignores assistant wording when classifying user intent', () => {
+  // Regression: a short user question whose assistant draft happens to
+  // contain "documento" used to be promoted to doc_required because the
+  // classifier was reading goal + finalText combined.
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'de que pais es este?',
+    finalText: 'No se pudo determinar el país basado en la información disponible en el documento proporcionado.',
+    files: ['uploaded-file-id'],
+  });
+
+  assert.notEqual(policy.mode, 'doc_required');
+  assert.equal(policy.autoGenerate, false);
 });

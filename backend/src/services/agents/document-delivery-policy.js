@@ -5,6 +5,8 @@ const PDF_RE = /\b(pdf|certificado|formulario|imprimible|constancia|recibo)\b/i;
 const LONG_DELIVERABLE_RE = /\b(extenso|profesional|completo|detallado|profund[oa]|acad[eé]mic[oa]|investigaci[oó]n|an[aá]lisis|estrategia|plan de negocio|consultor[ií]a|entregable)\b/i;
 const TRANSCRIPTION_RE = /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcribe|transcript|transcription)\b/i;
 const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
+const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
+const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 
 const PALETTES = {
   academic: {
@@ -75,12 +77,21 @@ function detectComplexity(text, estimatedWords) {
   return 'simple';
 }
 
-function classifyMode(text, estimatedWords, format, files = [], options = {}) {
+// Classification is intentionally driven by the user's request text only.
+// The assistant's draft answer can mention "documento", "informe" or
+// "tabla" while answering a plain question, and matching on that text
+// would auto-promote conversational turns to doc_required.
+function classifyMode(requestText, estimatedWords, format, files = [], options = {}) {
   if (options.transcriptionOnly) return 'chat_only';
-  const explicitDocument = WORDISH_RE.test(text) || SHEET_RE.test(text) || DECK_RE.test(text) || PDF_RE.test(text);
+  const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
+  const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText);
+  if (documentUnderstanding && !explicitOutput) {
+    return estimatedWords >= 900 || LONG_DELIVERABLE_RE.test(requestText) ? 'doc_suggested' : 'chat_only';
+  }
+  const explicitDocument = WORDISH_RE.test(requestText) || SHEET_RE.test(requestText) || DECK_RE.test(requestText) || PDF_RE.test(requestText);
   if (explicitDocument) return 'doc_required';
-  if (estimatedWords >= 900) return 'doc_required';
-  if (estimatedWords >= 500 || files.length > 0 || LONG_DELIVERABLE_RE.test(text)) return 'doc_suggested';
+  if (estimatedWords >= 900) return 'doc_suggested';
+  if (estimatedWords >= 500 || files.length > 0 || LONG_DELIVERABLE_RE.test(requestText)) return 'doc_suggested';
   if (format !== 'docx' && estimatedWords >= 300) return 'doc_suggested';
   return 'chat_only';
 }
@@ -93,19 +104,24 @@ function buildDocumentDeliveryPolicy({
   requestedFormat = null,
 } = {}) {
   const requestText = compactText(`${goal || ''} ${displayGoal || ''}`);
+  // `text` mixes request + draft answer and is only used for descriptive
+  // signals (template / table hints / complexity). Routing-critical
+  // decisions (format, mode) must come from `requestText` so the
+  // assistant's wording can never promote a chat turn to doc_required.
   const text = compactText(`${requestText} ${finalText || ''}`);
   const transcriptionOnly = TRANSCRIPTION_RE.test(requestText) && !EXPLICIT_TRANSCRIPTION_OUTPUT_RE.test(requestText);
   const estimated = estimateWords({ goal, displayGoal, finalText });
-  const format = detectFormat(text, requestedFormat);
+  const format = detectFormat(requestText, requestedFormat);
   const template = detectTemplate(text, format);
-  const mode = classifyMode(text, estimated, format, Array.isArray(files) ? files : [], { transcriptionOnly });
+  const mode = classifyMode(requestText, estimated, format, Array.isArray(files) ? files : [], { transcriptionOnly });
   const tableSignals = SHEET_RE.test(text);
   const complexity = detectComplexity(text, estimated);
   const reason = (() => {
     if (transcriptionOnly) return 'Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo.';
+    if (DOCUMENT_UNDERSTANDING_RE.test(requestText) && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)) return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
     if (mode === 'chat_only') return 'Respuesta conversacional corta; no requiere archivo.';
     if (mode === 'doc_suggested') return 'La respuesta tiene suficiente densidad para sugerir un documento profesional.';
-    if (estimated >= 900) return 'Respuesta prevista mayor a 900 palabras; documento requerido.';
+    if (estimated >= 900) return 'Respuesta prevista extensa; documento sugerido, no automatico.';
     if (format === 'xlsx') return 'Solicitud tabular/de datos; Excel requerido.';
     if (format === 'pptx') return 'Solicitud de presentación; PowerPoint requerido.';
     if (format === 'pdf') return 'Solicitud imprimible/formal; PDF requerido.';
