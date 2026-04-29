@@ -36,6 +36,12 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const AUTH_CHECK_TIMEOUT_MS = 12000
 
+function normalizeLoginPassword(password: string): string {
+  return String(password || "")
+    .replace(/[\u200B-\u200D\uFEFF\u2028\u2029\r\n\t]/g, "")
+    .trim()
+}
+
 function withAuthTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
   let timeoutId: number | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -98,7 +104,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const loginEpoch = ++authEpochRef.current
     setIsLoading(true)
     try {
-      const response = await apiClient.login({ email: email.trim(), password })
+      const response = await apiClient.login({
+        email: email.trim(),
+        password: normalizeLoginPassword(password),
+      })
       if (!response?.user || !response?.token) {
         throw new Error('Invalid login response')
       }

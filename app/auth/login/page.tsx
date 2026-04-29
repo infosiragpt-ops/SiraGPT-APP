@@ -28,11 +28,7 @@ export default function LoginPage() {
   // Redirect if already logged in
   React.useEffect(() => {
     if (user) {
-      if (user.isSuperAdmin) {
-        router.push("/super-admin")
-      } else {
-        router.push("/chat")
-      }
+      router.push("/chat")
     }
   }, [user, router])
 
