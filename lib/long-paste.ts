@@ -1,9 +1,9 @@
 export const LONG_PASTE_MIN_CHARS = 1600
 export const LONG_PASTE_MIN_WORDS = 260
-// Threshold is "more than 8 lines" (>= 9 non-empty lines) — product
+// Threshold is "more than 30 lines" (>= 31 non-empty lines) — product
 // rule: any multi-line paste deeper than a short snippet should be
 // chipped as a document instead of dumped into the textarea.
-export const LONG_PASTE_MIN_LINES = 9
+export const LONG_PASTE_MIN_LINES = 31
 
 export type LongPasteMetadata = {
   kind: "long_paste_document"

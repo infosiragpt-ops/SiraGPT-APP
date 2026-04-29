@@ -18,19 +18,19 @@ test("long paste classifier compiles dense pasted content into a document", () =
   assert.equal(shouldCompilePastedTextAsDocument(pasted), true)
 })
 
-test("long paste classifier triggers strictly above 8 non-empty lines", () => {
-  const eightLines = Array.from({ length: 8 }, (_, i) => `linea ${i + 1}`).join("\n")
-  const nineLines = Array.from({ length: 9 }, (_, i) => `linea ${i + 1}`).join("\n")
+test("long paste classifier triggers strictly above 30 non-empty lines", () => {
+  const thirtyLines = Array.from({ length: 30 }, (_, i) => `linea ${i + 1}`).join("\n")
+  const thirtyOneLines = Array.from({ length: 31 }, (_, i) => `linea ${i + 1}`).join("\n")
 
-  assert.equal(shouldCompilePastedTextAsDocument(eightLines), false, "8 líneas deben pegarse como texto plano")
-  assert.equal(shouldCompilePastedTextAsDocument(nineLines), true, "9 líneas deben convertirse en documento")
+  assert.equal(shouldCompilePastedTextAsDocument(thirtyLines), false, "30 líneas deben pegarse como texto plano")
+  assert.equal(shouldCompilePastedTextAsDocument(thirtyOneLines), true, "31 líneas deben convertirse en documento")
 })
 
 test("long paste classifier ignores blank lines when counting", () => {
-  // 8 non-empty lines separated by blanks → still under the threshold even
+  // 30 non-empty lines separated by blanks → still under the threshold even
   // though raw line count is higher. Prevents accidental triggers from
   // double-spaced short messages.
-  const padded = Array.from({ length: 8 }, (_, i) => `linea ${i + 1}`).join("\n\n")
+  const padded = Array.from({ length: 30 }, (_, i) => `linea ${i + 1}`).join("\n\n")
   assert.equal(shouldCompilePastedTextAsDocument(padded), false)
 })
 
