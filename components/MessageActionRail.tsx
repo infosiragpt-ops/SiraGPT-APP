@@ -186,9 +186,7 @@ export function MessageActionRail({
   const hasText = trimmed.length > 0
   // Copy is meaningless on empty/error responses.
   const showCopy = canCopy && hasText && !hasError
-  // TTS needs actual prose; skip pure-code blocks (would just say "code block").
-  const isPureCode = hasText && /^```[\s\S]+```$/.test(trimmed)
-  const showSpeak = canVoice && hasText && !isPureCode && !hasError
+  const showSpeak = canVoice && hasText && !hasError
   const showFeedback = canFeedback && hasText && !hasError
   // Regeneration only makes sense after the model has finished producing a
   // response. During the thinking/streaming state it creates visual noise and
