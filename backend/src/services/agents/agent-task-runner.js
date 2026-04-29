@@ -37,6 +37,7 @@ const {
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../message-attachments');
+const { assessAttachmentContext } = require('./attachment-context-guard');
 
 const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -59,6 +60,7 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
         'docintel_analyze',
         'docintel_retrieve',
         'docintel_extract_tables',
+        'docintel_compare',
         'python_exec',
         'run_tests',
       ].includes(tool))
@@ -554,6 +556,127 @@ async function runAgentTaskJob(payload = {}, job = null) {
         durationMs: Date.now() - startedAt,
         transcriptionFileCount: transcriptionFileIds.length,
         transcriptionTextLength: transcriptionText.length,
+      });
+      return { taskId, status, artifacts: 0 };
+    }
+
+    // ── Thin-attachment guard ─────────────────────────────────────────
+    // If the user attached files AND the question references the attachment
+    // ("de qué es esto?", "qué dice este documento?"), but extraction
+    // produced only a handful of useful words, refuse to bluff. Ask the
+    // user for the real content instead — better UX than a confident
+    // "no se pudo determinar..." follow-up wrapped in an auto DOCX.
+    const attachmentStats = assessAttachmentContext({
+      uploadedFileContext,
+      files,
+      userText: displayGoal || goal,
+    });
+    if (attachmentStats.isThin) {
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: 'Contexto adjunto insuficiente; se solicita material adicional al usuario.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          thinContextWords: attachmentStats.usefulWords,
+          fileCount: files.length,
+          transcriptionOnly: false,
+        },
+      };
+      task.documentPolicy = documentPolicy;
+      emit({ type: 'document_policy', policy: documentPolicy });
+
+      const stepId = 's1';
+      stepIdCounter = 1;
+      emit({ type: 'step_start', id: stepId, label: 'Revisando adjunto', icon: 'file-text' });
+      emit({ type: 'step_done', id: stepId, ok: true });
+      emit({
+        type: 'checkpoint',
+        label: 'Adjunto con contenido insuficiente',
+        status: 'warning',
+        payload: { usefulWords: attachmentStats.usefulWords, fileCount: files.length },
+      });
+
+      const wordsLabel = attachmentStats.usefulWords === 1 ? '1 palabra útil' : `${attachmentStats.usefulWords} palabras útiles`;
+      const finalMarkdown = [
+        `El material adjunto solo contiene ${wordsLabel}, lo que no me alcanza para responder tu pregunta con confianza.`,
+        '',
+        '**¿Puedes ayudarme con una de estas opciones?**',
+        '- Pega el texto completo de la página o documento.',
+        '- Sube el archivo original (PDF, DOCX, imagen completa).',
+        '- Comparte el enlace de origen para revisar el contenido directamente.',
+      ].join('\n');
+
+      emit({ type: 'final_text', markdown: finalMarkdown });
+      const doneEvent = emit({
+        type: 'done',
+        stoppedReason: 'thin_attachment_context',
+        stats: { steps: 1, artifacts: 0 },
+      });
+
+      const status = 'completed';
+      task.status = status;
+      task.updatedAt = new Date().toISOString();
+      const dbMessage = await persistAssistantMessage({
+        chatId,
+        userId: user.id,
+        assistantMessageId,
+        streamState,
+        task,
+        status,
+        artifacts: [],
+        metadata: {
+          documentPolicy,
+          runtimeModel: runtimeModelProfile.runtimeModel,
+          selectedModel: model,
+          stoppedReason: 'thin_attachment_context',
+          attachmentStats,
+        },
+      });
+      if (dbMessage?.id && doneEvent) {
+        emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
+      }
+
+      taskStore.markTaskStatus(task, status, {
+        streamState,
+        stats: {
+          steps: 1,
+          artifacts: 0,
+          durationMs: Date.now() - startedAt,
+          stoppedReason: 'thin_attachment_context',
+        },
+        artifacts: [],
+      });
+      if (task.durableExecution?.graphId) {
+        try {
+          durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, status, {
+            stats: {
+              steps: 1,
+              artifacts: 0,
+              durationMs: Date.now() - startedAt,
+              stoppedReason: 'thin_attachment_context',
+            },
+          });
+        } catch (err) {
+          console.warn('[agent-task-runner] durable graph status write failed:', err.message);
+        }
+      }
+      metrics.counter('agent_task_invocations_total', { status });
+      metrics.observe('agent_task_duration_ms', { status }, Date.now() - startedAt);
+      metrics.counter('agent_task_artifacts_total', { status }, 0);
+      persistProgress(status);
+      auditLog.audit({
+        event: 'agent_task_worker_finished',
+        taskId,
+        userId: user.id,
+        chatId,
+        status,
+        stoppedReason: 'thin_attachment_context',
+        steps: 1,
+        artifacts: 0,
+        durationMs: Date.now() - startedAt,
+        attachmentStats,
       });
       return { taskId, status, artifacts: 0 };
     }
