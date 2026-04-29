@@ -52,6 +52,42 @@ export function normalizePath(input: string): string {
   return input.replace(/\\/g, "/").replace(/^\/+/, "").trim()
 }
 
+/**
+ * Detect whether the current browser exposes the File System Access API
+ * (Chromium-only at the time of writing). Useful to render a banner
+ * + visible export option for Safari/Firefox users whose changes only
+ * persist in localStorage and can't sync to a real folder on disk.
+ */
+export function browserSupportsLocalFolderSync(): boolean {
+  if (typeof window === "undefined") return false
+  return typeof (window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker === "function"
+}
+
+/**
+ * Bundle the entire workspace into a downloadable ZIP. The jszip
+ * import is dynamic on purpose: it's ~250 KB minified, and most users
+ * never click "Export" — keeping it out of the initial /code chunk
+ * avoids paying that cost on first paint.
+ */
+export async function exportWorkspaceAsZip(files: CodeFiles): Promise<Blob> {
+  const JSZipModule = await import("jszip")
+  const JSZip = (JSZipModule as { default?: typeof import("jszip") }).default
+    ?? (JSZipModule as unknown as typeof import("jszip"))
+  const zip = new JSZip()
+  for (const file of Object.values(files)) {
+    const path = normalizePath(file.path) || file.path
+    if (!path) continue
+    zip.file(path, file.content ?? "")
+  }
+  return zip.generateAsync({ type: "blob", compression: "DEFLATE" })
+}
+
+/** Build a stable filename for the exported ZIP. */
+export function workspaceExportFilename(label = "siragpt-code-workspace"): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "")
+  return `${label}-${stamp}.zip`
+}
+
 export type CodeBlock = {
   language: string
   /** Optional path inferred from the block (// path: foo.tsx, language=foo.tsx, etc.). */

@@ -11,7 +11,7 @@
  */
 
 import * as React from "react"
-import { Command } from "lucide-react"
+import { AlertTriangle, Command, Download, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -29,6 +29,11 @@ import {
 } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import {
+  browserSupportsLocalFolderSync,
+  exportWorkspaceAsZip,
+  workspaceExportFilename,
+} from "@/lib/code-workspace-utils"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { EditorPanel } from "./editor-panel"
@@ -131,6 +136,7 @@ export function CodeWorkspace() {
 
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
+      <BrowserCompatBanner />
       <div className="min-h-0 flex-1">
         {/* Layout: AI chat on the left (primary), file tree + editor on the
             right. Putting the chat first matches a "talk to your code"
@@ -219,11 +225,85 @@ type PaletteCommand = {
   run: () => void
 }
 
+/**
+ * BrowserCompatBanner — informs the user when the current browser
+ * lacks the File System Access API (Safari/Firefox today). In that
+ * case the workspace still works (state persists to localStorage)
+ * but cannot sync with a folder on disk, so we surface the limitation
+ * upfront and point them at Export-as-ZIP.
+ *
+ * Renders nothing during SSR or on supported browsers.
+ */
+function BrowserCompatBanner() {
+  const [supported, setSupported] = React.useState<boolean | null>(null)
+  React.useEffect(() => {
+    setSupported(browserSupportsLocalFolderSync())
+  }, [])
+  if (supported !== false) return null
+  return (
+    <div className="flex shrink-0 items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-[12px] text-amber-700 dark:text-amber-300">
+      <AlertTriangle className="mt-[1px] h-3.5 w-3.5 shrink-0" />
+      <p className="leading-snug">
+        Tu navegador no permite sincronizar con una carpeta local del disco. Tus cambios se guardan en este navegador,
+        pero <strong>se perderán si limpias los datos del sitio</strong>. Usa <strong>Exportar como ZIP</strong> antes
+        de cerrar, o abre <code>/code</code> en Chrome o Edge para enlazar una carpeta de tu escritorio.
+      </p>
+    </div>
+  )
+}
+
 function Footer() {
+  const { files } = useCodeWorkspace()
+  const [exporting, setExporting] = React.useState(false)
+  const fileCount = Object.keys(files).length
+
+  const handleExport = React.useCallback(async () => {
+    if (exporting) return
+    if (typeof window === "undefined") return
+    setExporting(true)
+    try {
+      const blob = await exportWorkspaceAsZip(files)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = workspaceExportFilename()
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Revoke after a tick to let the download start without yanking
+      // the URL out from under the browser.
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (err) {
+      // Surface the failure but keep the button responsive.
+      console.error("[code-workspace] export-as-zip failed:", err)
+      window.alert(`No se pudo exportar el ZIP: ${(err as Error)?.message || "error desconocido"}`)
+    } finally {
+      setExporting(false)
+    }
+  }, [exporting, files])
+
   return (
     <div className="flex h-7 shrink-0 items-center justify-between border-t border-border/60 bg-muted/20 px-4 text-[11px] text-muted-foreground">
       <span>Workspace local · cambios guardados en este navegador</span>
-      <span className="opacity-80">Inspirado en patrones de Cursor</span>
+      <div className="flex items-center gap-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-[11px]"
+          disabled={exporting || fileCount === 0}
+          onClick={handleExport}
+          title={fileCount === 0 ? "Sin archivos para exportar" : `Exportar ${fileCount} archivo(s) como ZIP`}
+        >
+          {exporting ? (
+            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+          ) : (
+            <Download className="mr-1 h-3 w-3" />
+          )}
+          Exportar como ZIP
+        </Button>
+        <span className="opacity-80">Inspirado en patrones de Cursor</span>
+      </div>
     </div>
   )
 }
