@@ -25,7 +25,7 @@ env:
 jobs:
   # ───────────────────────────────────────────────────────────────────
   # FRONTEND — Next.js 14 at repo root
-  # Gates: install, build (hard) · lint, type-check (soft, informational)
+  # Gates: install, lint, type-check, build — all blocking.
   # ───────────────────────────────────────────────────────────────────
   frontend:
     name: Frontend · build
@@ -45,19 +45,19 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
-      # Soft gate — project has pre-existing lint warnings; runs for
-      # visibility but doesn't block merges. Tighten once the baseline
-      # is clean.
-      - name: Lint (informational)
-        run: npm run lint
-        continue-on-error: true
+      # Hard gate (with ratchet) — `eslint` errors fail the build.
+      # `--max-warnings 97` pins the existing baseline so the warning
+      # count can only shrink: any new warning lands on top of 97 and
+      # tips the gate over. Update the number when you clear warnings.
+      - name: Lint (hard gate, ratcheted)
+        run: npm run lint -- --max-warnings 97
 
-      # Soft gate — same reason. There's a known backlog of TS errors
-      # in ported components (voice-selector, chart, etc.). Tracking
-      # them here so they're visible in every run without being a blocker.
-      - name: TypeScript check (informational)
+      # Hard gate — TypeScript errors fail the build. Baseline is
+      # clean today (0 errors); flip is safe. `--ignoreDeprecations 5.0`
+      # is kept to avoid noise from libraries that haven't migrated to
+      # TS 5.x deprecation rules yet.
+      - name: TypeScript check (hard gate)
         run: npx tsc --noEmit --skipLibCheck --ignoreDeprecations 5.0
-        continue-on-error: true
 
       # Hard gate — `next build` is the source of truth. Catches
       # missing modules, import errors, static-analysis failures, and
