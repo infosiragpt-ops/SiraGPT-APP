@@ -5,6 +5,7 @@ const {
   requireRedisUrl,
 } = require('./agent-task-queue');
 const { runAgentTaskJob } = require('./agent-task-runner');
+const { installProcessGuards, isTransientRedisError } = require('./redis-resilience');
 
 let worker;
 let workerConnection;
@@ -18,8 +19,13 @@ function startAgentTaskWorker() {
     return null;
   }
 
+  // Guards against unhandled Redis rejections bubbling up from BullMQ
+  // internals (e.g. Job.updateProgress during a failover) and crashing
+  // the parent process. Other rejections still surface as errors.
+  installProcessGuards();
+
   const concurrency = Math.max(1, Number.parseInt(process.env.AGENT_WORKER_CONCURRENCY || '2', 10) || 2);
-  workerConnection = createRedisConnection();
+  workerConnection = createRedisConnection({ label: 'agent-task-worker' });
   worker = new Worker(
     getQueueName(),
     async (job) => runAgentTaskJob(job.data, job),
@@ -35,8 +41,13 @@ function startAgentTaskWorker() {
   worker.on('failed', (job, err) => {
     console.error(`[agent-task-worker] job failed ${job?.id || 'unknown'}:`, err?.message || err);
   });
+  // The connection itself already logs transient errors via
+  // attachRedisListeners; this handler only surfaces worker-level
+  // BullMQ events that aren't connection-driven.
   worker.on('error', (err) => {
-    console.error('[agent-task-worker] redis/worker error:', err?.message || err);
+    if (!isTransientRedisError(err)) {
+      console.error('[agent-task-worker] worker error:', err?.message || err);
+    }
   });
 
   return worker;

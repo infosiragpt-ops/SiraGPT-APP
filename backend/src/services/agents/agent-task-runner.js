@@ -295,7 +295,13 @@ async function runAgentTaskJob(payload = {}, job = null) {
       state: streamState,
       documentPolicy,
     });
-    if (job) void job.updateProgress({ status, lastEventSeq: task.lastEventSeq || 0 });
+    if (job) {
+      // Catch and discard: BullMQ writes progress through Redis, which
+      // can reject mid-failover. Without .catch() the rejection goes
+      // unhandled and (depending on Node policy) can terminate the
+      // worker. Progress is best-effort observability — never fatal.
+      Promise.resolve(job.updateProgress({ status, lastEventSeq: task.lastEventSeq || 0 })).catch(() => {});
+    }
   };
   const emit = (event) => {
     streamState = internals.reduceAgentState(streamState, event);

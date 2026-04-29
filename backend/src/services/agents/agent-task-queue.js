@@ -1,5 +1,6 @@
 const { Queue } = require('bullmq');
 const IORedis = require('ioredis');
+const { attachRedisListeners, reconnectDelay } = require('./redis-resilience');
 
 let queue;
 let queueConnection;
@@ -16,17 +17,23 @@ function requireRedisUrl() {
   return redisUrl;
 }
 
-function createRedisConnection() {
+function createRedisConnection({ label = 'redis' } = {}) {
   const redisUrl = requireRedisUrl();
-  return new IORedis(redisUrl, {
+  const conn = new IORedis(redisUrl, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
+    retryStrategy: reconnectDelay,
+    // Keep BullMQ commands queued during a reconnect window instead of
+    // failing them — pairs with maxRetriesPerRequest:null.
+    enableOfflineQueue: true,
   });
+  attachRedisListeners(conn, { label });
+  return conn;
 }
 
 function getAgentTaskQueue() {
   if (queue) return queue;
-  queueConnection = createRedisConnection();
+  queueConnection = createRedisConnection({ label: 'agent-task-queue' });
   queue = new Queue(getQueueName(), {
     connection: queueConnection,
     defaultJobOptions: {
