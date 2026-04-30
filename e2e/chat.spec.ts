@@ -14,9 +14,19 @@ import { expect, test } from "@playwright/test"
  * The signal we're looking for is "the chat route does not 5xx".
  * Tightened assertions belong in a follow-up spec that stubs auth
  * or runs against a seeded test user.
+ *
+ * Cold-start note
+ * ---------------
+ * In CI the first `page.goto("/chat")` triggers Next dev's first
+ * compile of the chat surface, which can take >30s. We use
+ * `waitUntil: "domcontentloaded"` (not the default `load`) so
+ * navigation resolves as soon as the HTML is parsed — `load` waits
+ * for every resource, and an i18n redirect mid-load surfaces as
+ * `net::ERR_ABORTED; maybe frame was detached?`. domcontentloaded
+ * is enough for a smoke that only cares the route resolved.
  */
 test("chat route resolves to either the chat page or a known auth page", async ({ page }) => {
-  const response = await page.goto("/chat")
+  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   expect(
     response!.ok() || (response!.status() >= 300 && response!.status() < 400),
@@ -26,7 +36,10 @@ test("chat route resolves to either the chat page or a known auth page", async (
   // The middleware either renders the chat surface (user is signed
   // in or anonymous mode is allowed) or redirects to /<locale>/login
   // / /<locale>/auth. Either is acceptable for the smoke.
-  await page.waitForLoadState("networkidle", { timeout: 15_000 })
+  // `domcontentloaded` again here (instead of `networkidle`) — the
+  // chat page may keep WebSocket / SSE connections open which means
+  // network never goes truly idle.
+  await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
   const url = page.url()
   expect(url).toMatch(/\/(chat|login|auth|register|sign[-_]?in)/i)
 })
@@ -37,8 +50,8 @@ test("chat route resolves to either the chat page or a known auth page", async (
  * surfaces as a CI failure instead of waiting for a user report.
  */
 test("chat surface paints a title and a non-empty body", async ({ page }) => {
-  await page.goto("/chat")
-  await page.waitForLoadState("networkidle", { timeout: 15_000 })
+  await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
 
   const title = await page.title()
   expect(title.trim().length, "document title should be set").toBeGreaterThan(0)

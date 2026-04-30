@@ -18,7 +18,11 @@ const PUBLIC_ROUTES = ["/", "/chat", "/privacy-policy", "/icon.svg"]
 
 for (const route of PUBLIC_ROUTES) {
   test(`route ${route} does not 5xx`, async ({ page }) => {
-    const response = await page.goto(route, { waitUntil: "domcontentloaded" })
+    // 60s timeout for cold-compile in Next dev; the navigation
+    // itself is short once the route is built, but the *first*
+    // request after `next dev` boots blocks while Webpack compiles
+    // the page bundle. Without this the spec is flaky in CI.
+    const response = await page.goto(route, { waitUntil: "domcontentloaded", timeout: 60_000 })
     expect(response, `navigation to ${route} should resolve`).not.toBeNull()
     const status = response!.status()
     expect(status, `${route} returned ${status}`).toBeLessThan(500)
