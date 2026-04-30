@@ -35,6 +35,7 @@ and **where to look** when you need to change something.
 | `policies.js` | Clarification + safety policy constants and evaluators. | `backend/tests/sira-platform.test.js` |
 | `pipeline-errors.js` | Stage-aware error taxonomy (`SiraPipelineError` + per-stage subclasses). Express `siraErrorHandler`. | `backend/tests/sira-pipeline-errors.test.js`, `backend/tests/sira-http-integration.test.js` |
 | `metrics.js` | Sira-specific Prometheus counters + histograms (turns, durations, errors, budget decisions). Sits on top of `services/agents/metrics.js`. | `backend/tests/sira-health-and-metrics.test.js` |
+| `context-compactor.js` | Per-turn context shrinking: dedup → window-fit → summarize-on-overflow → RAG rank+cap → memory cap. Reuses `services/context-window.js`. | `backend/tests/sira-context-compactor.test.js` |
 | `token-ledger.js` | `buildTokenUsageFrame`, in-memory ledger. Deterministic chars/4 estimator + provider-reported merge. | `backend/tests/sira-token-ledger.test.ts` (frontend) |
 | `token-budget-policy.js` | Plan caps (FREE/PRO/TEAM/ENTERPRISE) and `assessTokenBudget`. | `backend/tests/sira-token-budget-policy.test.ts` (frontend) |
 | `model-adapter.js` | Model abstraction across OpenAI / Anthropic / Groq / Gemini / OpenRouter; auto-routing guard. | `backend/tests/sira-platform.test.js` |
