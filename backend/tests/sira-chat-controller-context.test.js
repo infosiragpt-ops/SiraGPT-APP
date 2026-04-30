@@ -33,7 +33,7 @@ const baseArgs = {
 };
 
 describe("chat-controller / context-compactor wiring", () => {
-  test("emits a context_compacted audit with stats including the new user message", async () => {
+  test("emits a context_compacted audit when prior history is present", async () => {
     const { storage, audits } = instrumentedStorage();
     await handleChatTurn({
       ...baseArgs,
@@ -47,8 +47,10 @@ describe("chat-controller / context-compactor wiring", () => {
 
     const audit = audits.find((a) => a.event === "context_compacted");
     assert.ok(audit, "context_compacted audit must fire");
-    // 2 history msgs + 1 current user msg = 3 input messages
-    assert.equal(audit.payload.original_messages, 3);
+    // Compaction now runs over `history` only (not the current
+    // message — the engine receives that separately as `text`). So
+    // 2 history msgs → 2 input messages.
+    assert.equal(audit.payload.original_messages, 2);
     // Nothing duplicated → no collisions.
     assert.equal(audit.payload.dedup_collisions, 0);
     // Under the 80% safety budget for gpt-4o-mini → no drops.
@@ -56,13 +58,27 @@ describe("chat-controller / context-compactor wiring", () => {
     assert.equal(audit.meta.requestId, "req-ctx-1");
   });
 
-  test("dedup_collisions is reported when history repeats the current message verbatim", async () => {
+  test("no audit fires when there is no prior history (compaction skipped)", async () => {
     const { storage, audits } = instrumentedStorage();
     await handleChatTurn({
       ...baseArgs,
       userMessage: "Hola",
-      // Same content as the current message → one dedup collision.
-      history: [{ role: "user", content: "Hola" }],
+      history: [],
+    }, { storage, registry: createDefaultRegistry() });
+    // Empty history → nothing to compact → no audit.
+    assert.equal(audits.find((a) => a.event === "context_compacted"), undefined);
+  });
+
+  test("dedup_collisions is reported when history contains exact-duplicate messages", async () => {
+    const { storage, audits } = instrumentedStorage();
+    await handleChatTurn({
+      ...baseArgs,
+      userMessage: "Resume",
+      // Two identical history msgs → one dedup collision.
+      history: [
+        { role: "user", content: "Hola" },
+        { role: "user", content: "Hola" },
+      ],
     }, { storage, registry: createDefaultRegistry() });
     const audit = audits.find((a) => a.event === "context_compacted");
     assert.equal(audit.payload.original_messages, 2);
@@ -70,12 +86,15 @@ describe("chat-controller / context-compactor wiring", () => {
     assert.equal(audit.payload.deduped_messages, 1);
   });
 
-  test("envelope carries context_compaction_summary for replay tools", async () => {
+  test("envelope carries context_compaction_summary when compaction ran", async () => {
     const { storage } = instrumentedStorage();
     const r = await handleChatTurn({
       ...baseArgs,
       userMessage: "Necesito un resumen breve.",
-      history: [],
+      history: [
+        { role: "user", content: "previous turn" },
+        { role: "assistant", content: "previous answer" },
+      ],
     }, { storage, registry: createDefaultRegistry() });
     if (r.envelope) {
       assert.ok(r.envelope.context_compaction_summary, "summary must be on the envelope");

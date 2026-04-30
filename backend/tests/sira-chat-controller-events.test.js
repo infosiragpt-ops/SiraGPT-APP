@@ -20,23 +20,28 @@ const baseArgs = {
 };
 
 describe("chat-controller emits ordered turn events", () => {
-  test("happy turn emits turn_started → token_budget_checked → envelope_built → chat_mode_resolved → context_compacted → … → turn_completed → _end", async () => {
+  test("happy turn with prior history emits the full ordered prefix", async () => {
     const storage = createSiraStorage({ adapter: createInMemoryStorage() });
     const events = createBufferedEvents();
+    // History triggers context_compacted (which runs BEFORE the
+    // engine so the engine sees the fitted history).
     await handleChatTurn({
       ...baseArgs,
       userMessage: "Resúmeme algo breve.",
+      history: [{ role: "user", content: "before" }, { role: "assistant", content: "after" }],
       requestId: "req-events-1",
     }, { storage, registry: createDefaultRegistry(), events });
 
     const names = events.events.map((e) => e.name);
-    // Mandatory ordered prefix:
+    // Compaction now happens before the engine, so the ordered
+    // prefix is: turn_started → token_budget_checked →
+    // context_compacted → envelope_built → chat_mode_resolved.
     const expectedOrder = [
       "turn_started",
       "token_budget_checked",
+      "context_compacted",
       "envelope_built",
       "chat_mode_resolved",
-      "context_compacted",
     ];
     let cursor = 0;
     for (const expected of expectedOrder) {
@@ -45,6 +50,24 @@ describe("chat-controller emits ordered turn events", () => {
       cursor = idx + 1;
     }
     // Stream must end with _end.
+    assert.equal(names[names.length - 1], "_end");
+  });
+
+  test("turn with no prior history skips context_compacted", async () => {
+    const storage = createSiraStorage({ adapter: createInMemoryStorage() });
+    const events = createBufferedEvents();
+    await handleChatTurn({
+      ...baseArgs,
+      userMessage: "Hola",
+      history: [],
+      requestId: "req-events-empty",
+    }, { storage, registry: createDefaultRegistry(), events });
+
+    const names = events.events.map((e) => e.name);
+    assert.ok(names.includes("turn_started"));
+    assert.ok(names.includes("envelope_built"));
+    // No context_compacted because there was nothing to compact.
+    assert.equal(names.includes("context_compacted"), false);
     assert.equal(names[names.length - 1], "_end");
   });
 

@@ -359,11 +359,36 @@ async function handleChatTurnUnlocked({
     }
   }
 
+  // ── 1.8. Context compaction (consumer side) ──────────────────────
+  // Runs the unified compactor over the *prior* conversation history
+  // (not including the current user message — the engine receives it
+  // separately via `text`). The fitted result becomes the `history`
+  // arg to the engine, so intent classification, planner graph, and
+  // every downstream prompt assembler see a context that already
+  // respects the model's window. A failure inside the compactor
+  // degrades back to the raw history so streaming never breaks on a
+  // compaction bug.
+  let compaction = null;
+  let historyForEngine = history;
+  if (Array.isArray(history) && history.length > 0) {
+    compaction = await compactContext({
+      messages: history,
+      model: selectedModel.modelId,
+      ragChunks: [],
+      memoryGists: [],
+    }).catch(() => null);
+    if (compaction && Array.isArray(compaction.messages)) {
+      historyForEngine = compaction.messages;
+      await store.audit("context_compacted", compaction.stats, auditMeta);
+      events.emit("context_compacted", { ...compaction.stats, request_id: requestId });
+    }
+  }
+
   // ── 2. Run engine (envelope + 5 frames + dry response) ───────────
   const bundle = await ciraEngine.runUserMessage({
     text: userMessage,
     attachments,
-    history,
+    history: historyForEngine,
     userPlan,
     userId,
     conversationId,
@@ -416,32 +441,14 @@ async function handleChatTurnUnlocked({
   await store.audit("chat_mode_resolved", modeResolvedPayload, { userId, requestId: bundle.envelope.request_id });
   events.emit("chat_mode_resolved", { ...modeResolvedPayload, request_id: bundle.envelope.request_id });
 
-  // ── 2.6. Compact the context window (stats-only audit) ───────────
-  // Runs the unified compactor over (current message + history) so
-  // the audit log captures the per-turn shrinking decision: how many
-  // messages got deduped, how many fell outside the budget, total
-  // tokens kept. We don't yet replace the runtime's history input
-  // with `compaction.messages` — that swap is a separate commit so
-  // the call-site contract here can be reviewed independently of
-  // the consumer side. Emitting the summary unconditionally gives
-  // dashboards real numbers from day one.
-  const messagesForCompaction = [
-    ...history,
-    { role: "user", content: userMessage },
-  ];
-  const compaction = await compactContext({
-    messages: messagesForCompaction,
-    model: selectedModel.modelId,
-    ragChunks: [],
-    memoryGists: [],
-  }).catch(() => null);
-  if (compaction) {
-    await store.audit("context_compacted", compaction.stats, {
-      userId,
-      requestId: bundle.envelope.request_id,
-    });
-    events.emit("context_compacted", { ...compaction.stats, request_id: bundle.envelope.request_id });
-    // Keep the summary on the envelope for replay/observability tools.
+  // ── 2.6. Stamp the compaction summary onto the envelope ──────────
+  // Compaction itself ran at stage 1.8 (before the engine, so the
+  // engine sees the fitted history). Now that the envelope exists,
+  // pin the summary on it for replay / observability — same data
+  // the audit log carries, but co-located with the persisted
+  // envelope so a single `getEnvelope(requestId)` answers "how was
+  // this turn's context compacted?" without a join.
+  if (compaction && bundle.envelope) {
     bundle.envelope.context_compaction_summary = compaction.stats;
   }
 
