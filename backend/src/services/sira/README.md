@@ -24,6 +24,7 @@ and **where to look** when you need to change something.
 | `task-envelope-builder.js` | Builds the Sira Cognitive Task Envelope from raw input + history + RAG. | `backend/tests/sira-task-envelope.test.js`, `backend/tests/sira-request-id.test.js` |
 | `task-envelope-schema.js` | JSON schema + `validateEnvelope`. | `backend/tests/sira-task-envelope.test.js` |
 | `frames.js` | Builders for `intent_frame`, `plan_frame`, `tool_call_frame`, `artifact_frame`, `validation_frame`, `final_response_frame`. | `backend/tests/sira-task-envelope.test.js` (frames block) |
+| `citation-frame.js` | First-class `citation_frame` wrapping `services/citation-engine.js`. Adds per-citation `marker_count`, `relevance_score`, and a `coverage` block (sources provided / cited / ratio). | `backend/tests/sira-citation-frame.test.js` |
 | `execution-trace-frame.js` | Privacy-safe runtime timeline + counters. | `backend/tests/sira-execution-trace-frame.test.ts` (frontend) |
 | `tool-registry.js` | Typed tool registry (60+ tools). `register`, `get`, `invoke`, `byCategory`, `integrity`. | `backend/tests/sira-stack-extras.test.js` |
 | `tool-policy.js` | Trust boundary: permission + sandbox + risk + side-effect gating per tool. | `backend/tests/sira-stack-extras.test.js` |
