@@ -42,6 +42,7 @@ const projectWorkspace = require("./project-workspace");
 const { compactContext } = require("./context-compactor");
 const { buildCitationFrame } = require("./citation-frame");
 const { createNoOpEvents } = require("./turn-events");
+const { validateScope: validateMemoryScope } = require("./memory-store");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -141,6 +142,14 @@ async function handleChatTurnUnlocked({
   // here; everywhere else (HTTP-RPC callers, tests, eval harness)
   // the no-op default keeps the call free.
   events = createNoOpEvents(),
+  // Optional MemoryStore (composite or single-tier). When wired,
+  // the controller recalls semantic + project memory before the
+  // engine and puts the user message into conversation memory
+  // after runtime. Missing → both calls become no-ops.
+  memoryStore = null,
+  // Per-turn memory-tier limits. Caller can tune; default keeps
+  // the prompt tight.
+  memoryRecallLimit = 5,
 } = {}) {
   // Stage-aware errors so `siraErrorHandler` can map them straight to
   // an HTTP 4xx with `{ code, stage, request_id, ... }` and the audit
@@ -312,6 +321,42 @@ async function handleChatTurnUnlocked({
         projected_tokens: tokenBudget.projected_usage.projected_turn_tokens,
       },
     };
+  }
+
+  // ── 1.7. Memory recall (semantic + project, best-effort) ────────
+  // Pulls the top-N relevant items from the unified MemoryStore so
+  // the envelope-builder (and downstream prompt assemblers) can fold
+  // them into the system prompt. Failures are non-fatal: recall
+  // errors degrade to an empty list rather than blocking the turn.
+  // The result is shaped so it can be persisted on the envelope for
+  // replay / observability without leaking raw items into the audit
+  // log.
+  let recalledMemory = { semantic: [], project: [] };
+  if (memoryStore && typeof memoryStore.recall === "function") {
+    const recallTasks = [];
+    if (userId) {
+      recallTasks.push(
+        memoryStore.recall({ tier: "semantic", scope: { userId }, query: userMessage, limit: memoryRecallLimit })
+          .then((r) => { recalledMemory.semantic = Array.isArray(r) ? r : []; })
+          .catch(() => { recalledMemory.semantic = []; }),
+      );
+    }
+    if (projectId && userId) {
+      recallTasks.push(
+        memoryStore.recall({ tier: "project", scope: { projectId, userId }, query: userMessage, limit: memoryRecallLimit })
+          .then((r) => { recalledMemory.project = Array.isArray(r) ? r : []; })
+          .catch(() => { recalledMemory.project = []; }),
+      );
+    }
+    if (recallTasks.length > 0) {
+      await Promise.all(recallTasks);
+      const recallSummary = {
+        semantic_count: recalledMemory.semantic.length,
+        project_count: recalledMemory.project.length,
+      };
+      await store.audit("memory_recalled", recallSummary, auditMeta);
+      events.emit("memory_recalled", { ...recallSummary, request_id: requestId });
+    }
   }
 
   // ── 2. Run engine (envelope + 5 frames + dry response) ───────────
@@ -545,6 +590,27 @@ async function handleChatTurnUnlocked({
   await store.audit("turn_completed", turnCompletedPayload, { userId, requestId: bundle.envelope.request_id });
   events.emit("turn_completed", turnCompletedPayload);
 
+  // ── 8.7. Memory persistence (conversation tier, best-effort) ─────
+  // The user message is the canonical thing to persist on every turn:
+  // a future recall("semantic", { userId, query: "what did we
+  // discuss about X?" }) should be able to find it. Long-term-memory's
+  // own background extraction handles the semantic tier; here we
+  // only own the conversation tier (cheap append).
+  if (memoryStore && typeof memoryStore.put === "function" && conversationId) {
+    try {
+      await memoryStore.put({
+        tier: "conversation",
+        scope: { conversationId },
+        item: { role: "user", text: userMessage, ts: Date.now() },
+      });
+      const persistedPayload = { tier: "conversation", role: "user" };
+      await store.audit("memory_persisted", persistedPayload, { userId, requestId: bundle.envelope.request_id });
+      events.emit("memory_persisted", { ...persistedPayload, request_id: bundle.envelope.request_id });
+    } catch (_e) {
+      // Memory writes must never poison a successful turn.
+    }
+  }
+
   const finalStage = runtimeResult.validation_frame.ready_to_deliver ? "delivered" : "needs_repair";
   siraMetrics.recordTurn({
     stage: finalStage,
@@ -604,6 +670,7 @@ async function handleChatTurnUnlocked({
     persisted_ids: persistedIds,
     mode: modeResolution,
     project_context: projectContext,
+    recalled_memory: recalledMemory,
     summary: {
       stage: finalStage,
       mode: modeResolution.mode,
