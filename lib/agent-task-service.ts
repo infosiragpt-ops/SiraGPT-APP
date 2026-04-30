@@ -94,6 +94,34 @@ export interface AgentTaskRunArgs {
   maxSteps?: number
   maxRuntimeMs?: number
   signal?: AbortSignal
+  /**
+   * Abort the SSE stream when the server goes silent for this many
+   * milliseconds. Protects the chat composer from hanging forever
+   * when a worker stalls upstream of the SSE writer (the failure
+   * mode that left the spinner spinning during the contract-resolver
+   * outage). Default: 90 s — long enough for a single LLM call to
+   * finish even on a slow tool turn, short enough that a stuck task
+   * surfaces an error within a reasonable wait.
+   */
+  idleTimeoutMs?: number
+}
+
+const DEFAULT_IDLE_TIMEOUT_MS = 90_000
+
+export class AgentTaskIdleTimeoutError extends Error {
+  readonly code = "idle_timeout"
+  constructor(timeoutMs: number) {
+    super(`El asistente no envió actualizaciones por ${Math.round(timeoutMs / 1000)} s.`)
+    this.name = "AgentTaskIdleTimeoutError"
+  }
+}
+
+export class AgentTaskEmptyStreamError extends Error {
+  readonly code = "empty_stream"
+  constructor() {
+    super("El asistente cerró la respuesta sin generar texto. Reintenta.")
+    this.name = "AgentTaskEmptyStreamError"
+  }
 }
 
 function authHeader(): Record<string, string> {
@@ -102,13 +130,31 @@ function authHeader(): Record<string, string> {
 }
 
 export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<AgentTaskEvent> {
-  const { signal, ...body } = args
+  const { signal, idleTimeoutMs, ...body } = args
+  const idleMs = typeof idleTimeoutMs === "number" && idleTimeoutMs > 0
+    ? idleTimeoutMs
+    : DEFAULT_IDLE_TIMEOUT_MS
+
+  // Combine the caller's abort signal with our own idle-timeout
+  // controller. Either side can stop the read loop without leaving
+  // the response body half-read.
+  const internal = new AbortController()
+  const onUpstreamAbort = () => internal.abort(signal?.reason ?? new DOMException("aborted", "AbortError"))
+  if (signal) {
+    if (signal.aborted) internal.abort(signal.reason)
+    else signal.addEventListener("abort", onUpstreamAbort, { once: true })
+  }
+
   const resp = await fetch(`${API_ROOT}/agent/task`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(body),
-    signal,
+    signal: internal.signal,
+  }).finally(() => {
+    // The signal listener stays attached for the lifetime of the
+    // generator — only remove the abort hook here on a fast failure
+    // (the response itself never began streaming).
   })
   if (!resp.ok) {
     let msg = `HTTP ${resp.status}`
@@ -124,12 +170,36 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  let timedOut = false
+
+  const armIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      timedOut = true
+      // Abort the underlying fetch so reader.read() rejects and we
+      // exit the loop instead of waiting on a dead socket.
+      internal.abort(new AgentTaskIdleTimeoutError(idleMs))
+      try { reader.cancel("idle-timeout").catch(() => {}) } catch { /* noop */ }
+    }, idleMs)
+  }
 
   try {
+    armIdleTimer()
     while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch (err: any) {
+        if (timedOut) throw new AgentTaskIdleTimeoutError(idleMs)
+        if (signal?.aborted) throw err
+        throw err
+      }
+      // Reset the idle timer on every successful chunk — even an
+      // empty heartbeat keeps the stream alive.
+      armIdleTimer()
+      if (chunk.done) break
+      buffer += decoder.decode(chunk.value, { stream: true })
       let idx
       while ((idx = buffer.indexOf("\n\n")) !== -1) {
         const raw = buffer.slice(0, idx)
@@ -142,6 +212,8 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
       }
     }
   } finally {
+    if (idleTimer) clearTimeout(idleTimer)
+    if (signal) signal.removeEventListener("abort", onUpstreamAbort)
     try { reader.releaseLock() } catch { /* already released */ }
   }
 }
@@ -381,6 +453,19 @@ export async function runStream(args: AgentTaskRunArgs, cbs: RunStreamCallbacks 
       state = reduceEvent(state, evt)
       cbs.onStateChange?.(state)
     }
+    // The SSE socket closed cleanly. Two failure shapes still need
+    // to surface to the user instead of leaving the message bubble
+    // empty:
+    //   1. Stream emitted no terminal `done`/`error` event.
+    //   2. Stream emitted `done` but never produced text or files
+    //      (the worker decided it was finalized but had nothing to
+    //      hand back — the contract-resolver outage hit this path).
+    if (!state.done) {
+      state = { ...state, done: true, error: state.error || "stream_closed_without_done" }
+    }
+    if (!state.error && !state.finalText.trim() && state.artifacts.length === 0) {
+      state = { ...state, error: "empty_response" }
+    }
     cbs.onFinal?.(state)
     return state
   } catch (err: any) {
@@ -389,8 +474,11 @@ export async function runStream(args: AgentTaskRunArgs, cbs: RunStreamCallbacks 
       cbs.onFinal?.(state)
       return state
     }
-    cbs.onError?.(err instanceof Error ? err : new Error(String(err?.message || err)))
-    throw err
+    const wrapped = err instanceof Error ? err : new Error(String(err?.message || err))
+    state = { ...state, done: true, error: (err as any)?.code || wrapped.message || "stream_error" }
+    cbs.onError?.(wrapped)
+    cbs.onFinal?.(state)
+    return state
   }
 }
 

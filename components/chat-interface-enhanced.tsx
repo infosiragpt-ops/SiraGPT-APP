@@ -6926,6 +6926,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           state = reduceEvent(state, evt);
           updateBubble(state);
         }
+        // Stream closed cleanly — surface the "I'm done but there's
+        // nothing to show" failure mode that previously left the
+        // bubble empty (no artifact, no final_text, no error event).
+        // The renderer hides itself when state.done && !state.error
+        // && !hasDeliverable, so without this nudge the user sees a
+        // blank message after the spinner disappears.
+        const finalTextEmpty = !state.finalText || !state.finalText.trim();
+        const noArtifacts = !state.artifacts || state.artifacts.length === 0;
+        if (!state.done) {
+          state = { ...state, done: true, error: state.error || 'stream_closed_without_done' };
+          updateBubble(state);
+        } else if (!state.error && finalTextEmpty && noArtifacts) {
+          state = { ...state, error: 'El asistente no devolvió respuesta. Reintenta o reformula el pedido.' };
+          updateBubble(state);
+        }
       } catch (err: any) {
         if (controller.signal.aborted || /abort/i.test(err?.message || '')) {
           taskWasAborted = true;
@@ -6933,10 +6948,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           updateBubble(state);
         } else {
           const rawMessage = String(err?.message || 'Agent task failed');
-          const runtimeMessage = /redis|redis_url/i.test(rawMessage)
+          // Friendlier remap for known infra failures so the red box
+          // explains *why* instead of dumping a stack trace.
+          const friendly = /redis|redis_url/i.test(rawMessage)
             ? 'Runtime agentico no disponible: Redis no está activo.'
-            : rawMessage;
-          state = { ...state, done: true, error: runtimeMessage };
+            : /idle_timeout|AgentTaskIdleTimeoutError/i.test(rawMessage)
+              ? 'El asistente dejó de enviar actualizaciones. Reintenta el pedido.'
+              : /empty_stream|AgentTaskEmptyStreamError/i.test(rawMessage)
+                ? 'El asistente cerró la respuesta sin generar texto. Reintenta.'
+                : rawMessage;
+          state = { ...state, done: true, error: friendly };
           updateBubble(state);
         }
       }
