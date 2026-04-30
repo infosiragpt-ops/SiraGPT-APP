@@ -24,6 +24,10 @@ export type ChatIntent =
   | 'webdev'
   | 'agent_task'
   | 'text'
+  // Meta-intent: prompt is too under-specified to act on. The contract
+  // tells the model to ask exactly ONE short clarifying question rather
+  // than guess and waste a deliverable on a wrong assumption.
+  | 'ambiguous'
 
 export const VALID_CHAT_INTENTS: ChatIntent[] = [
   'gmail',
@@ -42,6 +46,7 @@ export const VALID_CHAT_INTENTS: ChatIntent[] = [
   'webdev',
   'agent_task',
   'text',
+  'ambiguous',
 ]
 
 export const AGENTIC_RUNTIME_INTENTS: ChatIntent[] = [
@@ -94,6 +99,24 @@ interface SemanticIntentResponse {
     release_decision?: string
   }
 }
+
+/**
+ * Universal 5-step execution skeleton applied to every capability before
+ * the per-intent contract. Forces the model to do real analysis instead
+ * of jumping straight to generation, which is the difference between
+ * "professional" output and "first thing that came to mind".
+ *
+ * Skipped for the `ambiguous` contract because that contract's whole job
+ * is to ask one question, not to execute a 5-step plan.
+ */
+export const PROFESSIONAL_EXECUTION_SKELETON = [
+  'siraGPT execution skeleton — apply EVERY turn before producing the final answer:',
+  '1. Analyze intent — restate in one short sentence what the user wants and what for.',
+  '2. Identify constraints — provided data, required formats, language, audience, deadline, and any unconfirmed assumptions.',
+  '3. State the plan — short list of concrete steps you will take, in order.',
+  '4. Execute under the per-capability contract below.',
+  '5. Cite sources, surface key computations, and list assumptions at the end — keep verified evidence visibly separated from assumptions.',
+].join('\n')
 
 export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, string>> = {
   math: [
@@ -155,19 +178,31 @@ export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, strin
   video: [
     'Preserve the user intent while specifying cinematic motion, continuity, camera direction, lighting, and safe concise scene structure.',
   ].join('\n'),
+  ambiguous: [
+    'The user request is under-specified. Ask EXACTLY ONE short clarifying question instead of guessing.',
+    'Pick the single most-critical missing field — usually one of: objective, scope, format, data source, audience, deadline.',
+    'Phrase the question directly and concretely; max 2 sentences. Mirror the user language.',
+    'Do not propose a tentative plan, do not list multiple options, do not assume a deliverable format, do not attempt the task before the user answers.',
+    'Skip the question and proceed under the closest matching contract only if subsequent context (attachments, conversation history) already resolves the ambiguity.',
+  ].join('\n'),
 }
 
 export function buildProfessionalCapabilityPrompt(intent: ChatIntent, prompt: string): string {
   const contract = PROFESSIONAL_CAPABILITY_CONTRACTS[intent]
   if (!contract) return prompt
-  return [
-    prompt,
-    '',
-    '---',
+  const sections: string[] = [prompt, '', '---']
+  // Ambiguous contract is a clarification request — wrapping it in the
+  // 5-step skeleton would push the model to fabricate a plan before
+  // asking, which is exactly what the contract forbids.
+  if (intent !== 'ambiguous') {
+    sections.push(PROFESSIONAL_EXECUTION_SKELETON, '')
+  }
+  sections.push(
     `siraGPT professional execution contract for ${intent}:`,
     contract,
     '---',
-  ].join('\n')
+  )
+  return sections.join('\n')
 }
 
 const normalizePrompt = (prompt: string) =>
@@ -341,8 +376,71 @@ export function shouldUseFastTextRoute(prompt: string): boolean {
   return words.length <= 60
 }
 
+// Lead verbs that signal the user is asking for *something*, but on
+// their own (or with only filler tokens) they convey no concrete object,
+// scope, or deliverable. These are the prompts where guessing produces
+// garbage and asking 1 question is dramatically better than risking it.
+const AMBIGUOUS_LEAD_VERB_RE =
+  /^(ayud(?:a|ame)|hazme?|haz(?:lo|elo)?|crea(?:me|lo)?|necesito|quiero|dame|prepara(?:me)?|exporta(?:me)?|envia(?:me)?|genera(?:me)?|sigueme|continua)$/
+
+const AMBIGUOUS_FILLER_TOKEN_RE =
+  /^(con|de|por|para|en|a|al|del|la|el|los|las|un|una|uno|unos|unas|algo|alg[uú]n|alguna|esto|eso|aquello|ese|esa|este|esta|aquel|mi|tu|su|nuestro|favor|porfa|porfis|porfavor|ya|ahora|hoy|ayuda|cosas?|temas?)$/
+
+/**
+ * True when the prompt is a bare lead-verb / single-noun fragment with
+ * no concrete object — the kind of input where the model, if it tries
+ * to answer, will invent an unrelated deliverable. Routing these to the
+ * `ambiguous` contract makes the model ask 1 short clarifying question.
+ *
+ * This is intentionally narrow:
+ *   - greetings ("hola", "ok") → handled by isLightweightConversationalPrompt
+ *   - questions ("¿qué es X?") → never flagged as ambiguous
+ *   - prompts >4 words → never flagged
+ *   - prompts with a concrete noun → never flagged
+ *
+ * Examples that DO trigger:
+ *   "ayúdame", "necesito ayuda", "hazme algo", "tesis", "informe"
+ *
+ * Examples that do NOT trigger:
+ *   "hola", "qué hora es", "dime sobre Python",
+ *   "ayúdame con la tesis", "genera un informe en Word"
+ */
+export function isAmbiguousPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return false
+  if (LIGHTWEIGHT_CHAT_RE.test(normalized)) return false
+  if (/[?¿]/.test(normalized)) return false
+
+  const words = normalized.split(/\s+/).filter(Boolean)
+  if (words.length === 0) return false
+
+  // Single bare token that is itself a lead verb — "ayúdame", "hazlo",
+  // "necesito" — is the textbook ambiguous case.
+  if (words.length === 1 && AMBIGUOUS_LEAD_VERB_RE.test(words[0])) return true
+
+  // Single bare content noun ("tesis", "informe") with no verb / no
+  // qualifier — flag only when the noun is in the work-deliverable
+  // vocabulary, otherwise it might be conversational.
+  if (words.length === 1 && ROUTING_PATTERNS.deliverableFile.test(words[0])) return true
+
+  // Lead-verb opener with only filler tokens behind it.
+  if (words.length <= 4 && AMBIGUOUS_LEAD_VERB_RE.test(words[0])) {
+    const rest = words.slice(1)
+    if (rest.length === 0) return true
+    if (rest.every(w => AMBIGUOUS_FILLER_TOKEN_RE.test(w))) return true
+  }
+
+  return false
+}
+
 export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const lc = normalizePrompt(prompt)
+
+  // Ambiguous comes first — under-specified prompts route to the
+  // clarifying-question contract rather than being guessed at as 'text'.
+  // Greetings ("hola") are filtered inside isAmbiguousPrompt and fall
+  // through to the lightweight chat path below.
+  if (isAmbiguousPrompt(prompt)) return 'ambiguous'
 
   if (isLightweightConversationalPrompt(lc)) return 'text'
 
@@ -472,7 +570,9 @@ export class AIService {
       const messages = [
         {
           role: "system",
-          content: `You are an expert at classifying user intent. Analyze the user's prompt (which could be in any language including Roman Urdu, Urdu, English, German, Spanish, etc.) and classify it into exactly one of these categories: 'gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'figma', 'plan', 'math', 'viz', 'doc', 'artifact', 'chart', 'webdev', 'agent_task', or 'text'.
+          content: `You are an expert at classifying user intent. Analyze the user's prompt (which could be in any language including Roman Urdu, Urdu, English, German, Spanish, etc.) and classify it into exactly one of these categories: 'gmail', 'google_services', 'web_search', 'image', 'video', 'ppt', 'figma', 'plan', 'math', 'viz', 'doc', 'artifact', 'chart', 'webdev', 'agent_task', 'ambiguous', or 'text'.
+
+- 'ambiguous': The prompt is too under-specified to act on — a bare lead verb ("ayúdame", "necesito"), a single noun without context ("tesis", "informe"), or any request where the deliverable, scope, or data source is missing. Prefer 'ambiguous' over guessing a deliverable type. Do NOT use 'ambiguous' for greetings (those are 'text') or for vague-but-answerable questions ("explícame algo" → 'text').
 
 - 'gmail': Sending, reading, or managing emails. Examples: "send an email to hamza", "read my last 5 emails", "enviar un correo electrónico".
 - 'google_services': Interacting with Google Calendar or Drive. Examples: "show my meetings for tomorrow", "find my marketing presentation on Drive", "mostrar mis eventos del calendario".
