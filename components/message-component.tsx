@@ -371,7 +371,12 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
         name: String(f.longPasteTitle || f.longPasteMeta?.title || f.longPasteMetadata?.title || f.originalName || f.name || 'archivo'),
         mimeType: f.mimeType || f.type || null,
         size: f.size ?? null,
-        url: f.url || null,
+        // LLM-generated docs (doc-generator) ship the bytes as
+        // `dataUrl: data:<mime>;base64,<…>` and never populate `url`.
+        // Without this fallback the viewer ended up with `url: null`
+        // and surfaced "Failed to fetch" / "No source available" even
+        // though the file was right there in the message payload.
+        url: f.url || f.dataUrl || null,
         file: f.file instanceof File ? f.file : null,
         extractedText: f.extractedText || null,
     })), [chips]);
