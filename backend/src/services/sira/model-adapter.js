@@ -21,6 +21,7 @@
  */
 
 const liteLLMGateway = require("../ai-product-os/litellm-gateway");
+const llmInstrumentation = require("./llm-instrumentation");
 
 const SUPPORTED_PROVIDERS = Object.freeze([
   "openai",
@@ -53,10 +54,38 @@ const SUPPORTED_MODALITIES = Object.freeze([
  */
 async function callUserSelectedModel(
   { selectedModel, systemPrompt, messages, responseFormat = "text", tools = [] } = {},
-  { providers = createDefaultProviders(), gatewayPolicy = {}, gateway = null, telemetry = null } = {},
+  {
+    providers = createDefaultProviders(),
+    gatewayPolicy = {},
+    gateway = null,
+    telemetry = null,
+    // When true (default), pre-check the per-provider circuit and
+    // record the call into the cost ledger + Prometheus. Tests can
+    // disable to keep their assertions clean from instrumentation
+    // side-effects.
+    instrument = true,
+    // Caller plan + user id — surfaced into the cost ledger so
+    // dashboards can slice spend by tier or user without leaving
+    // the existing audit/log surface. Optional.
+    userPlan = null,
+    userId = null,
+  } = {},
 ) {
   validateSelection(selectedModel);
   validateMessages(messages);
+
+  // Circuit-breaker pre-check: refuse to dispatch when a provider
+  // has tripped. The recorder maintains the state machine; here we
+  // just consult it. `half_open` returns true (one trial allowed),
+  // so this only blocks fully open circuits.
+  if (instrument && !llmInstrumentation.isProviderAvailable(selectedModel.provider)) {
+    const e = mkErr(
+      "provider_circuit_open",
+      `provider "${selectedModel.provider}" circuit is open; refusing dispatch`,
+    );
+    e.retryable = true;
+    throw e;
+  }
 
   const plan = liteLLMGateway.createGatewayPlan({
     selectedModel,
@@ -74,20 +103,59 @@ async function callUserSelectedModel(
     tools,
   };
 
-  const result = gateway && typeof gateway.dispatch === "function"
-    ? await gateway.dispatch({ plan, payload })
-    : await liteLLMGateway.dispatchGatewayCall({ plan, payload, providers, telemetry });
+  const startedAt = Date.now();
+  let result;
+  try {
+    result = gateway && typeof gateway.dispatch === "function"
+      ? await gateway.dispatch({ plan, payload })
+      : await liteLLMGateway.dispatchGatewayCall({ plan, payload, providers, telemetry });
+  } catch (err) {
+    // Best-effort failure recording before re-throwing. Counts the
+    // failure on the breaker so consecutive provider outages trip
+    // the circuit; emits the call counter labelled "error".
+    if (instrument) {
+      try {
+        llmInstrumentation.recordLlmCall({
+          selectedModel,
+          durationMs: Date.now() - startedAt,
+          status: "error",
+          errorCode: err && err.code ? String(err.code) : "dispatch_failed",
+          userPlan, userId,
+        });
+      } catch (_e) { /* never let instrumentation hide the real error */ }
+    }
+    throw err;
+  }
 
   const actualSelection = result.selectedModel || selectedModel;
   if (!gatewayPolicy.allow_fallbacks && !gatewayPolicy.allowFallbacks) {
     guardAgainstAutoRouting(selectedModel, actualSelection);
   }
 
-  return shape(result.output, actualSelection, {
+  const shaped = shape(result.output, actualSelection, {
     gateway_trace: result.trace,
     gateway_cost_usd: result.cost,
     fallback_used: result.fallback_used,
   });
+
+  if (instrument) {
+    try {
+      llmInstrumentation.recordLlmCall({
+        // Always attribute to the *original* selection so a fallback
+        // doesn't silently re-credit a different provider's metrics.
+        // The fallback path is captured separately via the
+        // `fallback_used` flag on the shaped response.
+        selectedModel,
+        durationMs: Date.now() - startedAt,
+        usage: shaped.usage,
+        costUsd: shaped.gateway_cost_usd,
+        status: "success",
+        userPlan, userId,
+      });
+    } catch (_e) { /* metrics must never poison user responses */ }
+  }
+
+  return shaped;
 }
 
 function validateSelection(s) {
