@@ -310,7 +310,7 @@ function sanitiseFilename(name, ext) {
   return `${base}.${ext}`;
 }
 
-async function renderDocument({ parsed }) {
+async function renderDocument({ parsed, userPrompt = '' }) {
   const format = parsed.format;
   if (!EXT_MIME[format]) {
     return { ok: false, error: `Formato no soportado: ${format}` };
@@ -364,6 +364,34 @@ except Exception as _e:
     console.warn('[doc-generator] preview render failed:', err?.message);
   }
 
+  // Validation Fabric — Phase 2.
+  // The DOCX is decoded and inspected for rendered math. When the
+  // upstream prompt asked for equations and the file came back with
+  // zero <m:oMath> + zero <w:drawing>, we refuse to mark it valid so
+  // the chat doesn't surface a broken "Validado" chip on a doc that
+  // silently dropped its formulas. Other formats are pass-through
+  // for now; xlsx/pptx land in their own validators.
+  let validation = { ok: true, validators: [] };
+  if (format === 'docx') {
+    try {
+      const { validateMathRender } = require('./agents/math-render-validator');
+      const buffer = Buffer.from(b64, 'base64');
+      const mathReport = await validateMathRender({
+        buffer,
+        prompt: userPrompt || parsed.title || '',
+        sourceText: parsed.python || '',
+      });
+      validation.validators.push({ id: 'math_render', ...mathReport });
+      if (!mathReport.ok) validation.ok = false;
+    } catch (err) {
+      console.warn('[doc-generator] math-render-validator failed:', err?.message);
+      // Validator failure is non-fatal — we don't want a parser bug
+      // to block legitimate documents. Surface the failure in the
+      // payload so an operator can spot the regression.
+      validation.validators.push({ id: 'math_render', ok: true, error: err?.message || 'validator_threw' });
+    }
+  }
+
   return {
     ok: true,
     dataUrl: `data:${mime};base64,${b64}`,
@@ -371,6 +399,7 @@ except Exception as _e:
     filename,
     size,
     htmlPreview,
+    validation,
     stderr: result.stderr,
   };
 }
@@ -425,6 +454,14 @@ function sanitiseExplanation(raw) {
 function buildArtefact({ parsed, rendered, renderError }) {
   const { format, title } = parsed;
   const explanation = sanitiseExplanation(parsed.explanation);
+  const validation = rendered?.validation || null;
+  // Surface a soft warning when a validator flagged the artifact —
+  // we deliver the file anyway (the user may still want to read /
+  // download it), but the chip should NOT advertise it as
+  // "Validado". The chat caption picks this up below.
+  const validationWarning = validation && validation.ok === false
+    ? validationWarningCopy(validation)
+    : null;
   const file = {
     type: 'doc',
     format,
@@ -437,6 +474,8 @@ function buildArtefact({ parsed, rendered, renderError }) {
     size: rendered?.size || 0,
     pythonCode: parsed.python,
     error: renderError || null,
+    validation,
+    validated: !renderError && (!validation || validation.ok !== false),
   };
   const contentLines = [
     `**${title || 'Documento'}**`,
@@ -445,15 +484,37 @@ function buildArtefact({ parsed, rendered, renderError }) {
   ];
   if (renderError) {
     contentLines.push('', `_⚠ No fue posible generar el archivo:_ \`${renderError.slice(0, 200)}\``);
+  } else if (validationWarning) {
+    contentLines.push('', `_⚠ ${validationWarning}_`);
   }
   return { content: contentLines.filter(Boolean).join('\n'), file };
+}
+
+/**
+ * Translate a failed validation report into a short user-facing line
+ * for the chat caption. Keep it actionable — the user should
+ * understand WHY the artifact is unmarked and what to do next.
+ */
+function validationWarningCopy(validation) {
+  if (!validation || validation.ok === false === false) return null;
+  const flagged = (validation.validators || []).find(v => v.ok === false);
+  if (!flagged) return 'El documento se generó pero no superó la validación interna.';
+  switch (flagged.id) {
+    case 'math_render':
+      if (flagged.reason === 'no_equations_rendered') {
+        return 'El documento se generó pero no contiene fórmulas reales — pídeme regenerarlo si necesitas las ecuaciones.';
+      }
+      return `Validación de fórmulas falló (${flagged.reason}); reintenta si necesitas math editable.`;
+    default:
+      return `Validador "${flagged.id}" no pasó (${flagged.reason || 'desconocido'}).`;
+  }
 }
 
 async function generateDoc({ prompt, model, signal }) {
   const parsed = await callLlm({ prompt, model, signal });
   let rendered = null;
   let renderError = null;
-  const r = await renderDocument({ parsed });
+  const r = await renderDocument({ parsed, userPrompt: prompt });
   if (r.ok) rendered = r;
   else renderError = r.error || 'unknown error';
   const { content, file } = buildArtefact({ parsed, rendered, renderError });
@@ -472,7 +533,7 @@ async function* streamDoc({ prompt, model, signal }) {
     return;
   }
   yield { type: 'stage', label: `Compilando .${parsed.format}`, pct: 55 };
-  const r = await renderDocument({ parsed });
+  const r = await renderDocument({ parsed, userPrompt: prompt });
   if (!r.ok) {
     yield { type: 'error', error: r.error || 'render failed' };
     return;
