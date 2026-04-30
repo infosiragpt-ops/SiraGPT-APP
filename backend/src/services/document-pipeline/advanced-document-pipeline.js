@@ -1707,6 +1707,31 @@ async function runAdvancedDocumentPipeline({
     dataUrl = `data:${artifact.mime};base64,${artifact.buffer.toString('base64')}`;
   }
 
+  // PdfRenderValidator (phase 4) — gate "Validado" on PDFs the same
+  // way MathRenderValidator gates DOCX. Static integrity check:
+  // confirms the magic bytes, parses page count, and (when the
+  // prompt asked for prose) refuses to ship a 0-text PDF that
+  // silently dropped its body.
+  if (plan.format === 'pdf') {
+    try {
+      const { validatePdfRender } = require('../agents/pdf-render-validator');
+      const pdfReport = await validatePdfRender({
+        buffer: artifact.buffer,
+        prompt: opts.prompt || promptText,
+      });
+      validation.checks = validation.checks || {};
+      validation.checks.pdf_render = pdfReport.ok;
+      if (!pdfReport.ok) {
+        validation.passed = false;
+      }
+      validation.pdfRender = pdfReport;
+    } catch (err) {
+      console.warn('[document-pipeline] pdf-render-validator failed:', err?.message);
+      validation.checks = validation.checks || {};
+      validation.checks.pdf_render = true;
+    }
+  }
+
   return {
     ...record,
     telemetryPath,
