@@ -1673,7 +1673,47 @@ async function runAdvancedDocumentPipeline({
     durationMs: Date.now() - startedAt,
   };
   const telemetryPath = await writeTelemetry(record, telemetryDir);
-  return { ...record, telemetryPath, buffer: artifact.buffer, dataUrl: `data:${artifact.mime};base64,${artifact.buffer.toString('base64')}` };
+
+  // ArtifactUrlResolver — persist the bytes once and hand the chat
+  // a real URL instead of an inline `data:base64` blob. data URLs
+  // were the original delivery channel because nothing else was wired
+  // up; in production they:
+  //   - bloat the message JSON (a 500 KB DOCX → 666 KB base64 stored
+  //     in the DB and re-downloaded with every chat fetch)
+  //   - breach the 2 MB browser data-URL cap on bigger artifacts
+  //   - render the right-pane preview path fragile (anything that
+  //     uses absUrl on a data URL is fine, but anything else burps)
+  // saveArtifact already content-addresses + auth-gates the bytes
+  // (see `routes/agent-task.js GET /api/agent/artifact/:id`). We
+  // reuse it here so the doc pipeline shares the same delivery
+  // contract as agent-task artifacts.
+  let url = null;
+  let dataUrl = null;
+  try {
+    const { saveArtifact } = require('../agents/task-tools');
+    const persisted = saveArtifact({
+      filename: artifact.filename,
+      base64: artifact.buffer.toString('base64'),
+      mime: artifact.mime,
+      ownerUserId: opts.userId || null,
+      chatId: opts.chatId || null,
+      validation,
+    });
+    url = persisted.downloadUrl;
+  } catch (err) {
+    // If the artifact store is unavailable we fall back to the
+    // inline data URL channel so the user still gets the file.
+    console.warn('[document-pipeline] saveArtifact failed; falling back to dataUrl:', err?.message);
+    dataUrl = `data:${artifact.mime};base64,${artifact.buffer.toString('base64')}`;
+  }
+
+  return {
+    ...record,
+    telemetryPath,
+    buffer: artifact.buffer,
+    url,
+    dataUrl,
+  };
 }
 
 async function* streamAdvancedDocumentPipeline(opts = {}) {
@@ -1725,6 +1765,12 @@ async function* streamAdvancedDocumentPipeline(opts = {}) {
       title: result.plan.title,
       explanation: explanationParts.join(' '),
       filename: result.artifact.filename,
+      // Phase 3: prefer the auth-gated URL the artifact store gave us.
+      // dataUrl stays as a transitional fallback for the rare case the
+      // store wasn't reachable; the chip mapper already falls through
+      // url → dataUrl, and old persisted messages from before this
+      // change keep working because dataUrl was all they had.
+      url: result.url,
       dataUrl: result.dataUrl,
       mime: result.artifact.mime,
       size: result.artifact.size,

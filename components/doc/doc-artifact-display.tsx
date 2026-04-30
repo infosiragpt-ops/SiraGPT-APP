@@ -41,7 +41,13 @@ interface DocFile {
   title?: string
   explanation?: string
   filename: string
-  dataUrl: string | null
+  // Phase 3 (ArtifactUrlResolver): the doc-pipeline now persists
+  // bytes and hands the chat a real `/api/agent/artifact/<id>` URL.
+  // `dataUrl` stays for backward compat with messages persisted
+  // before the cutover (and as a fallback when the artifact store
+  // is unreachable).
+  url?: string | null
+  dataUrl?: string | null
   mime?: string
   size?: number
   htmlPreview?: string | null    // server-rendered HTML for docx/xlsx
@@ -86,7 +92,14 @@ function htmlPreviewDataUrl(html: string) {
 
 function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?: (target: DocumentPreviewTarget) => void }) {
   const meta = FORMAT_META[doc.format] || FORMAT_META.docx
-  const available = !!doc.dataUrl && doc.dataUrl.startsWith("data:")
+  // Source for preview / download — prefer the auth-gated URL when
+  // the pipeline hands one back, otherwise fall through to the
+  // legacy data URL (backward compat with messages persisted before
+  // the ArtifactUrlResolver cutover).
+  const sourceUrl: string | null = (doc.url && doc.url.length > 0)
+    ? doc.url
+    : (doc.dataUrl && doc.dataUrl.startsWith("data:") ? doc.dataUrl : null)
+  const available = !!sourceUrl
   const hasHtmlPreview = !!doc.htmlPreview && doc.htmlPreview.length > 0
   const hasPdfPreview = doc.format === "pdf" && available
   const hasSvgPreview = doc.format === "svg" && available
@@ -103,15 +116,15 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
     if (onDocumentPreview && hasHtmlPreview) {
       onDocumentPreview({
         url: htmlPreviewDataUrl(doc.htmlPreview as string),
-        downloadUrl: available ? (doc.dataUrl as string) : undefined,
+        downloadUrl: sourceUrl || undefined,
         filename: doc.filename,
       })
       return
     }
-    if (onDocumentPreview && available) {
+    if (onDocumentPreview && sourceUrl) {
       onDocumentPreview({
-        url: doc.dataUrl as string,
-        downloadUrl: doc.dataUrl as string,
+        url: sourceUrl,
+        downloadUrl: sourceUrl,
         filename: doc.filename,
       })
       return
@@ -120,10 +133,18 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
   }
 
   async function download() {
-    if (!available || isDownloading) return
+    if (!sourceUrl || isDownloading) return
     setIsDownloading(true)
     try {
-      await downloadUrlAsFile(doc.dataUrl as string, doc.filename)
+      // /api/agent/artifact/<id> is auth-gated; cookies alone are
+      // not enough on this app (JWT lives in localStorage). data:
+      // and blob: URLs ignore the init silently and download via
+      // the existing branches in downloadUrlAsFile.
+      const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
+      await downloadUrlAsFile(sourceUrl, doc.filename, {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
       toast.success("Descarga iniciada")
     } catch (error) {
       console.error("[DocArtifactDisplay] download failed:", error)
@@ -190,11 +211,11 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
       {/* Preview area */}
       {previewOpen && anyPreview && (
         <div className="border-t border-border/50 bg-muted/5">
-          {hasPdfPreview ? (
-            <embed src={doc.dataUrl!} type="application/pdf" className="h-[70vh] w-full" />
-          ) : hasSvgPreview ? (
+          {hasPdfPreview && sourceUrl ? (
+            <embed src={sourceUrl} type="application/pdf" className="h-[70vh] w-full" />
+          ) : hasSvgPreview && sourceUrl ? (
             <img
-              src={doc.dataUrl!}
+              src={sourceUrl}
               alt={doc.title || doc.filename}
               className="mx-auto max-h-[70vh] w-full bg-white object-contain"
             />

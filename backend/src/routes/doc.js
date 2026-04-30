@@ -204,6 +204,11 @@ router.post(
         outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
         telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
         signal: controller.signal,
+        // Threaded into ArtifactUrlResolver so the persisted artifact
+        // is owner-scoped — the GET /api/agent/artifact/:id route
+        // refuses any caller that isn't the owner.
+        userId: req.user?.id || null,
+        chatId,
       };
       for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
         if (clientGone) break;
@@ -217,7 +222,7 @@ router.post(
 
     clearInterval(heartbeat);
 
-    if (content && file && file.dataUrl) {
+    if (content && file && (file.url || file.dataUrl)) {
       send({ type: 'stage', label: 'Guardando en la conversación', pct: 98 });
       let assistantMessage = null;
       if (chatId) {
