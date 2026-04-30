@@ -229,12 +229,25 @@ jobs:
         continue-on-error: true
 
   # ───────────────────────────────────────────────────────────────────
-  # E2E — Playwright browser smoke (informational)
+  # E2E — Playwright browser smoke (informational, stricter step)
   # ───────────────────────────────────────────────────────────────────
   # Boots `next dev` on :3005 (per playwright.config.ts) and runs the
-  # smoke specs in e2e/. continue-on-error keeps a flaky boot from
-  # blocking merges; what we care about is the signal in the PR
-  # checks. Tighten to a hard gate only after several green weeks.
+  # smoke specs in e2e/. Posture today (ratcheted from the original
+  # double-soft state):
+  #
+  #   step `Run Playwright smoke`: HARD — failures are visible in the
+  #     job. We want the signal in the PR checks, not silently swallowed.
+  #
+  #   job-level continue-on-error: SOFT — keeps a flaky `next dev` boot
+  #     or transient browser hiccup from blocking merges while the
+  #     suite stabilizes. The `ci` final gate's `needs:` list still
+  #     does NOT include `e2e`, so branch protection is unchanged.
+  #
+  # Promotion criteria (when to drop the job-level continue-on-error
+  # AND add `e2e` to `ci` `needs:`): five consecutive green runs over
+  # at least three days, with no flake-induced retry. Promotion is
+  # explicit, not automatic — see /docs/architecture/PIPELINE.md
+  # gap §14.4 for the criteria's owner and the audit trail.
   e2e:
     name: E2E · Playwright smoke (informational)
     runs-on: ubuntu-latest
@@ -259,7 +272,6 @@ jobs:
 
       - name: Run Playwright smoke
         run: npm run test:e2e
-        continue-on-error: true
 
   # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
