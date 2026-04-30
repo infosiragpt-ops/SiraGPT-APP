@@ -165,7 +165,7 @@ jobs:
         run: npx prisma db push --accept-data-loss --skip-generate
 
       - name: Agentic runtime tests
-        run: node --test tests/agentic-frameworks.test.js tests/document-delivery-policy.test.js tests/agent-task-durable-events.test.js tests/agent-task-queue.test.js tests/file-processing-status.test.js
+        run: node --test tests/agentic-frameworks.test.js tests/document-delivery-policy.test.js tests/agent-task-durable-events.test.js tests/agent-task-queue.test.js tests/file-processing-status.test.js tests/sira-request-id.test.js
 
       - name: Boot server and verify /health
         run: |

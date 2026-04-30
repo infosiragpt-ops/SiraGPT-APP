@@ -873,6 +873,7 @@ router.post(
         userPlan: req.body.user_plan || req.user?.plan || "FREE",
         userId: req.user?.id || req.user?.userId || null,
         dryRun: true,
+        requestId: req.requestId || req.id || null,
       });
       ok(res, ciraEngine.snapshot(r));
     } catch (err) {
@@ -931,6 +932,7 @@ router.post(
         userPlan: req.body.user_plan || req.user?.plan || "FREE",
         userId: req.user?.id || req.user?.userId || null,
         dryRun: true,
+        requestId: req.requestId || req.id || null,
       });
       // Step 3-5: drive the workflow_graph through the runtime
       const runtimeResult = await ciraRuntime.runWorkflow({
@@ -1044,6 +1046,7 @@ router.post(
         selectedModel: req.body.selected_model,
         userPlan: req.body.user_plan || req.user?.plan || "FREE",
         dryRun: req.body.dry_run !== false,
+        requestId: req.requestId || req.id || null,
       }, { storage: ciraSharedStorage, registry: ciraSharedToolRegistry });
       ok(res, r);
     } catch (err) {

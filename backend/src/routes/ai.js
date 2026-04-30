@@ -1087,6 +1087,7 @@ router.post(
           userId: userId || null,
           modelChoice: { model: { provider: actualProvider, id: actualModel } },
           dryRun: true,
+          requestId: req.requestId || req.id || null,
         });
         ciraRuntimeBlock = buildCiraRuntimePromptBlock(ciraRuntimeBundle);
         const aiProductOsProfile = semanticIntentAnalysis ? {

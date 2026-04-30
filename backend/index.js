@@ -137,6 +137,12 @@ app.use(passport.session());
 // per-request line during local development.
 const { httpLogger } = require('./src/middleware/logger');
 app.use(httpLogger);
+// Pin req.id onto req.requestId / res.locals.requestId and echo it
+// back as `X-Request-Id`. Must run *after* httpLogger so req.id is
+// already populated, and *before* route handlers so the header is on
+// every response (including errors).
+const { requestIdMiddleware } = require('./src/middleware/request-id');
+app.use(requestIdMiddleware);
 if (process.env.NODE_ENV !== 'production') {
     app.use(morgan('dev'));
 }

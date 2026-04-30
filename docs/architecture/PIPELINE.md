@@ -414,14 +414,14 @@ Three layers, each with a different audience and retention.
 
 These are the pieces that are deliberately not yet here. Each will be addressed in its own commit so the diff stays auditable.
 
-| # | Gap | Planned in |
-|---|---|---|
-| 1 | `request_id` is generated inside the controller but not consistently propagated as `X-Request-Id` to all logs and HTTP responses. | task 2 |
-| 2 | Errors thrown in different stages do not share a taxonomy. A `ToolError` and an `EnvelopeError` have different shapes today. | task 3 |
-| 3 | `/health` returns 200 if the process is up; it does not check DB, Redis, queue depth, or model-adapter reachability. `/metrics` does not exist. | task 4 |
-| 4 | Playwright covers individual surfaces but not the full pipeline (chat → upload → RAG → tool-call → stream → citation) end-to-end. | task 5 |
-| 5 | Per-module `MODULE.md` documents are missing for most subareas. | task 6 |
-| 6 | Context compaction is implicit (split across `context-window.js`, `gist-memory.js`, and the envelope builder). A first-class `context-compactor` with a single contract is missing. | task 7 |
+| # | Gap | Planned in | Status |
+|---|---|---|---|
+| 1 | `request_id` end-to-end propagation: HTTP middleware → chat-controller → engine → envelope, echoed back as `X-Request-Id`. | task 2 | **done** — `backend/src/middleware/request-id.js`, `tests/sira-request-id.test.js` |
+| 2 | Errors thrown in different stages do not share a taxonomy. A `ToolError` and an `EnvelopeError` have different shapes today. | task 3 | pending |
+| 3 | `/health` returns 200 if the process is up; it does not check DB, Redis, queue depth, or model-adapter reachability. `/metrics` does not exist. | task 4 | pending |
+| 4 | Playwright covers individual surfaces but not the full pipeline (chat → upload → RAG → tool-call → stream → citation) end-to-end. | task 5 | pending |
+| 5 | Per-module `MODULE.md` documents are missing for most subareas. | task 6 | pending |
+| 6 | Context compaction is implicit (split across `context-window.js`, `gist-memory.js`, and the envelope builder). A first-class `context-compactor` with a single contract is missing. | task 7 | pending |
 
 ---
 

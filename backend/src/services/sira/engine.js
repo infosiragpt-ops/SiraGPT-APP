@@ -40,6 +40,9 @@ const { createIntegrationStack } = require("../ai-product-os/integration-stack")
  * @param {object} [args.toolDispatcher]       — { run(toolName, args) → result }
  * @param {object} [args.artifactRenderer]     — { render(spec) → { buffer, mime, ... } }
  * @param {boolean} [args.dryRun=true]
+ * @param {string}  [args.requestId]           — HTTP `X-Request-Id`; threaded into the envelope
+ *                                                so the access log, audit log, and envelope share
+ *                                                one id. Optional (a fresh one is minted otherwise).
  * @returns {Promise<object>}
  */
 async function runUserMessage(args = {}) {
@@ -59,6 +62,7 @@ async function runUserMessage(args = {}) {
     userId: args.userId,
     modelChoice: args.modelChoice,
     llmClient: args.llmClient,
+    requestId: args.requestId,
   });
   const envelope = envelopeBundle.envelope;
   const envelopeValidation = envelopeBundle.validation;

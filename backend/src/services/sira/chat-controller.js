@@ -50,6 +50,7 @@ async function handleChatTurn({
   toolArgs = {},
   dryRun = true,
   bypassSessionQueue = false,
+  requestId = null,
 } = {}, deps = {}) {
   const actorKey = buildChatTurnActorKey({ conversationId, userId });
   const queue = deps.sessionQueue || defaultChatTurnQueue;
@@ -65,6 +66,7 @@ async function handleChatTurn({
       permissions,
       toolArgs,
       dryRun,
+      requestId,
     }, deps);
   }
   return queue.run(actorKey, () => handleChatTurnUnlocked({
@@ -78,6 +80,7 @@ async function handleChatTurn({
     permissions,
     toolArgs,
     dryRun,
+    requestId,
   }, deps));
 }
 
@@ -92,6 +95,12 @@ async function handleChatTurnUnlocked({
   permissions = ["none", "read_uploaded_file", "write_artifact", "execute_sandboxed_code", "external_api_access"],
   toolArgs = {},
   dryRun = true,
+  // Caller-supplied request id (HTTP `X-Request-Id` from the route). When
+  // present it is threaded into the envelope, every audit event from the
+  // very first one (`turn_started`), and back out to the response. This
+  // is the single id that ties the access log, audit log, envelope, and
+  // any downstream tooling to a single chat turn.
+  requestId = null,
 } = {}, {
   storage = null,
   registry = null,
@@ -116,12 +125,18 @@ async function handleChatTurnUnlocked({
   const persistedIds = {};
 
   // ── 1. Persist user message + start audit trail ──────────────────
+  // Audits emitted before the engine runs carry whatever requestId the
+  // caller threaded in (may be null in non-HTTP contexts). After the
+  // envelope is built, we switch to `bundle.envelope.request_id`, which
+  // resolves to the same value when the caller provided one — making
+  // every audit row in a turn share one id.
+  const auditMeta = requestId ? { userId, requestId } : { userId };
   persistedIds.user_message_id = await store.addMessage({
     conversationId, role: "user",
     content: { text: userMessage, attachments },
     selectedModel,
   });
-  await store.audit("turn_started", { conversationId, userMessage_len: userMessage.length, attachment_count: attachments.length }, { userId });
+  await store.audit("turn_started", { conversationId, userMessage_len: userMessage.length, attachment_count: attachments.length }, auditMeta);
 
   const tokenBudget = assessTokenBudget({
     userId,
@@ -141,7 +156,7 @@ async function handleChatTurnUnlocked({
     projected_usage: tokenBudget.projected_usage,
     caps: tokenBudget.caps,
     violations: tokenBudget.violations,
-  }, { userId });
+  }, auditMeta);
   if (tokenBudget.decision === "blocked") {
     const blockedText = "La solicitud supera el presupuesto de tokens configurado para esta sesión. Reduce el tamaño del mensaje, divide la tarea o aumenta el plan antes de continuar.";
     persistedIds.assistant_message_id = await store.addMessage({
@@ -158,9 +173,10 @@ async function handleChatTurnUnlocked({
       decision: tokenBudget.decision,
       violations: tokenBudget.violations,
       projected_usage: tokenBudget.projected_usage,
-    }, { userId });
+    }, auditMeta);
     return {
       stage: "token_budget_exceeded",
+      request_id: requestId,
       token_budget: tokenBudget,
       persisted_ids: persistedIds,
       summary: {
@@ -181,11 +197,13 @@ async function handleChatTurnUnlocked({
     conversationId,
     modelChoice: { model: selectedModel },
     dryRun: true,
+    requestId,
   });
   if (bundle.stage === "envelope" || bundle.ok === false) {
-    await store.audit("envelope_invalid", { errors: bundle.errors }, { userId });
+    await store.audit("envelope_invalid", { errors: bundle.errors }, auditMeta);
     return {
       stage: "envelope_invalid",
+      request_id: requestId,
       errors: bundle.errors || ["unknown_envelope_failure"],
       token_budget: tokenBudget,
       persisted_ids: persistedIds,
@@ -226,6 +244,7 @@ async function handleChatTurnUnlocked({
     });
     return {
       stage: "needs_clarification",
+      request_id: bundle.envelope.request_id,
       envelope: bundle.envelope,
       intent_frame: bundle.intent_frame,
       plan_frame: bundle.plan_frame,
@@ -327,6 +346,7 @@ async function handleChatTurnUnlocked({
 
   return {
     stage: runtimeResult.validation_frame.ready_to_deliver ? "delivered" : "needs_repair",
+    request_id: bundle.envelope.request_id,
     envelope: bundle.envelope,
     intent_frame: bundle.intent_frame,
     plan_frame: bundle.plan_frame,

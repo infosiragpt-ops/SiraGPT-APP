@@ -57,6 +57,11 @@ const SIRA_EXECUTION_LAW = Object.freeze({
  * @param {string} [args.userId]
  * @param {object} [args.modelChoice]           — output of model-router.select()
  * @param {object} [args.llmClient]             — optional intent classifier client
+ * @param {string} [args.requestId]             — caller-supplied request id (HTTP `X-Request-Id`).
+ *                                                If omitted, a fresh one is minted. Pass-through
+ *                                                from the route handler unifies the access log,
+ *                                                audit log, envelope, and response header under
+ *                                                a single id per turn.
  * @returns {Promise<{ envelope, validation, frames }>}
  */
 async function buildEnvelope({
@@ -69,6 +74,7 @@ async function buildEnvelope({
   userId = null,
   modelChoice = null,
   llmClient = null,
+  requestId = null,
 } = {}) {
   if (typeof text !== "string" || text.trim().length === 0) {
     throw new Error("task-envelope-builder: text (non-empty string) required");
@@ -109,9 +115,15 @@ async function buildEnvelope({
   const enrichedDecision = skillSystem.mergeDecisionWithSkill(tokenAwareDecision, skill);
 
   // ── 4. Build the planner graph (the workflow_graph) ──────────────
-  const requestId = `req_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
+  // Honor a caller-supplied request id so the HTTP layer, the access
+  // log, the audit log, and the envelope all share one identifier.
+  // Fall back to the legacy mint format only when no caller id is
+  // provided (offline tests, eval harness, replay tooling).
+  const resolvedRequestId = (typeof requestId === "string" && requestId.length > 0)
+    ? requestId
+    : `req_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
   const { plan, validation: planValidation } = planner.buildAndValidate(enrichedDecision, {
-    contract_id: requestId,
+    contract_id: resolvedRequestId,
   });
   const targetFormat = inferTargetFormatFromDecision(enrichedDecision, taxonomyIntent, requestIntelligence);
   const siraToolPlan = deriveToolPlan(enrichedDecision, taxonomyIntent, targetFormat);
@@ -127,7 +139,7 @@ async function buildEnvelope({
   // ── 5. Compose the envelope ──────────────────────────────────────
   const envelope = {
     schema_version: SCHEMA_VERSION,
-    request_id: requestId,
+    request_id: resolvedRequestId,
     conversation_id: conversationId,
     user_id: userId,
     created_at: new Date().toISOString(),
