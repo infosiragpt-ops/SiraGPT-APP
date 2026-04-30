@@ -1550,7 +1550,10 @@ const ActiveOptionsDisplay = ({
                     )}
                     {!isUploading && !isFailed && file.id && !longPasteMeta && (
                       <div className="mt-0.5">
-                        <FileProcessingBadge fileId={file.id} />
+                        <FileProcessingBadge
+                          fileId={file.id}
+                          onReady={() => toast.success(`Documento listo: ${file.name}`)}
+                        />
                       </div>
                     )}
                     {isUploading && (

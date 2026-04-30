@@ -11,6 +11,14 @@ interface Props {
   /** Compact rendering suitable for image-chip overlays. */
   compact?: boolean
   className?: string
+  /**
+   * Fires once when the file's stage transitions to `ready` from any
+   * other non-ready stage. Useful for surfacing a "documento listo"
+   * toast in the parent without the parent having to track stage
+   * deltas itself. Will NOT fire on first mount when the row was
+   * already `ready` (avoids a misleading toast for an old file).
+   */
+  onReady?: () => void
 }
 
 /**
@@ -21,8 +29,20 @@ interface Props {
  * the failure reason renders inline so the user knows whether the
  * parser, embedding, vector store, or the model itself broke.
  */
-export function FileProcessingBadge({ fileId, compact, className }: Props) {
+export function FileProcessingBadge({ fileId, compact, className, onReady }: Props) {
   const status = useFileProcessingStatus(fileId)
+
+  // Fire onReady on the non-ready → ready transition. Tracking the
+  // previous stage in a ref means we never fire from the initial poll
+  // that lands directly on 'ready' (legacy file or already-indexed).
+  const prevStageRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    const prev = prevStageRef.current
+    if (status.stage === "ready" && prev && prev !== "ready") {
+      onReady?.()
+    }
+    if (status.stage) prevStageRef.current = status.stage
+  }, [status.stage, onReady])
 
   if (!fileId) return null
   // Don't blink during the first poll.
