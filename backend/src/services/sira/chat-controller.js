@@ -40,6 +40,7 @@ const siraMetrics = require("./metrics");
 const chatModes = require("./chat-modes");
 const projectWorkspace = require("./project-workspace");
 const { compactContext } = require("./context-compactor");
+const { buildCitationFrame } = require("./citation-frame");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -514,6 +515,32 @@ async function handleChatTurnUnlocked({
     plan: userPlan,
     durationMs: Date.now() - turnStartedAtMs,
   });
+
+  // ── 8.5. Citation frame ──────────────────────────────────────────
+  // Build a typed `citation_frame` so the client can render
+  // attributions on the same footing as the other frames. Inputs:
+  //   - response text: `bundle.response.user_visible_summary` (the
+  //     user-facing answer that may carry [Source: N] markers).
+  //   - chunks: extracted from runtime tool results that emitted a
+  //     RAG-style hit array (any tool result whose `output.chunks`
+  //     or `output.hits` is an array of {text/title/source/score}).
+  // When neither input yields anything, `buildCitationFrame` returns
+  // a no-citations frame, so this call is safe to wire unconditionally.
+  const citationChunks = collectCitationChunks(runtimeResult.tool_results || []);
+  const citationFrame = buildCitationFrame({
+    response: bundle.response?.user_visible_summary || "",
+    chunks: citationChunks,
+    language: bundle.envelope.normalized_request?.language || "en",
+    requestId: bundle.envelope.request_id,
+  });
+  if (citationFrame.has_citations) {
+    await store.audit("citation_frame_built", {
+      sources_provided: citationFrame.coverage.sources_provided,
+      sources_cited: citationFrame.coverage.sources_cited,
+      coverage_ratio: citationFrame.coverage.coverage_ratio,
+    }, { userId, requestId: bundle.envelope.request_id });
+  }
+
   return {
     stage: finalStage,
     request_id: bundle.envelope.request_id,
@@ -524,6 +551,7 @@ async function handleChatTurnUnlocked({
     artifact_frame: runtimeResult.artifact_frame,
     validation_frame: runtimeResult.validation_frame,
     final_response_frame: bundle.final_response_frame,
+    citation_frame: citationFrame,
     response: bundle.response,
     runtime: runtimeResult,
     policy: policyVerdict,
@@ -539,10 +567,45 @@ async function handleChatTurnUnlocked({
       tool_count: runtimeResult.tool_results.length,
       artifact_count: runtimeResult.artifact_frame.artifacts.length,
       validation_score: runtimeResult.validation_frame.aggregate_score,
+      citations: citationFrame.has_citations ? citationFrame.citations.length : 0,
+      coverage_ratio: citationFrame.coverage.coverage_ratio,
       token_usage: tokenUsage.usage,
       execution_trace: runtimeResult.execution_trace_frame?.counters || null,
     },
   };
+}
+
+/**
+ * Walk the runtime tool results and collect any chunk arrays that
+ * look RAG-shaped. We accept several common shapes — `output.chunks`,
+ * `output.hits`, `output.results` — because different tools emit
+ * different keys, but all of them carry the same `{text, title?,
+ * source?, score?}` triple. Tools that don't emit chunks contribute
+ * nothing to the citation frame.
+ */
+function collectCitationChunks(toolResults) {
+  if (!Array.isArray(toolResults) || toolResults.length === 0) return [];
+  const out = [];
+  for (const tc of toolResults) {
+    const output = tc?.output;
+    if (!output || typeof output !== "object") continue;
+    const arrays = [output.chunks, output.hits, output.results];
+    for (const arr of arrays) {
+      if (Array.isArray(arr)) {
+        for (const c of arr) {
+          if (c && typeof c === "object" && (c.text || c.title || c.source)) {
+            out.push({
+              text: typeof c.text === "string" ? c.text : "",
+              title: c.title || c.source || null,
+              source: c.source || c.title || null,
+              score: typeof c.score === "number" ? c.score : null,
+            });
+          }
+        }
+      }
+    }
+  }
+  return out;
 }
 
 async function recordTokenUsage({
