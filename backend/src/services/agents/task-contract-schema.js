@@ -258,9 +258,15 @@ const taskContractSchema = {
             description: "Built-in check the reviewer runs. Optional; semantic tests usually omit it.",
           },
           parameters: {
-            type: "object",
-            description: "Free-form parameters for the check (e.g. { \"value\": 30 } for min_rows).",
-            additionalProperties: true,
+            // OpenAI's strict json_schema mode rejects free-form
+            // objects (additionalProperties:true with no enumerated
+            // properties), so we model the parameters as a JSON-
+            // encoded string here. The reviewer is the only consumer
+            // and it forwards the value untouched, so the runtime
+            // shape stays compatible.
+            type: "string",
+            maxLength: 800,
+            description: "JSON-encoded parameters for the check (e.g. '{\"value\": 30}' for min_rows). Empty string when no parameters apply.",
           },
         },
       },
