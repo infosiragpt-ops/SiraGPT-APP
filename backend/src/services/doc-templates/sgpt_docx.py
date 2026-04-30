@@ -267,35 +267,68 @@ def apa_paragraph(doc, text, *, first_line_indent=True, italic=False, bold=False
     if first_line_indent and not center:
         p.paragraph_format.first_line_indent = Cm(1.27)
 
+    # Try OMML (real Word equations) for inline math first; fall back
+    # to a matplotlib PNG run on a per-segment basis.
+    try:
+        from sgpt_math_omml import insert_omml_inline as _omml_inline
+    except Exception:
+        _omml_inline = None
+
     last = 0
     for m in _INLINE_MATH_RE.finditer(text):
         if m.start() > last:
             _set_font(p.add_run(text[last:m.start()]), size=12, italic=italic, bold=bold)
-        try:
-            buf, _ = _render_math_png(m.group(1), fontsize=12)
-            run = p.add_run()
-            # Inline math sits on the text baseline; sizing by height
-            # keeps the surrounding line height stable across paragraphs.
-            run.add_picture(buf, height=Inches(0.20))
-        except Exception:
-            # If matplotlib is unavailable or the LaTeX is malformed,
-            # fall back to the raw `$...$` string so the user still
-            # sees the math source rather than nothing.
-            _set_font(p.add_run(m.group(0)), size=12, italic=italic, bold=bold)
+        latex_src = m.group(1)
+        rendered = False
+        if _omml_inline is not None:
+            try:
+                rendered = _omml_inline(p, latex_src)
+            except Exception:
+                rendered = False
+        if not rendered:
+            try:
+                buf, _ = _render_math_png(latex_src, fontsize=12)
+                run = p.add_run()
+                # Inline math sits on the text baseline; sizing by height
+                # keeps the surrounding line height stable across paragraphs.
+                run.add_picture(buf, height=Inches(0.20))
+            except Exception:
+                # If matplotlib is unavailable or the LaTeX is malformed,
+                # fall back to the raw `$...$` string so the user still
+                # sees the math source rather than nothing.
+                _set_font(p.add_run(m.group(0)), size=12, italic=italic, bold=bold)
         last = m.end()
     if last < len(text):
         _set_font(p.add_run(text[last:]), size=12, italic=italic, bold=bold)
     return p
 
 
-def apa_math(doc, latex, *, fontsize=14):
+def apa_math(doc, latex, *, fontsize=14, prefer_omml=True):
     """Centered display equation rendered from LaTeX.
 
-    The image height scales with `fontsize` so the equation reads
-    larger than inline body math (Word equations behave the same way).
-    Use this for formulas that deserve their own line; for small
-    inline math, write `$...$` inside `apa_paragraph` instead.
+    Two-tier rendering:
+      1. If `prefer_omml` and the LaTeX successfully translates to
+         OMML (sgpt_math_omml.insert_omml_paragraph), insert a real
+         editable Word equation. This is what makes the user's
+         document open in Word with the equation editor active and
+         the formula reflowable on font/size change.
+      2. Otherwise fall back to a matplotlib mathtext PNG embedded
+         as an inline image — universal-coverage fallback for
+         expressions our MathML→OMML walker doesn't handle yet.
+      3. If both fail (very malformed LaTeX, no matplotlib), the raw
+         LaTeX source is rendered as italic text so the equation is
+         still legible from the source.
     """
+    if prefer_omml:
+        try:
+            from sgpt_math_omml import insert_omml_paragraph
+            p = insert_omml_paragraph(doc, latex, fontsize=fontsize)
+            if p is not None:
+                return p
+        except Exception:
+            # OMML path failed; fall through to PNG.
+            pass
+
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(6)

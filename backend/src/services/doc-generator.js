@@ -42,11 +42,12 @@ function _loadTemplate(name) {
   catch { return ''; }
 }
 const TEMPLATES = {
-  'sgpt_docx.py': _loadTemplate('sgpt_docx.py'),
-  'sgpt_xlsx.py': _loadTemplate('sgpt_xlsx.py'),
-  'sgpt_pptx.py': _loadTemplate('sgpt_pptx.py'),
-  'sgpt_pdf.py':  _loadTemplate('sgpt_pdf.py'),
-  'sgpt_svg.py':  _loadTemplate('sgpt_svg.py'),
+  'sgpt_docx.py':       _loadTemplate('sgpt_docx.py'),
+  'sgpt_math_omml.py':  _loadTemplate('sgpt_math_omml.py'),
+  'sgpt_xlsx.py':       _loadTemplate('sgpt_xlsx.py'),
+  'sgpt_pptx.py':       _loadTemplate('sgpt_pptx.py'),
+  'sgpt_pdf.py':        _loadTemplate('sgpt_pdf.py'),
+  'sgpt_svg.py':        _loadTemplate('sgpt_svg.py'),
 };
 
 function clientForModel(modelName) {
@@ -114,8 +115,8 @@ visually consistent, on-brand, and academically correct. The bundle:
   doc = apa_document()                                 # TNR 12 pt · doble interlineado · márgenes 2.54 cm · header con número de página
   apa_cover(doc, title="...", author="...", institution="...", course=None, professor=None, date=None, degree=None)
   apa_heading(doc, 1..5, text)                         # level 1: centered bold · 2: left bold · 3: left bold italic · 4/5: sangría 1.27 cm
-  apa_paragraph(doc, text, first_line_indent=True, italic=False, bold=False, center=False)   # justificado por defecto · soporta \`$...$\` LaTeX inline
-  apa_math(doc, r"\int_0^1 f(x)\,dx", fontsize=14)     # ecuación centrada en su propia línea (matplotlib mathtext → PNG transparente)
+  apa_paragraph(doc, text, first_line_indent=True, italic=False, bold=False, center=False)   # justificado por defecto · soporta \`$...$\` LaTeX inline (OMML editable + fallback PNG)
+  apa_math(doc, r"\int_0^1 f(x)\,dx", fontsize=14)     # ecuación centrada nativa de Word (OMML editable; fallback PNG cuando la LaTeX excede la cobertura)
   apa_table(doc, headers=[...], rows=[[...]], caption_number="1", caption_title="...", note="...")
   apa_references(doc, ["Autor, A. A. (2020). Título. ...", ...])
   apa_table_of_contents(doc)                           # inserta campo TOC — el usuario lo refresca al abrir
