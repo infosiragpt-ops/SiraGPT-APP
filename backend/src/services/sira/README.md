@@ -39,6 +39,7 @@ and **where to look** when you need to change something.
 | `token-ledger.js` | `buildTokenUsageFrame`, in-memory ledger. Deterministic chars/4 estimator + provider-reported merge. | `backend/tests/sira-token-ledger.test.ts` (frontend) |
 | `token-budget-policy.js` | Plan caps (FREE/PRO/TEAM/ENTERPRISE) and `assessTokenBudget`. | `backend/tests/sira-token-budget-policy.test.ts` (frontend) |
 | `model-adapter.js` | Model abstraction across OpenAI / Anthropic / Groq / Gemini / OpenRouter; auto-routing guard. | `backend/tests/sira-platform.test.js` |
+| `llm-instrumentation.js` | Per-provider circuit breaker (closed/half_open/open) + cost ledger + Prometheus metrics for every LLM call. | `backend/tests/sira-llm-instrumentation.test.js` |
 | `idempotency-guard.js` | Tool-call deduplication within a workflow. | `backend/tests/sira-runtime.test.js` |
 | `session-actor-queue.js` | Per-conversation serialization (one in-flight turn per conversation). | `backend/tests/sira-session-actor-queue.test.ts` (frontend) |
 | `storage-schema.js` | Postgres DDL + in-memory adapter for the 7 sira tables. | `backend/tests/sira-platform.test.js` |
@@ -96,6 +97,11 @@ Registered in `metrics.js` against the shared registry from
 | `sira_token_budget_decisions_total` | counter | `decision`, `plan`, `enforcement_mode` |
 | `sira_clarifications_requested_total` | counter | — |
 | `sira_envelope_invalid_total` | counter | — |
+| `sira_llm_calls_total` | counter | `provider`, `model`, `status` |
+| `sira_llm_call_duration_ms` | histogram | `provider`, `model` |
+| `sira_llm_tokens_total` | counter | `provider`, `model`, `direction` |
+| `sira_llm_cost_micro_usd_total` | counter | `provider`, `model` |
+| `sira_llm_circuit_state` | gauge | `provider` |
 
 When you add a new metric:
 1. Register it in `metrics.js` with a help string + labels.
