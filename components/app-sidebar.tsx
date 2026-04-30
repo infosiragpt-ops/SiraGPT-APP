@@ -183,20 +183,6 @@ function SidebarNavItem({
   )
 }
 
-function OpenClawLogo({ className }: { className?: string }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-4 w-4 items-center justify-center text-[15px] leading-none",
-        className,
-      )}
-      aria-hidden="true"
-    >
-      🦞
-    </span>
-  )
-}
-
 // Generation Types with enhanced functionality
 const generationTypes = [
   {
@@ -271,7 +257,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/openclaw', '/parafraseo', '/projects', '/design', '/library',
+      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -787,7 +773,6 @@ export function AppSidebar() {
   const isOnChatPage = activePathname.startsWith('/chat')
   const isOnLibraryPage = activePathname.startsWith('/library')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
-  const isOnOpenClawPage = activePathname.startsWith('/openclaw')
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   const isOnDesignPage = activePathname.startsWith('/design')
@@ -945,20 +930,6 @@ export function AppSidebar() {
             iconClassName="text-emerald-500"
             active={isOnGPTsPage}
             pending={pendingHref === '/gpts'}
-            sidebarState={state}
-            markNavigationIntent={markNavigationIntent}
-            prefetchOnHover={prefetchOnHover}
-            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
-          />
-
-          <SidebarNavItem
-            href="/openclaw"
-            label={t("openclaw")}
-            tooltip={t("openclaw")}
-            icon={OpenClawLogo}
-            iconClassName="text-rose-500"
-            active={isOnOpenClawPage}
-            pending={pendingHref === '/openclaw'}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
