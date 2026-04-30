@@ -25,6 +25,7 @@ const responseBuilder = require("./response-builder");
 const { runCiraAgentRuntime } = require("../agent-runtime");
 const { createDefaultRegistry } = require("./tool-registry");
 const { createIntegrationStack } = require("../ai-product-os/integration-stack");
+const { IngressError } = require("./pipeline-errors");
 
 /**
  * @param {object} args
@@ -47,7 +48,12 @@ const { createIntegrationStack } = require("../ai-product-os/integration-stack")
  */
 async function runUserMessage(args = {}) {
   if (typeof args.text !== "string" || args.text.trim().length === 0) {
-    throw new Error("sira.engine: text (non-empty string) required");
+    throw new IngressError({
+      code: "ingress.engine_missing_text",
+      message: "sira.engine: text (non-empty string) required",
+      details: { received_type: typeof args.text },
+      requestId: args.requestId || null,
+    });
   }
   const dryRun = args.dryRun !== false;
 

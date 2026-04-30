@@ -15,6 +15,7 @@ const { createRunIdempotencyGuard } = require("./idempotency-guard");
 const { createToolResilienceController } = require("./tool-resilience");
 const { buildExecutionTraceFrame } = require("./execution-trace-frame");
 const { validateArtifact, validateSources, validateCode, validateDocument, validateSafety, composeValidationFrame } = require("./validator-engine");
+const { ContextError } = require("./pipeline-errors");
 
 const DEFAULT_PERMISSIONS = Object.freeze([
   "none", "read_uploaded_file", "write_artifact",
@@ -40,7 +41,12 @@ async function runWorkflow({
   dryRun = false,
 } = {}) {
   if (!envelope || !envelope.workflow_graph) {
-    throw new Error("sira.runtime: envelope.workflow_graph required");
+    throw new ContextError({
+      code: "context.runtime_missing_workflow_graph",
+      message: "sira.runtime: envelope.workflow_graph required",
+      details: { has_envelope: Boolean(envelope) },
+      requestId: envelope?.request_id || null,
+    });
   }
   const reg = registry || createDefaultRegistry();
   const log = [];

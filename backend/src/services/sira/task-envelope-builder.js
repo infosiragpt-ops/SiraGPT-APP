@@ -77,7 +77,13 @@ async function buildEnvelope({
   requestId = null,
 } = {}) {
   if (typeof text !== "string" || text.trim().length === 0) {
-    throw new Error("task-envelope-builder: text (non-empty string) required");
+    const { IngressError } = require("./pipeline-errors");
+    throw new IngressError({
+      code: "ingress.envelope_missing_text",
+      message: "task-envelope-builder: text (non-empty string) required",
+      details: { received_type: typeof text },
+      requestId,
+    });
   }
 
   // ── 1. Normalise raw input ───────────────────────────────────────
