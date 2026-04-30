@@ -417,7 +417,7 @@ These are the pieces that are deliberately not yet here. Each will be addressed 
 | # | Gap | Planned in | Status |
 |---|---|---|---|
 | 1 | `request_id` end-to-end propagation: HTTP middleware → chat-controller → engine → envelope, echoed back as `X-Request-Id`. | task 2 | **done** — `backend/src/middleware/request-id.js`, `tests/sira-request-id.test.js` |
-| 2 | Errors thrown in different stages do not share a taxonomy. A `ToolError` and an `EnvelopeError` have different shapes today. | task 3 | pending |
+| 2 | Stage-aware error taxonomy: `SiraPipelineError` + per-stage subclasses, `wrapAsSiraError`, `toHttpResponse`, `toAuditPayload`, `siraErrorHandler`. | task 3 | **done** — `backend/src/services/sira/pipeline-errors.js`, `tests/sira-pipeline-errors.test.js`, first migrated site: chat-controller input validation |
 | 3 | `/health` returns 200 if the process is up; it does not check DB, Redis, queue depth, or model-adapter reachability. `/metrics` does not exist. | task 4 | pending |
 | 4 | Playwright covers individual surfaces but not the full pipeline (chat → upload → RAG → tool-call → stream → citation) end-to-end. | task 5 | pending |
 | 5 | Per-module `MODULE.md` documents are missing for most subareas. | task 6 | pending |

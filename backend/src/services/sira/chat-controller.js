@@ -35,6 +35,7 @@ const { createDefaultRegistry } = require("./tool-registry");
 const { createSessionActorQueue, buildChatTurnActorKey } = require("./session-actor-queue");
 const { buildTokenUsageFrame } = require("./token-ledger");
 const { assessTokenBudget } = require("./token-budget-policy");
+const { IngressError } = require("./pipeline-errors");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -109,14 +110,34 @@ async function handleChatTurnUnlocked({
   tokenBudgetCaps = null,
   tokenBudgetMode = "enforce",
 } = {}) {
+  // Stage-aware errors so `siraErrorHandler` can map them straight to
+  // an HTTP 4xx with `{ code, stage, request_id, ... }` and the audit
+  // log gets a structured payload instead of a string. requestId is
+  // attached when present so the access log, audit log, and HTTP
+  // response all share one correlation id even on early failures.
   if (!userMessage || typeof userMessage !== "string") {
-    throw new Error("chat-controller: userMessage required");
+    throw new IngressError({
+      code: "ingress.missing_user_message",
+      message: "chat-controller: userMessage required",
+      details: { field: "userMessage" },
+      requestId,
+    });
   }
   if (!conversationId || !userId) {
-    throw new Error("chat-controller: conversationId + userId required");
+    throw new IngressError({
+      code: "ingress.missing_identity",
+      message: "chat-controller: conversationId + userId required",
+      details: { missing: { conversationId: !conversationId, userId: !userId } },
+      requestId,
+    });
   }
   if (!selectedModel || !selectedModel.provider || !selectedModel.modelId) {
-    throw new Error("chat-controller: selectedModel { provider, modelId } required (no auto-routing)");
+    throw new IngressError({
+      code: "ingress.missing_selected_model",
+      message: "chat-controller: selectedModel { provider, modelId } required (no auto-routing)",
+      details: { selectedModel: selectedModel || null },
+      requestId,
+    });
   }
   const originalSelection = { ...selectedModel };
 
