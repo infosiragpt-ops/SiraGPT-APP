@@ -346,10 +346,20 @@ function countIntersection(a, b) {
 
 function round4(n) { return Math.round(n * 10000) / 10000; }
 
+// Codes are kept verbatim — callers + tests index on `err.code` as
+// the primary discriminator. Only the class changes (Error → tagged
+// SiraPipelineError subclass) so toHttpResponse + audit consumers
+// get a stage + http_status without the call sites needing edits.
 function mkErr(code, message) {
-  const e = new Error(message);
-  e.code = code;
-  return e;
+  const { RAGError, IngressError } = require("./pipeline-errors");
+  // `missing_query` and `missing_answer` are caller-shape complaints
+  // (you didn't pass me what I need). The rest are RAG-state
+  // problems (bad chunks/index, unknown mode) — internal and
+  // surfaced as 502.
+  if (code === "missing_query" || code === "missing_answer") {
+    return new IngressError({ code, message });
+  }
+  return new RAGError({ code, message });
 }
 
 module.exports = {
