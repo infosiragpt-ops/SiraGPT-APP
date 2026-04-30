@@ -59,6 +59,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
 import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+import { FileProcessingBadge } from "@/components/file-processing-badge"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -1546,6 +1547,11 @@ const ActiveOptionsDisplay = ({
                       >
                         Mostrar en el campo de texto ›
                       </button>
+                    )}
+                    {!isUploading && !isFailed && file.id && !longPasteMeta && (
+                      <div className="mt-0.5">
+                        <FileProcessingBadge fileId={file.id} />
+                      </div>
                     )}
                     {isUploading && (
                       <div className="flex items-center gap-1 mt-1">
