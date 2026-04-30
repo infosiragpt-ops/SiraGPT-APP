@@ -38,6 +38,7 @@ and **where to look** when you need to change something.
 | `metrics.js` | Sira-specific Prometheus counters + histograms (turns, durations, errors, budget decisions). Sits on top of `services/agents/metrics.js`. | `backend/tests/sira-health-and-metrics.test.js` |
 | `context-compactor.js` | Per-turn context shrinking: dedup → window-fit → summarize-on-overflow → RAG rank+cap → memory cap. Reuses `services/context-window.js`. | `backend/tests/sira-context-compactor.test.js` |
 | `chat-modes.js` | 5-mode catalog (chat, research, document, code, presentation) with tool whitelist/blocklist, system prompt addendum, validator profile, intent-family scope. `resolveMode`, `applyModeToToolPlan`, `applyModePrompt`. | `backend/tests/sira-chat-modes.test.js` |
+| `memory-store.js` | Unified `put/recall/forget/stats` over the four memory tiers (`short_term`, `conversation`, `semantic`, `project`, `user`). `createInMemoryStore` for tests; `createCompositeStore({...adapters})` for production routing to existing modules. | `backend/tests/sira-memory-store.test.js` |
 | `token-ledger.js` | `buildTokenUsageFrame`, in-memory ledger. Deterministic chars/4 estimator + provider-reported merge. | `backend/tests/sira-token-ledger.test.ts` (frontend) |
 | `token-budget-policy.js` | Plan caps (FREE/PRO/TEAM/ENTERPRISE) and `assessTokenBudget`. | `backend/tests/sira-token-budget-policy.test.ts` (frontend) |
 | `model-adapter.js` | Model abstraction across OpenAI / Anthropic / Groq / Gemini / OpenRouter; auto-routing guard. | `backend/tests/sira-platform.test.js` |
