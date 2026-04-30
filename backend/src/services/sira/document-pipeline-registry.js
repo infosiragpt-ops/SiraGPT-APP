@@ -258,7 +258,18 @@ function integrity() {
   return { ok: issues.length === 0, issues, parsers: PARSERS.length, generators: GENERATORS.length };
 }
 
-function mkErr(code, message) { const e = new Error(`${code}: ${message}`); e.code = code; return e; }
+// Codes preserved verbatim. Most thrown values from this module are
+// either "format unknown / parser missing" (operator/config issue
+// → ContextError, internal/500) or caller-shape complaints
+// ("missing_format" → IngressError, 400). The map below routes them.
+const _DOCUMENT_PIPELINE_INGRESS_CODES = new Set(["missing_format"]);
+function mkErr(code, message) {
+  const { ContextError, IngressError } = require("./pipeline-errors");
+  if (_DOCUMENT_PIPELINE_INGRESS_CODES.has(code)) {
+    return new IngressError({ code, message: `${code}: ${message}` });
+  }
+  return new ContextError({ code, message: `${code}: ${message}` });
+}
 
 module.exports = {
   PARSERS,

@@ -276,7 +276,14 @@ function defaultIdFactory(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
 }
 
-function err(code, message) { const e = new Error(message); e.code = code; return e; }
+// Codes preserved verbatim (e.g. "missing_args", "invalid_adapter")
+// so tests and log queries that index on `err.code` continue to work.
+// The class hop (Error → StorageError) lights up the audit log + the
+// route's error handler with a structured payload.
+function err(code, message) {
+  const { StorageError } = require("./pipeline-errors");
+  return new StorageError({ code, message });
+}
 
 module.exports = {
   SCHEMA_DDL,

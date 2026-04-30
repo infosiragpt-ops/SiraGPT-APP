@@ -366,7 +366,10 @@ function splitSentences(text) {
 }
 function clamp01(n) { if (!Number.isFinite(n)) return 0; if (n < 0) return 0; if (n > 1) return 1; return n; }
 function round4(n) { return Math.round(n * 10000) / 10000; }
-function mkErr(code, message) { const e = new Error(`${code}: ${message}`); e.code = code; return e; }
+function mkErr(code, message) {
+  const { IngressError } = require("./pipeline-errors");
+  return new IngressError({ code, message: `${code}: ${message}` });
+}
 
 module.exports = {
   evaluateMetric,

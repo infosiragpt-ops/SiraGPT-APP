@@ -279,7 +279,13 @@ function makeId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 10)}`;
 }
 
-function mkErr(code, message) { const e = new Error(`${code}: ${message}`); e.code = code; return e; }
+// Codes preserved verbatim — callers + tests index on err.code as the
+// primary discriminator. Only the class changes (Error → IngressError)
+// so toHttpResponse / audit consumers get a structured payload.
+function mkErr(code, message) {
+  const { IngressError } = require("./pipeline-errors");
+  return new IngressError({ code, message: `${code}: ${message}` });
+}
 
 module.exports = {
   SCHEMA_VERSION,

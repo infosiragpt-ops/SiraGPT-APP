@@ -67,7 +67,7 @@ class SiraToolRegistry {
     const normalized = normalizeTool(tool);
     validateToolContract(normalized);
     if (this.tools.has(normalized.name)) {
-      throw new Error(`sira-tool-registry: tool already registered: "${normalized.name}"`);
+      throw _toolError("tool_already_registered", `sira-tool-registry: tool already registered: "${normalized.name}"`);
     }
     this.tools.set(normalized.name, normalized);
     return normalized;
@@ -163,16 +163,25 @@ class SiraToolRegistry {
 // ── Validation + helpers ────────────────────────────────────────────
 
 function validateToolContract(t) {
-  if (!t || typeof t !== "object") throw new Error("sira-tool-registry: tool must be an object");
-  if (!t.name || typeof t.name !== "string") throw new Error("sira-tool-registry: tool.name required");
-  if (typeof t.execute !== "function") throw new Error(`sira-tool-registry: ${t.name}.execute() required`);
-  if (!TOOL_CATEGORIES.includes(t.category)) throw new Error(`sira-tool-registry: ${t.name}.category invalid`);
-  if (!TOOL_RISK_LEVELS.includes(t.riskLevel)) throw new Error(`sira-tool-registry: ${t.name}.riskLevel invalid`);
-  if (!Array.isArray(t.permissionsRequired)) throw new Error(`sira-tool-registry: ${t.name}.permissionsRequired must be array`);
-  if (typeof t.timeoutMs !== "number" || t.timeoutMs <= 0) throw new Error(`sira-tool-registry: ${t.name}.timeoutMs must be positive number`);
-  if (!t.manifest || typeof t.manifest !== "object") throw new Error(`sira-tool-registry: ${t.name}.manifest required`);
-  if (!Array.isArray(t.manifest.allowedFormats)) throw new Error(`sira-tool-registry: ${t.name}.manifest.allowedFormats required`);
-  if (!Array.isArray(t.manifest.acceptanceTests)) throw new Error(`sira-tool-registry: ${t.name}.manifest.acceptanceTests required`);
+  if (!t || typeof t !== "object") throw _toolError("invalid_tool_object", "sira-tool-registry: tool must be an object");
+  if (!t.name || typeof t.name !== "string") throw _toolError("missing_tool_name", "sira-tool-registry: tool.name required");
+  if (typeof t.execute !== "function") throw _toolError("missing_tool_execute", `sira-tool-registry: ${t.name}.execute() required`);
+  if (!TOOL_CATEGORIES.includes(t.category)) throw _toolError("invalid_tool_category", `sira-tool-registry: ${t.name}.category invalid`);
+  if (!TOOL_RISK_LEVELS.includes(t.riskLevel)) throw _toolError("invalid_tool_risk_level", `sira-tool-registry: ${t.name}.riskLevel invalid`);
+  if (!Array.isArray(t.permissionsRequired)) throw _toolError("invalid_tool_permissions", `sira-tool-registry: ${t.name}.permissionsRequired must be array`);
+  if (typeof t.timeoutMs !== "number" || t.timeoutMs <= 0) throw _toolError("invalid_tool_timeout", `sira-tool-registry: ${t.name}.timeoutMs must be positive number`);
+  if (!t.manifest || typeof t.manifest !== "object") throw _toolError("missing_tool_manifest", `sira-tool-registry: ${t.name}.manifest required`);
+  if (!Array.isArray(t.manifest.allowedFormats)) throw _toolError("missing_tool_allowed_formats", `sira-tool-registry: ${t.name}.manifest.allowedFormats required`);
+  if (!Array.isArray(t.manifest.acceptanceTests)) throw _toolError("missing_tool_acceptance_tests", `sira-tool-registry: ${t.name}.manifest.acceptanceTests required`);
+}
+
+// Codes are dotted-namespaced internally but exposed verbatim on
+// `err.code` so existing tests + log queries keep working. The
+// registration-time validators all map to IngressError + 400 — they
+// are invalid inputs to register(), not runtime tool failures.
+function _toolError(code, message) {
+  const { IngressError } = require("./pipeline-errors");
+  return new IngressError({ code, message });
 }
 
 function normalizeTool(tool) {
