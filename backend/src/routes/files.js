@@ -2,6 +2,7 @@ const express = require('express');
 const fsSync = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { ALLOWED_MIMES, ALLOWED_EXTENSIONS } = require('../middleware/upload');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
 const documentIntelligence = require('../services/document-intelligence');
@@ -99,26 +100,51 @@ function serializeAnalysisMeta(analysis = null) {
  *   - Browsers often report `application/octet-stream` for clipboard
  *     pastes, drag-from-other-apps, HEIC on Linux, and some ZIP-based
  *     office formats.
- *   - Adversarial uploads can spoof the MIME header.
+ *   - Adversarial uploads can spoof the MIME header (a `.png` rename
+ *     of an executable still presents as `image/png` to multer).
  *   - Magic-byte detection is the only reliable source of truth.
  *
- * Strategy:
- *   - Detect → if confidence is high, overwrite the stored mimetype.
- *   - Plain-text formats (md / csv / json / xml) have NO magic bytes,
- *     so a `null` detection means "trust the original mimetype".
+ * Returns `{ mime, source }`:
+ *   - `source: 'magic-bytes'` — file-type identified the format from
+ *     content. Caller MUST re-validate this against the allowlist
+ *     because multer's pre-gate only saw the (potentially spoofed)
+ *     declared mime/extension.
+ *   - `source: 'fallback'` — file-type returned null. This is normal
+ *     for plain-text formats (md / csv / json / xml / txt / html) which
+ *     have no magic bytes; trust the multer-reported mime.
  *
- * Returns the (possibly corrected) mime string. Never throws — failure
- * just falls back to the multer-reported mimetype.
+ * Never throws — detection failure falls back gracefully.
  */
 async function detectMime(filePath, fallbackMime) {
   try {
     const { fileTypeFromFile } = await loadFileType();
     const detected = await fileTypeFromFile(filePath);
-    if (detected && detected.mime) return detected.mime;
+    if (detected && detected.mime) {
+      return { mime: detected.mime, source: 'magic-bytes' };
+    }
   } catch (e) {
     console.warn('[files] magic-byte detection failed:', e.message);
   }
-  return fallbackMime;
+  return { mime: fallbackMime, source: 'fallback' };
+}
+
+/**
+ * After magic-byte detection corrected the mime, re-check it against
+ * the allowlist. The pre-multer filter validates the *declared* mime;
+ * this guard catches the case where the real content disagrees and
+ * lands outside what we accept (e.g., a renamed executable).
+ *
+ * Plain-text detections (`source: 'fallback'`) are trusted — they
+ * already passed the extension/declared-mime gate at the multer
+ * boundary and have no detectable signature.
+ */
+function isContentTypeAllowed(detection) {
+  if (detection.source !== 'magic-bytes') return true;
+  return ALLOWED_MIMES.has(detection.mime);
+}
+
+async function unlinkQuiet(p) {
+  try { await fs.unlink(p); } catch (_) { /* already gone */ }
 }
 
 // Upload files
@@ -132,15 +158,34 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
 
     for (const file of req.files) {
       try {
-        // Magic-byte detection — overrides browser-reported mimetype when
-        // it's wrong (octet-stream, spoofed, or Office ZIP misidentified).
-        // We mutate `file.mimetype` so downstream consumers (file
-        // processor, OpenAI uploader, Prisma row, response payload) all
-        // see the corrected value with no extra plumbing.
-        const detectedMime = await detectMime(file.path, file.mimetype);
-        if (detectedMime && detectedMime !== file.mimetype) {
-          console.log(`[files] mime corrected for ${file.originalname}: ${file.mimetype} → ${detectedMime}`);
-          file.mimetype = detectedMime;
+        // Magic-byte detection — sees the *real* content type by reading
+        // the file's leading bytes. Two responsibilities:
+        //   1. Correct the mimetype when the browser misreported it
+        //      (octet-stream, spoof, Office-ZIP).
+        //   2. Reject the upload when the real type lands outside the
+        //      allowlist — multer's pre-gate trusted the declared mime,
+        //      so we close the spoofing loophole here.
+        const detection = await detectMime(file.path, file.mimetype);
+        if (!isContentTypeAllowed(detection)) {
+          console.warn(
+            `[files] rejected ${file.originalname}: declared=${file.mimetype} ` +
+            `real=${detection.mime} (not in allowlist)`,
+          );
+          await unlinkQuiet(file.path);
+          processedFiles.push({
+            name: file.originalname,
+            size: file.size,
+            type: file.mimetype,
+            success: false,
+            error: `Tipo real del archivo no permitido (${detection.mime}); el contenido no coincide con la extensión declarada.`,
+            code: 'magic_byte_mismatch',
+            detectedMime: detection.mime,
+          });
+          continue;
+        }
+        if (detection.mime && detection.mime !== file.mimetype) {
+          console.log(`[files] mime corrected for ${file.originalname}: ${file.mimetype} → ${detection.mime}`);
+          file.mimetype = detection.mime;
         }
 
         // Process file content

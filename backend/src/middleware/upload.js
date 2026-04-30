@@ -97,3 +97,8 @@ const upload = multer({
 });
 
 module.exports = upload;
+// Exposed so the post-magic-byte check in routes/files.js can re-validate
+// the *real* detected mime against the same allowlist the multer pre-gate
+// uses, without duplicating the list.
+module.exports.ALLOWED_MIMES = ALLOWED_MIMES;
+module.exports.ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS;
