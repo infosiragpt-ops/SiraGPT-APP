@@ -1031,26 +1031,72 @@ router.post(
   async (req, res) => {
     const errs = validationResult(req);
     if (!errs.isEmpty()) return fail(res, 400, errs.array());
+
+    const userId = req.user?.id || req.user?.userId || req.body.user_id || "anonymous";
+    // Ensure the conversation exists in the storage adapter (idempotent best-effort)
     try {
-      const userId = req.user?.id || req.user?.userId || req.body.user_id || "anonymous";
-      // Ensure the conversation exists in the storage adapter (idempotent best-effort)
-      try {
-        await ciraSharedStorage.startConversation({ userId, title: "Sira chat" });
-      } catch (_e) { /* ignore — adapter may already have it */ }
-      const r = await ciraChat.handleChatTurn({
-        conversationId: req.body.conversation_id,
-        userId,
-        userMessage: req.body.user_message,
-        attachments: req.body.attachments,
-        history: req.body.history,
-        selectedModel: req.body.selected_model,
-        userPlan: req.body.user_plan || req.user?.plan || "FREE",
-        dryRun: req.body.dry_run !== false,
-        requestId: req.requestId || req.id || null,
-      }, { storage: ciraSharedStorage, registry: ciraSharedToolRegistry });
-      ok(res, r);
+      await ciraSharedStorage.startConversation({ userId, title: "Sira chat" });
+    } catch (_e) { /* ignore — adapter may already have it */ }
+
+    // ── SSE detection ──────────────────────────────────────────────
+    // The client signals interest in a streaming response by sending
+    // `Accept: text/event-stream` (the standard EventSource API does
+    // this automatically). When we see it, the route writes events
+    // progressively via `createSSEEvents` and ends the response after
+    // the final `_end` marker. Otherwise the route stays a normal
+    // JSON-RPC endpoint — no behavioural change for older clients.
+    const acceptsSSE =
+      typeof req.headers.accept === "string" &&
+      req.headers.accept.toLowerCase().includes("text/event-stream");
+    const turnEvents = require("../services/sira/turn-events");
+    const events = acceptsSSE
+      ? turnEvents.createSSEEvents(res, { requestId: req.requestId || req.id || null })
+      : turnEvents.createNoOpEvents();
+
+    const turnArgs = {
+      conversationId: req.body.conversation_id,
+      userId,
+      userMessage: req.body.user_message,
+      attachments: req.body.attachments,
+      history: req.body.history,
+      selectedModel: req.body.selected_model,
+      userPlan: req.body.user_plan || req.user?.plan || "FREE",
+      dryRun: req.body.dry_run !== false,
+      requestId: req.requestId || req.id || null,
+      // Caller-supplied chat mode + project scope (optional). The
+      // controller resolves chat mode against envelope-hint and the
+      // family-fallback when these are absent.
+      mode: typeof req.body.mode === "string" ? req.body.mode : null,
+      projectId: typeof req.body.project_id === "string" ? req.body.project_id : null,
+    };
+    const turnDeps = {
+      storage: ciraSharedStorage,
+      registry: ciraSharedToolRegistry,
+      events,
+    };
+
+    try {
+      const r = await ciraChat.handleChatTurn(turnArgs, turnDeps);
+      // SSE: the controller already called events.end() at the
+      // terminal stage, which wrote the final _end marker and closed
+      // the response. We must NOT call ok() afterwards because the
+      // headers + stream have already shipped.
+      if (!acceptsSSE) ok(res, r);
     } catch (err) {
-      fail(res, 500, err.message || "sira chat failed");
+      // SSE: best-effort error frame on the open stream, then end.
+      // JSON: standard error response.
+      if (acceptsSSE) {
+        try {
+          events.emit("error", {
+            code: err && err.code ? String(err.code) : "sira_chat_failed",
+            message: err && err.message ? String(err.message).slice(0, 500) : "sira chat failed",
+            request_id: req.requestId || req.id || null,
+          });
+          events.end();
+        } catch (_e) { /* connection may already be torn down */ }
+      } else {
+        fail(res, 500, err.message || "sira chat failed");
+      }
     }
   }
 );
