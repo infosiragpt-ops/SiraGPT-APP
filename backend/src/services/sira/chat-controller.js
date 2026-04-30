@@ -39,6 +39,7 @@ const { IngressError } = require("./pipeline-errors");
 const siraMetrics = require("./metrics");
 const chatModes = require("./chat-modes");
 const projectWorkspace = require("./project-workspace");
+const { compactContext } = require("./context-compactor");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -339,6 +340,34 @@ async function handleChatTurnUnlocked({
     source: modeResolution.source,
     dropped_required_tools: modeFilter.dropped_required,
   }, { userId, requestId: bundle.envelope.request_id });
+
+  // ── 2.6. Compact the context window (stats-only audit) ───────────
+  // Runs the unified compactor over (current message + history) so
+  // the audit log captures the per-turn shrinking decision: how many
+  // messages got deduped, how many fell outside the budget, total
+  // tokens kept. We don't yet replace the runtime's history input
+  // with `compaction.messages` — that swap is a separate commit so
+  // the call-site contract here can be reviewed independently of
+  // the consumer side. Emitting the summary unconditionally gives
+  // dashboards real numbers from day one.
+  const messagesForCompaction = [
+    ...history,
+    { role: "user", content: userMessage },
+  ];
+  const compaction = await compactContext({
+    messages: messagesForCompaction,
+    model: selectedModel.modelId,
+    ragChunks: [],
+    memoryGists: [],
+  }).catch(() => null);
+  if (compaction) {
+    await store.audit("context_compacted", compaction.stats, {
+      userId,
+      requestId: bundle.envelope.request_id,
+    });
+    // Keep the summary on the envelope for replay/observability tools.
+    bundle.envelope.context_compaction_summary = compaction.stats;
+  }
 
   // ── 3. Policies — clarification + safety ─────────────────────────
   const policyVerdict = evaluatePolicyForEnvelope(bundle.envelope);
