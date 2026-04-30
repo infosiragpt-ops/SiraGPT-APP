@@ -712,12 +712,18 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         onToggleSplitView(content);
     };
 
-    // Cleanup audio when component unmounts
+    // Cleanup audio when component unmounts. Cancels both the
+    // ElevenLabs <audio> element and any in-flight browser TTS
+    // utterance so navigating away mid-playback doesn't leave the
+    // tab silently talking from another route.
     useEffect(() => {
         return () => {
             if (currentAudio) {
                 currentAudio.pause();
                 setCurrentAudio(null);
+            }
+            if (typeof window !== "undefined" && window.speechSynthesis) {
+                try { window.speechSynthesis.cancel() } catch { /* ignore */ }
             }
         };
     }, [currentAudio]);
@@ -900,10 +906,36 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     };
 
     const handleSpeak = async () => {
-        if (isSpeaking && currentAudio) {
-            currentAudio.pause();
+        // Toggle path 1 — ElevenLabs audio is already loaded.
+        // First click kicks playback. A second click pauses but
+        // KEEPS the audio object so a third click resumes from
+        // exactly where we left off, no re-fetch (the round-trip
+        // is what made the toggle feel sluggish before).
+        if (currentAudio) {
+            if (isSpeaking) {
+                currentAudio.pause();
+                // onpause handler clears isSpeaking — leave the
+                // audio in place so the next click resumes.
+            } else {
+                try {
+                    await currentAudio.play();
+                } catch (err) {
+                    console.warn("[tts] resume failed:", err);
+                    setCurrentAudio(null);
+                    setIsSpeaking(false);
+                }
+            }
+            return;
+        }
+
+        // Toggle path 2 — browser-TTS fallback was speaking. The
+        // SpeechSynthesisUtterance API has no per-handle stop; we
+        // cancel the entire queue and reset state. Without this,
+        // every click that lands here while the browser is talking
+        // would queue another utterance on top of the current one.
+        if (isSpeaking && typeof window !== "undefined" && window.speechSynthesis) {
+            try { window.speechSynthesis.cancel() } catch { /* ignore */ }
             setIsSpeaking(false);
-            setCurrentAudio(null);
             return;
         }
 
@@ -960,12 +992,24 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             console.log('ElevenLabs TTS failed, using browser TTS:', error);
             setIsLoadingAudio(false);
             setShowAudioPlayer(false);
+            // Cancel any utterance still queued from a previous
+            // failure path so we don't talk over ourselves.
+            try { window.speechSynthesis?.cancel() } catch { /* ignore */ }
             const utterance = new SpeechSynthesisUtterance(textToSpeak);
+            utterance.onstart = () => setIsSpeaking(true);
             utterance.onend = () => {
                 setIsSpeaking(false);
                 setCurrentAudio(null);
             };
+            utterance.onerror = () => {
+                setIsSpeaking(false);
+                setCurrentAudio(null);
+            };
             window.speechSynthesis.speak(utterance);
+            // Optimistically flip the visual state — onstart can
+            // be slow on Safari and the user expects immediate
+            // feedback when they pressed the button.
+            setIsSpeaking(true);
         }
     };
 

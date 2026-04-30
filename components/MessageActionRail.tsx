@@ -183,15 +183,19 @@ export function MessageActionRail({
   // ── Contextual visibility ────────────────────────────────────────
   const trimmed = (content || "").trim()
   const hasText = trimmed.length > 0
-  // Copy is meaningless on empty/error responses.
-  const showCopy = canCopy && hasText && !hasError
-  const showSpeak = canVoice && hasText && !hasError
-  const showFeedback = canFeedback && hasText && !hasError
-  // Regeneration only makes sense after the model has finished producing a
-  // response. During the thinking/streaming state it creates visual noise and
-  // cannot safely act on a complete assistant message yet.
-  const showRegenerate = canRegenerate && !isStreaming && (hasText || hasError)
-  const showShare = canShare && hasText && !hasError
+  // Action rail is hidden in its entirety while the model is still
+  // producing a response. Copy / Speak / Feedback / Share are
+  // meaningless against a half-streamed bubble (and the fenced
+  // `agent-task-state` block that drives the thinking indicator
+  // counts as text for the trim check, which is why every action
+  // used to leak through during streaming). Regenerate was already
+  // hidden; the other four now match.
+  const isLive = isStreaming
+  const showCopy = canCopy && hasText && !hasError && !isLive
+  const showSpeak = canVoice && hasText && !hasError && !isLive
+  const showFeedback = canFeedback && hasText && !hasError && !isLive
+  const showRegenerate = canRegenerate && !isLive && (hasText || hasError)
+  const showShare = canShare && hasText && !hasError && !isLive
 
   // Nothing to render? Don't render the container either — keeps the
   // bubble visually clean for messages that genuinely have no actions.
