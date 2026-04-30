@@ -159,14 +159,18 @@ const taskContractSchema = {
       description: "High-level kind of deliverable. Use `none` for pure chat answers with no file; use `text-answer` when the answer IS the deliverable.",
     },
     required_extension: {
-      oneOf: [
+      // anyOf (NOT oneOf) — OpenAI structured outputs reject oneOf at
+      // any level. A null value cannot also be a string, so the two
+      // schemas are mutually exclusive in practice and anyOf is the
+      // semantically equivalent (and API-supported) choice.
+      anyOf: [
         { type: "string", enum: EXTENSIONS },
         { type: "null" },
       ],
       description: "File extension the deliverable MUST use (without leading dot). Null when no file is expected.",
     },
     mime_type: {
-      oneOf: [
+      anyOf: [
         { type: "string", enum: MIME_TYPES },
         { type: "null" },
       ],

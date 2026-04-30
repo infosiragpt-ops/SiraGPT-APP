@@ -250,10 +250,10 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
  * must be false. We enforce that here so the prompt doesn't diverge
  * from what the API will accept.
  *
- * For `oneOf` at leaf level the API also requires the same structure
- * (one branch for string enum, one for null). Our schema already
- * conforms, so this is mostly a pass-through with `required` tightening
- * for nested objects.
+ * Note: `oneOf` is NOT supported by OpenAI's structured outputs at
+ * any nesting level — the schema must use `anyOf` for nullable
+ * string-enum properties (see `required_extension` / `mime_type` in
+ * task-contract-schema.js). This pass leaves them alone.
  */
 function toStrictOpenAISchema(root) {
   function visit(node) {
