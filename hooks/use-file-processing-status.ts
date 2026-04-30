@@ -1,6 +1,18 @@
 "use client"
 
 import * as React from "react"
+import {
+  type FileProcessingStage,
+  TERMINAL_STAGES,
+  describeStage as describeStageVocab,
+  friendlyFailureLabel as friendlyFailureLabelVocab,
+} from "@/lib/file-processing-vocab"
+
+// Re-export the vocab so existing import sites
+// (`from "@/hooks/use-file-processing-status"`) keep working.
+export type { FileProcessingStage } from "@/lib/file-processing-vocab"
+export const describeStage = describeStageVocab
+export const friendlyFailureLabel = friendlyFailureLabelVocab
 
 /**
  * Polls GET /api/files/:id/processing-status until the file's
@@ -18,17 +30,7 @@ import * as React from "react"
  * hook idle without throwing into the React tree.
  */
 
-export type FileProcessingStage =
-  | "uploaded"
-  | "validating"
-  | "extracting"
-  | "chunking"
-  | "embedding"
-  | "indexing"
-  | "ready"
-  | "failed"
-
-const TERMINAL: ReadonlySet<FileProcessingStage> = new Set(["ready", "failed"])
+const TERMINAL = TERMINAL_STAGES
 
 export interface FileProcessingStatus {
   fileId: string | null
@@ -149,53 +151,7 @@ export function useFileProcessingStatus(
   return state
 }
 
-/**
- * Map the stage-prefixed `processingError` reasons we write in the
- * backend (see STATE_MACHINE.md §7) to short, user-facing Spanish
- * labels. Non-technical users shouldn't have to read "processing:
- * ENOENT: no such file" to know what went wrong; support staff still
- * get the raw reason via the tooltip on the badge.
- */
-function friendlyFailureLabel(error: string | null | undefined): string {
-  const raw = (error || "").trim()
-  if (!raw) return "Error de procesamiento"
-  if (/^magic_byte_mismatch/i.test(raw)) return "Tipo de archivo no permitido"
-  if (/^processing/i.test(raw)) return "No se pudo procesar el documento"
-  if (/^rag_indexing/i.test(raw)) return "Error al indexar el documento"
-  if (/^db_create_failed/i.test(raw)) return "No se pudo registrar el archivo"
-  // Anything else: keep the raw reason. It's already short by
-  // construction (1000-char ceiling) and may be the real signal the
-  // user needs (e.g. "Out of memory" from a huge OCR pass).
-  return raw
-}
-
-/**
- * Localised label + tone for a stage. Centralised here so the chip,
- * the message bubble and any future surface render the same vocabulary.
- */
-export function describeStage(stage: FileProcessingStage | null, error?: string | null): {
-  label: string
-  tone: "neutral" | "progress" | "success" | "error"
-} {
-  if (!stage) return { label: "Pendiente", tone: "neutral" }
-  switch (stage) {
-    case "uploaded":
-      return { label: "Subido", tone: "progress" }
-    case "validating":
-      return { label: "Validando", tone: "progress" }
-    case "extracting":
-      return { label: "Extrayendo texto", tone: "progress" }
-    case "chunking":
-      return { label: "Fragmentando", tone: "progress" }
-    case "embedding":
-      return { label: "Indexando", tone: "progress" }
-    case "indexing":
-      return { label: "Indexando", tone: "progress" }
-    case "ready":
-      return { label: "Listo", tone: "success" }
-    case "failed":
-      return { label: friendlyFailureLabel(error), tone: "error" }
-    default:
-      return { label: String(stage), tone: "neutral" }
-  }
-}
+// describeStage / friendlyFailureLabel now live in
+// `lib/file-processing-vocab.ts` so they can be unit-tested without
+// pulling React into the test harness. Re-exported at the top of
+// this file for backwards compat with existing import sites.

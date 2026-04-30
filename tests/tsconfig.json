@@ -19,6 +19,7 @@
     "../lib/long-paste.ts",
     "../lib/message-preservation.ts",
     "../lib/attachment-url.ts",
-    "../lib/search-brain-ui.ts"
+    "../lib/search-brain-ui.ts",
+    "../lib/file-processing-vocab.ts"
   ]
 }
