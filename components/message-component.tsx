@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+import { FileProcessingBadge } from "@/components/file-processing-badge"
 import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
 import { AgenticStepsRenderer } from "@/components/agentic-steps"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -390,8 +391,13 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
                     {getDocumentChipIcon(att.name)}
                     <span className="flex min-w-0 flex-col">
                         <span className="truncate text-[13px] font-medium leading-tight">{att.name}</span>
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                            {(att.name.split('.').pop() || 'file').slice(0, 4)}
+                        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                            <span>{(att.name.split('.').pop() || 'file').slice(0, 4)}</span>
+                            {/* Same state-machine badge the composer chip uses
+                                — kept here so that re-opening an old chat
+                                still reflects whether the document finished
+                                indexing (or failed loudly with the reason). */}
+                            <FileProcessingBadge fileId={att.id ? String(att.id) : null} compact />
                         </span>
                     </span>
                 </button>
