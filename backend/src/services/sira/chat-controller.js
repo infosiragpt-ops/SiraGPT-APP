@@ -41,6 +41,7 @@ const chatModes = require("./chat-modes");
 const projectWorkspace = require("./project-workspace");
 const { compactContext } = require("./context-compactor");
 const { buildCitationFrame } = require("./citation-frame");
+const { createNoOpEvents } = require("./turn-events");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -135,6 +136,11 @@ async function handleChatTurnUnlocked({
   // membership row → ProjectAccessError on access; otherwise empty
   // docs / instructions / recents).
   projectWorkspaceDeps = null,
+  // Optional turn-events sink. When the route handler wants to
+  // stream the turn to the client, it passes `createSSEEvents(res)`
+  // here; everywhere else (HTTP-RPC callers, tests, eval harness)
+  // the no-op default keeps the call free.
+  events = createNoOpEvents(),
 } = {}) {
   // Stage-aware errors so `siraErrorHandler` can map them straight to
   // an HTTP 4xx with `{ code, stage, request_id, ... }` and the audit
@@ -186,7 +192,9 @@ async function handleChatTurnUnlocked({
     content: { text: userMessage, attachments },
     selectedModel,
   });
-  await store.audit("turn_started", { conversationId, userMessage_len: userMessage.length, attachment_count: attachments.length }, auditMeta);
+  const turnStartedPayload = { conversationId, userMessage_len: userMessage.length, attachment_count: attachments.length };
+  await store.audit("turn_started", turnStartedPayload, auditMeta);
+  events.emit("turn_started", { ...turnStartedPayload, request_id: requestId });
 
   // ── 1.5. Load project workspace context (best-effort) ────────────
   // Runs before the engine so the envelope-builder (in a follow-up
@@ -204,23 +212,27 @@ async function handleChatTurnUnlocked({
         userId,
         deps: projectWorkspaceDeps || {},
       });
-      await store.audit("project_context_loaded", {
+      const projectLoadedPayload = {
         project_id: projectId,
         member_role: projectContext.member?.role || null,
         capability_count: projectContext.capabilities.length,
         doc_count: projectContext.docs.length,
         recent_conversation_count: projectContext.recent_conversations.length,
-      }, auditMeta);
+      };
+      await store.audit("project_context_loaded", projectLoadedPayload, auditMeta);
+      events.emit("project_context_loaded", { ...projectLoadedPayload, request_id: requestId });
     } catch (err) {
       if (err && err.code === "project.forbidden") {
         await store.audit("project_access_denied", {
           project_id: projectId,
           reason: "not_a_member",
         }, auditMeta);
+        events.emit("project_access_denied", { project_id: projectId, reason: "not_a_member", request_id: requestId });
         siraMetrics.recordTurn({
           stage: "project_forbidden", status: "blocked", plan: userPlan,
           durationMs: Date.now() - turnStartedAtMs,
         });
+        events.end();
         return {
           stage: "project_forbidden",
           request_id: requestId,
@@ -251,13 +263,15 @@ async function handleChatTurnUnlocked({
     caps: tokenBudgetCaps,
     mode: tokenBudgetMode,
   });
-  await store.audit("token_budget_checked", {
+  const budgetCheckedPayload = {
     decision: tokenBudget.decision,
     enforcement_mode: tokenBudget.enforcement_mode,
     projected_usage: tokenBudget.projected_usage,
     caps: tokenBudget.caps,
     violations: tokenBudget.violations,
-  }, auditMeta);
+  };
+  await store.audit("token_budget_checked", budgetCheckedPayload, auditMeta);
+  events.emit("token_budget_checked", { ...budgetCheckedPayload, request_id: requestId });
   siraMetrics.recordTokenBudgetDecision({
     decision: tokenBudget.decision,
     plan: userPlan,
@@ -275,15 +289,18 @@ async function handleChatTurnUnlocked({
       },
       selectedModel,
     });
-    await store.audit("turn_blocked_token_budget", {
+    const blockedPayload = {
       decision: tokenBudget.decision,
       violations: tokenBudget.violations,
       projected_usage: tokenBudget.projected_usage,
-    }, auditMeta);
+    };
+    await store.audit("turn_blocked_token_budget", blockedPayload, auditMeta);
+    events.emit("turn_blocked_token_budget", { ...blockedPayload, request_id: requestId });
     siraMetrics.recordTurn({
       stage: "token_budget_exceeded", status: "blocked", plan: userPlan,
       durationMs: Date.now() - turnStartedAtMs,
     });
+    events.end();
     return {
       stage: "token_budget_exceeded",
       request_id: requestId,
@@ -311,11 +328,13 @@ async function handleChatTurnUnlocked({
   });
   if (bundle.stage === "envelope" || bundle.ok === false) {
     await store.audit("envelope_invalid", { errors: bundle.errors }, auditMeta);
+    events.emit("envelope_invalid", { errors: bundle.errors, request_id: requestId });
     siraMetrics.recordEnvelopeInvalid();
     siraMetrics.recordTurn({
       stage: "envelope_invalid", status: "error", plan: userPlan,
       durationMs: Date.now() - turnStartedAtMs,
     });
+    events.end();
     return {
       stage: "envelope_invalid",
       request_id: requestId,
@@ -324,6 +343,14 @@ async function handleChatTurnUnlocked({
       persisted_ids: persistedIds,
     };
   }
+  // After this point, every emit can use bundle.envelope.request_id
+  // (which is the same as requestId when the caller threaded one in,
+  // or the freshly-minted one otherwise).
+  events.emit("envelope_built", {
+    request_id: bundle.envelope.request_id,
+    primary_intent: bundle.envelope.intent_analysis?.primary_intent?.id || null,
+    workflow_node_count: bundle.envelope.workflow_graph?.nodes?.length || 0,
+  });
 
   // Persist the envelope ASAP so it can be replayed even if the run dies later.
   persistedIds.envelope_id = await store.persistEnvelope({ envelope: bundle.envelope, conversationId, userId });
@@ -336,11 +363,13 @@ async function handleChatTurnUnlocked({
   const modeResolution = chatModes.resolveMode({ callerMode: mode, envelope: bundle.envelope });
   const modeFilter = chatModes.applyModeToToolPlan(bundle.envelope, modeResolution.mode);
   if (modeFilter.tool_plan) bundle.envelope.tool_plan = modeFilter.tool_plan;
-  await store.audit("chat_mode_resolved", {
+  const modeResolvedPayload = {
     mode: modeResolution.mode,
     source: modeResolution.source,
     dropped_required_tools: modeFilter.dropped_required,
-  }, { userId, requestId: bundle.envelope.request_id });
+  };
+  await store.audit("chat_mode_resolved", modeResolvedPayload, { userId, requestId: bundle.envelope.request_id });
+  events.emit("chat_mode_resolved", { ...modeResolvedPayload, request_id: bundle.envelope.request_id });
 
   // ── 2.6. Compact the context window (stats-only audit) ───────────
   // Runs the unified compactor over (current message + history) so
@@ -366,6 +395,7 @@ async function handleChatTurnUnlocked({
       userId,
       requestId: bundle.envelope.request_id,
     });
+    events.emit("context_compacted", { ...compaction.stats, request_id: bundle.envelope.request_id });
     // Keep the summary on the envelope for replay/observability tools.
     bundle.envelope.context_compaction_summary = compaction.stats;
   }
@@ -385,10 +415,12 @@ async function handleChatTurnUnlocked({
       selectedModel,
       responseText: clarificationText,
     });
-    await store.audit("clarification_requested", {
+    const clarificationPayload = {
       questions: bundle.envelope.clarification_policy?.questions || [],
       reasons: policyVerdict.clarification.reasons,
-    }, { userId, requestId: bundle.envelope.request_id });
+    };
+    await store.audit("clarification_requested", clarificationPayload, { userId, requestId: bundle.envelope.request_id });
+    events.emit("clarification_requested", { ...clarificationPayload, request_id: bundle.envelope.request_id });
     persistedIds.assistant_message_id = await store.addMessage({
       conversationId, role: "assistant",
       content: {
@@ -404,6 +436,7 @@ async function handleChatTurnUnlocked({
       stage: "needs_clarification", status: "needs_clarification", plan: userPlan,
       durationMs: Date.now() - turnStartedAtMs,
     });
+    events.end();
     return {
       stage: "needs_clarification",
       request_id: bundle.envelope.request_id,
@@ -463,12 +496,14 @@ async function handleChatTurnUnlocked({
     checks: runtimeResult.validation_frame.checks,
   });
   if (runtimeResult.execution_trace_frame) {
-    await store.audit("execution_trace_recorded", {
+    const tracePayload = {
       request_id: bundle.envelope.request_id,
       status: runtimeResult.execution_trace_frame.status,
       duration_ms: runtimeResult.execution_trace_frame.duration_ms,
       counters: runtimeResult.execution_trace_frame.counters,
-    }, { userId, requestId: bundle.envelope.request_id });
+    };
+    await store.audit("execution_trace_recorded", tracePayload, { userId, requestId: bundle.envelope.request_id });
+    events.emit("runtime_completed", tracePayload);
   }
 
   // ── 5. Guard against accidental auto-routing ─────────────────────
@@ -499,14 +534,16 @@ async function handleChatTurnUnlocked({
     },
     selectedModel,
   });
-  await store.audit("turn_completed", {
+  const turnCompletedPayload = {
     request_id: bundle.envelope.request_id,
     ready_to_deliver: runtimeResult.validation_frame.ready_to_deliver,
     artifact_count: runtimeResult.artifact_frame.artifacts.length,
     tool_count: runtimeResult.tool_results.length,
     token_usage: tokenUsage.usage,
     execution_trace: runtimeResult.execution_trace_frame?.counters || null,
-  }, { userId, requestId: bundle.envelope.request_id });
+  };
+  await store.audit("turn_completed", turnCompletedPayload, { userId, requestId: bundle.envelope.request_id });
+  events.emit("turn_completed", turnCompletedPayload);
 
   const finalStage = runtimeResult.validation_frame.ready_to_deliver ? "delivered" : "needs_repair";
   siraMetrics.recordTurn({
@@ -534,12 +571,19 @@ async function handleChatTurnUnlocked({
     requestId: bundle.envelope.request_id,
   });
   if (citationFrame.has_citations) {
-    await store.audit("citation_frame_built", {
+    const citationPayload = {
       sources_provided: citationFrame.coverage.sources_provided,
       sources_cited: citationFrame.coverage.sources_cited,
       coverage_ratio: citationFrame.coverage.coverage_ratio,
-    }, { userId, requestId: bundle.envelope.request_id });
+    };
+    await store.audit("citation_frame_built", citationPayload, { userId, requestId: bundle.envelope.request_id });
+    events.emit("citation_frame_built", { ...citationPayload, request_id: bundle.envelope.request_id });
   }
+  // Final flush: end the event stream after the last emit so any
+  // SSE consumer can close cleanly. Subsequent return statement
+  // returns the same payload as before — non-streaming callers see
+  // no behavioural change.
+  events.end();
 
   return {
     stage: finalStage,
