@@ -35,6 +35,28 @@ export function isTerminalStage(stage: FileProcessingStage | null | undefined): 
 }
 
 /**
+ * Returns `true` only on a real non-ready → ready edge — the moment
+ * worth surfacing a "Documento listo" toast. Carefully NOT firing on:
+ *   - the initial poll (`prev` is null) when the row was already
+ *     `ready` before the consumer mounted (legacy / already-indexed
+ *     file would otherwise flash a misleading toast)
+ *   - back-to-back ready states from re-renders
+ *   - any other stage on either side
+ *
+ * Used by `FileProcessingBadge`'s onReady plumbing — extracted into
+ * the vocab so the rule can be unit-tested without React.
+ */
+export function shouldFireReadyTransition(
+  previous: FileProcessingStage | null | undefined,
+  current: FileProcessingStage | null | undefined,
+): boolean {
+  if (current !== "ready") return false
+  if (!previous) return false
+  if (previous === "ready") return false
+  return true
+}
+
+/**
  * Map the stage-prefixed `processingError` reasons we write in the
  * backend (see STATE_MACHINE.md §7) to short, user-facing Spanish
  * labels. Non-technical users shouldn't have to read "processing:

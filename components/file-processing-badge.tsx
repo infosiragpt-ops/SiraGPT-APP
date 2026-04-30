@@ -5,6 +5,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { Check, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useFileProcessingStatus, describeStage } from "@/hooks/use-file-processing-status"
+import { shouldFireReadyTransition, type FileProcessingStage } from "@/lib/file-processing-vocab"
 
 interface Props {
   fileId: string | null | undefined
@@ -32,13 +33,13 @@ interface Props {
 export function FileProcessingBadge({ fileId, compact, className, onReady }: Props) {
   const status = useFileProcessingStatus(fileId)
 
-  // Fire onReady on the non-ready → ready transition. Tracking the
-  // previous stage in a ref means we never fire from the initial poll
-  // that lands directly on 'ready' (legacy file or already-indexed).
-  const prevStageRef = React.useRef<string | null>(null)
+  // Fire onReady on the non-ready → ready transition. The decision
+  // rule lives in `shouldFireReadyTransition` so the edge cases
+  // (initial mount on an already-ready file, ready→ready re-renders)
+  // can be locked down by unit tests instead of by careful reading.
+  const prevStageRef = React.useRef<FileProcessingStage | null>(null)
   React.useEffect(() => {
-    const prev = prevStageRef.current
-    if (status.stage === "ready" && prev && prev !== "ready") {
+    if (shouldFireReadyTransition(prevStageRef.current, status.stage)) {
       onReady?.()
     }
     if (status.stage) prevStageRef.current = status.stage

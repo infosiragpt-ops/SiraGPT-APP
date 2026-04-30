@@ -5,6 +5,7 @@ import {
   describeStage,
   friendlyFailureLabel,
   isTerminalStage,
+  shouldFireReadyTransition,
   TERMINAL_STAGES,
 } from "../lib/file-processing-vocab"
 
@@ -69,4 +70,42 @@ test("friendlyFailureLabel is case-insensitive on the prefix match", () => {
   assert.equal(friendlyFailureLabel("MAGIC_BYTE_MISMATCH: foo"), "Tipo de archivo no permitido")
   assert.equal(friendlyFailureLabel("Processing: ECONNRESET"),    "No se pudo procesar el documento")
   assert.equal(friendlyFailureLabel("RAG_INDEXING: 503 service"), "Error al indexar el documento")
+})
+
+test("shouldFireReadyTransition fires on a real non-ready → ready edge", () => {
+  assert.equal(shouldFireReadyTransition("uploaded",   "ready"), true)
+  assert.equal(shouldFireReadyTransition("validating", "ready"), true)
+  assert.equal(shouldFireReadyTransition("extracting", "ready"), true)
+  assert.equal(shouldFireReadyTransition("chunking",   "ready"), true)
+  assert.equal(shouldFireReadyTransition("embedding",  "ready"), true)
+  assert.equal(shouldFireReadyTransition("indexing",   "ready"), true)
+})
+
+test("shouldFireReadyTransition stays quiet on initial mount onto an already-ready file", () => {
+  // First poll lands directly on `ready` — `previous` is null because
+  // the consumer just mounted. Toasting here would be a lie.
+  assert.equal(shouldFireReadyTransition(null,      "ready"), false)
+  assert.equal(shouldFireReadyTransition(undefined, "ready"), false)
+})
+
+test("shouldFireReadyTransition stays quiet on ready→ready re-renders", () => {
+  // The hook re-emits state on every poll; the badge must not re-fire
+  // the toast every time the same `ready` value is reported.
+  assert.equal(shouldFireReadyTransition("ready", "ready"), false)
+})
+
+test("shouldFireReadyTransition stays quiet on every non-ready current stage", () => {
+  const nonReady = ["uploaded", "validating", "extracting", "chunking", "embedding", "indexing", "failed"] as const
+  for (const cur of nonReady) {
+    assert.equal(
+      shouldFireReadyTransition("extracting", cur),
+      false,
+      `should not fire when current stage is '${cur}'`,
+    )
+  }
+})
+
+test("shouldFireReadyTransition tolerates null/undefined current without firing", () => {
+  assert.equal(shouldFireReadyTransition("extracting", null),      false)
+  assert.equal(shouldFireReadyTransition("extracting", undefined), false)
 })
