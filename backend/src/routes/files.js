@@ -174,6 +174,41 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
     const processedFiles = [];
 
     for (const file of req.files) {
+      // Create the File row up-front (status='uploaded') so the state
+      // machine covers every stage the user can see — including the
+      // pre-validation / pre-extraction window. The frontend that
+      // already polls /processing-status (Phase 2.2) now lights up
+      // immediately instead of waiting for extraction to complete.
+      let fileRecord = null;
+      try {
+        fileRecord = await prisma.file.create({
+          data: {
+            userId: req.user.id,
+            filename: file.filename,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
+            size: file.size,
+            path: file.path,
+            extractedText: null,
+            openaiFileId: null,
+            processingStage: 'uploaded',
+            processingStageAt: new Date(),
+          },
+        });
+      } catch (createError) {
+        console.error('[files] could not create File row:', createError.message || createError);
+        await unlinkQuiet(file.path);
+        processedFiles.push({
+          name: file.originalname,
+          size: file.size,
+          type: file.mimetype,
+          success: false,
+          error: 'No se pudo registrar el archivo en la base de datos.',
+          code: 'db_create_failed',
+        });
+        continue;
+      }
+
       try {
         // Magic-byte detection — sees the *real* content type by reading
         // the file's leading bytes. Two responsibilities:
@@ -182,14 +217,20 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
         //   2. Reject the upload when the real type lands outside the
         //      allowlist — multer's pre-gate trusted the declared mime,
         //      so we close the spoofing loophole here.
+        await fileProcessingStatus.setStage(prisma, fileRecord.id, 'validating', { userId: req.user.id });
         const detection = await detectMime(file.path, file.mimetype);
         if (!isContentTypeAllowed(detection)) {
           console.warn(
             `[files] rejected ${file.originalname}: declared=${file.mimetype} ` +
             `real=${detection.mime} (not in allowlist)`,
           );
+          await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
+            userId: req.user.id,
+            error: `magic_byte_mismatch: contenido detectado ${detection.mime}`,
+          });
           await unlinkQuiet(file.path);
           processedFiles.push({
+            id: fileRecord.id,
             name: file.originalname,
             size: file.size,
             type: file.mimetype,
@@ -206,6 +247,7 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
         }
 
         // Process file content
+        await fileProcessingStatus.setStage(prisma, fileRecord.id, 'extracting', { userId: req.user.id });
         const result = await fileProcessor.processFile(file);
 
         // Generate thumbnail for images
@@ -230,18 +272,18 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
           }
         }
 
-        // Save file record to database
-        const fileRecord = await prisma.file.create({
+        // Update the File row with the now-known mime / extractedText /
+        // openaiFileId. Stage stays at 'extracting' until the RAG
+        // schedule picks it up and transitions to chunking → embedding
+        // → indexing → ready (or failed). The state machine therefore
+        // never goes backwards.
+        fileRecord = await prisma.file.update({
+          where: { id: fileRecord.id },
           data: {
-            userId: req.user.id,
-            filename: file.filename,
-            originalName: file.originalname,
             mimeType: file.mimetype,
-            size: file.size,
-            path: file.path,
             extractedText: result.extractedText,
-            openaiFileId: openaiFileId
-          }
+            openaiFileId: openaiFileId,
+          },
         });
 
         const ragQueued = scheduleDefaultRagIndex(req.user.id, fileRecord);
@@ -275,7 +317,17 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
         });
       } catch (error) {
         console.error('File processing error:', error);
+        // Pin the failure on the row created at the top of the loop so
+        // the state machine reflects "extraction blew up" instead of
+        // leaving the row stuck at 'validating' / 'extracting' forever.
+        if (fileRecord && fileRecord.id) {
+          await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
+            userId: req.user.id,
+            error: `processing: ${error && error.message ? error.message : String(error)}`,
+          });
+        }
         processedFiles.push({
+          id: fileRecord ? fileRecord.id : undefined,
           name: file.originalname,
           size: file.size,
           type: file.mimetype,
