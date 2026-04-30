@@ -418,7 +418,7 @@ These are the pieces that are deliberately not yet here. Each will be addressed 
 |---|---|---|---|
 | 1 | `request_id` end-to-end propagation: HTTP middleware → chat-controller → engine → envelope, echoed back as `X-Request-Id`. | task 2 | **done** — `backend/src/middleware/request-id.js`, `tests/sira-request-id.test.js` |
 | 2 | Stage-aware error taxonomy: `SiraPipelineError` + per-stage subclasses, `wrapAsSiraError`, `toHttpResponse`, `toAuditPayload`, `siraErrorHandler`. | task 3 | **done** — `backend/src/services/sira/pipeline-errors.js`, `tests/sira-pipeline-errors.test.js`, first migrated site: chat-controller input validation |
-| 3 | `/health` returns 200 if the process is up; it does not check DB, Redis, queue depth, or model-adapter reachability. `/metrics` does not exist. | task 4 | pending |
+| 3 | Deep `/health/{live,ready}` + composite `/health` (DB + Redis + queue + process + model-providers). Prometheus `/metrics` covering chat turns, durations, budget decisions, pipeline errors, clarifications, envelope rejections. | task 4 | **done** — `backend/src/services/observability/health-check.js`, `backend/src/services/sira/metrics.js`, `backend/index.js`, `tests/sira-health-and-metrics.test.js` |
 | 4 | Playwright covers individual surfaces but not the full pipeline (chat → upload → RAG → tool-call → stream → citation) end-to-end. | task 5 | pending |
 | 5 | Per-module `MODULE.md` documents are missing for most subareas. | task 6 | pending |
 | 6 | Context compaction is implicit (split across `context-window.js`, `gist-memory.js`, and the envelope builder). A first-class `context-compactor` with a single contract is missing. | task 7 | pending |

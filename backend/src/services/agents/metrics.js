@@ -222,6 +222,12 @@ module.exports = {
   renderText,
   recordAgentRun,
   _reset,
+  // Exposed so other services (e.g. services/sira/metrics.js) can
+  // register their own metric families against the same registry —
+  // a single /metrics endpoint then exports them all.
+  registerCounter,
+  registerHistogram,
+  registerGauge,
   // exported for tests
   registry,
 };

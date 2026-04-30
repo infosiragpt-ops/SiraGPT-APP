@@ -36,6 +36,7 @@ const { createSessionActorQueue, buildChatTurnActorKey } = require("./session-ac
 const { buildTokenUsageFrame } = require("./token-ledger");
 const { assessTokenBudget } = require("./token-budget-policy");
 const { IngressError } = require("./pipeline-errors");
+const siraMetrics = require("./metrics");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -140,6 +141,9 @@ async function handleChatTurnUnlocked({
     });
   }
   const originalSelection = { ...selectedModel };
+  // Pinned at the very top so every return path can compute one
+  // duration. Prometheus histograms read this via `recordTurn`.
+  const turnStartedAtMs = Date.now();
 
   const store = storage || createSiraStorage({ adapter: createInMemoryStorage() });
   const reg = registry || createDefaultRegistry();
@@ -178,6 +182,11 @@ async function handleChatTurnUnlocked({
     caps: tokenBudget.caps,
     violations: tokenBudget.violations,
   }, auditMeta);
+  siraMetrics.recordTokenBudgetDecision({
+    decision: tokenBudget.decision,
+    plan: userPlan,
+    enforcement_mode: tokenBudget.enforcement_mode,
+  });
   if (tokenBudget.decision === "blocked") {
     const blockedText = "La solicitud supera el presupuesto de tokens configurado para esta sesión. Reduce el tamaño del mensaje, divide la tarea o aumenta el plan antes de continuar.";
     persistedIds.assistant_message_id = await store.addMessage({
@@ -195,6 +204,10 @@ async function handleChatTurnUnlocked({
       violations: tokenBudget.violations,
       projected_usage: tokenBudget.projected_usage,
     }, auditMeta);
+    siraMetrics.recordTurn({
+      stage: "token_budget_exceeded", status: "blocked", plan: userPlan,
+      durationMs: Date.now() - turnStartedAtMs,
+    });
     return {
       stage: "token_budget_exceeded",
       request_id: requestId,
@@ -222,6 +235,11 @@ async function handleChatTurnUnlocked({
   });
   if (bundle.stage === "envelope" || bundle.ok === false) {
     await store.audit("envelope_invalid", { errors: bundle.errors }, auditMeta);
+    siraMetrics.recordEnvelopeInvalid();
+    siraMetrics.recordTurn({
+      stage: "envelope_invalid", status: "error", plan: userPlan,
+      durationMs: Date.now() - turnStartedAtMs,
+    });
     return {
       stage: "envelope_invalid",
       request_id: requestId,
@@ -262,6 +280,11 @@ async function handleChatTurnUnlocked({
         token_usage: tokenUsage,
       },
       selectedModel,
+    });
+    siraMetrics.recordClarificationRequested();
+    siraMetrics.recordTurn({
+      stage: "needs_clarification", status: "needs_clarification", plan: userPlan,
+      durationMs: Date.now() - turnStartedAtMs,
     });
     return {
       stage: "needs_clarification",
@@ -365,8 +388,15 @@ async function handleChatTurnUnlocked({
     execution_trace: runtimeResult.execution_trace_frame?.counters || null,
   }, { userId, requestId: bundle.envelope.request_id });
 
+  const finalStage = runtimeResult.validation_frame.ready_to_deliver ? "delivered" : "needs_repair";
+  siraMetrics.recordTurn({
+    stage: finalStage,
+    status: finalStage === "delivered" ? "success" : "needs_repair",
+    plan: userPlan,
+    durationMs: Date.now() - turnStartedAtMs,
+  });
   return {
-    stage: runtimeResult.validation_frame.ready_to_deliver ? "delivered" : "needs_repair",
+    stage: finalStage,
     request_id: bundle.envelope.request_id,
     envelope: bundle.envelope,
     intent_frame: bundle.intent_frame,
@@ -382,7 +412,7 @@ async function handleChatTurnUnlocked({
     token_budget: tokenBudget,
     persisted_ids: persistedIds,
     summary: {
-      stage: runtimeResult.validation_frame.ready_to_deliver ? "delivered" : "needs_repair",
+      stage: finalStage,
       tool_count: runtimeResult.tool_results.length,
       artifact_count: runtimeResult.artifact_frame.artifacts.length,
       validation_score: runtimeResult.validation_frame.aggregate_score,

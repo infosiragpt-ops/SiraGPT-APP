@@ -181,13 +181,83 @@ app.use('/uploads', express.static(uploadsDir, {
 }));
 
 
-// Health check
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'OK',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV
+// ── Health probes ───────────────────────────────────────────────
+// Three endpoints for three different operational consumers:
+//   /health        → composite (all checks + ops info). 503 when any
+//                    critical check is unhealthy.
+//   /health/live   → liveness (process up). Always 200 unless the
+//                    process is past the point of being able to serve.
+//   /health/ready  → readiness (DB + Redis + queue + process). Used
+//                    by the load balancer / k8s readiness probe.
+//
+// A dedicated, lazy IORedis client is used only for the health probe
+// so a flaky Redis can't poison the live BullMQ queue connection.
+const {
+    runLivenessCheck,
+    runReadinessCheck,
+    runFullHealthCheck,
+    reportToHttpStatus,
+} = require('./src/services/observability/health-check');
+
+let _healthRedisClient = null;
+function getHealthRedisClient() {
+    if (!process.env.REDIS_URL) return null;
+    if (_healthRedisClient) return _healthRedisClient;
+    try {
+        const IORedis = require('ioredis');
+        _healthRedisClient = new IORedis(process.env.REDIS_URL, {
+            lazyConnect: true,
+            // Health check ping should not retry — a stuck Redis IS the
+            // signal we want to surface. One attempt, fail fast.
+            maxRetriesPerRequest: 1,
+            enableReadyCheck: false,
+            connectTimeout: 2000,
+        });
+        // Swallow background errors. The health probe will still observe
+        // the connection state on the next ping().
+        _healthRedisClient.on('error', () => {});
+        return _healthRedisClient;
+    } catch (_e) {
+        return null;
+    }
+}
+
+app.get('/health/live', (_req, res) => {
+    const report = runLivenessCheck();
+    res.status(reportToHttpStatus(report)).json(report);
+});
+
+app.get('/health/ready', async (_req, res) => {
+    const report = await runReadinessCheck({
+        prisma,
+        redis: getHealthRedisClient(),
+        // queue: pass `getAgentTaskQueue()` here once the platform wants
+        //        queue-depth signals on the readiness gate.
+        queue: null,
     });
+    res.status(reportToHttpStatus(report)).json(report);
+});
+
+app.get('/health', async (_req, res) => {
+    const report = await runFullHealthCheck({
+        prisma,
+        redis: getHealthRedisClient(),
+        queue: null,
+    });
+    res.status(reportToHttpStatus(report)).json(report);
+});
+
+// ── Prometheus metrics ──────────────────────────────────────────
+// Single scrape endpoint for the entire process. Both SE-agent
+// counters (registered in services/agents/metrics.js) and Sira
+// pipeline counters (registered in services/sira/metrics.js — via
+// require side-effect below) export through one renderer.
+const observabilityMetrics = require('./src/services/agents/metrics');
+require('./src/services/sira/metrics');
+
+app.get('/metrics', (_req, res) => {
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.send(observabilityMetrics.renderText());
 });
 
 // API Routes
