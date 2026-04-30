@@ -281,6 +281,17 @@ model File {
   openaiFileId String? // OpenAI Files API ID
   createdAt   DateTime @default(now())
 
+  // Processing state machine — written by the upload pipeline and the
+  // RAG indexer. Stages, in order: uploaded → validating → extracting
+  // → chunking → embedding → indexing → ready (or → failed at any
+  // step). The frontend polls /api/files/:id/processing-status and
+  // surfaces the current stage / error in the attachment chip so the
+  // chat never sits on a silent spinner when the pipeline stalls.
+  // Nullable to keep legacy rows queryable without a backfill.
+  processingStage     String?
+  processingError     String?
+  processingStageAt   DateTime?
+
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   documentAnalysis DocumentAnalysis?

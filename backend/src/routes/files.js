@@ -3,6 +3,7 @@ const fsSync = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { ALLOWED_MIMES, ALLOWED_EXTENSIONS } = require('../middleware/upload');
+const fileProcessingStatus = require('../services/file-processing-status');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
 const documentIntelligence = require('../services/document-intelligence');
@@ -30,16 +31,27 @@ function loadFileType() {
 
 function scheduleDefaultRagIndex(userId, fileRecord) {
   const docs = operationalRag.normaliseDocs([fileRecord]);
-  if (docs.length === 0) return false;
+  if (docs.length === 0) {
+    // No document to index; treat the upload as terminal-ready so
+    // the file row converges to a non-pending state for the UI to
+    // poll. (Images / pure thumbnails land here.)
+    fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
+    return false;
+  }
 
   setImmediate(async () => {
+    // Mark the entry into the async pipeline so the frontend can
+    // distinguish "extraction done, still indexing" from "ready".
+    await fileProcessingStatus.setStage(prisma, fileRecord.id, 'chunking', { userId });
     try {
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'embedding', { userId });
       const result = await operationalRag.ensureIndexed({
         rag,
         userId,
         collection: operationalRag.DEFAULT_COLLECTION,
         docs,
       });
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'indexing', { userId });
       if (result.indexed && operationalRag.shouldUseGraphBackfill(docs)) {
         const graphSources = (result.ingestedSources && result.ingestedSources.length > 0)
           ? result.ingestedSources
@@ -52,8 +64,13 @@ function scheduleDefaultRagIndex(userId, fileRecord) {
           openai: rag.getOpenAI(),
         });
       }
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
     } catch (err) {
       console.warn('[files] default RAG indexing failed:', err.message || err);
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
+        userId,
+        error: `rag_indexing: ${err && err.message ? err.message : String(err)}`,
+      });
     }
   });
 
@@ -278,6 +295,43 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
   } catch (error) {
     console.error('Upload error:', error);
     res.status(500).json({ error: 'File upload failed' });
+  }
+});
+
+/**
+ * GET /api/files/:id/processing-status
+ *
+ * Lightweight polling endpoint the chat UI hits while an attachment
+ * is in flight. Returns the current stage of the file's processing
+ * state machine, plus the timestamp of the last transition and the
+ * failure reason when stage='failed'. The frontend uses this to:
+ *   - swap the chip badge from "Procesando" → "Listo"
+ *   - show "Error: <reason>" inline instead of a silent spinner
+ *   - stop polling once isTerminal=true
+ *
+ * Authorisation: a user can only read status for their own files.
+ */
+router.get('/:id/processing-status', authenticateToken, async (req, res) => {
+  try {
+    const status = await fileProcessingStatus.getStatus(prisma, req.params.id);
+    if (!status) return res.status(404).json({ error: 'File not found' });
+    if (status.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    return res.json({
+      fileId: status.fileId,
+      name: status.name,
+      mimeType: status.mimeType,
+      size: status.size,
+      stage: status.stage,
+      error: status.error,
+      stageAt: status.stageAt,
+      isTerminal: status.isTerminal,
+      createdAt: status.createdAt,
+    });
+  } catch (err) {
+    console.error('[files] processing-status read failed:', err.message || err);
+    return res.status(500).json({ error: 'Failed to read processing status' });
   }
 });
 
