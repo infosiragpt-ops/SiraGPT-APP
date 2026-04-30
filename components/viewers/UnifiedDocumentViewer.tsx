@@ -66,7 +66,38 @@ import remarkGfm from "remark-gfm"
 import * as XLSX from "xlsx"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneLight, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
-import mammoth from "mammoth"
+// mammoth is imported dynamically inside DocxRenderer's fallback path
+// (~250 KB module, only loaded when docx-preview fails). Static import
+// would force every viewer instance to ship the bytes even for non-DOCX
+// previews, AND would bundle it into the page chunk so a stale HTML
+// reference to a re-hashed chunk surfaces as "Loading chunk failed"
+// instead of a recoverable per-document error.
+let mammothPromise: Promise<typeof import("mammoth")> | null = null
+function loadMammoth() {
+  if (!mammothPromise) {
+    mammothPromise = import("mammoth").catch((err) => {
+      // Reset the cache so the next attempt actually retries instead of
+      // keeping the rejected promise in scope forever.
+      mammothPromise = null
+      throw err
+    })
+  }
+  return mammothPromise
+}
+
+/**
+ * True when the error came from webpack failing to load a code-split
+ * chunk — almost always because the page HTML references a chunk hash
+ * the running server no longer has on disk (after a deploy or a dev
+ * hot-restart). Recovery is a hard refresh, not a per-document retry.
+ */
+function isChunkLoadError(err: unknown): boolean {
+  if (!err) return false
+  const e = err as { name?: string; message?: string }
+  if (e.name === "ChunkLoadError") return true
+  const msg = e.message || ""
+  return /Loading chunk \S+ failed|ChunkLoadError|Failed to fetch dynamically imported module/i.test(msg)
+}
 import JSZip from "jszip"
 import DOMPurify from "dompurify"
 import { Document as PdfDocument, Page as PdfPage, pdfjs } from "react-pdf"
@@ -1745,12 +1776,14 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
           // Fallback to mammoth → sanitized HTML.
           // eslint-disable-next-line no-console
           console.warn("[UnifiedDocumentViewer] docx-preview failed, falling back to mammoth:", docxErr)
+          const mammothMod = (await loadMammoth()) as any
+          const mammoth = mammothMod.default || mammothMod
           const result = await mammoth.convertToHtml(
             { arrayBuffer: buf },
             {
               includeDefaultStyleMap: true,
-              convertImage: (mammoth as any).images?.imgElement
-                ? (mammoth as any).images.imgElement((image: any) =>
+              convertImage: mammoth.images?.imgElement
+                ? mammoth.images.imgElement((image: any) =>
                     image.read("base64").then((data: string) => ({
                       src: `data:${image.contentType};base64,${data}`,
                     })),
@@ -1764,6 +1797,18 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
         }
       } catch (e: any) {
         if (cancelled) return
+        // Chunk-load errors are not data issues — they happen when the
+        // page HTML references a JS chunk hash that no longer exists
+        // (after a deploy or a dev-server hot-restart). Surface a
+        // recover-by-reload message instead of dumping the webpack
+        // error verbatim, and skip the extractedText fallback so the
+        // refresh nudge isn't masked by a half-rendered page.
+        const message = e?.message || String(e || "Error")
+        if (isChunkLoadError(e)) {
+          setErr("La aplicación se actualizó. Recarga la página para abrir el documento.")
+          setMode("error")
+          return
+        }
         // Last-resort: if the binary read failed but the message
         // carries extractedText (server-side parse), still show the
         // user something readable instead of "No source available".
@@ -1772,7 +1817,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
           setMode("extracted")
           return
         }
-        setErr(e?.message || "Error")
+        setErr(message)
         setMode("error")
       }
     })()
@@ -1780,7 +1825,17 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
   }, [a])
 
   if (mode === "error") {
-    return <ErrorState error={err || "Error"} hint="Intenta descargar el archivo y ábrelo en Word / Pages." />
+    const isReloadHint = err?.startsWith("La aplicación se actualizó")
+    return (
+      <ErrorState
+        error={err || "Error"}
+        hint={
+          isReloadHint
+            ? "Cmd+Shift+R (o Ctrl+Shift+R en Windows/Linux) suele bastar."
+            : "Intenta descargar el archivo y ábrelo en Word / Pages."
+        }
+      />
+    )
   }
 
   return (
