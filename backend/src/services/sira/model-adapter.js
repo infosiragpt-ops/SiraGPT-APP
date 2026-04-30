@@ -79,12 +79,12 @@ async function callUserSelectedModel(
   // just consult it. `half_open` returns true (one trial allowed),
   // so this only blocks fully open circuits.
   if (instrument && !llmInstrumentation.isProviderAvailable(selectedModel.provider)) {
-    const e = mkErr(
+    // mkErr already returns a `ToolError({code:"provider_circuit_open",
+    // retryable:true})` — see _MODEL_ADAPTER_TOOL_CODES below.
+    throw mkErr(
       "provider_circuit_open",
       `provider "${selectedModel.provider}" circuit is open; refusing dispatch`,
     );
-    e.retryable = true;
-    throw e;
   }
 
   const plan = liteLLMGateway.createGatewayPlan({
@@ -263,10 +263,24 @@ function createDefaultProviders() {
   };
 }
 
+// Code → error class mapping. Codes are kept verbatim — the test
+// suite + audit consumers index on `err.code` as the primary
+// discriminator, so the migration to SiraPipelineError must NOT
+// rename or namespace the code value. Only the class changes,
+// which gives `toHttpResponse` / `toAuditPayload` / the Express
+// `siraErrorHandler` a structured payload to work with.
+const _MODEL_ADAPTER_TOOL_CODES = new Set([
+  "provider_circuit_open",
+]);
 function mkErr(code, message) {
-  const e = new Error(message);
-  e.code = code;
-  return e;
+  const { IngressError, ToolError } = require("./pipeline-errors");
+  if (_MODEL_ADAPTER_TOOL_CODES.has(code)) {
+    return new ToolError({ code, message, retryable: true });
+  }
+  // Every other thrown code in this module is a request-shape
+  // complaint (missing field, bad message, modality unsupported,
+  // auto-routing violation) → 400 / IngressError.
+  return new IngressError({ code, message });
 }
 
 module.exports = {
