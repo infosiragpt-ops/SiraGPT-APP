@@ -229,6 +229,39 @@ jobs:
         continue-on-error: true
 
   # ───────────────────────────────────────────────────────────────────
+  # E2E — Playwright browser smoke (informational)
+  # ───────────────────────────────────────────────────────────────────
+  # Boots `next dev` on :3005 (per playwright.config.ts) and runs the
+  # smoke specs in e2e/. continue-on-error keeps a flaky boot from
+  # blocking merges; what we care about is the signal in the PR
+  # checks. Tighten to a hard gate only after several green weeks.
+  e2e:
+    name: E2E · Playwright smoke (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install Playwright Chromium (only)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright smoke
+        run: npm run test:e2e
+        continue-on-error: true
+
+  # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
   # Branch protection on `main` can require this single status instead
