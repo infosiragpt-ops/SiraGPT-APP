@@ -7,6 +7,22 @@ import { downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 
+/**
+ * Build the fetch init the preview uses against the backend asset
+ * host. Includes the cookie AND the Bearer token most auth gates
+ * look for. Cookie alone is not enough on deploys that protect
+ * /uploads/* with a JWT middleware — the request returns 403 and
+ * the user sees "No se pudo previsualizar".
+ */
+function buildAssetFetchInit(): RequestInit {
+  if (typeof window === "undefined") return { credentials: "include" }
+  const token = window.localStorage?.getItem("auth-token") || ""
+  return {
+    credentials: "include",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  }
+}
+
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 /**
  * DocumentPreview — right-pane viewer for generated documents.
@@ -327,7 +343,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       setState({ kind: "loading" })
       ;(async () => {
         try {
-          const resp = await fetch(previewUrl, { credentials: "include" })
+          const resp = await fetch(previewUrl, buildAssetFetchInit())
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
           const html = await resp.text()
           if (cancelled) return
@@ -353,7 +369,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
     ;(async () => {
       try {
-        const resp = await fetch(previewUrl, { credentials: "include" })
+        const resp = await fetch(previewUrl, buildAssetFetchInit())
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
 
         if (format === "csv") {

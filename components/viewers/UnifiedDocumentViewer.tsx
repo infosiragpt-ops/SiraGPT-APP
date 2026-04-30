@@ -554,10 +554,27 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 // ─── Utilities for loading raw content ───────────────────────────────
 
+/**
+ * Build a fetch init that carries both the session cookie and the
+ * Bearer token most of the backend's auth middlewares look for.
+ * Without the Bearer header, deploys that protect /uploads/* with a
+ * JWT gate (and any future auth-gated asset path) reject the request
+ * with HTTP 403 even though the user is logged in — the cookie is
+ * not enough on its own.
+ */
+function authedAssetFetchInit(): RequestInit {
+  if (typeof window === "undefined") return { credentials: "include" }
+  const token = window.localStorage?.getItem("auth-token") || ""
+  return {
+    credentials: "include",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  }
+}
+
 async function readAsText(a: AttachmentLike): Promise<string> {
   if (a.file) return await a.file.text()
   if (a.url) {
-    const res = await fetch(absUrl(a.url), { credentials: "include" })
+    const res = await fetch(absUrl(a.url), authedAssetFetchInit())
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return await res.text()
   }
@@ -568,7 +585,7 @@ async function readAsText(a: AttachmentLike): Promise<string> {
 async function readAsArrayBuffer(a: AttachmentLike): Promise<ArrayBuffer> {
   if (a.file) return await a.file.arrayBuffer()
   if (a.url) {
-    const res = await fetch(absUrl(a.url), { credentials: "include" })
+    const res = await fetch(absUrl(a.url), authedAssetFetchInit())
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return await res.arrayBuffer()
   }
