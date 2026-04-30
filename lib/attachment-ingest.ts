@@ -64,7 +64,12 @@ const ALLOWED_EXTENSIONS = new Set<string>([
   "eml", "msg",
 ])
 
-const DEFAULT_MAX_BYTES = 50 * 1024 * 1024 // 50 MB — matches backend default
+// No client-side size cap — the product accepts arbitrarily large
+// uploads. Real-world ceilings (browser memory while reading the
+// blob, server disk space, OpenAI Files API at 512 MB) still apply
+// downstream and surface their own errors when they bite, but the
+// composer no longer pre-rejects on size.
+const DEFAULT_MAX_BYTES = Number.POSITIVE_INFINITY
 const DEFAULT_MAX_COUNT = 10                // matches backend `files: 10`
 
 export type IngestSource =
@@ -120,7 +125,10 @@ export function validateFile(
   if (!file || file.size === 0) {
     return { ok: false, reason: "El archivo está vacío", code: "empty_file" }
   }
-  if (file.size > max) {
+  // The default cap is Infinity, so this branch only fires when a
+  // caller explicitly opts into a size limit (none do today). Kept
+  // for callers that may want a per-surface ceiling later.
+  if (Number.isFinite(max) && file.size > max) {
     const mb = Math.round(max / (1024 * 1024))
     return {
       ok: false,

@@ -87,11 +87,23 @@ const fileFilter = (req, file, cb) => {
   return cb(new Error(`Tipo no permitido: ${mime || ext || 'desconocido'}`), false);
 };
 
+// Per-file size policy:
+//   - MAX_FILE_SIZE env var (megabytes, integer > 0): enforce that cap.
+//   - Anything else (unset, 0, NaN): no cap. Multer accepts the file,
+//     downstream pipelines still apply their own real-world ceilings
+//     (OpenAI Files API at 512 MB, disk space, fileProcessor memory).
+// The product UX asks for "sin límite" by default, so the unset case
+// resolves to Infinity rather than the legacy 50 MB ceiling.
+const rawMaxFileSizeMb = parseInt(process.env.MAX_FILE_SIZE, 10);
+const PER_FILE_BYTE_CAP = Number.isFinite(rawMaxFileSizeMb) && rawMaxFileSizeMb > 0
+  ? rawMaxFileSizeMb * 1024 * 1024
+  : Number.POSITIVE_INFINITY;
+
 const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE) * 1024 * 1024 || 50 * 1024 * 1024, // 50MB default
+    fileSize: PER_FILE_BYTE_CAP,
     files: 10, // Up to 10 files per request — multimodal ingestion can batch
   },
 });

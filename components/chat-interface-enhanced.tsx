@@ -6993,7 +6993,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <p className="text-base font-semibold">Soltar para adjuntar</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Word, Excel, PowerPoint, imágenes y datos hasta 50 MB.
+              PDF, Word, Excel, PowerPoint, imágenes y datos — sin límite de tamaño.
             </p>
           </div>
         </div>
