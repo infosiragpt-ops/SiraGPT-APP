@@ -82,7 +82,7 @@ Return a self-contained JSON object (no fences, no prose before or after):
   "format": "docx" | "xlsx" | "pptx" | "pdf" | "svg" | "csv",
   "filename": string,
   "title": string,         // user-language short title shown above the artefact
-  "explanation": string,   // 1-3 short sentences describing what the document contains
+  "explanation": string,   // 1-3 short sentences describing what the document contains. NEVER include a download URL, link, "undefined/", "[descargar]" Markdown link, or any phrase like "puedes descargarlo en el siguiente enlace" — the chip card surfaces the download button automatically. Just describe the contents.
   "python": string         // self-contained Python 3 snippet that writes the file to OUT_PATH
 }
 
@@ -114,7 +114,7 @@ visually consistent, on-brand, and academically correct. The bundle:
   doc = apa_document()                                 # TNR 12 pt · doble interlineado · márgenes 2.54 cm · header con número de página
   apa_cover(doc, title="...", author="...", institution="...", course=None, professor=None, date=None, degree=None)
   apa_heading(doc, 1..5, text)                         # level 1: centered bold · 2: left bold · 3: left bold italic · 4/5: sangría 1.27 cm
-  apa_paragraph(doc, text, first_line_indent=True, italic=False, bold=False, center=False)   # justificado por defecto · soporta `$...$` LaTeX inline
+  apa_paragraph(doc, text, first_line_indent=True, italic=False, bold=False, center=False)   # justificado por defecto · soporta \`$...$\` LaTeX inline
   apa_math(doc, r"\int_0^1 f(x)\,dx", fontsize=14)     # ecuación centrada en su propia línea (matplotlib mathtext → PNG transparente)
   apa_table(doc, headers=[...], rows=[[...]], caption_number="1", caption_title="...", note="...")
   apa_references(doc, ["Autor, A. A. (2020). Título. ...", ...])
@@ -125,17 +125,17 @@ visually consistent, on-brand, and academically correct. The bundle:
 
   ── Math rendering rules — APPLY ALWAYS for any document with formulas ──
     * NEVER write math as plain ASCII like "x^2", "f(x) = 3x^3 - 5x^2", or "Σ" in body text.
-      Always wrap inline math in `$...$` so apa_paragraph rasterises it via mathtext.
-    * Use `apa_math(doc, r"\int_0^{2} (4x^2 - 2x + 1)\,dx", fontsize=14)` for any formula
+      Always wrap inline math in \`$...$\` so apa_paragraph rasterises it via mathtext.
+    * Use \`apa_math(doc, r"\int_0^{2} (4x^2 - 2x + 1)\,dx", fontsize=14)\` for any formula
       that deserves its own centered line (statements, results, key derivations).
-    * Use raw strings (`r"..."`) so backslashes survive. Examples that look professional:
+    * Use raw strings (\`r"..."\`) so backslashes survive. Examples that look professional:
         apa_paragraph(doc, r"La función es $f(x) = 3x^{3} - 5x^{2} + 2x - 7$.")
         apa_math(doc, r"f'(x) = 9x^{2} - 10x + 2")
         apa_math(doc, r"\int g(x)\,dx = \frac{4x^{3}}{3} - x^{2} + x + C")
-    * Greek letters: `$\alpha$`, `$\beta$`, `$\sigma^{2}$`. Vectors: `$\vec{v}$`.
-      Fractions: `\frac{a}{b}`. Sums: `\sum_{i=1}^{n} x_i`. Limits: `\lim_{x \to 0}`.
+    * Greek letters: \`$\alpha$\`, \`$\beta$\`, \`$\sigma^{2}$\`. Vectors: \`$\vec{v}$\`.
+      Fractions: \`\frac{a}{b}\`. Sums: \`\sum_{i=1}^{n} x_i\`. Limits: \`\lim_{x \to 0}\`.
     * If the prompt asks for a Word with math (derivadas, integrales, álgebra,
-      estadística, física), you MUST use `$...$` and `apa_math` — never the
+      estadística, física), you MUST use \`$...$\` and \`apa_math\` — never the
       caret/asterisk pseudo-math the chat sometimes streams.
 
 -------- sgpt_xlsx API --------
@@ -374,14 +374,62 @@ except Exception as _e:
   };
 }
 
+/**
+ * Strip the "Puedes descargarlo a continuación: undefined/" garbage
+ * the LLM keeps inventing in `explanation`. The download link is
+ * surfaced by the file chip and the right-pane preview — there's
+ * never a URL the LLM should write itself, but the model copies the
+ * pattern from training data and substitutes "undefined" because no
+ * variable was ever bound.
+ *
+ * Also nukes a few related variants:
+ *   - bare "undefined/" tokens
+ *   - markdown links pointing at undefined/null/[url]
+ *   - sentences ending in "a continuación: <broken-url>"
+ *   - empty link bodies like "[descargar]()"
+ */
+function sanitiseExplanation(raw) {
+  if (typeof raw !== 'string' || !raw) return '';
+  let out = raw;
+
+  // 1. Markdown links with empty / undefined / null / "#" hrefs.
+  //    Done BEFORE sentence-strip so a link like "[archivo](undefined/)"
+  //    becomes the bare word "archivo" and doesn't drag the whole
+  //    sentence into the trash bin in step 2.
+  out = out.replace(
+    /\[([^\]]+)\]\(\s*(?:undefined|null|#|)\s*\/?\s*\)/gi,
+    '$1',
+  );
+
+  // 2. Drop entire sentences that end in a broken URL placeholder. The
+  //    LLM tends to write "Puedes descargarlo a continuación: undefined/"
+  //    or "El archivo está en el siguiente enlace: null/" — strip from
+  //    the previous sentence boundary through the trailing slash.
+  out = out.replace(
+    /(^|[.!?])\s*[^.!?\n]*?(?:undefined|null)\/+[^\n]*/gi,
+    (_, boundary) => boundary || '',
+  );
+
+  // 3. Stray "undefined/" / "null/" tokens that escaped the sentence
+  //    sweep — happens when the LLM emits them as bare lines.
+  out = out.replace(/^\s*(?:undefined|null)\/?\s*$/gim, '');
+  out = out.replace(/\b(?:undefined|null)\/+/gi, '');
+
+  // 4. Collapse the leftover whitespace / double spaces / blank lines.
+  out = out.replace(/[ \t]{2,}/g, ' ');
+  out = out.replace(/\n{3,}/g, '\n\n').trim();
+  return out;
+}
+
 function buildArtefact({ parsed, rendered, renderError }) {
-  const { format, title, explanation } = parsed;
+  const { format, title } = parsed;
+  const explanation = sanitiseExplanation(parsed.explanation);
   const file = {
     type: 'doc',
     format,
     htmlPreview: rendered?.htmlPreview || null,
     title: title || 'Documento',
-    explanation: explanation || '',
+    explanation,
     filename: rendered?.filename || sanitiseFilename(parsed.filename || title, format),
     dataUrl: rendered?.dataUrl || null,
     mime: rendered?.mime || EXT_MIME[format],
@@ -392,7 +440,7 @@ function buildArtefact({ parsed, rendered, renderError }) {
   const contentLines = [
     `**${title || 'Documento'}**`,
     '',
-    explanation || '',
+    explanation,
   ];
   if (renderError) {
     contentLines.push('', `_⚠ No fue posible generar el archivo:_ \`${renderError.slice(0, 200)}\``);
