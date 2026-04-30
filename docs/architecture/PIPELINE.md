@@ -234,14 +234,22 @@ Every event lands in `sira_audit_logs(request_id, user_id, event_type, payload, 
 | Event | Stage | Payload (key fields) |
 |---|---|---|
 | `turn_started` | 1 | `conversation_id`, `user_id`, `attachment_count`, `message_chars` |
+| `project_context_loaded` | 1.5 | `project_id`, `member_role`, `capability_count`, `doc_count`, `recent_conversation_count` |
+| `project_access_denied` | 1.5 | `project_id`, `reason` (only fires on forbidden access) |
+| `project_context_error` | 1.5 | `project_id`, `error_code` (best-effort degrade — turn proceeds without project) |
+| `memory_recalled` | 1.7 | `semantic_count`, `project_count` (counts only, content-free) |
+| `context_compacted` | 1.8 | `original_messages`, `deduped_messages`, `kept_messages`, `dropped_messages`, `dedup_collisions`, `total_tokens`, `budget` |
 | `token_budget_checked` | 2 | `decision`, `enforcement_mode`, `projected_usage`, `caps`, `violations[]` |
 | `turn_blocked_token_budget` | 2 | `decision`, `violations[]`, `projected_usage` |
 | `envelope_invalid` | 3 | `errors[]` (validator-reported schema errors) |
+| `chat_mode_resolved` | 3.5 | `mode`, `source` (caller / envelope_hint / family_fallback / default), `dropped_required_tools[]` |
 | `clarification_requested` | 5 | `questions[]`, `reasons[]` |
 | `execution_trace_recorded` | 6 | `request_id`, `status`, `duration_ms`, `counters` |
 | `token_usage_recorded` | 8 | `request_id`, `dimensions`, `usage`, `accounting_method`, `estimated` |
 | `token_usage_ledger_error` | 8 | `request_id`, `error_message` |
 | `turn_completed` | 9 | `request_id`, `ready_to_deliver`, `artifact_count`, `tool_count`, `token_usage`, `execution_trace_summary` |
+| `memory_persisted` | 9.5 | `tier`, `role` (only when memory writes succeed) |
+| `citation_frame_built` | 8.5 | `sources_provided`, `sources_cited`, `coverage_ratio` (only when citations exist) |
 
 Runtime emits these into the execution trace timeline (not the main audit log):
 
@@ -410,6 +418,46 @@ Three layers, each with a different audience and retention.
 - `docs/document-chat-integration-report.md`, `document-generation-validation-report.md` — document subsystem reports.
 
 ---
+
+## 13.5 Streaming (SSE)
+
+Every chat turn that the route serves with `Accept: text/event-stream`
+receives a real-time SSE stream of the same audit events listed in
+§6, plus a synthetic `_end` marker. The contract:
+
+- One `event:` line per emit, with `data:` carrying a JSON payload
+  that includes `request_id`.
+- Final `event: _end\ndata: {}\n\n` then connection close.
+- On errors after the stream has opened, an `event: error` is
+  emitted with `{ code, message, request_id }` before `_end`.
+- The route negotiates streaming via the standard `Accept` header.
+  Missing or non-SSE Accept → legacy JSON response. The chat-
+  controller emits to a no-op sink in that case so there is zero
+  cost when streaming is not requested.
+
+The wiring is in `backend/src/services/sira/turn-events.js`
+(`createNoOpEvents`, `createBufferedEvents`, `createSSEEvents`)
+and is consumed by `routes/enterprise.js` `/sira/chat`.
+
+## 13.6 Production wiring
+
+`backend/src/services/sira/production-wiring.js` builds the
+composite MemoryStore + project-workspace deps the chat-controller
+expects, on every request:
+
+- `buildProductionMemoryStore(prisma)` — composite over five tiers,
+  delegating to `gist-memory`, `long-term-memory`, `project-memory`
+  for the persistent ones and to in-process adapters for
+  `conversation` and `user`.
+- `buildProductionWorkspaceDeps(prisma)` — adapters that translate
+  the current `Project` (single-owner) schema into the membership
+  + docs + instructions + recent-conversations contract
+  `loadProjectContext` consumes. Errors degrade to safe defaults so
+  a transient DB blip does not block the turn.
+
+When the schema gains multi-tenant `ProjectMember`, the only place
+that needs to change is `production-wiring.js` — the chat-
+controller, the route, and the contract stay the same.
 
 ## 14. Known gaps and roadmap
 

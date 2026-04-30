@@ -40,6 +40,9 @@ and **where to look** when you need to change something.
 | `chat-modes.js` | 5-mode catalog (chat, research, document, code, presentation) with tool whitelist/blocklist, system prompt addendum, validator profile, intent-family scope. `resolveMode`, `applyModeToToolPlan`, `applyModePrompt`. | `backend/tests/sira-chat-modes.test.js` |
 | `memory-store.js` | Unified `put/recall/forget/stats` over the four memory tiers (`short_term`, `conversation`, `semantic`, `project`, `user`). `createInMemoryStore` for tests; `createCompositeStore({...adapters})` for production routing to existing modules. | `backend/tests/sira-memory-store.test.js` |
 | `project-workspace.js` | Per-turn loader for project-scoped context (docs, instructions, memory_scope, permissions, recent conversations). Three-role permission model (viewer/editor/owner) with `canAccess(member, capability)`. | `backend/tests/sira-project-workspace.test.js` |
+| `turn-events.js` | Pluggable typed event sink emitted into at every chat-controller boundary. Three sinks: `createNoOpEvents()` (default), `createBufferedEvents()` (tests), `createSSEEvents(res)` (HTTP streaming). 13 canonical event names mirrored 1:1 with the audit log. | `backend/tests/sira-turn-events.test.js`, `backend/tests/sira-chat-controller-events.test.js`, `backend/tests/sira-sse-route.test.js` |
+| `memory-store-adapters.js` | Concrete adapters that satisfy the `MemoryStore` interface by delegating to existing modules: short_term→gist-memory, semantic→long-term-memory, project→project-memory + Prisma. Plus simple in-process `conversation` and `user` adapters. | `backend/tests/sira-memory-store-adapters.test.js` |
+| `production-wiring.js` | Convenience factory that composes the production MemoryStore + projectWorkspaceDeps for the route layer. Single place to swap when the schema evolves (e.g. multi-tenant ProjectMember). | `backend/tests/sira-production-wiring.test.js` |
 | `token-ledger.js` | `buildTokenUsageFrame`, in-memory ledger. Deterministic chars/4 estimator + provider-reported merge. | `backend/tests/sira-token-ledger.test.ts` (frontend) |
 | `token-budget-policy.js` | Plan caps (FREE/PRO/TEAM/ENTERPRISE) and `assessTokenBudget`. | `backend/tests/sira-token-budget-policy.test.ts` (frontend) |
 | `model-adapter.js` | Model abstraction across OpenAI / Anthropic / Groq / Gemini / OpenRouter; auto-routing guard. | `backend/tests/sira-platform.test.js` |
@@ -70,14 +73,22 @@ field shape.
 | Event | Emitted by | When |
 |---|---|---|
 | `turn_started` | `chat-controller` | stage 1 |
+| `project_context_loaded` | `chat-controller` | stage 1.5 (when projectId is set + access OK) |
+| `project_access_denied` | `chat-controller` | stage 1.5 (forbidden) |
+| `project_context_error` | `chat-controller` | stage 1.5 (non-forbidden loader error) |
+| `memory_recalled` | `chat-controller` | stage 1.7 (when memoryStore is wired) |
+| `context_compacted` | `chat-controller` | stage 1.8 (when prior history exists) |
 | `token_budget_checked` | `chat-controller` | stage 2 |
 | `turn_blocked_token_budget` | `chat-controller` | stage 2, blocked path |
 | `envelope_invalid` | `chat-controller` | stage 3, schema rejection |
+| `chat_mode_resolved` | `chat-controller` | stage 3.5 (after engine returns valid envelope) |
 | `clarification_requested` | `chat-controller` | stage 5, ask path |
 | `execution_trace_recorded` | `chat-controller` | stage 6, after runtime |
 | `token_usage_recorded` | `chat-controller` | stage 8 |
 | `token_usage_ledger_error` | `chat-controller` | stage 8, ledger write failure |
+| `citation_frame_built` | `chat-controller` | stage 8.5 (when has_citations) |
 | `turn_completed` | `chat-controller` | stage 9 |
+| `memory_persisted` | `chat-controller` | stage 9.5 (when memoryStore is wired) |
 | `node_started`, `node_completed`, `tool_policy_denied`, `tool_deduplicated`, `tool_invoked`, `tool_retry_scheduled` | `runtime` | recorded into the execution trace timeline (not the main audit log) |
 
 When you add a new audit event:
@@ -106,6 +117,15 @@ Registered in `metrics.js` against the shared registry from
 | `sira_llm_tokens_total` | counter | `provider`, `model`, `direction` |
 | `sira_llm_cost_micro_usd_total` | counter | `provider`, `model` |
 | `sira_llm_circuit_state` | gauge | `provider` |
+
+### Streaming events (SSE)
+
+Every event in the audit table above is also emitted to the
+`turn-events` sink. When the route mounts `createSSEEvents(res)`
+(triggered by `Accept: text/event-stream`), these become real-time
+SSE frames the client can render as live progress beats. The
+canonical event names live in `turn-events.EVENT_NAMES`. A
+synthetic `_end` marker closes the stream after the terminal stage.
 
 When you add a new metric:
 1. Register it in `metrics.js` with a help string + labels.
