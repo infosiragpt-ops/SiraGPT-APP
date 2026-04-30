@@ -28,6 +28,10 @@ const { buildDocumentDeliveryPolicy } = require('./document-delivery-policy');
 const { getQueueName } = require('./agent-task-queue');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
+const {
+  generateVancouverMatrixDocument,
+  isVancouverMatrixWordRequest,
+} = require('./vancouver-table-document');
 const { buildLangGraphLayer } = require('./agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
 const {
@@ -161,7 +165,12 @@ async function runAgentTaskJob(payload = {}, job = null) {
   if (!taskId) throw new Error('agent task payload missing taskId');
   if (!user?.id) throw new Error('agent task payload missing user.id');
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
-  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest) throw new Error('OPENAI_API_KEY not configured');
+  const deterministicVancouverRequest = isVancouverMatrixWordRequest(`${goal || ''} ${displayGoal || ''}`) &&
+    Array.isArray(files) &&
+    files.length > 0;
+  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest) {
+    throw new Error('OPENAI_API_KEY not configured');
+  }
 
   const internals = routeInternals();
   const controller = new AbortController();
@@ -444,6 +453,97 @@ async function runAgentTaskJob(payload = {}, job = null) {
   let stepIdCounter = 0;
   let currentStepId = null;
   const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
+  const finishDeterministicTask = async ({
+    finalMarkdown,
+    stoppedReason,
+    steps,
+    artifactsList = artifacts,
+    metadata = {},
+  }) => {
+    if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
+    const doneEvent = emit({
+      type: 'done',
+      stoppedReason,
+      stats: { steps, artifacts: artifactsList.length },
+    });
+
+    const status = 'completed';
+    task.status = status;
+    task.updatedAt = new Date().toISOString();
+    const dbMessage = await persistAssistantMessage({
+      chatId,
+      userId: user.id,
+      assistantMessageId,
+      streamState,
+      task,
+      status,
+      artifacts: artifactsList,
+      metadata: {
+        documentPolicy,
+        runtimeModel: runtimeModelProfile.runtimeModel,
+        selectedModel: model,
+        executionProfile,
+        intentAlignmentProfile,
+        taskPlan,
+        universalTaskContract,
+        enterpriseExecutionGraph,
+        enterpriseRuntimeProfile,
+        enterpriseToolRuntimePlan,
+        enterpriseQaBoardReview,
+        agenticOperatingCore,
+        frameworks: frameworkStatus,
+        durableExecution: enterpriseRuntimeProfile.durableExecution,
+        stoppedReason,
+        maxSteps,
+        maxRuntimeMs,
+        ...metadata,
+      },
+    });
+    if (dbMessage?.id && doneEvent) {
+      emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
+    }
+
+    taskStore.markTaskStatus(task, status, {
+      streamState,
+      stats: {
+        steps,
+        artifacts: artifactsList.length,
+        durationMs: Date.now() - startedAt,
+        stoppedReason,
+      },
+      artifacts: artifactsList,
+    });
+    if (task.durableExecution?.graphId) {
+      try {
+        durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, status, {
+          stats: {
+            steps,
+            artifacts: artifactsList.length,
+            durationMs: Date.now() - startedAt,
+            stoppedReason,
+          },
+        });
+      } catch (err) {
+        console.warn('[agent-task-runner] durable graph status write failed:', err.message);
+      }
+    }
+    metrics.counter('agent_task_invocations_total', { status });
+    metrics.observe('agent_task_duration_ms', { status }, Date.now() - startedAt);
+    metrics.counter('agent_task_artifacts_total', { status }, artifactsList.length);
+    persistProgress(status);
+    auditLog.audit({
+      event: 'agent_task_worker_finished',
+      taskId,
+      userId: user.id,
+      chatId,
+      status,
+      stoppedReason,
+      steps,
+      artifacts: artifactsList.length,
+      durationMs: Date.now() - startedAt,
+    });
+    return { taskId, status, artifacts: artifactsList.length };
+  };
 
   try {
     if (plainTranscriptionRequest) {
@@ -685,6 +785,65 @@ async function runAgentTaskJob(payload = {}, job = null) {
         attachmentStats,
       });
       return { taskId, status, artifacts: 0 };
+    }
+
+    if (deterministicVancouverRequest) {
+      documentPolicy = {
+        ...buildDocumentDeliveryPolicy({
+          goal,
+          displayGoal,
+          files,
+          requestedFormat: 'docx',
+        }),
+        mode: 'doc_required',
+        format: 'docx',
+        autoGenerate: true,
+        reason: 'Solicitud explícita de tabla en Word con estructura Vancouver.',
+      };
+      task.documentPolicy = documentPolicy;
+      emit({ type: 'document_policy', policy: documentPolicy });
+
+      stepIdCounter = 1;
+      emit({ type: 'step_start', id: 's1', label: 'Leyendo documento adjunto', icon: 'file-text' });
+      emit({ type: 'step_done', id: 's1', ok: true });
+      emit({
+        type: 'checkpoint',
+        label: 'Contenido documental disponible',
+        status: 'saved',
+        payload: {
+          fileCount: files.length,
+          contextChars: String(uploadedFileContext || '').length,
+        },
+      });
+
+      stepIdCounter = 2;
+      emit({ type: 'step_start', id: 's2', label: 'Construyendo matriz Vancouver', icon: 'table' });
+      const generated = await generateVancouverMatrixDocument({
+        prisma,
+        task,
+        userId: user.id,
+        fileIds: files,
+        goal: displayGoal || goal,
+        emit,
+      });
+      if (generated?.artifact) artifacts.push(generated.artifact);
+      emit({ type: 'step_done', id: 's2', ok: true });
+
+      stepIdCounter = 3;
+      emit({ type: 'step_start', id: 's3', label: 'Preparando entrega final', icon: 'check' });
+      emit({ type: 'step_done', id: 's3', ok: true });
+
+      return finishDeterministicTask({
+        finalMarkdown: generated.finalMarkdown,
+        stoppedReason: 'vancouver_matrix_docx',
+        steps: 3,
+        artifactsList: artifacts,
+        metadata: {
+          vancouverMatrix: true,
+          sourceFileIds: files,
+          validation: generated.validation,
+        },
+      });
     }
 
     const toolCtx = {

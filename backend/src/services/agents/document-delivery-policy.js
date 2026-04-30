@@ -4,6 +4,10 @@ const DECK_RE = /\b(ppt|pptx|powerpoint|presentaci[oó]n|slides?|diapositivas?|p
 const PDF_RE = /\b(pdf|certificado|formulario|imprimible|constancia|recibo)\b/i;
 const LONG_DELIVERABLE_RE = /\b(extenso|profesional|completo|detallado|profund[oa]|acad[eé]mic[oa]|investigaci[oó]n|an[aá]lisis|estrategia|plan de negocio|consultor[ií]a|entregable)\b/i;
 const TRANSCRIPTION_RE = /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcribe|transcript|transcription)\b/i;
+const EXPLICIT_WORD_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento\s+word)\b|\b(?:word|docx|documento\s+word)\b/i;
+const EXPLICIT_SHEET_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:excel|xlsx|spreadsheet|hoja\s+de\s+c[aá]lculo)\b|\b(?:excel|xlsx|spreadsheet)\b/i;
+const EXPLICIT_DECK_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:ppt|pptx|power\s*point|powerpoint|presentaci[oó]n|diapositivas?)\b|\b(?:ppt|pptx|power\s*point|powerpoint)\b/i;
+const EXPLICIT_PDF_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?pdf\b|\bpdf\b/i;
 const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
 const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
@@ -56,6 +60,14 @@ function estimateWords({ goal, displayGoal, finalText } = {}) {
 function detectFormat(text, requestedFormat) {
   const requested = compactText(requestedFormat).toLowerCase().replace(/^\./, '');
   if (['docx', 'xlsx', 'pptx', 'pdf'].includes(requested)) return requested;
+  const explicitDeck = EXPLICIT_DECK_OUTPUT_RE.test(text);
+  const explicitPdf = EXPLICIT_PDF_OUTPUT_RE.test(text);
+  const explicitSheet = EXPLICIT_SHEET_OUTPUT_RE.test(text);
+  const explicitWord = EXPLICIT_WORD_OUTPUT_RE.test(text);
+  if (explicitDeck) return 'pptx';
+  if (explicitPdf) return 'pdf';
+  if (explicitSheet && !explicitWord) return 'xlsx';
+  if (explicitWord) return 'docx';
   if (SHEET_RE.test(text)) return 'xlsx';
   if (DECK_RE.test(text)) return 'pptx';
   if (PDF_RE.test(text)) return 'pdf';

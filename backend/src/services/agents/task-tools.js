@@ -333,9 +333,32 @@ const createDocument = {
     });
 
     // Inject OUT_PATH env into the script via os.environ before the
-    // agent's code runs. We write a tiny bootstrap that ensures the
-    // var is present for any pattern (os.environ.get / os.getenv).
-    const wrapped = `import os\nos.environ["OUT_PATH"] = ${JSON.stringify(tmpOut)}\n${python}`;
+    // agent's code runs. Some models still save to a local filename
+    // despite the contract; the recovery footer copies the newest
+    // matching artifact into OUT_PATH so the task does not loop forever
+    // on a valid-but-misplaced document.
+    const recoveryPatterns = [
+      cleanName,
+      ext ? `*.${ext}` : '*',
+      ext ? `**/*.${ext}` : '**/*',
+    ];
+    const wrapped = [
+      'import os, glob, shutil',
+      `os.environ["OUT_PATH"] = ${JSON.stringify(tmpOut)}`,
+      'OUT_PATH = os.environ["OUT_PATH"]',
+      python,
+      '',
+      '# -- siraGPT OUT_PATH recovery --',
+      'if not os.path.exists(OUT_PATH):',
+      `    _patterns = ${JSON.stringify(recoveryPatterns)}`,
+      '    _candidates = []',
+      '    for _pattern in _patterns:',
+      '        _candidates.extend(glob.glob(_pattern, recursive=True))',
+      '    _candidates = [p for p in _candidates if os.path.isfile(p) and os.path.abspath(p) != os.path.abspath(OUT_PATH)]',
+      '    if _candidates:',
+      '        _candidate = max(_candidates, key=lambda p: os.path.getmtime(p))',
+      '        shutil.copyfile(_candidate, OUT_PATH)',
+    ].join('\n');
 
     const r = await sandbox.run({
       language: 'python',
