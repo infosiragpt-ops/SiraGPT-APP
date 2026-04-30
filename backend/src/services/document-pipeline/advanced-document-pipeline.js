@@ -1732,6 +1732,31 @@ async function runAdvancedDocumentPipeline({
     }
   }
 
+  // MimeTypeValidator (phase 5) — every format gets the magic-byte
+  // cross-check before delivery, so a renamed-binary masquerading
+  // as the declared format never reaches the chip with a green
+  // "Validado" badge. Plain-text formats (csv/md/txt/json/xml/html)
+  // fall through cleanly because they have no magic-byte signature
+  // and the validator trusts the declaration.
+  try {
+    const { validateMimeType } = require('../agents/mime-type-validator');
+    const mimeReport = await validateMimeType({
+      buffer: artifact.buffer,
+      declaredMime: artifact.mime,
+      declaredExtension: plan.format,
+    });
+    validation.checks = validation.checks || {};
+    validation.checks.mime_type = mimeReport.ok;
+    if (!mimeReport.ok) {
+      validation.passed = false;
+    }
+    validation.mimeType = mimeReport;
+  } catch (err) {
+    console.warn('[document-pipeline] mime-type-validator failed:', err?.message);
+    validation.checks = validation.checks || {};
+    validation.checks.mime_type = true;
+  }
+
   return {
     ...record,
     telemetryPath,
