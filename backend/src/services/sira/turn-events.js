@@ -58,6 +58,7 @@ const EVENT_NAMES = Object.freeze([
   "turn_blocked_token_budget",
   "project_context_loaded",
   "project_access_denied",
+  "memory_recalled",
   "envelope_built",
   "envelope_invalid",
   "chat_mode_resolved",
@@ -65,6 +66,9 @@ const EVENT_NAMES = Object.freeze([
   "clarification_requested",
   "runtime_completed",
   "citation_frame_built",
+  "token_usage_recorded",
+  "token_usage_ledger_error",
+  "memory_persisted",
   "turn_completed",
 ]);
 

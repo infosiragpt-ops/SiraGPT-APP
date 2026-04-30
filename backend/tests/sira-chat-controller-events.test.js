@@ -124,4 +124,25 @@ describe("chat-controller emits ordered turn events", () => {
     assert.ok(r);
     assert.ok(["delivered", "needs_repair", "needs_clarification", "envelope_invalid"].includes(r.stage));
   });
+
+  test("token_usage_recorded fires on the event stream so SSE clients can show running cost", async () => {
+    const storage = createSiraStorage({ adapter: createInMemoryStorage() });
+    const events = createBufferedEvents();
+    await handleChatTurn({
+      ...baseArgs,
+      userMessage: "Hola",
+      requestId: "req-events-token",
+    }, { storage, registry: createDefaultRegistry(), events });
+
+    const tokenEvent = events.events.find((e) => e.name === "token_usage_recorded");
+    assert.ok(tokenEvent, "token_usage_recorded event must be on the stream");
+    assert.equal(tokenEvent.data.request_id, "req-events-token");
+    assert.ok(tokenEvent.data.usage, "payload must carry the usage block");
+    assert.ok(tokenEvent.data.dimensions, "payload must carry the dimensions block");
+    // Defensive check: the event payload is content-free per the
+    // privacy contract — it only carries token counts + dimension
+    // labels, never message text.
+    assert.equal(tokenEvent.data.usage.message_text, undefined);
+    assert.equal(tokenEvent.data.usage.user_message, undefined);
+  });
 });

@@ -468,6 +468,7 @@ async function handleChatTurnUnlocked({
     const tokenUsage = await recordTokenUsage({
       store,
       tokenLedger,
+      events,
       envelope: bundle.envelope,
       userMessage,
       attachments,
@@ -576,6 +577,7 @@ async function handleChatTurnUnlocked({
   const tokenUsage = await recordTokenUsage({
     store,
     tokenLedger,
+    events,
     envelope: bundle.envelope,
     userMessage,
     attachments,
@@ -746,6 +748,11 @@ async function recordTokenUsage({
   selectedModel,
   runtimeResult = null,
   responseText = "",
+  // Optional events sink. When the route opted into SSE, the
+  // streaming client now sees `token_usage_recorded` as a live event
+  // and can show the running cost in the UI before the turn ends.
+  // No-op default so non-streaming callers keep their behaviour.
+  events = null,
 }) {
   const tokenUsage = buildTokenUsageFrame({
     envelope,
@@ -765,16 +772,26 @@ async function recordTokenUsage({
         request_id: tokenUsage.request_id,
         error: error && error.message ? error.message : String(error),
       }, { userId: tokenUsage.user_id, requestId: tokenUsage.request_id });
+      if (events && typeof events.emit === "function") {
+        events.emit("token_usage_ledger_error", {
+          request_id: tokenUsage.request_id,
+          error: error && error.message ? error.message : String(error),
+        });
+      }
     }
   }
 
-  await store.audit("token_usage_recorded", {
+  const usagePayload = {
     request_id: tokenUsage.request_id,
     dimensions: tokenUsage.dimensions,
     usage: tokenUsage.usage,
     accounting_method: tokenUsage.accounting_method,
     estimated: tokenUsage.estimated,
-  }, { userId: tokenUsage.user_id, requestId: tokenUsage.request_id });
+  };
+  await store.audit("token_usage_recorded", usagePayload, { userId: tokenUsage.user_id, requestId: tokenUsage.request_id });
+  if (events && typeof events.emit === "function") {
+    events.emit("token_usage_recorded", usagePayload);
+  }
 
   return tokenUsage;
 }
