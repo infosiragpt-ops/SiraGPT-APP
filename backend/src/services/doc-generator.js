@@ -107,20 +107,36 @@ visually consistent, on-brand, and academically correct. The bundle:
 -------- sgpt_docx API (APA 7) --------
   from sgpt_docx import (
       apa_document, apa_cover, apa_page_break,
-      apa_heading, apa_paragraph, apa_table, apa_references,
+      apa_heading, apa_paragraph, apa_math, apa_table, apa_references,
       apa_table_of_contents,
       instrument_bai, instrument_whoqol_bref, instrument_phq9, instrument_gad7,
   )
   doc = apa_document()                                 # TNR 12 pt · doble interlineado · márgenes 2.54 cm · header con número de página
   apa_cover(doc, title="...", author="...", institution="...", course=None, professor=None, date=None, degree=None)
   apa_heading(doc, 1..5, text)                         # level 1: centered bold · 2: left bold · 3: left bold italic · 4/5: sangría 1.27 cm
-  apa_paragraph(doc, text, first_line_indent=True, italic=False, bold=False, center=False)   # justificado por defecto
+  apa_paragraph(doc, text, first_line_indent=True, italic=False, bold=False, center=False)   # justificado por defecto · soporta `$...$` LaTeX inline
+  apa_math(doc, r"\int_0^1 f(x)\,dx", fontsize=14)     # ecuación centrada en su propia línea (matplotlib mathtext → PNG transparente)
   apa_table(doc, headers=[...], rows=[[...]], caption_number="1", caption_title="...", note="...")
   apa_references(doc, ["Autor, A. A. (2020). Título. ...", ...])
   apa_table_of_contents(doc)                           # inserta campo TOC — el usuario lo refresca al abrir
   # instrumentos psicológicos listos:
   instrument_bai(doc); instrument_whoqol_bref(doc); instrument_phq9(doc); instrument_gad7(doc)
   doc.save(OUT_PATH)
+
+  ── Math rendering rules — APPLY ALWAYS for any document with formulas ──
+    * NEVER write math as plain ASCII like "x^2", "f(x) = 3x^3 - 5x^2", or "Σ" in body text.
+      Always wrap inline math in `$...$` so apa_paragraph rasterises it via mathtext.
+    * Use `apa_math(doc, r"\int_0^{2} (4x^2 - 2x + 1)\,dx", fontsize=14)` for any formula
+      that deserves its own centered line (statements, results, key derivations).
+    * Use raw strings (`r"..."`) so backslashes survive. Examples that look professional:
+        apa_paragraph(doc, r"La función es $f(x) = 3x^{3} - 5x^{2} + 2x - 7$.")
+        apa_math(doc, r"f'(x) = 9x^{2} - 10x + 2")
+        apa_math(doc, r"\int g(x)\,dx = \frac{4x^{3}}{3} - x^{2} + x + C")
+    * Greek letters: `$\alpha$`, `$\beta$`, `$\sigma^{2}$`. Vectors: `$\vec{v}$`.
+      Fractions: `\frac{a}{b}`. Sums: `\sum_{i=1}^{n} x_i`. Limits: `\lim_{x \to 0}`.
+    * If the prompt asks for a Word with math (derivadas, integrales, álgebra,
+      estadística, física), you MUST use `$...$` and `apa_math` — never the
+      caret/asterisk pseudo-math the chat sometimes streams.
 
 -------- sgpt_xlsx API --------
   from sgpt_xlsx import (

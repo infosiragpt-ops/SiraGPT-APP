@@ -27,12 +27,68 @@ Usage:
 """
 
 import io
+import re
 from docx import Document
-from docx.shared import Pt, Cm, Inches, RGBColor
+from docx.shared import Pt, Cm, Inches, RGBColor, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING, WD_BREAK
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+
+
+# ─── Math rendering (LaTeX → PNG via matplotlib mathtext) ────────────────
+#
+# python-docx has no first-class equation API, so we rasterise math via
+# matplotlib's bundled mathtext (no LaTeX install required) and embed
+# the PNG as an inline image. Looks identical to a Word equation when
+# printed; the trade-off is the image is not editable in Word's
+# equation editor. For typical academic / report output that's the
+# right trade — fonts render at 300 DPI with Computer Modern, baseline
+# math symbols (∫, Σ, fractions, sub/superscripts) all come out clean.
+
+_MATH_DPI = 300
+_INLINE_MATH_RE = re.compile(r"(?<!\\)\$([^$\n]{1,400}?)\$")
+_DISPLAY_MATH_RE = re.compile(r"\$\$([^$]{1,800}?)\$\$", re.DOTALL)
+
+
+def _render_math_png(latex, fontsize=12):
+    """Render a LaTeX math expression to PNG bytes via mathtext. Returns
+    (png_bytes, height_in_inches). The width is auto from mathtext."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    # Computer Modern matches Word's Cambria Math closely enough that
+    # the image blends with the surrounding TNR body text.
+    plt.rcParams["mathtext.fontset"] = "cm"
+    plt.rcParams["mathtext.default"] = "regular"
+
+    fig = plt.figure(figsize=(0.01, 0.01))
+    fig.patch.set_alpha(0)
+    body = latex.strip()
+    # Matplotlib's mathtext is a subset of LaTeX — strip directives it
+    # doesn't support but the LLM might emit ("\displaystyle", "\\,").
+    body = body.replace("\\displaystyle", "").strip()
+    fig.text(0, 0, f"${body}$", fontsize=fontsize)
+    # First draw to size the canvas to the actual glyph extents.
+    fig.canvas.draw()
+    text_artist = fig.texts[0]
+    bbox = text_artist.get_window_extent(renderer=fig.canvas.get_renderer())
+    inches_w = bbox.width / fig.dpi
+    inches_h = bbox.height / fig.dpi
+    fig.set_size_inches(max(inches_w + 0.05, 0.3), max(inches_h + 0.05, 0.2))
+
+    buf = io.BytesIO()
+    fig.savefig(
+        buf,
+        format="png",
+        dpi=_MATH_DPI,
+        transparent=True,
+        bbox_inches="tight",
+        pad_inches=0.02,
+    )
+    plt.close(fig)
+    buf.seek(0)
+    return buf, inches_h
 
 
 # ─── Low-level XML helpers ───────────────────────────────────────────────
@@ -195,7 +251,14 @@ def apa_heading(doc, level, text):
 
 
 def apa_paragraph(doc, text, *, first_line_indent=True, italic=False, bold=False, center=False):
-    """Body paragraph with APA defaults (first-line indent 1.27 cm)."""
+    """Body paragraph with APA defaults (first-line indent 1.27 cm).
+
+    Supports inline math via `$...$` delimiters: every math segment is
+    rendered to a transparent PNG via matplotlib mathtext and embedded
+    as an inline image, the surrounding plain-text segments stay as
+    Times New Roman runs. Use `apa_math(doc, latex)` for big display
+    formulas that should sit on their own centered line.
+    """
     p = doc.add_paragraph()
     if center:
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -203,7 +266,50 @@ def apa_paragraph(doc, text, *, first_line_indent=True, italic=False, bold=False
         p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     if first_line_indent and not center:
         p.paragraph_format.first_line_indent = Cm(1.27)
-    _set_font(p.add_run(text), size=12, italic=italic, bold=bold)
+
+    last = 0
+    for m in _INLINE_MATH_RE.finditer(text):
+        if m.start() > last:
+            _set_font(p.add_run(text[last:m.start()]), size=12, italic=italic, bold=bold)
+        try:
+            buf, _ = _render_math_png(m.group(1), fontsize=12)
+            run = p.add_run()
+            # Inline math sits on the text baseline; sizing by height
+            # keeps the surrounding line height stable across paragraphs.
+            run.add_picture(buf, height=Inches(0.20))
+        except Exception:
+            # If matplotlib is unavailable or the LaTeX is malformed,
+            # fall back to the raw `$...$` string so the user still
+            # sees the math source rather than nothing.
+            _set_font(p.add_run(m.group(0)), size=12, italic=italic, bold=bold)
+        last = m.end()
+    if last < len(text):
+        _set_font(p.add_run(text[last:]), size=12, italic=italic, bold=bold)
+    return p
+
+
+def apa_math(doc, latex, *, fontsize=14):
+    """Centered display equation rendered from LaTeX.
+
+    The image height scales with `fontsize` so the equation reads
+    larger than inline body math (Word equations behave the same way).
+    Use this for formulas that deserve their own line; for small
+    inline math, write `$...$` inside `apa_paragraph` instead.
+    """
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(6)
+    p.paragraph_format.space_after = Pt(6)
+    run = p.add_run()
+    try:
+        buf, _ = _render_math_png(latex, fontsize=fontsize)
+        # Display math sits a bit larger than inline math; ~0.45in
+        # tracks Word's default Cambria Math rendering at 14pt.
+        run.add_picture(buf, height=Inches(0.45))
+    except Exception:
+        # Fallback to raw LaTeX in italics so the equation is still
+        # readable when matplotlib is missing or LaTeX is malformed.
+        _set_font(p.add_run(latex), size=12, italic=True)
     return p
 
 
