@@ -23,10 +23,18 @@ const FRAME_TYPES = Object.freeze([
   "final_response_frame",
 ]);
 
+// Lazy-require to avoid the circular import that would happen if
+// pipeline-errors ever needs to reference frames. The module is
+// only loaded on the first throw site that fires.
+function _envelopeError(code, message) {
+  const { EnvelopeError } = require("./pipeline-errors");
+  return new EnvelopeError({ code, message });
+}
+
 // ── IntentFrame ─────────────────────────────────────────────────────
 
 function buildIntentFrame({ envelope } = {}) {
-  if (!envelope || !envelope.intent_analysis) throw new Error("frames.buildIntentFrame: envelope required");
+  if (!envelope || !envelope.intent_analysis) throw _envelopeError("envelope.intent_frame_missing_envelope", "frames.buildIntentFrame: envelope required");
   const ia = envelope.intent_analysis;
   return Object.freeze({
     frame_type: "intent_frame",
@@ -42,7 +50,7 @@ function buildIntentFrame({ envelope } = {}) {
 // ── PlanFrame ───────────────────────────────────────────────────────
 
 function buildPlanFrame({ envelope } = {}) {
-  if (!envelope || !envelope.workflow_graph) throw new Error("frames.buildPlanFrame: envelope required");
+  if (!envelope || !envelope.workflow_graph) throw _envelopeError("envelope.plan_frame_missing_envelope", "frames.buildPlanFrame: envelope required");
   const wg = envelope.workflow_graph;
   return Object.freeze({
     frame_type: "plan_frame",
@@ -69,7 +77,7 @@ function buildPlanFrame({ envelope } = {}) {
 // ── ToolCallFrame ───────────────────────────────────────────────────
 
 function buildToolCallFrame({ envelope, args = {} } = {}) {
-  if (!envelope || !envelope.tool_plan) throw new Error("frames.buildToolCallFrame: envelope required");
+  if (!envelope || !envelope.tool_plan) throw _envelopeError("envelope.tool_call_frame_missing_envelope", "frames.buildToolCallFrame: envelope required");
   return Object.freeze({
     frame_type: "tool_call_frame",
     tool_calls: envelope.tool_plan.required_tools.map(t => ({
@@ -88,7 +96,7 @@ function buildToolCallFrame({ envelope, args = {} } = {}) {
 // ── ArtifactFrame ───────────────────────────────────────────────────
 
 function buildArtifactFrame({ envelope } = {}) {
-  if (!envelope || !envelope.output_contract) throw new Error("frames.buildArtifactFrame: envelope required");
+  if (!envelope || !envelope.output_contract) throw _envelopeError("envelope.artifact_frame_missing_envelope", "frames.buildArtifactFrame: envelope required");
   const oc = envelope.output_contract;
   const artifacts = [];
   artifacts.push({
@@ -128,7 +136,7 @@ function buildArtifactFrame({ envelope } = {}) {
  * @param {number} [args.aggregate_score]
  */
 function buildValidationFrame({ envelope, checkResults = [], aggregate_score = null } = {}) {
-  if (!envelope || !envelope.quality_plan) throw new Error("frames.buildValidationFrame: envelope required");
+  if (!envelope || !envelope.quality_plan) throw _envelopeError("envelope.validation_frame_missing_envelope", "frames.buildValidationFrame: envelope required");
   const minScore = envelope.quality_plan.minimum_acceptance_score;
   const allPassed = checkResults.every(c => c.status === "passed");
   const score = typeof aggregate_score === "number"
@@ -153,7 +161,7 @@ function buildValidationFrame({ envelope, checkResults = [], aggregate_score = n
 // ── FinalResponseFrame ──────────────────────────────────────────────
 
 function buildFinalResponseFrame({ envelope, validationFrame, artifacts = [], warnings = [] } = {}) {
-  if (!envelope || !envelope.final_answer_contract) throw new Error("frames.buildFinalResponseFrame: envelope required");
+  if (!envelope || !envelope.final_answer_contract) throw _envelopeError("envelope.final_response_frame_missing_envelope", "frames.buildFinalResponseFrame: envelope required");
   const ready = Boolean(validationFrame?.ready_to_deliver);
   const requiredArtifacts = artifacts.filter(a => a.required !== false);
   return Object.freeze({

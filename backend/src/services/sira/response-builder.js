@@ -7,7 +7,13 @@
  */
 
 function buildFinalResponse({ envelope, runtime = null, validation = null, warnings = [] } = {}) {
-  if (!envelope) throw new Error("sira.response-builder: envelope required");
+  if (!envelope) {
+    const { EnvelopeError } = require("./pipeline-errors");
+    throw new EnvelopeError({
+      code: "envelope.response_builder_missing_envelope",
+      message: "sira.response-builder: envelope required",
+    });
+  }
   const validationFrame = validation || runtime?.validation_frame || null;
   const artifacts = collectArtifacts(runtime);
   const ready = Boolean(validationFrame?.ready_to_deliver);

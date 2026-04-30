@@ -23,7 +23,11 @@ function buildExecutionTraceFrame({
   toolResilience = null,
 } = {}) {
   if (!envelope || !envelope.request_id) {
-    throw new Error("sira.execution-trace-frame: envelope.request_id required");
+    const { EnvelopeError } = require("./pipeline-errors");
+    throw new EnvelopeError({
+      code: "envelope.trace_frame_missing_request_id",
+      message: "sira.execution-trace-frame: envelope.request_id required",
+    });
   }
 
   const normalizedLog = normalizeRuntimeLog(log);

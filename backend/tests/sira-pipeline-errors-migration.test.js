@@ -84,3 +84,60 @@ describe("runtime.runWorkflow throws ContextError on missing workflow_graph", ()
     );
   });
 });
+
+describe("frames.* throw EnvelopeError on missing envelope", () => {
+  const frames = require("../src/services/sira/frames");
+  const { EnvelopeError } = require("../src/services/sira/pipeline-errors");
+
+  const cases = [
+    ["buildIntentFrame",       "envelope.intent_frame_missing_envelope"],
+    ["buildPlanFrame",         "envelope.plan_frame_missing_envelope"],
+    ["buildToolCallFrame",     "envelope.tool_call_frame_missing_envelope"],
+    ["buildArtifactFrame",     "envelope.artifact_frame_missing_envelope"],
+    ["buildValidationFrame",   "envelope.validation_frame_missing_envelope"],
+    ["buildFinalResponseFrame","envelope.final_response_frame_missing_envelope"],
+  ];
+
+  for (const [fnName, code] of cases) {
+    test(`${fnName} throws EnvelopeError(${code})`, () => {
+      assert.throws(
+        () => frames[fnName]({ envelope: null }),
+        (err) => {
+          assert.ok(err instanceof EnvelopeError, `${fnName} did not throw EnvelopeError`);
+          assert.equal(err.code, code);
+          assert.equal(err.stage, "envelope");
+          return true;
+        },
+      );
+    });
+  }
+});
+
+describe("response-builder + execution-trace-frame + tool-resilience throw tagged errors", () => {
+  const responseBuilder = require("../src/services/sira/response-builder");
+  const executionTraceFrame = require("../src/services/sira/execution-trace-frame");
+  const toolResilience = require("../src/services/sira/tool-resilience");
+  const { EnvelopeError, ToolError } = require("../src/services/sira/pipeline-errors");
+
+  test("response-builder rejects null envelope with EnvelopeError", () => {
+    assert.throws(
+      () => responseBuilder.buildFinalResponse({ envelope: null }),
+      (err) => err instanceof EnvelopeError && err.code === "envelope.response_builder_missing_envelope",
+    );
+  });
+
+  test("execution-trace-frame rejects missing request_id with EnvelopeError", () => {
+    assert.throws(
+      () => executionTraceFrame.buildExecutionTraceFrame({ envelope: {} }),
+      (err) => err instanceof EnvelopeError && err.code === "envelope.trace_frame_missing_request_id",
+    );
+  });
+
+  test("tool-resilience.invoke rejects missing registry.invoke with ToolError", async () => {
+    const controller = toolResilience.createToolResilienceController({ envelope: { workflow_graph: { retry_policy: {} } } });
+    await assert.rejects(
+      () => controller.invoke({ registry: {}, toolName: "x" }),
+      (err) => err instanceof ToolError && err.code === "tool.registry_missing_invoke",
+    );
+  });
+});

@@ -37,7 +37,11 @@ function createToolResilienceController({ envelope = null, sleep = DEFAULT_SLEEP
   return {
     async invoke({ registry, toolName, input = {}, context = {}, tool = null, nodeId = null, auditTrace = [] } = {}) {
       if (!registry || typeof registry.invoke !== "function") {
-        throw new Error("sira.tool-resilience: registry.invoke required");
+        const { ToolError } = require("./pipeline-errors");
+        throw new ToolError({
+          code: "tool.registry_missing_invoke",
+          message: "sira.tool-resilience: registry.invoke required",
+        });
       }
       const policy = resolveToolRetryPolicy({ envelope, tool });
       let attempt = 0;
