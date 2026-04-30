@@ -55,6 +55,11 @@ registerHistogram("sira_chat_turn_duration_ms", {
   labels: ["stage"],
   buckets: STAGE_BUCKETS_MS,
 });
+registerHistogram("sira_chat_stage_duration_ms", {
+  help: "Per-stage duration in milliseconds inside a single chat turn (project_context, memory_recall, context_compaction, engine, runtime, …)",
+  labels: ["stage"],
+  buckets: STAGE_BUCKETS_MS,
+});
 registerCounter("sira_pipeline_errors_total", {
   help: "SiraPipelineError occurrences by stage and code",
   labels: ["stage", "code"],
@@ -71,6 +76,18 @@ registerCounter("sira_envelope_invalid_total", {
   help: "Turns that failed envelope schema validation",
   labels: [],
 });
+
+/**
+ * Record a single chat-controller stage's wall-clock duration. Call
+ * after the stage finishes regardless of success / skip — the
+ * histogram is an operational signal, not a quality signal.
+ *
+ *   recordStageDuration("engine", 184)        // ms
+ */
+function recordStageDuration(stage, durationMs) {
+  if (!stage || !Number.isFinite(durationMs) || durationMs < 0) return;
+  observe("sira_chat_stage_duration_ms", { stage }, durationMs);
+}
 
 /**
  * Record the outcome of a chat turn. Call once at the end of
@@ -132,6 +149,7 @@ function recordEnvelopeInvalid() {
 
 module.exports = {
   recordTurn,
+  recordStageDuration,
   recordTokenBudgetDecision,
   recordPipelineError,
   recordClarificationRequested,

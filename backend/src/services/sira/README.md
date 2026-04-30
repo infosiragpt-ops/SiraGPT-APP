@@ -112,6 +112,7 @@ Registered in `metrics.js` against the shared registry from
 | `sira_token_budget_decisions_total` | counter | `decision`, `plan`, `enforcement_mode` |
 | `sira_clarifications_requested_total` | counter | — |
 | `sira_envelope_invalid_total` | counter | — |
+| `sira_chat_stage_duration_ms` | histogram | `stage` (project_context, memory_recall, context_compaction, engine, runtime, …) |
 | `sira_llm_calls_total` | counter | `provider`, `model`, `status` |
 | `sira_llm_call_duration_ms` | histogram | `provider`, `model` |
 | `sira_llm_tokens_total` | counter | `provider`, `model`, `direction` |

@@ -216,11 +216,13 @@ async function handleChatTurnUnlocked({
   let projectContext = null;
   if (typeof projectId === "string" && projectId.length > 0) {
     try {
+      const _projectStartedAt = Date.now();
       projectContext = await projectWorkspace.loadProjectContext({
         projectId,
         userId,
         deps: projectWorkspaceDeps || {},
       });
+      siraMetrics.recordStageDuration("project_context", Date.now() - _projectStartedAt);
       const projectLoadedPayload = {
         project_id: projectId,
         member_role: projectContext.member?.role || null,
@@ -349,7 +351,9 @@ async function handleChatTurnUnlocked({
       );
     }
     if (recallTasks.length > 0) {
+      const _recallStartedAt = Date.now();
       await Promise.all(recallTasks);
+      siraMetrics.recordStageDuration("memory_recall", Date.now() - _recallStartedAt);
       const recallSummary = {
         semantic_count: recalledMemory.semantic.length,
         project_count: recalledMemory.project.length,
@@ -371,12 +375,14 @@ async function handleChatTurnUnlocked({
   let compaction = null;
   let historyForEngine = history;
   if (Array.isArray(history) && history.length > 0) {
+    const _compactStartedAt = Date.now();
     compaction = await compactContext({
       messages: history,
       model: selectedModel.modelId,
       ragChunks: [],
       memoryGists: [],
     }).catch(() => null);
+    siraMetrics.recordStageDuration("context_compaction", Date.now() - _compactStartedAt);
     if (compaction && Array.isArray(compaction.messages)) {
       historyForEngine = compaction.messages;
       await store.audit("context_compacted", compaction.stats, auditMeta);
@@ -385,6 +391,7 @@ async function handleChatTurnUnlocked({
   }
 
   // ── 2. Run engine (envelope + 5 frames + dry response) ───────────
+  const _engineStartedAt = Date.now();
   const bundle = await ciraEngine.runUserMessage({
     text: userMessage,
     attachments,
@@ -396,6 +403,7 @@ async function handleChatTurnUnlocked({
     dryRun: true,
     requestId,
   });
+  siraMetrics.recordStageDuration("engine", Date.now() - _engineStartedAt);
   if (bundle.stage === "envelope" || bundle.ok === false) {
     await store.audit("envelope_invalid", { errors: bundle.errors }, auditMeta);
     events.emit("envelope_invalid", { errors: bundle.errors, request_id: requestId });
@@ -506,6 +514,7 @@ async function handleChatTurnUnlocked({
   }
 
   // ── 4. Drive the runtime (tool execution + artifacts + validation) ─
+  const _runtimeStartedAt = Date.now();
   const runtimeResult = await ciraRuntime.runWorkflow({
     envelope: bundle.envelope,
     registry: reg,
@@ -514,6 +523,7 @@ async function handleChatTurnUnlocked({
     dryRun,
     context: { selectedModel, userId, conversationId },
   });
+  siraMetrics.recordStageDuration("runtime", Date.now() - _runtimeStartedAt);
 
   // Persist tool calls + artifacts + validation report
   for (const tc of runtimeResult.tool_results || []) {
