@@ -22,6 +22,7 @@
 
 const express = require("express");
 const { body, param, validationResult } = require("express-validator");
+const prisma = require("../config/database");
 
 const { listComponents, getComponent, countByStatus } = require("../services/agents/component-registry");
 const { listControls, evaluateAsvs } = require("../services/security/owasp-asvs");
@@ -1069,10 +1070,18 @@ router.post(
       mode: typeof req.body.mode === "string" ? req.body.mode : null,
       projectId: typeof req.body.project_id === "string" ? req.body.project_id : null,
     };
+    // Build the production wiring on every request. The factories
+    // are cheap (no I/O until a method is actually called) and the
+    // adapters keep their state in the wrapped modules, not in the
+    // composite, so a per-request build is safe and avoids module-
+    // load-time coupling on Prisma.
+    const wiring = require("../services/sira/production-wiring");
     const turnDeps = {
       storage: ciraSharedStorage,
       registry: ciraSharedToolRegistry,
       events,
+      memoryStore: wiring.buildProductionMemoryStore(prisma),
+      projectWorkspaceDeps: wiring.buildProductionWorkspaceDeps(prisma),
     };
 
     try {
