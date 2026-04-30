@@ -150,6 +150,26 @@ export function useFileProcessingStatus(
 }
 
 /**
+ * Map the stage-prefixed `processingError` reasons we write in the
+ * backend (see STATE_MACHINE.md §7) to short, user-facing Spanish
+ * labels. Non-technical users shouldn't have to read "processing:
+ * ENOENT: no such file" to know what went wrong; support staff still
+ * get the raw reason via the tooltip on the badge.
+ */
+function friendlyFailureLabel(error: string | null | undefined): string {
+  const raw = (error || "").trim()
+  if (!raw) return "Error de procesamiento"
+  if (/^magic_byte_mismatch/i.test(raw)) return "Tipo de archivo no permitido"
+  if (/^processing/i.test(raw)) return "No se pudo procesar el documento"
+  if (/^rag_indexing/i.test(raw)) return "Error al indexar el documento"
+  if (/^db_create_failed/i.test(raw)) return "No se pudo registrar el archivo"
+  // Anything else: keep the raw reason. It's already short by
+  // construction (1000-char ceiling) and may be the real signal the
+  // user needs (e.g. "Out of memory" from a huge OCR pass).
+  return raw
+}
+
+/**
  * Localised label + tone for a stage. Centralised here so the chip,
  * the message bubble and any future surface render the same vocabulary.
  */
@@ -174,7 +194,7 @@ export function describeStage(stage: FileProcessingStage | null, error?: string 
     case "ready":
       return { label: "Listo", tone: "success" }
     case "failed":
-      return { label: error || "Error de procesamiento", tone: "error" }
+      return { label: friendlyFailureLabel(error), tone: "error" }
     default:
       return { label: String(stage), tone: "neutral" }
   }
