@@ -37,6 +37,8 @@ const { buildTokenUsageFrame } = require("./token-ledger");
 const { assessTokenBudget } = require("./token-budget-policy");
 const { IngressError } = require("./pipeline-errors");
 const siraMetrics = require("./metrics");
+const chatModes = require("./chat-modes");
+const projectWorkspace = require("./project-workspace");
 
 const defaultChatTurnQueue = createSessionActorQueue();
 
@@ -53,6 +55,15 @@ async function handleChatTurn({
   dryRun = true,
   bypassSessionQueue = false,
   requestId = null,
+  // Optional caller-supplied mode override. When absent, the
+  // controller falls back to the envelope hint, then the family
+  // mapping, then `chat`.
+  mode = null,
+  // Optional project workspace. When set, the controller loads
+  // docs/instructions/permissions/recent-conversations and surfaces
+  // the result on the response. Forbidden access raises
+  // ProjectAccessError → 403.
+  projectId = null,
 } = {}, deps = {}) {
   const actorKey = buildChatTurnActorKey({ conversationId, userId });
   const queue = deps.sessionQueue || defaultChatTurnQueue;
@@ -69,6 +80,8 @@ async function handleChatTurn({
       toolArgs,
       dryRun,
       requestId,
+      mode,
+      projectId,
     }, deps);
   }
   return queue.run(actorKey, () => handleChatTurnUnlocked({
@@ -83,6 +96,8 @@ async function handleChatTurn({
     toolArgs,
     dryRun,
     requestId,
+    mode,
+    projectId,
   }, deps));
 }
 
@@ -103,6 +118,8 @@ async function handleChatTurnUnlocked({
   // is the single id that ties the access log, audit log, envelope, and
   // any downstream tooling to a single chat turn.
   requestId = null,
+  mode = null,
+  projectId = null,
 } = {}, {
   storage = null,
   registry = null,
@@ -110,6 +127,12 @@ async function handleChatTurnUnlocked({
   tokenLedger = null,
   tokenBudgetCaps = null,
   tokenBudgetMode = "enforce",
+  // Adapters for project-workspace lookups. When projectId is null
+  // these are never called; when projectId is set, missing adapters
+  // make `loadProjectContext` degrade to safe defaults (no
+  // membership row → ProjectAccessError on access; otherwise empty
+  // docs / instructions / recents).
+  projectWorkspaceDeps = null,
 } = {}) {
   // Stage-aware errors so `siraErrorHandler` can map them straight to
   // an HTTP 4xx with `{ code, stage, request_id, ... }` and the audit
@@ -162,6 +185,57 @@ async function handleChatTurnUnlocked({
     selectedModel,
   });
   await store.audit("turn_started", { conversationId, userMessage_len: userMessage.length, attachment_count: attachments.length }, auditMeta);
+
+  // ── 1.5. Load project workspace context (best-effort) ────────────
+  // Runs before the engine so the envelope-builder (in a follow-up
+  // commit) can fold project instructions into the system prompt and
+  // the RAG path can scope retrieval to project docs. A forbidden
+  // access is fatal — surfaces as an early return so we don't waste
+  // budget on a turn the caller is not allowed to make. Anything
+  // else (missing adapters, transient errors) degrades to a null
+  // context.
+  let projectContext = null;
+  if (typeof projectId === "string" && projectId.length > 0) {
+    try {
+      projectContext = await projectWorkspace.loadProjectContext({
+        projectId,
+        userId,
+        deps: projectWorkspaceDeps || {},
+      });
+      await store.audit("project_context_loaded", {
+        project_id: projectId,
+        member_role: projectContext.member?.role || null,
+        capability_count: projectContext.capabilities.length,
+        doc_count: projectContext.docs.length,
+        recent_conversation_count: projectContext.recent_conversations.length,
+      }, auditMeta);
+    } catch (err) {
+      if (err && err.code === "project.forbidden") {
+        await store.audit("project_access_denied", {
+          project_id: projectId,
+          reason: "not_a_member",
+        }, auditMeta);
+        siraMetrics.recordTurn({
+          stage: "project_forbidden", status: "blocked", plan: userPlan,
+          durationMs: Date.now() - turnStartedAtMs,
+        });
+        return {
+          stage: "project_forbidden",
+          request_id: requestId,
+          error: { code: "project.forbidden", project_id: projectId },
+          persisted_ids: persistedIds,
+        };
+      }
+      // Best-effort: a non-forbidden error in the project loader
+      // (e.g. a missing adapter) leaves the turn project-less rather
+      // than failing closed; the audit row preserves the cause.
+      await store.audit("project_context_error", {
+        project_id: projectId,
+        error_code: err && err.code ? String(err.code) : "unknown",
+      }, auditMeta);
+      projectContext = null;
+    }
+  }
 
   const tokenBudget = assessTokenBudget({
     userId,
@@ -252,6 +326,20 @@ async function handleChatTurnUnlocked({
   // Persist the envelope ASAP so it can be replayed even if the run dies later.
   persistedIds.envelope_id = await store.persistEnvelope({ envelope: bundle.envelope, conversationId, userId });
 
+  // ── 2.5. Resolve chat mode + apply tool-plan filter ──────────────
+  // Mode resolution prefers caller > envelope hint > family fallback >
+  // default ("chat"). The filter prunes tools that the active mode
+  // forbids; downstream `tool-policy` will catch any that slip
+  // through but pruning here keeps the runtime DAG honest.
+  const modeResolution = chatModes.resolveMode({ callerMode: mode, envelope: bundle.envelope });
+  const modeFilter = chatModes.applyModeToToolPlan(bundle.envelope, modeResolution.mode);
+  if (modeFilter.tool_plan) bundle.envelope.tool_plan = modeFilter.tool_plan;
+  await store.audit("chat_mode_resolved", {
+    mode: modeResolution.mode,
+    source: modeResolution.source,
+    dropped_required_tools: modeFilter.dropped_required,
+  }, { userId, requestId: bundle.envelope.request_id });
+
   // ── 3. Policies — clarification + safety ─────────────────────────
   const policyVerdict = evaluatePolicyForEnvelope(bundle.envelope);
 
@@ -297,6 +385,8 @@ async function handleChatTurnUnlocked({
       token_usage: tokenUsage,
       token_budget: tokenBudget,
       persisted_ids: persistedIds,
+      mode: modeResolution,
+      project_context: projectContext,
     };
   }
 
@@ -411,8 +501,12 @@ async function handleChatTurnUnlocked({
     token_usage: tokenUsage,
     token_budget: tokenBudget,
     persisted_ids: persistedIds,
+    mode: modeResolution,
+    project_context: projectContext,
     summary: {
       stage: finalStage,
+      mode: modeResolution.mode,
+      project_id: projectContext ? projectContext.project_id : null,
       tool_count: runtimeResult.tool_results.length,
       artifact_count: runtimeResult.artifact_frame.artifacts.length,
       validation_score: runtimeResult.validation_frame.aggregate_score,
