@@ -4,6 +4,7 @@ import React from "react"
 import { X, AlertCircle, Download, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { downloadHref, downloadUrlAsFile } from "@/lib/utils"
+import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -264,7 +265,15 @@ async function renderPptx(buffer: ArrayBuffer) {
 export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [state, setState] = React.useState<State>({ kind: "loading" })
   const [isDownloading, setIsDownloading] = React.useState(false)
-  const previewUrl = React.useMemo(() => typeof url === "string" ? url : url.url, [url])
+  // Resolve the URL through `normalizeBackendAssetUrl` so an absolute
+  // `/uploads/...` URL the backend baked in gets rewritten to the
+  // frontend's NEXT_PUBLIC_IMAGE_URL host. Fixes "Failed to fetch"
+  // when BASE_URL on the server is unreachable from the browser
+  // (production deploys, mixed-content, leftover localhost).
+  const previewUrl = React.useMemo(() => {
+    const raw = typeof url === "string" ? url : url.url
+    return normalizeBackendAssetUrl(raw, process.env.NEXT_PUBLIC_IMAGE_URL)
+  }, [url])
   const downloadUrl = React.useMemo(() => typeof url === "string" ? previewUrl : (url.downloadUrl || url.url), [previewUrl, url])
   const format = React.useMemo(() => {
     const fromUrl = inferFormat(previewUrl)

@@ -60,6 +60,7 @@ import {
   RefreshCw,
   Reply} from "lucide-react"
 import { cn } from "@/lib/utils"
+import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import * as XLSX from "xlsx"
@@ -183,10 +184,11 @@ function formatSize(n: number | null | undefined) {
 }
 
 function absUrl(u: string) {
-  if (!u) return u
-  if (u.startsWith("http") || u.startsWith("blob:") || u.startsWith("data:")) return u
-  const base = process.env.NEXT_PUBLIC_IMAGE_URL || ""
-  return u.startsWith("/") ? `${base}${u}` : `${base}/${u}`
+  // Routes through the shared `normalizeBackendAssetUrl` so the
+  // /uploads/* origin-rewrite (see lib/attachment-url.ts) stays in
+  // one place. Fixes "Failed to fetch" when the backend baked in a
+  // BASE_URL that isn't reachable from the browser.
+  return normalizeBackendAssetUrl(u, process.env.NEXT_PUBLIC_IMAGE_URL)
 }
 
 function useIsDark() {
