@@ -3042,3 +3042,82 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .reduce-motion .agentic-search-status::before { opacity: 0.42; transform: translateX(0) rotate(4deg); }
 .reduce-motion .agentic-search-status:hover,
 .reduce-motion .agentic-search-status:focus-visible { transform: none; }
+
+/* ─────────────────────────────────────────────────────────────────
+ * DiffBlock — dark-theme overrides for diff2html.
+ * The library ships a light theme; we don't import its stylesheet
+ * directly. Instead we restyle the structural markup it emits inside
+ * a .diff-block-wrapper scope so chat code blocks blend with the rest
+ * of the dark UI.
+ * ───────────────────────────────────────────────────────────────── */
+.diff-block-wrapper { color: rgb(228, 228, 231); }
+.diff-block-wrapper .d2h-wrapper,
+.diff-block-wrapper .d2h-files-diff { background: transparent; }
+.diff-block-wrapper .d2h-file-wrapper {
+  border: 1px solid rgb(63, 63, 70);
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+}
+.diff-block-wrapper .d2h-file-header {
+  background: rgba(39, 39, 42, 0.7);
+  border-bottom: 1px solid rgb(63, 63, 70);
+  color: rgb(228, 228, 231);
+  padding: 0.5rem 0.75rem;
+}
+.diff-block-wrapper .d2h-file-name { color: rgb(228, 228, 231); font-weight: 500; }
+.diff-block-wrapper .d2h-tag { background: rgb(63, 63, 70); color: rgb(228, 228, 231); }
+.diff-block-wrapper .d2h-diff-table {
+  background: rgb(24, 24, 27);
+  color: rgb(228, 228, 231);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 12.5px;
+}
+.diff-block-wrapper .d2h-code-side-line,
+.diff-block-wrapper .d2h-code-line { color: rgb(228, 228, 231); }
+.diff-block-wrapper .d2h-code-side-linenumber,
+.diff-block-wrapper .d2h-code-linenumber {
+  background: rgba(39, 39, 42, 0.6);
+  border-color: rgb(63, 63, 70);
+  color: rgb(113, 113, 122);
+}
+.diff-block-wrapper .d2h-ins {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.diff-block-wrapper .d2h-ins .d2h-code-side-linenumber,
+.diff-block-wrapper .d2h-ins .d2h-code-linenumber {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: rgb(187, 247, 208);
+}
+.diff-block-wrapper .d2h-del {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.diff-block-wrapper .d2h-del .d2h-code-side-linenumber,
+.diff-block-wrapper .d2h-del .d2h-code-linenumber {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: rgb(254, 202, 202);
+}
+.diff-block-wrapper .d2h-info {
+  background: rgba(63, 63, 70, 0.6);
+  color: rgb(161, 161, 170);
+  border-color: rgb(63, 63, 70);
+}
+.diff-block-wrapper .d2h-cntx {
+  background: transparent;
+  color: rgb(212, 212, 216);
+}
+.diff-block-wrapper .d2h-emptyplaceholder {
+  background: rgba(39, 39, 42, 0.4);
+  border-color: rgb(63, 63, 70);
+}
+.diff-block-wrapper ins,
+.diff-block-wrapper del {
+  text-decoration: none;
+  background: transparent;
+}
+.diff-block-wrapper ins { color: rgb(134, 239, 172); }
+.diff-block-wrapper del { color: rgb(252, 165, 165); }

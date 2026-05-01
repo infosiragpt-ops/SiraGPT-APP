@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1245**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1250**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (88)
+## Apache-2.0 (89)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -53,6 +53,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@prisma/engines-version` | 6.18.0-8.34b5a692b7bd79939a9a2c3ef97d816e749cda2f | Apache-2.0 | [link](https://github.com/prisma/engines-wrapper) |
 | `@prisma/fetch-engine` | 6.18.0 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
 | `@prisma/get-platform` | 6.18.0 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
+| `@profoundlogic/hogan` | 3.0.4 | Apache-2.0 | [link](https://github.com/ProfoundLogic/hogan.js-ProfoundLogic) |
 | `@puppeteer/browsers` | 2.10.12 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `@smithy/is-array-buffer` | 2.2.0 | Apache-2.0 | [link](https://github.com/awslabs/smithy-typescript) |
 | `@smithy/types` | 4.14.1 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
@@ -117,7 +118,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `word` | 0.3.0 | Apache-2.0 | [link](https://github.com/SheetJS/js-word) |
 | `xlsx` | 0.18.5 | Apache-2.0 | [link](https://github.com/SheetJS/sheetjs) |
 
-## BSD (43)
+## BSD (44)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -134,6 +135,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `d3-shape` | 1.3.7, 3.2.0 | BSD-3-Clause | [link](https://github.com/d3/d3-shape) |
 | `deepmerge-ts` | 7.1.5 | BSD-3-Clause | [link](https://github.com/RebeccaStevens/deepmerge-ts) |
 | `devtools-protocol` | 0.0.1521046 | BSD-3-Clause | [link](https://github.com/ChromeDevTools/devtools-protocol) |
+| `diff` | 8.0.4 | BSD-3-Clause | [link](https://github.com/kpdecker/jsdiff) |
 | `dingbat-to-unicode` | 1.0.1 | BSD-2-Clause | [link](https://github.com/mwilliamson/dingbat-to-unicode) |
 | `domelementtype` | 2.3.0 | BSD-2-Clause | [link](https://github.com/fb55/domelementtype) |
 | `domhandler` | 5.0.3 | BSD-2-Clause | [link](https://github.com/fb55/domhandler) |
@@ -148,7 +150,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `esutils` | 2.0.3 | BSD-2-Clause | [link](https://github.com/estools/esutils) |
 | `extract-zip` | 2.0.1 | BSD-2-Clause | [link](https://github.com/maxogden/extract-zip) |
 | `fast-uri` | 3.1.0 | BSD-3-Clause | [link](https://github.com/fastify/fast-uri) |
-| `highlight.js` | 10.7.3 | BSD-3-Clause | [link](https://github.com/highlightjs/highlight.js) |
+| `highlight.js` | 10.7.3, 11.11.1 | BSD-3-Clause | [link](https://github.com/highlightjs/highlight.js) |
 | `ieee754` | 1.2.1 | BSD-3-Clause | [link](https://github.com/feross/ieee754) |
 | `intl-messageformat` | 11.2.1 | BSD-3-Clause | [link](https://github.com/formatjs/formatjs) |
 | `lop` | 0.4.2 | BSD-2-Clause | [link](https://github.com/mwilliamson/lop) |
@@ -214,7 +216,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@syncfusion/ej2-spreadsheet` | 32.2.9 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls.git#master) |
 | `@syncfusion/ej2-svg-base` | 32.2.3 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls) |
 
-## ISC (76)
+## ISC (77)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -222,6 +224,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@isaacs/cliui` | 8.0.2 | ISC | [link](https://github.com/yargs/cliui) |
 | `@msgpack/msgpack` | 3.1.2 | ISC | [link](https://github.com/msgpack/msgpack-javascript) |
 | `@ungap/structured-clone` | 1.3.0 | ISC | [link](https://github.com/ungap/structured-clone) |
+| `abbrev` | 1.1.1 | ISC | [link](https://github.com/isaacs/abbrev-js) |
 | `anymatch` | 3.1.3 | ISC | [link](https://github.com/micromatch/anymatch) |
 | `boolbase` | 1.0.0 | ISC | [link](https://github.com/fb55/boolbase) |
 | `chownr` | 1.1.4 | ISC | [link](https://github.com/isaacs/chownr) |
@@ -295,7 +298,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yaml` | 2.8.3 | ISC | [link](https://github.com/eemeli/yaml) |
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 
-## MIT (1001)
+## MIT (1003)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -671,6 +674,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `detect-node-es` | 1.1.0 | MIT | [link](https://github.com/thekashey/detect-node) |
 | `devlop` | 1.1.0 | MIT | [link](https://github.com/wooorm/devlop) |
 | `dfa` | 1.2.0 | MIT | [link](https://github.com/devongovett/dfa) |
+| `diff2html` | 3.4.56 | MIT | [link](https://github.com/rtfpessoa/diff2html) |
 | `dlv` | 1.1.3 | MIT | [link](https://github.com/developit/dlv) |
 | `docx` | 8.5.0, 9.5.1 | MIT | [link](https://github.com/dolanmiu/docx) |
 | `docxtemplater` | 3.67.1 | MIT | [link](https://github.com/open-xml-templating/docxtemplater) |
@@ -982,6 +986,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `node-pandoc` | 0.3.0 | MIT | [link](https://github.com/eshinn/node-pandoc) |
 | `node-releases` | 2.0.38 | MIT | [link](https://github.com/chicoxyzzy/node-releases) |
 | `nodemailer` | 6.10.1, 7.0.13 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
+| `nopt` | 1.0.10 | MIT | [link](https://github.com/isaacs/nopt) |
 | `normalize-path` | 3.0.0 | MIT | [link](https://github.com/jonschlinkert/normalize-path) |
 | `nypm` | 0.6.2 | MIT | [link](https://github.com/unjs/nypm) |
 | `oauth` | 0.10.2, 0.9.15 | MIT | [link](https://github.com/ciaranj/node-oauth) |

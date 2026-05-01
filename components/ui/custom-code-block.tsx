@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check, Clipboard, ExternalLink } from "lucide-react";
 import { useShikiHighlight } from "@/lib/use-shiki-highlight";
+import { DiffBlock } from "@/components/chat/diff-block";
 
 export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: any) => {
     const [isCopied, setIsCopied] = useState(false);
@@ -10,7 +11,18 @@ export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: 
     const language = match ? match[1] : 'text';
 
     const codeString = String(children).replace(/\n$/, '');
+
+    // Diff fences (```diff … ```) with a recognisable unified-diff
+    // header get the Cursor-style side-by-side renderer instead of
+    // generic syntax highlighting. The hook below still runs (rules
+    // of hooks); its result is unused on this branch.
+    const isDiff = language === 'diff' && /^(?:diff --git|---\s|\+\+\+\s|@@\s)/m.test(codeString);
+
     const highlighted = useShikiHighlight(codeString, language);
+
+    if (isDiff) {
+        return <DiffBlock diff={codeString} />;
+    }
 
     const handleCopy = () => {
         navigator.clipboard.writeText(codeString).then(() => {
