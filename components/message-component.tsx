@@ -38,8 +38,7 @@ import ReactMarkdown from 'react-markdown'
 import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
-import rehypeKatex from 'rehype-katex'
-import rehypeRaw from 'rehype-raw'
+import { markdownRehypePlugins } from '@/lib/markdown-sanitize'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
@@ -1313,7 +1312,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             >
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
-                    rehypePlugins={[rehypeKatex, rehypeRaw]}
+                    rehypePlugins={markdownRehypePlugins}
                     components={components}
                 >
                     {content}
@@ -1896,7 +1895,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
             return (
                 <div className="mb-2 text-md text-foreground/90 prose prose-sm dark:prose-invert max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, rehypeRaw]}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={markdownRehypePlugins}>
                         {cleaned}
                     </ReactMarkdown>
                 </div>

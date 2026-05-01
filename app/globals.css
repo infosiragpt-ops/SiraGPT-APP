@@ -2917,15 +2917,32 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   font-variant-numeric: tabular-nums;
 }
 .agentic-search-status__progress {
+  appearance: none;
+  -webkit-appearance: none;
   display: block;
   width: 100%;
   height: 4px;
+  border: 0;
   border-radius: 999px;
   background: hsl(210 22% 90% / 0.6);
   overflow: hidden;
 }
-.agentic-search-status__progress > span {
-  display: block;
+.agentic-search-status__progress::-webkit-progress-bar {
+  background: hsl(210 22% 90% / 0.6);
+  border-radius: inherit;
+}
+.agentic-search-status__progress::-webkit-progress-value {
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    hsl(196 92% 54%),
+    hsl(214 92% 56%) 60%,
+    hsl(204 92% 48%)
+  );
+  transition: width 360ms cubic-bezier(0.45, 0, 0.25, 1);
+  box-shadow: 0 0 12px hsl(204 92% 60% / 0.55);
+}
+.agentic-search-status__progress::-moz-progress-bar {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(

@@ -6549,9 +6549,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }));
 
       // The chat bubble stays minimal, but it is now a real activity
-      // trigger. ReactMarkdown renders this raw HTML via rehypeRaw; the
-      // parent message list delegates clicks by data-search-activity-id
-      // so we do not need to mutate MessageComponent.
+      // trigger. ReactMarkdown renders this controlled raw HTML through
+      // the central rehype-sanitize schema; the parent message list
+      // delegates clicks by data-search-activity-id so we do not need
+      // to mutate MessageComponent.
       //
       // The badge now carries:
       //   - phase label (Buscando · Recopilando · Seleccionando · Validando · Sintetizando)
@@ -6590,7 +6591,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           (counter || "") + (elapsed || "") +
           `<span class="agentic-search-status__hint">Actividad</span>` +
           `</span>` +
-          `<span class="agentic-search-status__progress" aria-hidden="true"><span style="width:${pct}%"></span></span>` +
+          `<progress class="agentic-search-status__progress" value="${pct}" max="100">${pct}%</progress>` +
           chipRow +
           `</button>`
         );
