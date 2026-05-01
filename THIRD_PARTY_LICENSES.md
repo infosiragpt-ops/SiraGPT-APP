@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1364**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1366**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -385,7 +385,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1025)
+## MIT (1027)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -1119,6 +1119,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `opentype.js` | 1.3.4 | MIT | [link](https://github.com/opentypejs/opentype.js) |
 | `orderedmap` | 2.1.1 | MIT | [link](https://github.com/marijnh/orderedmap) |
 | `p-finally` | 1.0.0 | MIT | [link](https://github.com/sindresorhus/p-finally) |
+| `p-limit` | 7.3.0 | MIT | [link](https://github.com/sindresorhus/p-limit) |
 | `p-queue` | 6.6.2, 9.2.0 | MIT | [link](https://github.com/sindresorhus/p-queue) |
 | `p-retry` | 6.2.1, 7.1.1 | MIT | [link](https://github.com/sindresorhus/p-retry) |
 | `p-timeout` | 3.2.0, 7.0.1 | MIT | [link](https://github.com/sindresorhus/p-timeout) |
@@ -1410,6 +1411,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `xtend` | 4.0.2 | MIT | [link](https://github.com/Raynos/xtend) |
 | `yargs` | 17.7.2 | MIT | [link](https://github.com/yargs/yargs) |
 | `yauzl` | 2.10.0 | MIT | [link](https://github.com/thejoshwolfe/yauzl) |
+| `yocto-queue` | 1.2.2 | MIT | [link](https://github.com/sindresorhus/yocto-queue) |
 | `zip-stream` | 4.1.1 | MIT | [link](https://github.com/archiverjs/node-zip-stream) |
 | `zlibjs` | 0.3.1 | MIT | [link](https://github.com/imaya/zlib.js) |
 | `zod` | 3.25.76, 4.3.6 | MIT | [link](https://github.com/colinhacks/zod) |

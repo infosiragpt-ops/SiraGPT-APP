@@ -4,6 +4,24 @@ const ocrEngine = require('./ocr-engine');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
+const OCR_CONCURRENCY = Math.max(1, Number(process.env.MESSAGE_ATTACHMENTS_OCR_CONCURRENCY) || 3);
+
+let _pLimitMod;
+async function loadPLimit() {
+  if (!_pLimitMod) {
+    _pLimitMod = (await import('p-limit')).default;
+  }
+  return _pLimitMod;
+}
+
+async function mapWithLimit(items, fn, concurrency = OCR_CONCURRENCY) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  if (items.length === 1) return [await fn(items[0], 0)];
+  const pLimit = await loadPLimit();
+  const limit = pLimit(Math.max(1, Math.min(concurrency, items.length)));
+  return Promise.all(items.map((item, idx) => limit(() => fn(item, idx))));
+}
+
 function compactString(value, max = 120000) {
   if (typeof value !== 'string') return null;
   if (value.length <= max) return value;
@@ -364,8 +382,8 @@ async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars
   const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 8);
   if (ids.length === 0) return '';
   const rows = await loadFileRows(prisma, userId, ids);
-  const ocrRows = await Promise.all(rows.map((row) => ensureImageOcr(prisma, row, userId)));
-  const enrichedRows = await Promise.all(ocrRows.map((row) => ensureDocumentAnalysis(prisma, row, userId)));
+  const ocrRows = await mapWithLimit(rows, (row) => ensureImageOcr(prisma, row, userId));
+  const enrichedRows = await mapWithLimit(ocrRows, (row) => ensureDocumentAnalysis(prisma, row, userId));
   const withText = enrichedRows.filter((row) => hasUsefulExtractedText(row.extractedText));
   if (withText.length === 0) return '';
 
@@ -414,8 +432,8 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
   if (ids.length === 0) return '';
 
   const rows = await loadFileRows(prisma, userId, ids);
-  const ocrRows = await Promise.all(rows.map((row) => ensureImageOcr(prisma, row, userId)));
-  const enrichedRows = await Promise.all(ocrRows.map((row) => ensureDocumentAnalysis(prisma, row, userId)));
+  const ocrRows = await mapWithLimit(rows, (row) => ensureImageOcr(prisma, row, userId));
+  const enrichedRows = await mapWithLimit(ocrRows, (row) => ensureDocumentAnalysis(prisma, row, userId));
   const withText = enrichedRows
     .map((row) => ({
       id: row.id,
@@ -449,6 +467,7 @@ module.exports = {
   ensureImageOcr,
   hasUsefulExtractedText,
   isPlainTranscriptionRequest,
+  mapWithLimit,
   normalizeClientMetadata,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
