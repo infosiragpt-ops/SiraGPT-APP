@@ -5,11 +5,14 @@ const {
   buildCodeFilesForRag,
   buildGitHubRagCollection,
   classifyRepositoryPath,
+  createDefaultOctokit,
   createGitHubCodexConnector,
   languageForPath,
   normalizeGitHubConnectorError,
   parseGitHubRepository,
   resolveAuth,
+  resolveGitHubRetryConfig,
+  resolveGitHubThrottleConfig,
 } = require('../src/services/github-codex-connector');
 
 function baseRepoData() {
@@ -226,6 +229,35 @@ describe('GitHub Codex connector repository parsing', () => {
 });
 
 describe('GitHub Codex connector auth status', () => {
+  test('resolves retry and throttle hardening config with safe defaults and clamps', () => {
+    const retryDefaults = resolveGitHubRetryConfig({});
+    assert.equal(retryDefaults.limit, 2);
+    assert.deepEqual(retryDefaults.retryableStatuses, [429, 500, 502, 503, 504]);
+    assert.equal(retryDefaults.doNotRetryStatuses.includes(401), true);
+    assert.equal(retryDefaults.doNotRetryStatuses.includes(403), true);
+    assert.equal(retryDefaults.doNotRetryStatuses.includes(422), true);
+    assert.equal(retryDefaults.doNotRetryStatuses.includes(500), false);
+
+    assert.equal(resolveGitHubRetryConfig({ GITHUB_CODEX_RETRY_LIMIT: 'bad' }).limit, 2);
+    assert.equal(resolveGitHubRetryConfig({ GITHUB_CODEX_RETRY_LIMIT: '-1' }).limit, 0);
+    assert.equal(resolveGitHubRetryConfig({ GITHUB_CODEX_RETRY_LIMIT: '99' }).limit, 5);
+
+    const throttleDefaults = resolveGitHubThrottleConfig({});
+    assert.deepEqual(throttleDefaults, { maxRetries: 2, retryAfterSeconds: 60 });
+    assert.deepEqual(resolveGitHubThrottleConfig({
+      GITHUB_CODEX_THROTTLE_MAX_RETRIES: '-3',
+      GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS: '0',
+    }), { maxRetries: 0, retryAfterSeconds: 1 });
+    assert.deepEqual(resolveGitHubThrottleConfig({
+      GITHUB_CODEX_THROTTLE_MAX_RETRIES: '99',
+      GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS: '999',
+    }), { maxRetries: 5, retryAfterSeconds: 300 });
+    assert.deepEqual(resolveGitHubThrottleConfig({
+      GITHUB_CODEX_THROTTLE_MAX_RETRIES: '2.5',
+      GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS: 'later',
+    }), { maxRetries: 2, retryAfterSeconds: 60 });
+  });
+
   test('redacts backend tokens from public status', () => {
     const auth = resolveAuth({ GITHUB_CODEX_TOKEN: 'ghp_secret' });
     assert.equal(auth.configured, true);
@@ -238,6 +270,38 @@ describe('GitHub Codex connector auth status', () => {
     const status = connector.getStatus();
     assert.equal(status.configured, true);
     assert.equal(status.tokenSource, 'GITHUB_CODEX_TOKEN');
+    assert.equal(status.resilience.retry.limit, 2);
+    assert.deepEqual(status.resilience.throttle, { maxRetries: 2, retryAfterSeconds: 60 });
+    assert.equal(JSON.stringify(status).includes('ghp_secret'), false);
+  });
+
+  test('creates default Octokit with server-side token without exposing it in status', async () => {
+    const octokit = await createDefaultOctokit({
+      token: 'ghp_secret',
+      env: {
+        GITHUB_CODEX_RETRY_LIMIT: '1',
+        GITHUB_CODEX_THROTTLE_MAX_RETRIES: '1',
+        GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS: '30',
+      },
+    });
+    const auth = await octokit.auth();
+    assert.equal(auth.type, 'token');
+    assert.equal(auth.token, 'ghp_secret');
+
+    const connector = createGitHubCodexConnector({
+      env: {
+        GITHUB_CODEX_TOKEN: 'ghp_secret',
+        GITHUB_CODEX_RETRY_LIMIT: '1',
+        GITHUB_CODEX_THROTTLE_MAX_RETRIES: '1',
+        GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS: '30',
+      },
+      octokitFactory: async () => createFakeOctokit(),
+    });
+    const status = connector.getStatus();
+    assert.deepEqual(status.resilience, {
+      retry: { limit: 1, retryableStatuses: [429, 500, 502, 503, 504] },
+      throttle: { maxRetries: 1, retryAfterSeconds: 30 },
+    });
     assert.equal(JSON.stringify(status).includes('ghp_secret'), false);
   });
 });
@@ -297,6 +361,50 @@ describe('GitHub Codex connector context aggregation', () => {
     assert.equal(normalized.status, 401);
     assert.equal(normalized.body.code, 'github_auth_failed');
     assert.equal(JSON.stringify(normalized).includes('Bad credentials'), false);
+  });
+
+  test('normalizes rate-limit and transient GitHub errors without leaking raw headers or messages', () => {
+    const forbidden = new Error('API rate limit exceeded for token ghp_secret');
+    forbidden.status = 403;
+    forbidden.response = {
+      headers: {
+        'x-ratelimit-limit': '5000',
+        'x-ratelimit-remaining': '0',
+        'x-ratelimit-reset': '1770000000',
+        'x-ratelimit-used': '5000',
+        'retry-after': '45',
+        authorization: 'token ghp_secret',
+      },
+    };
+    const forbiddenNormalized = normalizeGitHubConnectorError(forbidden);
+    assert.equal(forbiddenNormalized.status, 403);
+    assert.equal(forbiddenNormalized.body.code, 'github_rate_limited');
+    assert.deepEqual(forbiddenNormalized.body.rateLimit, {
+      limit: '5000',
+      remaining: '0',
+      reset: '1770000000',
+      used: '5000',
+      retryAfter: '45',
+    });
+    assert.equal(JSON.stringify(forbiddenNormalized).includes('authorization'), false);
+    assert.equal(JSON.stringify(forbiddenNormalized).includes('ghp_secret'), false);
+
+    const tooManyRequests = new Error('secondary rate limit');
+    tooManyRequests.status = 429;
+    tooManyRequests.response = { headers: { 'retry-after': '10' } };
+    const tooManyRequestsNormalized = normalizeGitHubConnectorError(tooManyRequests);
+    assert.equal(tooManyRequestsNormalized.status, 429);
+    assert.equal(tooManyRequestsNormalized.body.code, 'github_rate_limited');
+    assert.equal(tooManyRequestsNormalized.body.rateLimit.retryAfter, '10');
+
+    const unavailable = new Error('GitHub 503 token ghp_secret');
+    unavailable.status = 503;
+    unavailable.response = { headers: {} };
+    const unavailableNormalized = normalizeGitHubConnectorError(unavailable);
+    assert.equal(unavailableNormalized.status, 503);
+    assert.equal(unavailableNormalized.body.code, 'github_api_error');
+    assert.equal(unavailableNormalized.body.error, 'GitHub API request failed');
+    assert.equal(JSON.stringify(unavailableNormalized).includes('ghp_secret'), false);
   });
 });
 

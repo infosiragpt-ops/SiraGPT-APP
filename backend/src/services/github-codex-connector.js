@@ -11,6 +11,15 @@ const MAX_CODE_FILE_LIMIT = 120;
 const DEFAULT_CODE_FILE_MAX_BYTES = 60000;
 const MAX_CODE_FILE_MAX_BYTES = 120000;
 const CODE_FETCH_CONCURRENCY = 4;
+const DEFAULT_GITHUB_CODEX_RETRY_LIMIT = 2;
+const MAX_GITHUB_CODEX_RETRY_LIMIT = 5;
+const DEFAULT_GITHUB_CODEX_THROTTLE_MAX_RETRIES = 2;
+const MAX_GITHUB_CODEX_THROTTLE_MAX_RETRIES = 5;
+const DEFAULT_GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS = 60;
+const MAX_GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS = 300;
+const GITHUB_RETRYABLE_STATUSES = [429, 500, 502, 503, 504];
+const GITHUB_DO_NOT_RETRY_STATUSES = Array.from({ length: 200 }, (_, index) => 400 + index)
+  .filter((status) => !GITHUB_RETRYABLE_STATUSES.includes(status));
 
 const SKIPPED_PATH_SEGMENTS = new Set([
   '.git',
@@ -169,7 +178,7 @@ function resolveAuth(env = process.env) {
   };
 }
 
-function publicAuthStatus(auth) {
+function publicAuthStatus(auth, resilience) {
   return {
     provider: 'github',
     package: 'octokit',
@@ -184,6 +193,7 @@ function publicAuthStatus(auth) {
       'issues:read',
       'actions:read',
     ],
+    resilience,
   };
 }
 
@@ -191,6 +201,78 @@ function clampInt(value, fallback, min, max) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
+}
+
+function clampEnvInt(value, fallback, min, max) {
+  const raw = trimString(value);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function resolveGitHubRetryConfig(env = process.env) {
+  const limit = clampEnvInt(
+    env.GITHUB_CODEX_RETRY_LIMIT,
+    DEFAULT_GITHUB_CODEX_RETRY_LIMIT,
+    0,
+    MAX_GITHUB_CODEX_RETRY_LIMIT,
+  );
+  return {
+    limit,
+    retryableStatuses: GITHUB_RETRYABLE_STATUSES.slice(),
+    doNotRetryStatuses: GITHUB_DO_NOT_RETRY_STATUSES.slice(),
+  };
+}
+
+function resolveGitHubThrottleConfig(env = process.env) {
+  return {
+    maxRetries: clampEnvInt(
+      env.GITHUB_CODEX_THROTTLE_MAX_RETRIES,
+      DEFAULT_GITHUB_CODEX_THROTTLE_MAX_RETRIES,
+      0,
+      MAX_GITHUB_CODEX_THROTTLE_MAX_RETRIES,
+    ),
+    retryAfterSeconds: clampEnvInt(
+      env.GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS,
+      DEFAULT_GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS,
+      1,
+      MAX_GITHUB_CODEX_THROTTLE_RETRY_AFTER_SECONDS,
+    ),
+  };
+}
+
+function publicResilienceStatus(env = process.env) {
+  const retry = resolveGitHubRetryConfig(env);
+  const throttle = resolveGitHubThrottleConfig(env);
+  return {
+    retry: {
+      limit: retry.limit,
+      retryableStatuses: retry.retryableStatuses,
+    },
+    throttle: {
+      maxRetries: throttle.maxRetries,
+      retryAfterSeconds: throttle.retryAfterSeconds,
+    },
+  };
+}
+
+function shouldRetryThrottledRequest(retryAfter, retryCount, throttleConfig) {
+  const delaySeconds = Number(retryAfter);
+  return (
+    retryCount < throttleConfig.maxRetries
+    && Number.isFinite(delaySeconds)
+    && delaySeconds <= throttleConfig.retryAfterSeconds
+  );
+}
+
+async function createGitHubOctokitClass() {
+  const [octokitMod, retryMod, throttlingMod] = await Promise.all([
+    import('octokit'),
+    import('@octokit/plugin-retry'),
+    import('@octokit/plugin-throttling'),
+  ]);
+  return octokitMod.Octokit.plugin(retryMod.retry, throttlingMod.throttling);
 }
 
 function normalisePosixPath(value) {
@@ -314,12 +396,25 @@ function buildCodeFilesForRag(files = []) {
     }));
 }
 
-async function createDefaultOctokit({ token }) {
-  const mod = await import('octokit');
-  return new mod.Octokit({
+async function createDefaultOctokit({ token, env = process.env } = {}) {
+  const retryConfig = resolveGitHubRetryConfig(env);
+  const throttleConfig = resolveGitHubThrottleConfig(env);
+  const GitHubOctokit = await createGitHubOctokitClass();
+  return new GitHubOctokit({
     ...(token ? { auth: token } : {}),
-    userAgent: 'siraGPT-codex-connector/6b',
+    userAgent: 'siraGPT-codex-connector/8a',
     request: { timeout: 12000 },
+    retry: {
+      retries: retryConfig.limit,
+      doNotRetry: retryConfig.doNotRetryStatuses,
+    },
+    throttle: {
+      fallbackSecondaryRateRetryAfter: throttleConfig.retryAfterSeconds,
+      onRateLimit: (retryAfter, _options, _octokit, retryCount) =>
+        shouldRetryThrottledRequest(retryAfter, retryCount, throttleConfig),
+      onSecondaryRateLimit: (retryAfter, _options, _octokit, retryCount) =>
+        shouldRetryThrottledRequest(retryAfter, retryCount, throttleConfig),
+    },
   });
 }
 
@@ -414,6 +509,7 @@ function readRateLimit(headers) {
     remaining: headerValue(headers, 'x-ratelimit-remaining'),
     reset: headerValue(headers, 'x-ratelimit-reset'),
     used: headerValue(headers, 'x-ratelimit-used'),
+    retryAfter: headerValue(headers, 'retry-after'),
   };
 }
 
@@ -455,12 +551,17 @@ function normalizeGitHubConnectorError(error) {
   const githubStatus = Number(error?.status || error?.response?.status) || 500;
   const status = githubStatus >= 400 && githubStatus < 600 ? githubStatus : 500;
   const documentationUrl = error?.response?.data?.documentation_url || error?.documentation_url || null;
+  const rateLimit = readRateLimit(error?.response?.headers);
+  const hasRateLimitSignal = Boolean(rateLimit.retryAfter) || rateLimit.remaining === '0';
 
   let code = 'github_api_error';
   let message = 'GitHub API request failed';
   if (status === 401) {
     code = 'github_auth_failed';
     message = 'GitHub token is invalid or expired';
+  } else if (status === 403 && hasRateLimitSignal) {
+    code = 'github_rate_limited';
+    message = 'GitHub API rate limit reached';
   } else if (status === 403) {
     code = 'github_access_denied';
     message = 'GitHub denied access or the rate limit was reached';
@@ -479,7 +580,7 @@ function normalizeGitHubConnectorError(error) {
       code,
       githubStatus: status,
       ...(documentationUrl ? { documentationUrl } : {}),
-      rateLimit: readRateLimit(error?.response?.headers),
+      rateLimit,
     },
   };
 }
@@ -555,7 +656,7 @@ function createGitHubCodexConnector(options = {}) {
 
   return {
     getStatus() {
-      return publicAuthStatus(resolveAuth(env));
+      return publicAuthStatus(resolveAuth(env), publicResilienceStatus(env));
     },
 
     async getRepositoryContext(params = {}) {
@@ -568,7 +669,7 @@ function createGitHubCodexConnector(options = {}) {
         MAX_README_PREVIEW_CHARS,
       );
       const auth = resolveAuth(env);
-      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source });
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source, env });
 
       const repositoryResponse = await octokit.rest.repos.get(parsed);
       const repository = normalizeRepository(repositoryResponse.data);
@@ -652,7 +753,7 @@ function createGitHubCodexConnector(options = {}) {
         MAX_CODE_FILE_MAX_BYTES,
       );
       const auth = resolveAuth(env);
-      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source });
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source, env });
 
       const repositoryResponse = await octokit.rest.repos.get(parsed);
       const repository = normalizeRepository(repositoryResponse.data);
@@ -755,9 +856,13 @@ module.exports = {
   buildCodexSummary,
   buildGitHubRagCollection,
   classifyRepositoryPath,
+  createDefaultOctokit,
+  createGitHubOctokitClass,
   createGitHubCodexConnector,
   languageForPath,
   normalizeGitHubConnectorError,
   parseGitHubRepository,
   resolveAuth,
+  resolveGitHubRetryConfig,
+  resolveGitHubThrottleConfig,
 };
