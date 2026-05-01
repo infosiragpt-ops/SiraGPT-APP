@@ -2,11 +2,11 @@ const express = require('express');
 const fsSync = require('fs');
 const { authenticateToken } = require('../middleware/auth');
 const upload = require('../middleware/upload');
-const { ALLOWED_MIMES, ALLOWED_EXTENSIONS } = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
 const documentIntelligence = require('../services/document-intelligence');
+const { validateUploadPolicy } = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
 const operationalRag = require('../services/rag/operational-runtime');
@@ -121,7 +121,7 @@ function serializeAnalysisMeta(analysis = null) {
  *     of an executable still presents as `image/png` to multer).
  *   - Magic-byte detection is the only reliable source of truth.
  *
- * Returns `{ mime, source }`:
+ * Returns `{ mime, ext, source }`:
  *   - `source: 'magic-bytes'` — file-type identified the format from
  *     content. Caller MUST re-validate this against the allowlist
  *     because multer's pre-gate only saw the (potentially spoofed)
@@ -137,27 +137,12 @@ async function detectMime(filePath, fallbackMime) {
     const { fileTypeFromFile } = await loadFileType();
     const detected = await fileTypeFromFile(filePath);
     if (detected && detected.mime) {
-      return { mime: detected.mime, source: 'magic-bytes' };
+      return { mime: detected.mime, ext: detected.ext || null, source: 'magic-bytes' };
     }
   } catch (e) {
     console.warn('[files] magic-byte detection failed:', e.message);
   }
-  return { mime: fallbackMime, source: 'fallback' };
-}
-
-/**
- * After magic-byte detection corrected the mime, re-check it against
- * the allowlist. The pre-multer filter validates the *declared* mime;
- * this guard catches the case where the real content disagrees and
- * lands outside what we accept (e.g., a renamed executable).
- *
- * Plain-text detections (`source: 'fallback'`) are trusted — they
- * already passed the extension/declared-mime gate at the multer
- * boundary and have no detectable signature.
- */
-function isContentTypeAllowed(detection) {
-  if (detection.source !== 'magic-bytes') return true;
-  return ALLOWED_MIMES.has(detection.mime);
+  return { mime: fallbackMime, ext: null, source: 'fallback' };
 }
 
 async function unlinkQuiet(p) {
@@ -219,14 +204,21 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
         //      so we close the spoofing loophole here.
         await fileProcessingStatus.setStage(prisma, fileRecord.id, 'validating', { userId: req.user.id });
         const detection = await detectMime(file.path, file.mimetype);
-        if (!isContentTypeAllowed(detection)) {
+        const policy = validateUploadPolicy({
+          originalName: file.originalname,
+          declaredMime: file.mimetype,
+          detectedMime: detection.mime,
+          detectionSource: detection.source,
+          size: file.size,
+        });
+        if (!policy.ok) {
           console.warn(
             `[files] rejected ${file.originalname}: declared=${file.mimetype} ` +
-            `real=${detection.mime} (not in allowlist)`,
+            `real=${detection.mime || 'unknown'} reason=${policy.code}`,
           );
           await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
             userId: req.user.id,
-            error: `magic_byte_mismatch: contenido detectado ${detection.mime}`,
+            error: `${policy.code}: ${policy.message}`,
           });
           await unlinkQuiet(file.path);
           processedFiles.push({
@@ -235,15 +227,16 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
             size: file.size,
             type: file.mimetype,
             success: false,
-            error: `Tipo real del archivo no permitido (${detection.mime}); el contenido no coincide con la extensión declarada.`,
-            code: 'magic_byte_mismatch',
-            detectedMime: detection.mime,
+            error: policy.message,
+            code: policy.code,
+            detectedMime: detection.mime || null,
+            detectedExtension: detection.ext || null,
           });
           continue;
         }
-        if (detection.mime && detection.mime !== file.mimetype) {
-          console.log(`[files] mime corrected for ${file.originalname}: ${file.mimetype} → ${detection.mime}`);
-          file.mimetype = detection.mime;
+        if (policy.mimeType && policy.mimeType !== file.mimetype) {
+          console.log(`[files] mime corrected for ${file.originalname}: ${file.mimetype} → ${policy.mimeType}`);
+          file.mimetype = policy.mimeType;
         }
 
         // Process file content

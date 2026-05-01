@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
+import DOMPurify from "dompurify"
 
 /**
  * Build the fetch init the preview uses against the backend asset
@@ -151,6 +152,16 @@ function previewShell(innerHtml: string) {
     </style>
     ${innerHtml}
   `
+}
+
+function sanitizeClientPreviewHtml(html: string) {
+  return DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    ADD_TAGS: ["style"],
+    ADD_ATTR: ["target", "rel"],
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "base", "form", "input", "button"],
+    FORBID_ATTR: ["srcdoc"],
+  })
 }
 
 function parseCsv(text: string, maxRows = 80) {
@@ -347,7 +358,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
           const html = await resp.text()
           if (cancelled) return
-          setState({ kind: "iframeHtml", html })
+          setState({ kind: "iframeHtml", html: sanitizeClientPreviewHtml(html) })
         } catch (err: unknown) {
           if (cancelled) return
           const message = err instanceof Error ? err.message : "No se pudo abrir la vista previa."
@@ -378,7 +389,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           const rows = parseCsv(text)
           setState({
             kind: "html",
-            html: previewShell(`<div class="sgpt-preview">${tableHtml(rows, { title: filename })}</div>`),
+            html: sanitizeClientPreviewHtml(previewShell(`<div class="sgpt-preview">${tableHtml(rows, { title: filename })}</div>`)),
             warnings: [],
           })
           return
@@ -390,14 +401,14 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         if (format === "xlsx") {
           const html = await renderXlsx(buffer)
           if (cancelled) return
-          setState({ kind: "html", html, warnings: [] })
+          setState({ kind: "html", html: sanitizeClientPreviewHtml(html), warnings: [] })
           return
         }
 
         if (format === "pptx") {
           const html = await renderPptx(buffer)
           if (cancelled) return
-          setState({ kind: "html", html, warnings: [] })
+          setState({ kind: "html", html: sanitizeClientPreviewHtml(html), warnings: [] })
           return
         }
 
@@ -415,7 +426,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         if (cancelled) return
         setState({
           kind: "html",
-          html: previewShell(`<article class="sgpt-preview docx">${result.value}</article>`),
+          html: sanitizeClientPreviewHtml(previewShell(`<article class="sgpt-preview docx">${result.value}</article>`)),
           warnings: (result.messages || []).map((m: { message?: string }) => m.message || "").filter(Boolean),
         })
       } catch (err: unknown) {

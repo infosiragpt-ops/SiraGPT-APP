@@ -26,6 +26,7 @@ Brechas contra un ecosistema ChatGPT + Gemini + Claude + Codex + Cursor:
 | RAG/cache | Implementaciones propias | Falta cache LRU/TTL estandar para resultados, manifests y metadata con limites claros |
 | Testing e2e | Playwright smoke informativo | Falta promocion gradual de e2e critico por flujos core: login, chat, upload, documento |
 | Licencias | `THIRD_PARTY_LICENSES.md` automatizado | Falta checklist por dependencia antes de install y reporte de decision |
+| Upload/documentos | Magic-byte check basico + OCR/RAG | Fase 2 agrega politica central de extension/MIME/tamano y sanitizacion de previews; queda reemplazar/aislar `xlsx` |
 
 ## 2. Matriz priorizada de dependencias recomendadas
 
@@ -46,6 +47,17 @@ Todas las versiones fueron consultadas en npm/GitHub el 2026-05-01. Antes de ins
 | P2 | `zod-to-json-schema` | https://github.com/StefanTerdell/zod-to-json-schema | `3.25.2` | ISC | Exportar contratos de tools/agentes | Documenta APIs internas para SDKs/conectores | Diferencias Zod v3/v4 | tool registry/docs | JSON schema manual | Reduce drift entre validacion y docs |
 | P2 | `@cyclonedx/cyclonedx-npm` | https://github.com/CycloneDX/cyclonedx-node-npm | `4.2.1` | Apache-2.0 | SBOM estandar | Evidencia enterprise/compliance | Nuevo artefacto CI | `.github/workflows/ci.yml`, scripts | licencia actual propia | Estandar comercial para auditorias |
 
+Dependencias ya presentes reutilizadas en Fase 2:
+
+| Dependencia | URL | Version instalada | Licencia | Uso | Decision |
+|---|---|---:|---|---|---|
+| `cheerio` | https://github.com/cheeriojs/cheerio | `1.x` | MIT | Sanitizacion server-side de HTML de preview | Reutilizada; evita introducir `sanitize-html` por historial de advisories |
+| `dompurify` | https://github.com/cure53/DOMPurify | `3.x` | Apache-2.0 / MPL-2.0 | Sanitizacion client-side de previews | Reutilizada; no agrega lock-in ni dependencia nueva |
+| `file-type` | https://github.com/sindresorhus/file-type | `22.x` backend | MIT | Deteccion por magic bytes | Reutilizada en upload policy |
+| `multer` | https://github.com/expressjs/multer | `2.1.1` | MIT | Multipart upload | Actualizada para cerrar advisories DoS |
+| `officeparser` | https://github.com/harshankur/officeParser | `6.1.1` | MIT | Extraccion de Office/PPTX | Actualizada; se adapto API nueva |
+| `nodemailer` | https://github.com/nodemailer/nodemailer | `8.0.7` | MIT-0 | Email transaccional | Actualizada para cerrar advisories de inyeccion/DoS |
+
 Dependencias descartadas en esta fase:
 
 - `sanitize-html`: MIT y reciente, pero tiene historial de advisories; mejor para sanitizacion HTML server-side general, no para pipeline AST actual.
@@ -63,6 +75,18 @@ Se integro `rehype-sanitize@6.0.0` en el render del chat:
 - `tests/markdown-sanitize.test.ts`: cubre bloqueo de HTML ejecutable, preservacion del badge controlado, codigo y KaTeX.
 - `next@14.2.35` y `eslint-config-next@14.2.35`: patch de seguridad dentro de la linea 14.2 para eliminar el fallo critico de auditoria sin adoptar una migracion mayor.
 - `shiki@1.29.2`: se declara explicitamente porque el estado actual del codigo ya lo importa via `lib/use-shiki-highlight.ts`; validado como MIT, activo y sin advisories conocidos en GitHub Advisory DB.
+
+Fase 2 aplicada:
+
+- `.github/workflows/ci.yml`: CI ejecuta con Node.js 24.
+- `backend/src/services/upload-security-policy.js`: politica central para allowlist, extension/MIME, limites y contenido activo.
+- `backend/src/routes/files.js` y `backend/src/middleware/upload.js`: revalidacion post-write antes de extraccion, OCR, RAG y OpenAI Files.
+- `backend/src/services/preview-html-sanitizer.js` y `backend/src/services/doc-preview.js`: sanitizacion server-side de previews DOCX/XLSX/CSV.
+- `components/document-preview.tsx`: sanitizacion client-side antes de `srcDoc`/`dangerouslySetInnerHTML`.
+- `backend/.env.example`: variables `MAX_FILE_SIZE`, `UPLOAD_MAX_FILE_MB`, `MAX_UPLOAD_FILES`, `ALLOW_UNBOUNDED_UPLOADS`.
+- `backend/package.json` y lockfile: parches de seguridad backend (`axios`, `express`, `multer`, `prisma`, `nodemailer`, `officeparser`) y eliminacion de `html-docx-js` no usado.
+- `docs/phase-2-security-documents.md`: runbook de la fase.
+- `backend/tests/upload-security-policy.test.js` y `backend/tests/preview-html-sanitizer.test.js`: regresiones de seguridad.
 
 Por que esta dependencia:
 

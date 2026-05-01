@@ -278,7 +278,12 @@ class FileProcessor {
   async processPowerPoint(filePath) {
     try {
       const officeParser = require('officeparser');
-      const text = await officeParser.parseOfficeAsync(filePath);
+      const parsed = typeof officeParser.parseOfficeAsync === 'function'
+        ? await officeParser.parseOfficeAsync(filePath)
+        : await officeParser.parseOffice(filePath, { ocr: false });
+      const text = typeof parsed === 'string'
+        ? parsed
+        : (typeof parsed?.toText === 'function' ? parsed.toText() : String(parsed || ''));
       console.log(`PowerPoint file processed: ${filePath}, length: ${text.length}`);
       return text;
     } catch (error) {

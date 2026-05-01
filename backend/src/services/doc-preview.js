@@ -22,6 +22,7 @@
 
 const mammoth = require('mammoth');
 const XLSX = require('xlsx');
+const { sanitizePreviewHtml } = require('./preview-html-sanitizer');
 
 const DOCX_STYLES = `
 <style>
@@ -126,7 +127,7 @@ async function previewDocx(base64) {
     const { value: html } = await mammoth.convertToHtml({ buffer }, MAMMOTH_OPTIONS);
     return {
       mime: 'text/html',
-      html: `${DOCX_STYLES}<div class="sgpt-doc-preview">${html}</div>`,
+      html: sanitizePreviewHtml(`${DOCX_STYLES}<div class="sgpt-doc-preview">${html}</div>`),
     };
   } catch (err) {
     console.warn('[doc-preview] docx conversion failed:', err?.message);
@@ -178,7 +179,7 @@ async function previewXlsx(base64, { maxRows = 60, maxSheets = 3 } = {}) {
       );
     }
     parts.push('</div>');
-    return { mime: 'text/html', html: parts.join('') };
+    return { mime: 'text/html', html: sanitizePreviewHtml(parts.join('')) };
   } catch (err) {
     console.warn('[doc-preview] xlsx conversion failed:', err?.message);
     return null;
@@ -249,7 +250,7 @@ async function previewCsv(base64, { maxRows = 80 } = {}) {
       }
     }
     parts.push('</div>');
-    return { mime: 'text/html', html: parts.join('') };
+    return { mime: 'text/html', html: sanitizePreviewHtml(parts.join('')) };
   } catch (err) {
     console.warn('[doc-preview] csv conversion failed:', err?.message);
     return null;
