@@ -2,6 +2,8 @@
 
 Fecha: 2026-05-01
 
+Actualizacion CTO: ver tambien [`docs/cto-commercial-ai-ecosystem-roadmap.md`](./cto-commercial-ai-ecosystem-roadmap.md) para el diagnostico consolidado posterior a Fase 6D + 7A/7B/7C, la matriz de brechas frente a ChatGPT/Gemini/Claude/Codex/Cursor y la priorizacion de Fase 8. La siguiente integracion recomendada es **Fase 8A: hardening del conector GitHub Codex/Cursor** con plugins oficiales Octokit de retry/throttle.
+
 ## 1. Diagnostico del estado actual
 
 SiraGPT ya tiene una base amplia para un ecosistema comercial de IA:
