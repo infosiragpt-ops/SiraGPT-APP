@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1359**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1364**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -299,7 +299,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@syncfusion/ej2-spreadsheet` | 32.2.9 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls.git#master) |
 | `@syncfusion/ej2-svg-base` | 32.2.3 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls) |
 
-## ISC (80)
+## ISC (81)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -340,6 +340,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `d3-transition` | 3.0.1 | ISC | [link](https://github.com/d3/d3-transition) |
 | `d3-zoom` | 3.0.0 | ISC | [link](https://github.com/d3/d3-zoom) |
 | `delaunator` | 5.1.0 | ISC | [link](https://github.com/mapbox/delaunator) |
+| `dezalgo` | 1.0.4 | ISC | [link](https://github.com/npm/dezalgo) |
 | `earcut` | 3.0.2 | ISC | [link](https://github.com/mapbox/earcut) |
 | `electron-to-chromium` | 1.5.343 | ISC | [link](https://github.com/Kilian/electron-to-chromium) |
 | `fastq` | 1.20.1 | ISC | [link](https://github.com/mcollina/fastq) |
@@ -384,7 +385,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1021)
+## MIT (1025)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -440,6 +441,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@modelcontextprotocol/sdk` | 1.29.0 | MIT | [link](https://github.com/modelcontextprotocol/typescript-sdk) |
 | `@napi-rs/canvas` | 0.1.100, 0.1.99 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
 | `@next/env` | 14.2.35 | MIT | [link](https://github.com/vercel/next.js) |
+| `@noble/hashes` | 1.8.0 | MIT | [link](https://github.com/paulmillr/noble-hashes) |
 | `@nodable/entities` | 2.1.0 | MIT | [link](https://github.com/nodable/val-parsers) |
 | `@nodelib/fs.scandir` | 2.1.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@nodelib/fs.stat` | 2.0.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
@@ -470,6 +472,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@octokit/webhooks` | 14.2.0 | MIT | [link](https://github.com/octokit/webhooks.js) |
 | `@octokit/webhooks-methods` | 6.0.0 | MIT | [link](https://github.com/octokit/webhooks-methods.js) |
 | `@panva/hkdf` | 1.2.1 | MIT | [link](https://github.com/panva/hkdf) |
+| `@paralleldrive/cuid2` | 2.3.1 | MIT | [link](https://github.com/ericelliott/cuid2) |
 | `@parcel/watcher` | 2.5.6 | MIT | [link](https://github.com/parcel-bundler/watcher) |
 | `@pdf-lib/standard-fonts` | 1.0.0 | MIT | [link](https://github.com/Hopding/standard-fonts) |
 | `@pdf-lib/upng` | 1.0.1 | MIT | [link](https://github.com/Hopding/upng) |
@@ -688,6 +691,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `argparse` | 1.0.10, 2.0.1 | MIT | [link](https://github.com/nodeca/argparse) |
 | `aria-hidden` | 1.2.6 | MIT | [link](https://github.com/theKashey/aria-hidden) |
 | `array-flatten` | 1.1.1 | MIT | [link](https://github.com/blakeembrey/array-flatten) |
+| `asap` | 2.0.6 | MIT | [link](https://github.com/kriskowal/asap) |
 | `ast-types` | 0.13.4 | MIT | [link](https://github.com/benjamn/ast-types) |
 | `async` | 3.2.6 | MIT | [link](https://github.com/caolan/async) |
 | `asynckit` | 0.4.0 | MIT | [link](https://github.com/alexindigo/asynckit) |
@@ -864,7 +868,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `form-data` | 3.0.4, 4.0.5 | MIT | [link](https://github.com/form-data/form-data) |
 | `format` | 0.2.2 | MIT | [link](https://github.com/samsonjs/format) |
 | `formdata-polyfill` | 4.0.10 | MIT | [link](git+https://jimmywarting@github.com/jimmywarting/FormData) |
-| `formidable` | 1.2.6 | MIT | [link](https://github.com/node-formidable/formidable) |
+| `formidable` | 1.2.6, 3.5.4 | MIT | [link](https://github.com/node-formidable/formidable) |
 | `forwarded` | 0.2.0 | MIT | [link](https://github.com/jshttp/forwarded) |
 | `forwarded-parse` | 2.1.2 | MIT | [link](https://github.com/lpinca/forwarded-parse) |
 | `fraction.js` | 5.3.4 | MIT | [link](https://github.com/rawify/Fraction.js) |
@@ -1310,7 +1314,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `styled-jsx` | 5.1.1 | MIT | [link](https://github.com/vercel/styled-jsx) |
 | `stylis` | 4.4.0 | MIT | [link](https://github.com/thysultan/stylis.js) |
 | `sucrase` | 3.35.1 | MIT | [link](https://github.com/alangpierce/sucrase) |
-| `superagent` | 6.1.0 | MIT | [link](https://github.com/visionmedia/superagent) |
+| `superagent` | 10.3.0, 6.1.0 | MIT | [link](https://github.com/ladjs/superagent) |
+| `supertest` | 7.2.2 | MIT | [link](https://github.com/ladjs/supertest) |
 | `supports-preserve-symlinks-flag` | 1.0.0 | MIT | [link](https://github.com/inspect-js/node-supports-preserve-symlinks-flag) |
 | `swr` | 2.4.1 | MIT | [link](https://github.com/vercel/swr) |
 | `tailwind-merge` | 2.6.1 | MIT | [link](https://github.com/dcastil/tailwind-merge) |
