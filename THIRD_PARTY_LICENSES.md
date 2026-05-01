@@ -343,7 +343,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@llamaindex/workflow-core` | 1.3.4 | MIT | [link](https://github.com/run-llama/workflows-ts) |
 | `@mermaid-js/parser` | 1.1.0 | MIT | [link](https://github.com/mermaid-js/mermaid) |
 | `@napi-rs/canvas` | 0.1.81, 0.1.99 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
-| `@next/env` | 14.2.16 | MIT | [link](https://github.com/vercel/next.js) |
+| `@next/env` | 14.2.35 | MIT | [link](https://github.com/vercel/next.js) |
 | `@nodable/entities` | 2.1.0 | MIT | [link](https://github.com/nodable/val-parsers) |
 | `@nodelib/fs.scandir` | 2.1.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@nodelib/fs.stat` | 2.0.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
@@ -966,7 +966,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `napi-build-utils` | 2.0.0 | MIT | [link](https://github.com/inspiredware/napi-build-utils) |
 | `negotiator` | 0.6.3, 0.6.4, 1.0.0 | MIT | [link](https://github.com/jshttp/negotiator) |
 | `netmask` | 2.0.2 | MIT | [link](https://github.com/rs/node-netmask) |
-| `next` | 14.2.16 | MIT | [link](https://github.com/vercel/next.js) |
+| `next` | 14.2.35 | MIT | [link](https://github.com/vercel/next.js) |
 | `next-intl` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-intl-swc-plugin-extractor` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-themes` | 0.4.6 | MIT | [link](https://github.com/pacocoursey/next-themes) |
