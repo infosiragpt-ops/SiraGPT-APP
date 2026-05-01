@@ -226,11 +226,11 @@ function render(entries) {
     lines.push('## Platform-conditional native binaries');
     lines.push('');
     lines.push(
-      `${entries._platformBinariesSkipped} platform-suffixed packages (sharp, esbuild, ` +
-      'rollup, swc, …) are intentionally omitted from the tables above. npm only ' +
-      'installs the variants matching the host\'s `os`/`cpu`, so listing them ' +
-      'directly would make this report drift between dev (macOS) and CI/prod ' +
-      '(Linux). They are documented in the parent package\'s entry instead.',
+      'Platform-suffixed packages (sharp, esbuild, rollup, swc, …) are intentionally ' +
+      'omitted from the tables above. npm only installs the variants matching the ' +
+      'host\'s `os`/`cpu`, so listing them directly would make this report drift ' +
+      'between dev (macOS) and CI/prod (Linux). They are documented in the parent ' +
+      'package\'s entry instead.',
     );
     lines.push('');
     lines.push('Currently the only family with non-permissive licensing in this ' +

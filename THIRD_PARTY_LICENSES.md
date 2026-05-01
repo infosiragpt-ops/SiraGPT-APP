@@ -1309,6 +1309,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 
 ## Platform-conditional native binaries
 
-10 platform-suffixed packages (sharp, esbuild, rollup, swc, …) are intentionally omitted from the tables above. npm only installs the variants matching the host's `os`/`cpu`, so listing them directly would make this report drift between dev (macOS) and CI/prod (Linux). They are documented in the parent package's entry instead.
+Platform-suffixed packages (sharp, esbuild, rollup, swc, …) are intentionally omitted from the tables above. npm only installs the variants matching the host's `os`/`cpu`, so listing them directly would make this report drift between dev (macOS) and CI/prod (Linux). They are documented in the parent package's entry instead.
 
 Currently the only family with non-permissive licensing in this group is `@img/sharp-libvips-*` (LGPL-3.0-or-later via N-API), which is allowlisted under the policy at the top of `scripts/generate-third-party-licenses.js`.
