@@ -72,7 +72,7 @@ export function DownloadButtons({ content, messageId }: DownloadButtonsProps) {
               downloadFile(blob, `${baseFilename}.xlsx`);
             } catch (backendError) {
               console.warn('Backend Excel failed, using frontend:', backendError);
-              downloadExcel(tableData, `${baseFilename}.xlsx`);
+              await downloadExcel(tableData, `${baseFilename}.xlsx`);
             }
             toast.success('Excel file downloaded successfully!');
           } else {

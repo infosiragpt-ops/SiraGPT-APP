@@ -27,7 +27,7 @@ No se agregaron dependencias nuevas al core. La fase usa dependencias ya present
 | `cheerio` | MIT | Sanitizacion server-side de HTML de preview | Parser HTML mantenido, sin traer `sanitize-html` con advisories recientes |
 | `dompurify` | Apache-2.0 / MPL-2.0 dual | Sanitizacion client-side | Ya estaba instalada; perfil HTML controlado en previews |
 | `mammoth` | BSD-2-Clause | DOCX a HTML/texto | Ya presente; usado solo con sanitizacion posterior |
-| `xlsx` | Apache-2.0 | Preview/lectura de hojas existente | Se mantiene con mitigaciones; sigue pendiente reemplazo por no tener fix npm |
+| `xlsx` | Apache-2.0 | Preview/lectura de hojas existente en Fase 2 | Reemplazada por `exceljs` en Fase 3 |
 | `officeparser` | MIT | Extraccion PPTX/DOCX legacy | Actualizada a `6.1.1`; API adaptada de `parseOfficeAsync` a `parseOffice(...).toText()` |
 | `multer` | MIT | Upload multipart | Actualizada a `2.1.1` para cerrar advisories DoS |
 | `nodemailer` | MIT-0 | Email transaccional | Actualizada a `8.0.7`; API `createTransport` validada |
@@ -53,8 +53,8 @@ Cuando no hay limite configurado, el backend aplica `100 MB` por archivo para ev
 ## Riesgo residual
 
 - `next@14.2.35`: advisories `high` requieren migracion mayor a Next 15/16 o mitigacion de infraestructura. No se hizo salto mayor en esta fase para evitar ruptura.
-- `xlsx@0.18.5`: mantiene advisories sin fix npm. Fase siguiente recomendada: aislar lectura XLSX en backend worker con limites estrictos y migrar generacion/lectura confiable a `exceljs`/Python `openpyxl`.
-- `react-syntax-highlighter`: queda como deuda en visores secundarios; chat principal ya usa Shiki y diff2html.
+- `xlsx@0.18.5`: cerrado en Fase 3. El core usa `exceljs@4.4.0`; `.xls` legacy queda rechazado por politica de upload.
+- `react-syntax-highlighter`: cerrado en Fase 3. Los visores secundarios usan el wrapper Shiki compartido.
 - `uuid` via LangGraph/ExcelJS/node-cron queda como `moderate`; los fixes sugeridos implican downgrades o saltos mayores incompatibles, por eso se documenta para una fase de migracion de agentes.
 
 ## Como probar

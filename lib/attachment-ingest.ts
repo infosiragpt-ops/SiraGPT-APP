@@ -34,7 +34,6 @@ const ALLOWED_MIMES = new Set<string>([
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -54,7 +53,7 @@ const ALLOWED_EXTENSIONS = new Set<string>([
   "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff",
   "svg", "heic", "heif",
   // Office / OpenDocument
-  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+  "pdf", "doc", "docx", "xlsx", "ppt", "pptx",
   "odt", "ods", "odp",
   // Text
   "txt", "md", "markdown", "csv", "tsv", "rtf",

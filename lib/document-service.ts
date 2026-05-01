@@ -1,8 +1,8 @@
 "use client"
 
 import mammoth from "mammoth"
-import * as XLSX from "xlsx"
 import { createWorker } from "tesseract.js"
+import { readXlsxWorkbook, xlsxRowToValues } from "./xlsx-client"
 
 export interface DocumentProcessor {
   processWord: (file: File) => Promise<string>
@@ -27,15 +27,13 @@ class DocumentProcessorImpl implements DocumentProcessor {
   async processExcel(file: File): Promise<string> {
     try {
       const arrayBuffer = await file.arrayBuffer()
-      const workbook = XLSX.read(arrayBuffer, { type: "array" })
+      const workbook = await readXlsxWorkbook(arrayBuffer)
       let text = ""
 
-      workbook.SheetNames.forEach((sheetName) => {
-        const worksheet = workbook.Sheets[sheetName]
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 })
-        text += `Sheet: ${sheetName}\n`
-        jsonData.forEach((row: any) => {
-          text += row.join("\t") + "\n"
+      workbook.worksheets.forEach((worksheet: any) => {
+        text += `Sheet: ${worksheet.name}\n`
+        worksheet.eachRow({ includeEmpty: false }, (row: any) => {
+          text += xlsxRowToValues(row).join("\t") + "\n"
         })
         text += "\n"
       })

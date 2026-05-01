@@ -156,7 +156,6 @@ const LAYERS = [
       lib("openpyxl", "openpyxl", "Python", "xlsx-read-write"),
       lib("xlsxwriter", "XlsxWriter", "Python", "xlsx-generation"),
       lib("pandas", "Pandas", "Python", "dataframes"),
-      lib("sheetjs", "SheetJS", "JS", "spreadsheet-io"),
       lib("exceljs", "ExcelJS", "JS", "xlsx-read-write"),
       lib("duckdb", "DuckDB", "Python / SQL", "local-analytics"),
       lib("polars", "Polars", "Python / Rust", "dataframes"),
@@ -578,7 +577,6 @@ const FORMAT_LAYER_MAP = Object.freeze({
   pptx: ["presentation-generation", "render-preview"],
   svg: ["design-canvas", "render-preview"],
   tsx: ["fullstack-web-builder", "sandbox"],
-  xls: ["spreadsheet-generation"],
   xlsx: ["spreadsheet-generation", "render-preview"],
   zip: ["sandbox", "fullstack-web-builder"],
 });
@@ -651,7 +649,6 @@ const LIBRARY_RUNTIME_REQUIREMENTS = Object.freeze({
   "openpyxl": { python: ["openpyxl"], external: true },
   "xlsxwriter": { python: ["XlsxWriter"], external: true },
   "pandas": { python: ["pandas"], external: true },
-  "sheetjs": { npm: ["xlsx"] },
   "exceljs": { npm: ["exceljs"] },
   "duckdb": { npm: ["duckdb"], python: ["duckdb"], external: true },
   "polars": { npm: ["nodejs-polars"], python: ["polars"], external: true },

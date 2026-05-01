@@ -7,6 +7,7 @@ import { downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import DOMPurify from "dompurify"
+import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
 /**
  * Build the fetch init the preview uses against the backend asset
@@ -206,24 +207,21 @@ function parseCsv(text: string, maxRows = 80) {
 }
 
 async function renderXlsx(buffer: ArrayBuffer) {
-  const XLSX = await import("xlsx")
-  const workbook = XLSX.read(buffer, { type: "array" })
+  const workbook = await readXlsxWorkbook(buffer)
   const maxSheets = 4
   const maxRows = 80
-  const sections = workbook.SheetNames.slice(0, maxSheets).map((name) => {
-    const worksheet = workbook.Sheets[name]
-    const rows = XLSX.utils.sheet_to_json(worksheet, {
-      header: 1,
-      blankrows: false,
-      raw: false,
-    }) as unknown[][]
+  const sections = workbook.worksheets.slice(0, maxSheets).map((worksheet: any) => {
+    const rows: string[][] = []
+    worksheet.eachRow({ includeEmpty: false }, (row: any) => {
+      if (rows.length < maxRows + 1) rows.push(xlsxRowToValues(row))
+    })
     return tableHtml(rows.slice(0, maxRows), {
-      title: name,
-      truncated: rows.length > maxRows ? `${rows.length - maxRows} filas más. Descarga el archivo para verlo completo.` : undefined,
+      title: worksheet.name,
+      truncated: worksheet.actualRowCount > maxRows ? `${worksheet.actualRowCount - maxRows} filas más. Descarga el archivo para verlo completo.` : undefined,
     })
   })
-  if (workbook.SheetNames.length > maxSheets) {
-    sections.push(`<p class="sgpt-muted">Se muestran ${maxSheets} de ${workbook.SheetNames.length} hojas.</p>`)
+  if (workbook.worksheets.length > maxSheets) {
+    sections.push(`<p class="sgpt-muted">Se muestran ${maxSheets} de ${workbook.worksheets.length} hojas.</p>`)
   }
   return previewShell(`<div class="sgpt-preview">${sections.join("")}</div>`)
 }

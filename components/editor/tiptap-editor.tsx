@@ -42,14 +42,10 @@ import { EditorToolbar } from "./toolbar"
 import { mdToHtml, htmlToMd } from "@/lib/markdown-html"
 import { cn } from "@/lib/utils"
 
-// Note on code-block highlighting: Tiptap's CodeBlockLowlight
-// extension needs `lowlight@3`, which conflicts at runtime with the
-// existing `react-syntax-highlighter` dependency this app already
-// uses for chat-message rendering (it expects `lowlight@1`). Rather
-// than fork the dep tree, we rely on StarterKit's plain CodeBlock
-// here — code is still monospaced + selectable, just not
-// syntax-coloured inside the editor. The chat message viewer
-// continues to highlight code in its own pipeline.
+// Note on code-block highlighting: keep the editor on StarterKit's
+// plain CodeBlock so the document editor does not pull an additional
+// grammar bundle. Chat and viewer surfaces use the shared Shiki
+// pipeline instead.
 
 interface Props {
   initialMarkdown?: string

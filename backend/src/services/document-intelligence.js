@@ -1,6 +1,4 @@
 const fs = require('fs');
-const path = require('path');
-const XLSX = require('xlsx');
 const ocrEngine = require('./ocr-engine');
 const fileProcessor = require('./fileProcessor');
 
@@ -229,47 +227,40 @@ function tableToMarkdown(columns, rows) {
   return [header, sep, ...body].join('\n');
 }
 
-function extractSpreadsheetTables(file = {}) {
-  if (!isSpreadsheet(file) || !file.path || !fs.existsSync(file.path)) return [];
-  try {
-    const workbook = XLSX.readFile(file.path, { cellDates: true });
-    return workbook.SheetNames.map((sheetName, index) => {
-      const worksheet = workbook.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
-      const columns = rows.length
-        ? Object.keys(rows[0]).map(String)
-        : (XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' })[0] || []).map(normalizeCell);
-      const preview = rows.slice(0, MAX_TABLE_PREVIEW_ROWS).map((row) => {
-        const out = {};
-        columns.forEach((col) => { out[col] = normalizeCell(row[col]); });
-        return out;
+function extractSpreadsheetTables(file = {}, extractedText = '') {
+  if (!isSpreadsheet(file)) return [];
+  const sheets = splitBySpreadsheetSheets(extractedText);
+  return sheets.map((sheet, index) => {
+    const lines = String(sheet.text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+    const columnsLine = lines.find((line) => /^Columns\s*\(/i.test(line));
+    const columns = columnsLine
+      ? columnsLine.replace(/^Columns\s*\(\d+\):\s*/i, '').split('|').map(normalizeCell).filter(Boolean)
+      : [];
+    const totalMatch = lines.find((line) => /^Total data rows:/i.test(line))?.match(/Total data rows:\s*(\d+)/i);
+    const dataStart = lines.findIndex((line) => line === '---');
+    const dataLines = dataStart >= 0 ? lines.slice(dataStart + 1) : [];
+    const preview = dataLines
+      .filter((line) => !/^\.\.\.\s*\[/.test(line))
+      .slice(0, MAX_TABLE_PREVIEW_ROWS)
+      .map((line) => {
+        const values = line.split('\t').map(normalizeCell);
+        const row = {};
+        columns.forEach((col, idx) => { row[col] = values[idx] || ''; });
+        return row;
       });
-      return {
-        ordinal: index + 1,
-        sourceType: 'sheet',
-        sourceLabel: sheetName,
-        sheetName,
-        title: sheetName,
-        columns,
-        rowCount: rows.length,
-        preview,
-        markdown: tableToMarkdown(columns, preview),
-        metadata: { workbookSheetIndex: index },
-      };
-    }).filter((table) => table.columns.length > 0);
-  } catch (err) {
-    return [{
-      ordinal: 1,
+    return {
+      ordinal: index + 1,
       sourceType: 'sheet',
-      sourceLabel: file.originalName || file.filename || 'spreadsheet',
-      title: 'Spreadsheet parse warning',
-      columns: [],
-      rowCount: 0,
-      preview: [],
-      markdown: '',
-      metadata: { warning: err.message },
-    }];
-  }
+      sourceLabel: sheet.sheetName,
+      sheetName: sheet.sheetName,
+      title: sheet.sheetName,
+      columns,
+      rowCount: totalMatch ? Number(totalMatch[1]) : preview.length,
+      preview,
+      markdown: tableToMarkdown(columns, preview),
+      metadata: { workbookSheetIndex: index, source: 'extracted_text' },
+    };
+  }).filter((table) => table.columns.length > 0);
 }
 
 function extractMarkdownTables(text) {
@@ -341,7 +332,7 @@ function extractCsvTable(file = {}, text = '') {
 }
 
 function buildTables(file = {}, extractedText = '') {
-  const spreadsheetTables = extractSpreadsheetTables(file).filter((table) => table.columns.length > 0);
+  const spreadsheetTables = extractSpreadsheetTables(file, extractedText).filter((table) => table.columns.length > 0);
   const csvTables = extractCsvTable(file, extractedText);
   const markdownTables = extractMarkdownTables(extractedText);
   return [...spreadsheetTables, ...csvTables, ...markdownTables]

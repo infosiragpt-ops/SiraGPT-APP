@@ -1,5 +1,5 @@
-import * as XLSX from 'xlsx';
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, WidthType } from 'docx';
+import { createXlsxBlob } from './xlsx-client';
 
 export interface TableData {
   headers: string[];
@@ -103,24 +103,9 @@ export function generateCSV(tableData: TableData): string {
 }
 
 // Generate Excel
-export function generateExcel(tableData: TableData): Blob {
-  const wb = XLSX.utils.book_new();
+export async function generateExcel(tableData: TableData): Promise<Blob> {
   const wsData = [tableData.headers, ...tableData.rows];
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-  // Auto-size columns
-  const colWidths = tableData.headers.map((_, colIndex) => {
-    const maxLength = Math.max(
-      tableData.headers[colIndex]?.length || 0,
-      ...tableData.rows.map(row => row[colIndex]?.length || 0)
-    );
-    return { wch: Math.min(maxLength + 2, 50) };
-  });
-  ws['!cols'] = colWidths;
-
-  XLSX.utils.book_append_sheet(wb, ws, 'Data');
-  const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-  return new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  return createXlsxBlob(wsData, 'Data');
 }
 
 // Generate Word document
@@ -203,8 +188,8 @@ export function downloadCSV(tableData: TableData, filename: string = 'data.csv')
   downloadFile(blob, filename);
 }
 
-export function downloadExcel(tableData: TableData, filename: string = 'data.xlsx') {
-  const blob = generateExcel(tableData);
+export async function downloadExcel(tableData: TableData, filename: string = 'data.xlsx') {
+  const blob = await generateExcel(tableData);
   downloadFile(blob, filename);
 }
 

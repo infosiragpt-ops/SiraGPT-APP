@@ -14,12 +14,11 @@
  */
 
 import React, { useMemo, useState } from "react"
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
-import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism"
 import {
   RefreshCw, FileCode, Download, ExternalLink, X, Eye, Check, Clipboard,
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
+import { ShikiCodeView } from "@/components/ui/shiki-code-view"
 
 function toFullDocument(code: string, language: string): string {
   if (language === "svg") {
@@ -134,16 +133,13 @@ export function ArtifactPanel() {
           )
         ) : (
           <div className="h-full overflow-auto">
-            <SyntaxHighlighter
-              style={oneDark}
-              language={lang === "mermaid" ? "mermaid" : "markup"}
-              PreTag="div"
-              customStyle={{ margin: 0, padding: "1.25rem", background: "#0f172a", fontSize: "13px", minHeight: "100%" }}
+            <ShikiCodeView
+              code={code}
+              language={lang === "mermaid" ? "mermaid" : "html"}
               wrapLongLines
-              codeTagProps={{ style: { whiteSpace: "pre-wrap", wordBreak: "break-all" } }}
-            >
-              {code}
-            </SyntaxHighlighter>
+              className="min-h-full bg-[#0f172a]"
+              codeClassName="[&_pre]:min-h-full [&_pre]:p-5"
+            />
           </div>
         )}
       </div>

@@ -39,8 +39,6 @@ import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import { markdownRehypePlugins } from '@/lib/markdown-sanitize'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
 import ImageGenerationEffect from './ImageGenerationEffect';

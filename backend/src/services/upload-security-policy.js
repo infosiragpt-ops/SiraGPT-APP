@@ -13,7 +13,6 @@ const ALLOWED_MIMES = new Set([
   'application/pdf',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -40,7 +39,7 @@ const ALLOWED_EXTENSIONS = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff',
   'svg', 'heic', 'heif',
   // Office / OpenDocument
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  'pdf', 'doc', 'docx', 'xlsx', 'ppt', 'pptx',
   'odt', 'ods', 'odp',
   // Text
   'txt', 'md', 'markdown', 'csv', 'tsv', 'rtf',
@@ -67,7 +66,6 @@ const EXTENSION_TO_MIMES = new Map([
   ['pdf', new Set(['application/pdf'])],
   ['doc', new Set(['application/msword'])],
   ['docx', new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'])],
-  ['xls', new Set(['application/vnd.ms-excel'])],
   ['xlsx', new Set(['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip'])],
   ['ppt', new Set(['application/vnd.ms-powerpoint'])],
   ['pptx', new Set(['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/zip'])],

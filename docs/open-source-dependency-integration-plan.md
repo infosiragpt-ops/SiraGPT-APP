@@ -37,6 +37,7 @@ Todas las versiones fueron consultadas en npm/GitHub el 2026-05-01. Antes de ins
 | P0 integrada | `rehype-sanitize` | https://github.com/rehypejs/rehype-sanitize | `6.0.0` | MIT | Sanitizar HTML en AST Markdown | Bloquea scripts, handlers y URLs peligrosas sin perder KaTeX/codigo | ESM; requiere schema para HTML interno controlado | `lib/markdown-sanitize.ts`, `components/message-component.tsx`, CSS/tests/docs | `sanitize-html`, DOMPurify post-render | Encaja con `react-markdown`/`rehype-raw`; menor superficie y sin advisories conocidos |
 | P0 integrada | `next` + `eslint-config-next` | https://github.com/vercel/next.js | `14.2.35` | MIT | Patch de runtime Next 14 | Elimina el advisory critico detectado por `npm audit --audit-level=critical` sin salto mayor | Build/regresion SSR; requiere smoke completo | `package.json`, `package-lock.json`, CI | Migrar a Next 15/16 | Patch semver-compatible frente a upgrade mayor |
 | P0 integrada | `shiki` | https://github.com/shikijs/shiki | `1.29.2` | MIT | Highlighting TextMate para bloques de codigo | Hace consistente el commit actual que ya importa Shiki y evita `Module not found` en `npm ci` | Bundle pesado; debe cargarse lazy como ya hace `useShikiHighlight` | `package.json`, `package-lock.json`, `THIRD_PARTY_LICENSES.md` | `react-syntax-highlighter`, `lowlight` | MIT, activo y con carga dinamica existente |
+| P0 integrada | `exceljs` | https://github.com/exceljs/exceljs | `4.4.0` | MIT | Lectura/generacion XLSX controlada | Sustituye `xlsx` npm, elimina advisories high sin fix y mantiene uso comercial compatible | Bundle cliente grande; se carga dinamicamente. No soporta `.xls` binario legacy | `package.json`, `backend/package.json`, viewers, previews, download routes, upload policy, tests/docs | `xlsx`, `@e965/xlsx`, `openpyxl`, `xlsxwriter` | MIT, mantenida, API Node/browser y menor riesgo legal/supply-chain para core comercial |
 | P1 | `@opentelemetry/api` + `@opentelemetry/sdk-node` | https://github.com/open-telemetry/opentelemetry-js | `1.9.1` / `0.216.0` | Apache-2.0 | Trazas distribuidas | Correlacion request->LLM->tool->documento | Config/exporters; cardinalidad | `backend/index.js`, `backend/src/services/observability/*` | solo Pino/Prometheus | Estandar cloud, sin lock-in |
 | P1 | `@opentelemetry/auto-instrumentations-node` | https://github.com/open-telemetry/opentelemetry-js-contrib | `0.74.0` | Apache-2.0 | Auto-instrumentar HTTP/Express/Redis/Postgres | Visibilidad rapida de latencia y errores | Ruido inicial; debe configurarse por env | `backend/src/services/observability/*` | instrumentacion manual | Alto impacto con bajo codigo propio |
 | P1 | `swr` | https://github.com/vercel/swr | `2.4.1` | MIT | Fetch cache/dedup en React | Mejora historial, settings y conectores | Migracion gradual por pantalla | `lib/*service.ts`, paginas cliente | React Query | Mas ligero y alineado con Next/Vercel |
@@ -121,6 +122,21 @@ Produccion:
 - Confirmar que `/chat` renderiza codigo, matematicas KaTeX, tablas y el estado de busqueda agentica.
 - Confirmar que respuestas con `<script>`, `onclick`, `onerror` o `javascript:` no llegan al DOM.
 - Confirmar que `npm audit --omit=dev --audit-level=critical` termina con codigo 0. Los advisories `high` restantes de Next requieren migracion mayor o mitigacion separada; `xlsx` no tiene fix npm disponible.
+
+### Fase 3 aplicada: hardening de dependencias de documentos/codigo
+
+Se cerro deuda de bajo riesgo y alto impacto sin refactor masivo:
+
+- `react-syntax-highlighter` y sus tipos fueron eliminados del core. Los visores de artefactos, paneles y documentos usan `components/ui/shiki-code-view.tsx`, montado sobre el hook Shiki existente.
+- `xlsx` fue eliminado de raiz y backend. Lectura/generacion XLSX confiable migro a `exceljs@4.4.0` con helpers compartidos en `lib/xlsx-client.ts` y `backend/src/services/xlsx-safe-workbook.js`.
+- `.xls` binario legacy queda rechazado en upload policy y en el selector de archivos. Es una reduccion deliberada de superficie: ExcelJS cubre OOXML `.xlsx`, no el formato binario antiguo.
+- `THIRD_PARTY_LICENSES.md` se regenera despues de la sustitucion para reflejar `exceljs` MIT y retirar dependencias removidas.
+
+Riesgos residuales:
+
+- El sandbox de artefactos interactivos aun carga SheetJS por CDN dentro de un iframe `sandbox="allow-scripts"` sin `allow-same-origin`. No es dependencia npm del core ni toca cookies/localStorage del host, pero debe pasar a un bundle controlado o retirarse en una fase separada.
+- `next@14.2.35` mantiene advisories `high` no criticos en `npm audit`; el salto a Next 15/16 queda como fase mayor por impacto de runtime.
+- `uuid` aparece como `moderate` por transitivos de ExcelJS/LangGraph/node-cron; no se fuerza override porque los cambios sugeridos implican saltos mayores o downgrades.
 
 ## 5. Seguridad y licencias
 

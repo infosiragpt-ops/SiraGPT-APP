@@ -23,13 +23,13 @@
  *   image   → <img> with wheel-zoom and click-drag pan
  *   pdf     → <iframe> using browser-native PDF viewer
  *   csv     → papa-free mini-parser → <table>
- *   xlsx    → SheetJS (xlsx) parses workbook → tabs + <table> per sheet
+ *   xlsx    → ExcelJS parses workbook → tabs + bounded <table> per sheet
  *   docx    → mammoth → HTML (sanitized) → rendered in scrollable pane
  *   md      → ReactMarkdown with GFM tables + code fences
  *   json    → pretty-printed + monospace
  *   xml/html→ sandboxed iframe with srcDoc (sanitized)
  *   txt     → <pre> with mono font + wrap toggle
- *   code    → react-syntax-highlighter with line numbers
+ *   code    → Shiki highlighting with line numbers
  *   other   → professional fallback with Download CTA (not a broken modal)
  */
 
@@ -63,9 +63,8 @@ import { cn } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import * as XLSX from "xlsx"
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
-import { oneLight, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism"
+import { ShikiCodeView } from "@/components/ui/shiki-code-view"
+import { readXlsxWorkbook, xlsxCellToText } from "@/lib/xlsx-client"
 // mammoth is imported dynamically inside DocxRenderer's fallback path
 // (~250 KB module, only loaded when docx-preview fails). Static import
 // would force every viewer instance to ship the bytes even for non-DOCX
@@ -140,7 +139,7 @@ function detectKind(file: AttachmentLike): Kind {
   // .docx (OOXML) → "docx" (handled client-side by docx-preview).
   if (mt === "application/msword" || ext === "doc") return "doc"
   if (mt.includes("wordprocessingml") || ext === "docx") return "docx"
-  if (mt.includes("spreadsheetml") || mt === "application/vnd.ms-excel" || /^xlsx?$/.test(ext)) return "xlsx"
+  if (mt.includes("spreadsheetml") || ext === "xlsx") return "xlsx"
   if (mt === "text/csv" || ext === "csv") return "csv"
   if (mt.includes("presentationml") || /^pptx?$/.test(ext)) return "pptx"
   if (mt === "text/markdown" || /^(md|markdown)$/.test(ext)) return "md"
@@ -1261,9 +1260,13 @@ function JsonRenderer({ a, isDark }: { a: AttachmentLike; isDark: boolean }) {
         <CopyButton text={text} />
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        <SyntaxHighlighter language="json" style={isDark ? oneDark : oneLight} showLineNumbers customStyle={{ margin: 0, padding: "1rem", background: "transparent" }}>
-          {text}
-        </SyntaxHighlighter>
+        <ShikiCodeView
+          code={text}
+          language="json"
+          theme={isDark ? "one-dark-pro" : "github-light"}
+          showLineNumbers
+          className="min-h-full bg-transparent"
+        />
       </div>
     </div>
   )
@@ -1291,14 +1294,13 @@ function CodeRenderer({ a, kind, isDark }: { a: AttachmentLike; kind: Kind; isDa
         <CopyButton text={text} />
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        <SyntaxHighlighter
+        <ShikiCodeView
+          code={text}
           language={lang}
-          style={isDark ? oneDark : oneLight}
+          theme={isDark ? "one-dark-pro" : "github-light"}
           showLineNumbers
-          customStyle={{ margin: 0, padding: "1rem", background: "transparent", fontSize: "12.5px" }}
-        >
-          {text}
-        </SyntaxHighlighter>
+          className="min-h-full bg-transparent"
+        />
       </div>
     </div>
   )
@@ -1415,19 +1417,15 @@ function CsvRenderer({ a }: { a: AttachmentLike }) {
   )
 }
 
-// ─── XLSX (SheetJS) ──────────────────────────────────────────────────
+// ─── XLSX (ExcelJS) ──────────────────────────────────────────────────
 
 /**
- * XLSX renderer — honors:
- *   • merged cells (rowspan / colspan) via sheet['!merges']
- *   • formatted display values (sheet[addr].w) so a cell formatted as
- *     "1,234.50" or "15%" renders the way Excel shows it, not the raw
- *     0.15 / 1234.5 number
- *   • column widths (sheet['!cols'].wpx) for realistic layout
- *   • number/date/currency alignment by underlying cell type
+ * XLSX renderer — bounded client-side preview via ExcelJS. We render a
+ * capped grid so malicious or accidental giant workbooks cannot lock up
+ * the browser while still giving users a useful inspection surface.
  */
 function XlsxRenderer({ a }: { a: AttachmentLike }) {
-  const [wb, setWb] = React.useState<XLSX.WorkBook | null>(null)
+  const [wb, setWb] = React.useState<any | null>(null)
   const [active, setActive] = React.useState<string | null>(null)
   const [err, setErr] = React.useState<string | null>(null)
 
@@ -1435,10 +1433,9 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
-        // cellStyles + cellNF → retains formatted display strings (.w)
-        const parsed = XLSX.read(buf, { type: "array", cellStyles: true, cellNF: true, cellDates: true })
+        const parsed = await readXlsxWorkbook(buf)
         setWb(parsed)
-        setActive(parsed.SheetNames[0] || null)
+        setActive(parsed.worksheets[0]?.name || null)
       } catch (e: any) {
         setErr(e?.message || "Error")
       }
@@ -1448,49 +1445,44 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
   if (err) return <ErrorState error={err} />
   if (!wb || !active) return <LoadingState label="Leyendo hoja de cálculo…" />
 
-  const sheet = wb.Sheets[active]
-  const ref = sheet["!ref"] || "A1"
-  const range = XLSX.utils.decode_range(ref)
-  const merges = sheet["!merges"] || []
-  const cols = sheet["!cols"] || []
-
-  // Build a lookup of cells occluded by a merge (render as "skipped"),
-  // plus the anchor cell that should get rowspan/colspan.
-  const occluded = new Set<string>()
-  const mergeAt: Record<string, { rowspan: number; colspan: number }> = {}
-  merges.forEach(m => {
-    const key = XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c })
-    mergeAt[key] = { rowspan: m.e.r - m.s.r + 1, colspan: m.e.c - m.s.c + 1 }
-    for (let r = m.s.r; r <= m.e.r; r++) {
-      for (let c = m.s.c; c <= m.e.c; c++) {
-        const k = XLSX.utils.encode_cell({ r, c })
-        if (k !== key) occluded.add(k)
-      }
-    }
-  })
-
-  const rows: number[] = []
-  for (let r = range.s.r; r <= range.e.r; r++) rows.push(r)
-  const colIdx: number[] = []
-  for (let c = range.s.c; c <= range.e.c; c++) colIdx.push(c)
+  const sheet = wb.worksheets.find((worksheet: any) => worksheet.name === active) || wb.worksheets[0]
+  if (!sheet) return <ErrorState error="El workbook no contiene hojas visibles." />
+  const maxRows = 500
+  const maxColumns = 80
+  const rowNumbers: number[] = []
+  const rowLimit = Math.min(maxRows, Math.max(0, Number(sheet.actualRowCount || sheet.rowCount || 0)))
+  for (let rowNumber = 1; rowNumber <= rowLimit; rowNumber += 1) {
+    const row = sheet.getRow(rowNumber)
+    const values = Array.isArray(row?.values) ? row.values.slice(1, maxColumns + 1) : []
+    if (values.some((value: any) => String(xlsxCellToText(value)).trim())) rowNumbers.push(rowNumber)
+  }
+  const columnCount = Math.min(maxColumns, Math.max(1, Number(sheet.actualColumnCount || sheet.columnCount || 1)))
+  const colIdx = Array.from({ length: columnCount }, (_, index) => index + 1)
+  const truncatedRows = Number(sheet.actualRowCount || 0) > maxRows
+  const truncatedColumns = Number(sheet.actualColumnCount || 0) > maxColumns
 
   return (
     <div className="flex h-full flex-col">
       {/* Sheet tabs */}
       <div className="flex gap-1 overflow-x-auto border-b border-border/40 px-2 py-1.5">
-        {wb.SheetNames.map(name => (
+        {wb.worksheets.map((worksheet: any) => (
           <button
-            key={name}
-            onClick={() => setActive(name)}
+            key={worksheet.name}
+            onClick={() => setActive(worksheet.name)}
             className={cn(
               "rounded-md px-2.5 py-1 text-[11.5px] font-medium whitespace-nowrap transition-colors",
-              name === active ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted",
+              worksheet.name === active ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted",
             )}
           >
-            {name}
+            {worksheet.name}
           </button>
         ))}
       </div>
+      {(truncatedRows || truncatedColumns) && (
+        <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
+          Vista acotada: se muestran hasta {maxRows} filas y {maxColumns} columnas para proteger el navegador.
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="min-w-full border-collapse text-[12px]" style={{ fontVariantNumeric: "tabular-nums" }}>
           <thead className="sticky top-0 z-20 bg-muted/80 backdrop-blur">
@@ -1500,35 +1492,30 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
                 <th
                   key={c}
                   className="border-b border-r border-border/40 px-3 py-1 text-left font-semibold text-[10px] uppercase tracking-wide text-muted-foreground"
-                  style={cols[c]?.wpx ? { minWidth: cols[c].wpx, maxWidth: Math.max(cols[c].wpx!, 80) } : undefined}
+                  style={sheet.getColumn(c)?.width ? { minWidth: Math.max(sheet.getColumn(c).width * 7, 72) } : undefined}
                 >
-                  {XLSX.utils.encode_col(c)}
+                  {columnLabel(c)}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => (
+            {rowNumbers.map(r => (
               <tr key={r} className="odd:bg-background even:bg-muted/10">
-                <td className="sticky left-0 z-10 border-b border-r border-border/30 bg-inherit px-2 py-1 text-[10px] text-muted-foreground text-right">{r + 1}</td>
+                <td className="sticky left-0 z-10 border-b border-r border-border/30 bg-inherit px-2 py-1 text-[10px] text-muted-foreground text-right">{r}</td>
                 {colIdx.map(c => {
-                  const key = XLSX.utils.encode_cell({ r, c })
-                  if (occluded.has(key)) return null
-                  const cell = sheet[key]
-                  const span = mergeAt[key]
-                  // Formatted display (.w) preferred; fallback to raw (.v).
-                  const display = cell?.w ?? (cell?.v != null ? String(cell.v) : "")
-                  const isNumber = cell?.t === "n"
+                  const cell = sheet.getRow(r).getCell(c)
+                  const value = cell?.value
+                  const display = xlsxCellToText(value)
+                  const isNumber = typeof value === "number"
                   return (
                     <td
                       key={c}
-                      rowSpan={span?.rowspan}
-                      colSpan={span?.colspan}
                       className={cn(
                         "border-b border-r border-border/20 px-3 py-1 align-top",
                         isNumber && "text-right",
                       )}
-                      title={cell?.v != null ? `Valor bruto: ${cell.v}` : undefined}
+                      title={value != null ? `Valor bruto: ${display}` : undefined}
                     >
                       {display}
                     </td>
@@ -1541,6 +1528,17 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
       </div>
     </div>
   )
+}
+
+function columnLabel(index: number) {
+  let n = index
+  let label = ""
+  while (n > 0) {
+    const rem = (n - 1) % 26
+    label = String.fromCharCode(65 + rem) + label
+    n = Math.floor((n - 1) / 26)
+  }
+  return label
 }
 
 // ─── PPTX (client-side text + image extraction via JSZip) ────────────

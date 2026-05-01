@@ -49,10 +49,7 @@ const CONVERTIBLE_MIMES = new Set([
   // PowerPoint
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  // Excel (we convert to PDF for "print preview"; in-browser SheetJS is
-  // still the preferred path for interactive spreadsheets — the route
-  // can decide which to surface.)
-  'application/vnd.ms-excel',
+  // Excel OOXML (legacy .xls is rejected at upload policy level).
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   // OpenDocument
   'application/vnd.oasis.opendocument.text',
@@ -63,7 +60,7 @@ const CONVERTIBLE_MIMES = new Set([
 const CONVERTIBLE_EXTS = new Set([
   'doc', 'docx', 'rtf',
   'ppt', 'pptx',
-  'xls', 'xlsx',
+  'xlsx',
   'odt', 'ods', 'odp',
 ]);
 

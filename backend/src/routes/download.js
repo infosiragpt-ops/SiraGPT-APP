@@ -2,10 +2,14 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
-const XLSX = require('xlsx');
 const fs = require('fs').promises;
 const path = require('path');
 const PptxGenJS = require('pptxgenjs');
+const {
+    addRowsWorksheet,
+    createWorkbook,
+    writeWorkbookBuffer,
+} = require('../services/xlsx-safe-workbook');
 
 const router = express.Router();
 
@@ -202,29 +206,18 @@ router.post(
                 return res.status(400).json({ error: 'No tabular data found in message' });
             }
 
-            // Create Excel workbook
-            const wb = XLSX.utils.book_new();
             const wsData = [tableData.headers, ...tableData.rows];
-            const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-            // Auto-size columns
-            const colWidths = tableData.headers.map((_, colIndex) => {
-                const maxLength = Math.max(
-                    tableData.headers[colIndex]?.length || 0,
-                    ...tableData.rows.map(row => row[colIndex]?.length || 0)
-                );
-                return { wch: Math.min(maxLength + 2, 50) };
-            });
-            ws['!cols'] = colWidths;
-
-            XLSX.utils.book_append_sheet(wb, ws, 'AI Response Data');
+            const wb = createWorkbook();
+            wb.creator = 'SiraGPT';
+            wb.created = new Date();
+            addRowsWorksheet(wb, 'AI Response Data', wsData);
 
             // Generate filename
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
             const finalFilename = filename || `ai-response-${timestamp}.xlsx`;
 
             // Write to buffer
-            const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+            const excelBuffer = await writeWorkbookBuffer(wb);
 
             // Set headers for file download
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

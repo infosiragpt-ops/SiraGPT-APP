@@ -15,7 +15,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 
 const mammoth = require('mammoth');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 let PizZip;
 try {
   PizZip = require('pizzip');
@@ -319,15 +319,17 @@ async function writeReport() {
   await runCase('XLS-002', 'spreadsheet-internals', 'Inspect XLSX workbook sheets, formulas and charts', async () => {
     const buffer = await fsp.readFile(generated.xlsx.artifact.path);
     const entries = assertOoxmlEntry(buffer, 'xl/workbook.xml');
-    const workbook = XLSX.readFile(generated.xlsx.artifact.path, { cellFormula: true });
-    assert.ok(workbook.SheetNames.length >= 4, 'expected at least 4 sheets');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(generated.xlsx.artifact.path);
+    const sheetNames = workbook.worksheets.map((worksheet) => worksheet.name);
+    assert.ok(sheetNames.length >= 4, 'expected at least 4 sheets');
     const sheetXml = entries.filter((entry) => entry.startsWith('xl/worksheets/')).map((entry) => zipText(buffer, entry)).join('\n');
     assert.ok(/<f[ >]/.test(sheetXml), 'missing formulas');
     assert.ok(entries.some((entry) => entry.startsWith('xl/charts/')), 'missing chart xml');
     return {
       artifact: generated.xlsx.artifact.path,
-      validations: ['SheetJS open', 'sheets>=4', 'formulas', 'charts'],
-      observations: `sheets=${workbook.SheetNames.join(', ')}`,
+      validations: ['ExcelJS open', 'sheets>=4', 'formulas', 'charts'],
+      observations: `sheets=${sheetNames.join(', ')}`,
     };
   });
 

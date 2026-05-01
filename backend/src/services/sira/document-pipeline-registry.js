@@ -7,7 +7,7 @@
  *   Parsers (mime/ext  →  parser)
  *     PDF                  Docling > LlamaParse > MinerU > PyMuPDF > pdfplumber > pypdf
  *     DOCX                 Mammoth (HTML) > python-docx (structure) > Docling
- *     XLSX/CSV             SheetJS > openpyxl > pandas
+ *     XLSX/CSV             ExcelJS > openpyxl > pandas
  *     PPTX                 python-pptx > Docling
  *     HTML/Markdown        MarkItDown > unified+rehype
  *     Image (OCR)          Tesseract > PaddleOCR > EasyOCR
@@ -47,7 +47,7 @@ const PARSERS = Object.freeze([
   { id: "docx2txt",     formats: ["docx"],           language: "python", runtime: "library",  ocr: false, layout: false, tables: false, formulas: false, reading_order: false, preference: 60 },
 
   // ── XLSX / CSV ─────────────────────────────────────────────────
-  { id: "sheetjs",      formats: ["xlsx","csv","xls","ods"], language: "node", runtime: "library", ocr: false, layout: false, tables: true, formulas: true, reading_order: false, preference: 92 },
+  { id: "exceljs",      formats: ["xlsx","csv"],      language: "node", runtime: "library", ocr: false, layout: false, tables: true, formulas: true, reading_order: false, preference: 92 },
   { id: "openpyxl",     formats: ["xlsx"],           language: "python", runtime: "library",  ocr: false, layout: false, tables: true,  formulas: true,  reading_order: false, preference: 90 },
   { id: "pandas",       formats: ["xlsx","csv"],     language: "python", runtime: "library",  ocr: false, layout: false, tables: true,  formulas: false, reading_order: false, preference: 85 },
 
@@ -75,7 +75,6 @@ const GENERATORS = Object.freeze([
   { id: "exceljs",           format: "xlsx",  language: "node",   runtime: "library", template_support: false, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", preference: 92 },
   { id: "xlsxwriter",        format: "xlsx",  language: "python", runtime: "library", template_support: false, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", preference: 90 },
   { id: "openpyxl",          format: "xlsx",  language: "python", runtime: "library", template_support: false, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", preference: 88 },
-  { id: "sheetjs",           format: "xlsx",  language: "node",   runtime: "library", template_support: false, mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", preference: 86 },
 
   // ── PPTX ───────────────────────────────────────────────────────
   { id: "pptxgenjs",         format: "pptx",  language: "node",   runtime: "library", template_support: false, mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation", preference: 92 },
@@ -109,7 +108,6 @@ const MIME_TO_FORMAT = Object.freeze({
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
   "application/msword": "doc",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-  "application/vnd.ms-excel": "xls",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
   "application/vnd.ms-powerpoint": "ppt",
   "text/csv": "csv",
@@ -220,8 +218,8 @@ async function dispatchGenerate({ format, plan, requires = {}, providers = {}, r
 function inferFormat(mime, ext) {
   if (mime && MIME_TO_FORMAT[String(mime).toLowerCase()]) return MIME_TO_FORMAT[String(mime).toLowerCase()];
   const e = String(ext || "").replace(/^\./, "").toLowerCase();
-  if (["pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "csv", "html", "md", "svg"].includes(e)) {
-    return e === "doc" ? "doc" : e === "xls" ? "xls" : e === "ppt" ? "ppt" : e;
+  if (["pdf", "docx", "doc", "xlsx", "pptx", "ppt", "csv", "html", "md", "svg"].includes(e)) {
+    return e === "doc" ? "doc" : e === "ppt" ? "ppt" : e;
   }
   if (["png", "jpg", "jpeg", "webp", "gif"].includes(e)) return "image";
   return null;

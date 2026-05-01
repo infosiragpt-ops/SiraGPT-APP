@@ -67,6 +67,19 @@ test('upload policy keeps text-ish extension fallbacks usable', () => {
   assert.equal(mimeMatchesExtension('text/plain', 'csv'), true);
 });
 
+test('upload policy rejects legacy binary .xls spreadsheets in the commercial core', () => {
+  const result = validateUploadPolicy({
+    originalName: 'legacy.xls',
+    declaredMime: 'application/vnd.ms-excel',
+    detectedMime: 'application/vnd.ms-excel',
+    detectionSource: 'fallback',
+    size: 1024,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'declared_type_not_allowed');
+});
+
 test('upload limits default to a bounded commercial ceiling unless explicitly overridden', () => {
   const limits = resolveUploadLimits({});
   assert.equal(limits.fileSize, 100 * 1024 * 1024);

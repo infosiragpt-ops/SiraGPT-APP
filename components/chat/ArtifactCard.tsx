@@ -20,13 +20,12 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
-import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism"
 import {
   RefreshCw, FileCode, Download, ExternalLink, X, Maximize2, Minimize2,
   Check, Clipboard,
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
+import { ShikiCodeView } from "@/components/ui/shiki-code-view"
 
 export type ArtifactCardProps = {
   code: string
@@ -331,16 +330,13 @@ function InlineSource({ code, language }: { code: string; language: string }) {
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <SyntaxHighlighter
-        style={oneDark}
+      <ShikiCodeView
+        code={code}
         language={language}
-        PreTag="div"
-        customStyle={{ margin: 0, padding: "1rem", background: "transparent", fontSize: "13px", maxHeight: 320, overflow: "auto" }}
         wrapLongLines
-        codeTagProps={{ style: { whiteSpace: "pre-wrap", wordBreak: "break-all" } }}
-      >
-        {code}
-      </SyntaxHighlighter>
+        maxHeight={320}
+        className="bg-transparent"
+      />
     </div>
   )
 }

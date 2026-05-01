@@ -1,9 +1,9 @@
 const mammoth = require('mammoth');
-const XLSX = require('xlsx');
 const pdf = require('pdf-parse');
 const sharp = require('sharp');
 const fs = require('fs').promises;
 const ocrEngine = require('./ocr-engine');
+const { readXlsxFile, worksheetRows } = require('./xlsx-safe-workbook');
 
 class FileProcessor {
   async processFile(file) {
@@ -28,7 +28,6 @@ class FileProcessor {
           extractedText = await this.processWord(filePath);
           break;
 
-        case 'application/vnd.ms-excel':
         case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
           extractedText = await this.processExcel(filePath);
           break;
@@ -200,14 +199,14 @@ class FileProcessor {
 
   async processExcel(filePath) {
     try {
-      const workbook = XLSX.readFile(filePath);
+      const workbook = await readXlsxFile(filePath);
       const MAX_DATA_ROWS_PER_SHEET = 50; // per brain spec — headers + 50 rows
 
       const sheetSummaries = [];
-      workbook.SheetNames.forEach(sheetName => {
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-        const nonEmptyRows = jsonData.filter(row => Array.isArray(row) && row.length > 0);
+      workbook.worksheets.forEach(worksheet => {
+        const sheetName = worksheet.name;
+        const nonEmptyRows = worksheetRows(worksheet, { maxRows: MAX_DATA_ROWS_PER_SHEET + 1 })
+          .filter(row => Array.isArray(row) && row.length > 0);
 
         if (nonEmptyRows.length === 0) {
           sheetSummaries.push(`Sheet: ${sheetName}\n(empty)\n`);
@@ -216,7 +215,7 @@ class FileProcessor {
 
         // First row is treated as header; everything after is data.
         const [headerRow, ...dataRows] = nonEmptyRows;
-        const totalDataRows = dataRows.length;
+        const totalDataRows = Math.max(0, Number(worksheet.actualRowCount || nonEmptyRows.length) - 1);
         const shown = dataRows.slice(0, MAX_DATA_ROWS_PER_SHEET);
         const truncated = totalDataRows > MAX_DATA_ROWS_PER_SHEET;
 
@@ -231,7 +230,8 @@ class FileProcessor {
         sheetSummaries.push(block);
       });
 
-      const header = `Excel workbook — ${workbook.SheetNames.length} sheet(s): ${workbook.SheetNames.join(', ')}\n\n`;
+      const sheetNames = workbook.worksheets.map((worksheet) => worksheet.name);
+      const header = `Excel workbook — ${sheetNames.length} sheet(s): ${sheetNames.join(', ')}\n\n`;
       return header + sheetSummaries.join('\n');
     } catch (error) {
       throw new Error(`Excel processing failed: ${error.message}`);

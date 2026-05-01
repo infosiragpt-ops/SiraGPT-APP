@@ -9,7 +9,7 @@
  *      per format:
  *        · docx  — server-side mammoth → HTML, embedded in an iframe
  *                  sandbox so its styles never leak into the chat.
- *        · xlsx  — server-side SheetJS → styled HTML table(s) per
+ *        · xlsx  — server-side ExcelJS → styled HTML table(s) per
  *                  sheet, also inside an iframe.
  *        · pdf   — native <embed type="application/pdf"/>.
  *        · svg   — <img src={dataUrl}/> (SVG renders as picture).
@@ -19,7 +19,7 @@
  *
  * The iframe preview uses sandbox="" (empty) — scripts are *not*
  * allowed; we only need the document rendering. This means mammoth/
- * sheetjs output is displayed safely even if a malicious server ever
+ * Office-derived HTML is displayed safely even if a malicious server ever
  * slipped a <script> through.
  */
 

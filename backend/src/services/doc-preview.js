@@ -6,7 +6,7 @@
  * Supported conversions:
  *   · docx → HTML via mammoth (paragraphs, headings, lists, tables,
  *            images inlined as base64).
- *   · xlsx → HTML via SheetJS (first sheet as a styled <table>).
+ *   · xlsx → HTML via ExcelJS (bounded sheets/rows as styled tables).
  *   · pdf  → no conversion needed — the existing <embed/> in the
  *            frontend renders it natively.
  *   · pptx → no good pure-JS renderer exists. We skip and the card
@@ -21,8 +21,8 @@
  */
 
 const mammoth = require('mammoth');
-const XLSX = require('xlsx');
 const { sanitizePreviewHtml } = require('./preview-html-sanitizer');
+const { readXlsxBuffer, worksheetRows } = require('./xlsx-safe-workbook');
 
 const DOCX_STYLES = `
 <style>
@@ -144,20 +144,18 @@ function escapeHtml(s) {
 async function previewXlsx(base64, { maxRows = 60, maxSheets = 3 } = {}) {
   try {
     const buffer = Buffer.from(base64, 'base64');
-    const wb = XLSX.read(buffer, { type: 'buffer' });
-    const sheets = wb.SheetNames.slice(0, maxSheets);
+    const wb = await readXlsxBuffer(buffer);
+    const sheets = wb.worksheets.slice(0, maxSheets);
     const parts = [XLSX_STYLES, '<div class="sgpt-xls-preview">'];
-    for (const name of sheets) {
-      const ws = wb.Sheets[name];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
-      const limited = rows.slice(0, maxRows);
-      parts.push(`<div class="sheet-tab">${escapeHtml(name)}</div>`);
-      if (limited.length === 0) {
+    for (const worksheet of sheets) {
+      const rows = worksheetRows(worksheet, { maxRows });
+      parts.push(`<div class="sheet-tab">${escapeHtml(worksheet.name)}</div>`);
+      if (rows.length === 0) {
         parts.push('<div class="truncated">Hoja vacía</div>');
         continue;
       }
       parts.push('<table>');
-      limited.forEach((row, rowIdx) => {
+      rows.forEach((row, rowIdx) => {
         const Tag = rowIdx === 0 ? 'th' : 'td';
         parts.push('<tr>');
         for (const cell of row) {
@@ -167,15 +165,15 @@ async function previewXlsx(base64, { maxRows = 60, maxSheets = 3 } = {}) {
         parts.push('</tr>');
       });
       parts.push('</table>');
-      if (rows.length > maxRows) {
+      if (worksheet.actualRowCount > maxRows) {
         parts.push(
-          `<div class="truncated">…${rows.length - maxRows} filas más. Descarga el archivo para verlas todas.</div>`
+          `<div class="truncated">…${worksheet.actualRowCount - maxRows} filas más. Descarga el archivo para verlas todas.</div>`
         );
       }
     }
-    if (wb.SheetNames.length > maxSheets) {
+    if (wb.worksheets.length > maxSheets) {
       parts.push(
-        `<div class="truncated">Se muestran ${maxSheets} de ${wb.SheetNames.length} hojas.</div>`
+        `<div class="truncated">Se muestran ${maxSheets} de ${wb.worksheets.length} hojas.</div>`
       );
     }
     parts.push('</div>');
