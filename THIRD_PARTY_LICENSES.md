@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1230**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1229**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -295,7 +295,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yaml` | 2.8.3 | ISC | [link](https://github.com/eemeli/yaml) |
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 
-## MIT (986)
+## MIT (985)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -734,7 +734,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `franc` | 6.2.0 | MIT | [link](https://github.com/wooorm/franc.git#main) |
 | `fresh` | 0.5.2 | MIT | [link](https://github.com/jshttp/fresh) |
 | `fs-constants` | 1.0.0 | MIT | [link](https://github.com/mafintosh/fs-constants) |
-| `fsevents` | 2.3.2 | MIT | [link](https://github.com/fsevents/fsevents) |
 | `function-bind` | 1.1.2 | MIT | [link](https://github.com/Raynos/function-bind) |
 | `geist` | 1.7.0 | MIT | [link](https://github.com/vercel/geist-font) |
 | `get-intrinsic` | 1.3.0 | MIT | [link](https://github.com/ljharb/get-intrinsic) |

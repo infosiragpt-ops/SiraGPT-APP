@@ -36,7 +36,16 @@ const FORBIDDEN_PATTERNS = ['GPL', 'AGPL', 'LGPL', 'CDDL', 'EPL', 'MPL-1.1', 'NP
 const PLATFORM_BIN_PATTERN =
   /-(darwin|linux|linuxmusl|android|win32|windows|freebsd|openbsd|netbsd|sunos|aix)-(x64|arm64|arm|ia32|x86|riscv64|s390x|loongarch64|ppc64|mips64el)(-[a-z]+)?$/;
 
+// Platform-conditional packages WITHOUT an os/arch suffix in the name.
+// These resolve via npm's `os`/`cpu` field in their own package.json and
+// only install on matching hosts. Listing them by name here keeps the
+// drift gate stable cross-platform.
+const PLATFORM_CONDITIONAL_NAMES = new Set([
+  'fsevents', // macOS-only: native binding to the FSEvents kernel API
+]);
+
 function isPlatformBinary(name) {
+  if (PLATFORM_CONDITIONAL_NAMES.has(name)) return true;
   return PLATFORM_BIN_PATTERN.test(name);
 }
 
