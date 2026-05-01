@@ -123,6 +123,19 @@ Produccion:
 - Confirmar que respuestas con `<script>`, `onclick`, `onerror` o `javascript:` no llegan al DOM.
 - Confirmar que `npm audit --omit=dev --audit-level=critical` termina con codigo 0. Los advisories `high` restantes de Next requieren migracion mayor o mitigacion separada; `xlsx` no tiene fix npm disponible.
 
+### Fase 4 aplicada: hardening de pruebas unitarias y e2e
+
+Se agrego cobertura enfocada en los riesgos introducidos/cerrados por Fase 3:
+
+- `tests/attachment-ingest.test.ts`: paridad de politica cliente para permitir `.xlsx` y rechazar `.xls` legacy.
+- `tests/download-excel.test.ts`: el fallback frontend de descarga Excel genera un workbook real con `exceljs`.
+- `backend/tests/xlsx-safe-workbook.test.js`: el helper backend escribe/lee XLSX real y aplica limites de filas/columnas en previews.
+- `e2e/chat-upload.spec.ts`: Playwright valida que el picker no reintroduce `.xls` cuando el compositor esta montado y que el primer render no lanza `pageerror`.
+- `e2e/chat.spec.ts`: el smoke de `/chat` acepta login/bootstrap sin usuario sembrado, manteniendo la senal en no-5xx, titulo y shell estable.
+- `.github/workflows/ci.yml`: el test backend de `xlsx-safe-workbook` queda dentro del job de backend.
+
+El job e2e sigue como informativo a nivel branch protection, pero el paso `Run Playwright smoke` falla dentro del job para producir senal visible.
+
 ### Fase 3 aplicada: hardening de dependencias de documentos/codigo
 
 Se cerro deuda de bajo riesgo y alto impacto sin refactor masivo:

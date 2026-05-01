@@ -19,7 +19,10 @@
     "../lib/long-paste.ts",
     "../lib/message-preservation.ts",
     "../lib/attachment-url.ts",
+    "../lib/attachment-ingest.ts",
     "../lib/search-brain-ui.ts",
-    "../lib/file-processing-vocab.ts"
+    "../lib/file-processing-vocab.ts",
+    "../lib/download-utils.ts",
+    "../lib/xlsx-client.ts"
   ]
 }
