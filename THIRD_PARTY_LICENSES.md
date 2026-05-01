@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1300**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1332**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (161)
+## Apache-2.0 (162)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -151,6 +151,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `bare-stream` | 2.7.0 | Apache-2.0 | [link](https://github.com/holepunchto/bare-stream) |
 | `bare-url` | 2.3.2 | Apache-2.0 | [link](https://github.com/holepunchto/bare-url) |
 | `baseline-browser-mapping` | 2.10.21 | Apache-2.0 | [link](https://github.com/web-platform-dx/baseline-browser-mapping) |
+| `before-after-hook` | 4.0.0 | Apache-2.0 | [link](https://github.com/gr2m/before-after-hook) |
 | `chevrotain` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `chromium-bidi` | 10.5.1 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/chromium-bidi) |
 | `class-variance-authority` | 0.7.1 | Apache-2.0 | [link](https://github.com/joe-bell/cva) |
@@ -293,7 +294,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@syncfusion/ej2-spreadsheet` | 32.2.9 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls.git#master) |
 | `@syncfusion/ej2-svg-base` | 32.2.3 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls) |
 
-## ISC (78)
+## ISC (79)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -369,6 +370,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `signal-exit` | 4.1.0 | ISC | [link](https://github.com/tapjs/signal-exit) |
 | `split2` | 4.2.0 | ISC | [link](https://github.com/mcollina/split2) |
 | `string-similarity` | 4.0.4 | ISC | [link](https://github.com/aceakash/string-similarity) |
+| `universal-user-agent` | 7.0.3 | ISC | [link](https://github.com/gr2m/universal-user-agent) |
 | `which` | 2.0.2 | ISC | [link](https://github.com/isaacs/node-which) |
 | `wrappy` | 1.0.2 | ISC | [link](https://github.com/npm/wrappy) |
 | `y18n` | 5.0.8 | ISC | [link](https://github.com/yargs/y18n) |
@@ -376,7 +378,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yaml` | 2.8.3 | ISC | [link](https://github.com/eemeli/yaml) |
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 
-## MIT (970)
+## MIT (1000)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -430,6 +432,31 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@nodelib/fs.scandir` | 2.1.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@nodelib/fs.stat` | 2.0.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@nodelib/fs.walk` | 1.2.8 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
+| `@octokit/app` | 16.1.2 | MIT | [link](https://github.com/octokit/app.js) |
+| `@octokit/auth-app` | 8.2.0 | MIT | [link](https://github.com/octokit/auth-app.js) |
+| `@octokit/auth-oauth-app` | 9.0.3 | MIT | [link](https://github.com/octokit/auth-oauth-app.js) |
+| `@octokit/auth-oauth-device` | 8.0.3 | MIT | [link](https://github.com/octokit/auth-oauth-device.js) |
+| `@octokit/auth-oauth-user` | 6.0.2 | MIT | [link](https://github.com/octokit/auth-oauth-user.js) |
+| `@octokit/auth-token` | 6.0.0 | MIT | [link](https://github.com/octokit/auth-token.js) |
+| `@octokit/auth-unauthenticated` | 7.0.3 | MIT | [link](https://github.com/octokit/auth-unauthenticated.js) |
+| `@octokit/core` | 7.0.6 | MIT | [link](https://github.com/octokit/core.js) |
+| `@octokit/endpoint` | 11.0.3 | MIT | [link](https://github.com/octokit/endpoint.js) |
+| `@octokit/graphql` | 9.0.3 | MIT | [link](https://github.com/octokit/graphql.js) |
+| `@octokit/oauth-app` | 8.0.3 | MIT | [link](https://github.com/octokit/oauth-app.js) |
+| `@octokit/oauth-authorization-url` | 8.0.0 | MIT | [link](https://github.com/octokit/oauth-authorization-url.js) |
+| `@octokit/oauth-methods` | 6.0.2 | MIT | [link](https://github.com/octokit/oauth-methods.js) |
+| `@octokit/openapi-types` | 27.0.0 | MIT | [link](https://github.com/octokit/openapi-types.ts) |
+| `@octokit/openapi-webhooks-types` | 12.1.0 | MIT | [link](https://github.com/octokit/openapi-webhooks) |
+| `@octokit/plugin-paginate-graphql` | 6.0.0 | MIT | [link](https://github.com/octokit/plugin-paginate-graphql.js) |
+| `@octokit/plugin-paginate-rest` | 14.0.0 | MIT | [link](https://github.com/octokit/plugin-paginate-rest.js) |
+| `@octokit/plugin-rest-endpoint-methods` | 17.0.0 | MIT | [link](https://github.com/octokit/plugin-rest-endpoint-methods.js) |
+| `@octokit/plugin-retry` | 8.1.0 | MIT | [link](https://github.com/octokit/plugin-retry.js) |
+| `@octokit/plugin-throttling` | 11.0.3 | MIT | [link](https://github.com/octokit/plugin-throttling.js) |
+| `@octokit/request` | 10.0.8 | MIT | [link](https://github.com/octokit/request.js) |
+| `@octokit/request-error` | 7.1.0 | MIT | [link](https://github.com/octokit/request-error.js) |
+| `@octokit/types` | 16.0.0 | MIT | [link](https://github.com/octokit/types.ts) |
+| `@octokit/webhooks` | 14.2.0 | MIT | [link](https://github.com/octokit/webhooks.js) |
+| `@octokit/webhooks-methods` | 6.0.0 | MIT | [link](https://github.com/octokit/webhooks-methods.js) |
 | `@panva/hkdf` | 1.2.1 | MIT | [link](https://github.com/panva/hkdf) |
 | `@parcel/watcher` | 2.5.6 | MIT | [link](https://github.com/parcel-bundler/watcher) |
 | `@pdf-lib/standard-fonts` | 1.0.0 | MIT | [link](https://github.com/Hopding/standard-fonts) |
@@ -792,6 +819,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `exsolve` | 1.0.8 | MIT | [link](https://github.com/unjs/exsolve) |
 | `extend` | 3.0.2 | MIT | [link](https://github.com/justmoon/node-extend) |
 | `fast-check` | 3.23.2 | MIT | [link](https://github.com/dubzzz/fast-check) |
+| `fast-content-type-parse` | 3.0.0 | MIT | [link](https://github.com/fastify/fast-content-type-parse) |
 | `fast-csv` | 4.3.6 | MIT | [link](https://github.com/C2FO/fast-csv) |
 | `fast-deep-equal` | 3.1.3 | MIT | [link](https://github.com/epoberezkin/fast-deep-equal) |
 | `fast-equals` | 5.4.0 | MIT | [link](https://github.com/planttheidea/fast-equals) |
@@ -895,6 +923,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `json-bigint` | 1.0.0 | MIT | [link](https://github.com/sidorares/json-bigint) |
 | `json-parse-even-better-errors` | 2.3.1 | MIT | [link](https://github.com/npm/json-parse-even-better-errors) |
 | `json-schema-traverse` | 1.0.0 | MIT | [link](https://github.com/epoberezkin/json-schema-traverse) |
+| `json-with-bigint` | 3.5.8 | MIT | [link](https://github.com/Ivan-Korolenko/json-with-bigint) |
 | `jsonwebtoken` | 9.0.2, 9.0.3 | MIT | [link](https://github.com/auth0/node-jsonwebtoken) |
 | `jszip` | 3.10.1 | MIT OR GPL-3.0-or-later | [link](https://github.com/Stuk/jszip) |
 | `jwa` | 1.4.2, 2.0.1 | MIT | [link](https://github.com/brianloveswords/node-jwa) |
@@ -1048,6 +1077,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `object-assign` | 4.1.1 | MIT | [link](https://github.com/sindresorhus/object-assign) |
 | `object-hash` | 2.2.0, 3.0.0 | MIT | [link](https://github.com/puleos/object-hash) |
 | `object-inspect` | 1.13.4 | MIT | [link](https://github.com/inspect-js/object-inspect) |
+| `octokit` | 5.0.5 | MIT | [link](https://github.com/octokit/octokit.js) |
 | `officeparser` | 6.1.1 | MIT | [link](https://github.com/harshankur/officeParser) |
 | `ohash` | 2.0.11 | MIT | [link](https://github.com/unjs/ohash) |
 | `oidc-token-hash` | 5.2.0 | MIT | [link](https://github.com/panva/oidc-token-hash) |
@@ -1275,6 +1305,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `tinyglobby` | 0.2.16 | MIT | [link](https://github.com/SuperchupuDev/tinyglobby) |
 | `tmp` | 0.2.5 | MIT | [link](https://github.com/raszi/node-tmp) |
 | `to-regex-range` | 5.0.1 | MIT | [link](https://github.com/micromatch/to-regex-range) |
+| `toad-cache` | 3.7.0 | MIT | [link](https://github.com/kibertoad/toad-cache) |
 | `toidentifier` | 1.0.1 | MIT | [link](https://github.com/component/toidentifier) |
 | `token-types` | 6.1.2 | MIT | [link](https://github.com/Borewit/token-types) |
 | `tr46` | 0.0.3 | MIT | [link](https://github.com/Sebmaster/tr46.js) |
@@ -1305,6 +1336,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `unist-util-stringify-position` | 4.0.0 | MIT | [link](https://github.com/syntax-tree/unist-util-stringify-position) |
 | `unist-util-visit` | 5.1.0 | MIT | [link](https://github.com/syntax-tree/unist-util-visit) |
 | `unist-util-visit-parents` | 6.0.2 | MIT | [link](https://github.com/syntax-tree/unist-util-visit-parents) |
+| `universal-github-app-jwt` | 2.2.2 | MIT | [link](https://github.com/gr2m/universal-github-app-jwt) |
 | `unpipe` | 1.0.0 | MIT | [link](https://github.com/stream-utils/unpipe) |
 | `unzipper` | 0.10.14 | MIT | [link](https://github.com/ZJONSSON/node-unzipper) |
 | `update-browserslist-db` | 1.2.3 | MIT | [link](https://github.com/browserslist/update-db) |

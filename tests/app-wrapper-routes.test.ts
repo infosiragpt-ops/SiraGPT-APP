@@ -34,6 +34,11 @@ describe("needsSidebar", () => {
     assert.equal(needsSidebar("/library"), true)
   })
 
+  it("enables the sidebar on Codex pages", () => {
+    assert.equal(needsSidebar("/codex"), true)
+    assert.equal(needsChatContext("/codex"), true)
+  })
+
   it("enables the sidebar on profile pages", () => {
     assert.equal(needsSidebar("/profile"), true)
   })

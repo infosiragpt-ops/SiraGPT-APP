@@ -32,6 +32,7 @@ import {
   CalendarDays,
   FolderKanban,
   Palette,
+  Code2,
   Loader2,
   PenSquare,
   Shield,
@@ -257,7 +258,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/library',
+      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/codex', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -776,6 +777,7 @@ export function AppSidebar() {
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   const isOnDesignPage = activePathname.startsWith('/design')
+  const isOnCodexPage = activePathname.startsWith('/codex')
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -982,6 +984,20 @@ export function AppSidebar() {
             iconClassName="text-fuchsia-500"
             active={isOnDesignPage}
             pending={pendingHref === '/design'}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
+
+          <SidebarNavItem
+            href="/codex"
+            label="Codex"
+            tooltip="Codex"
+            icon={Code2}
+            iconClassName="text-blue-500"
+            active={isOnCodexPage}
+            pending={pendingHref === '/codex'}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}

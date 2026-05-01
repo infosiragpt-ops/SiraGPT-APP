@@ -40,6 +40,7 @@ Todas las versiones fueron consultadas en npm/GitHub el 2026-05-01. Antes de ins
 | P0 integrada | `exceljs` | https://github.com/exceljs/exceljs | `4.4.0` | MIT | Lectura/generacion XLSX controlada | Sustituye `xlsx` npm, elimina advisories high sin fix y mantiene uso comercial compatible | Bundle cliente grande; se carga dinamicamente. No soporta `.xls` binario legacy | `package.json`, `backend/package.json`, viewers, previews, download routes, upload policy, tests/docs | `xlsx`, `@e965/xlsx`, `openpyxl`, `xlsxwriter` | MIT, mantenida, API Node/browser y menor riesgo legal/supply-chain para core comercial |
 | P1 integrada | `@opentelemetry/api` + `@opentelemetry/sdk-node` + `@opentelemetry/resources` | https://github.com/open-telemetry/opentelemetry-js | `1.9.1` / `0.216.0` / `2.7.1` | Apache-2.0 | Trazas distribuidas | Correlacion request->LLM->tool->documento | Config/exporters; cardinalidad | `backend/index.js`, `backend/src/services/observability/*` | solo Pino/Prometheus | Estandar cloud, sin lock-in |
 | P1 integrada | `@opentelemetry/auto-instrumentations-node` + `@opentelemetry/exporter-trace-otlp-http` | https://github.com/open-telemetry/opentelemetry-js-contrib | `0.74.0` / `0.216.0` | Apache-2.0 | Auto-instrumentar HTTP/Express/Redis/Postgres/OpenAI y exportar OTLP | Visibilidad rapida de latencia y errores | Ruido inicial; se ignoran `/health*`, `/metrics`, `fs`, `dns` | `backend/src/services/observability/*`, middleware, docs/tests | instrumentacion manual | Alto impacto con bajo codigo propio |
+| P1 integrada | `octokit` | https://github.com/octokit/octokit.js | `5.0.5` | MIT | Conector GitHub tipo Codex/Cursor | Contexto profesional de repo, PRs, issues, README y Actions sin clonar codigo | ESM en backend CommonJS; requiere Node >=20 y token server-side para privados | `backend/src/services/github-codex-connector.js`, `backend/src/routes/github-codex.js`, `app/codex/page.tsx`, `lib/github-codex-service.ts` | `@octokit/rest`, REST manual con `fetch` | SDK oficial, MIT, mantenido y menor riesgo que clientes propios |
 | P1 | `swr` | https://github.com/vercel/swr | `2.4.1` | MIT | Fetch cache/dedup en React | Mejora historial, settings y conectores | Migracion gradual por pantalla | `lib/*service.ts`, paginas cliente | React Query | Mas ligero y alineado con Next/Vercel |
 | P1 | `@tanstack/react-query` | https://github.com/TanStack/query | `5.100.6` | MIT | Estado servidor complejo | Mejor para dashboards/admin con invalidaciones | Provider global; mayor cambio UX | `app/layout.tsx`, admin/proyectos | SWR | Elegir si se priorizan mutaciones complejas |
 | P1 | `p-limit` | https://github.com/sindresorhus/p-limit | `7.3.0` | MIT | Concurrencia controlada | Evita bursts en RAG/OCR/providers | ESM; adaptar tests Node | RAG, OCR, file processing | Bottleneck existente | Minimalista para bucles internos |
@@ -161,6 +162,20 @@ Se integro trazado distribuido activable por entorno:
 - `docs/phase-6a-opentelemetry.md`: runbook de despliegue y validacion.
 
 La integracion es opt-in: no intenta contactar un collector si no se configura `OTEL_ENABLED=true` o un endpoint OTLP.
+
+### Fase 6B aplicada: conector GitHub tipo Codex/Cursor
+
+Se integro un conector GitHub de bajo riesgo y alto impacto con `octokit@5.0.5`:
+
+- `backend/src/services/github-codex-connector.js`: cliente Octokit server-side, parsing seguro de `owner/repo`, contexto de repo/PR/issues/Actions/README, errores normalizados y modo public read-only cuando no hay token.
+- `backend/src/routes/github-codex.js`: endpoints autenticados `/api/codex/github/status` y `/api/codex/github/repo`.
+- `app/codex/page.tsx` y `lib/github-codex-service.ts`: superficie operativa para inspeccionar repositorios y preparar contexto estilo Codex/Cursor.
+- `components/app-sidebar.tsx`: `Codex` queda debajo de `Diseño`.
+- `backend/.env.example`: `GITHUB_CODEX_TOKEN` documentado como token server-side opcional para repos publicos y requerido para privados.
+- `backend/tests/github-codex-connector.test.js`: parsing, redaccion de token, agregacion de contexto y degradacion parcial.
+- `docs/phase-6b-github-codex-connector.md`: runbook de seguridad, pruebas y despliegue.
+
+No se clona codigo, no se ejecutan comandos del repositorio remoto y no se aceptan tokens GitHub desde el navegador.
 
 ### Fase 3 aplicada: hardening de dependencias de documentos/codigo
 

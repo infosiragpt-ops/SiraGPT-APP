@@ -82,6 +82,7 @@
     "node-fetch": "^2.7.0",
     "node-pandoc": "^0.3.0",
     "nodemailer": "^8.0.7",
+    "octokit": "5.0.5",
     "officeparser": "^6.1.1",
     "openai": "^5.10.1",
     "opossum": "^9.0.0",
