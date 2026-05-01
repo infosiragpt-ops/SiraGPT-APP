@@ -22,6 +22,7 @@ const rateLimit = require('express-rate-limit');
 const session = require('express-session');
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
 const passport = require('./src/config/passport');
 const { bigintSerializerMiddleware } = require('./src/utils/bigint-serializer');
 
@@ -346,6 +347,13 @@ app.use((err, req, res, next) => {
         return res.status(413).json({ error: 'File too large' });
     }
 
+    if (err instanceof multer.MulterError || /^Tipo no permitido:/i.test(err.message || '')) {
+        return res.status(400).json({
+            error: err.message || 'Upload validation failed',
+            code: err.code || 'upload_validation_failed',
+        });
+    }
+
     res.status(err.status || 500).json({
         error: process.env.NODE_ENV === 'production'
             ? 'Internal server error'
@@ -358,38 +366,45 @@ app.use('*', (req, res) => {
     res.status(404).json({ error: 'Route not found' });
 });
 
-// Start server
-prisma.connectDatabase();
-const server = app.listen(PORT, () => {
-    console.log(`🚀 Backend server running on port ${PORT}`);
-    console.log(`📊 Environment: ${process.env.NODE_ENV}`);
-    console.log(`🔗 Health check: http://localhost:${PORT}/health`);
-});
+function startServer() {
+    prisma.connectDatabase();
+    const server = app.listen(PORT, () => {
+        console.log(`🚀 Backend server running on port ${PORT}`);
+        console.log(`📊 Environment: ${process.env.NODE_ENV}`);
+        console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+    });
 
-startAgentTaskWorker();
+    startAgentTaskWorker();
 
-// Initialize WebSocket server for Computer Use
-initializeWebSocketServer(server);
+    // Initialize WebSocket server for Computer Use
+    initializeWebSocketServer(server);
 
-// Wire scheduler → agent: register the invoker so cron/webhook jobs
-// can run the agent without the scheduler module importing the agent
-// layer (which would circular-require via the skills registry).
-scheduler.setInvoker(runAgent);
-scheduler.start();
+    // Wire scheduler → agent: register the invoker so cron/webhook jobs
+    // can run the agent without the scheduler module importing the agent
+    // layer (which would circular-require via the skills registry).
+    scheduler.setInvoker(runAgent);
+    scheduler.start();
 
-async function shutdown(signal) {
-    console.log(`[shutdown] ${signal} received`);
-    try { scheduler.stop?.(); } catch {}
-    await Promise.allSettled([
-        closeAgentTaskWorker(),
-        closeAgentTaskQueue(),
-        new Promise((resolve) => server.close(resolve)),
-        shutdownOpenTelemetry(),
-    ]);
-    process.exit(0);
+    async function shutdown(signal) {
+        console.log(`[shutdown] ${signal} received`);
+        try { scheduler.stop?.(); } catch {}
+        await Promise.allSettled([
+            closeAgentTaskWorker(),
+            closeAgentTaskQueue(),
+            new Promise((resolve) => server.close(resolve)),
+            shutdownOpenTelemetry(),
+        ]);
+        process.exit(0);
+    }
+
+    process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+    process.once('SIGINT', () => { void shutdown('SIGINT'); });
+    return server;
 }
 
-process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
-process.once('SIGINT', () => { void shutdown('SIGINT'); });
+if (require.main === module) {
+    startServer();
+}
 
 module.exports = app;
+module.exports.startServer = startServer;

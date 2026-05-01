@@ -11,10 +11,6 @@ const {
   normalizeGitHubConnectorError,
 } = require('../services/github-codex-connector');
 
-const router = express.Router();
-
-router.use(authenticateToken);
-
 function validationFail(req, res) {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -24,12 +20,24 @@ function validationFail(req, res) {
   return false;
 }
 
-router.get('/status', (_req, res) => {
-  const connector = createGitHubCodexConnector();
-  res.json({ github: connector.getStatus() });
-});
+function createGithubCodexRouter({
+  authenticate = authenticateToken,
+  ragService = rag,
+  createConnector = createGitHubCodexConnector,
+  normalizeError = normalizeGitHubConnectorError,
+  codeFilesForRag = buildCodeFilesForRag,
+  githubRagCollection = buildGitHubRagCollection,
+} = {}) {
+  const router = express.Router();
 
-router.get(
+  router.use(authenticate);
+
+  router.get('/status', (_req, res) => {
+    const connector = createConnector();
+    res.json({ github: connector.getStatus() });
+  });
+
+  router.get(
   '/repo',
   [
     query('repo').isString().trim().isLength({ min: 1, max: 240 }),
@@ -40,7 +48,7 @@ router.get(
     if (validationFail(req, res)) return;
 
     try {
-      const connector = createGitHubCodexConnector();
+      const connector = createConnector();
       const context = await connector.getRepositoryContext({
         repository: req.query.repo,
         branch: req.query.branch,
@@ -48,13 +56,13 @@ router.get(
       });
       res.json({ context });
     } catch (error) {
-      const normalized = normalizeGitHubConnectorError(error);
+      const normalized = normalizeError(error);
       res.status(normalized.status).json(normalized.body);
     }
   },
 );
 
-router.get(
+  router.get(
   '/files',
   [
     query('repo').isString().trim().isLength({ min: 1, max: 240 }),
@@ -66,7 +74,7 @@ router.get(
     if (validationFail(req, res)) return;
 
     try {
-      const connector = createGitHubCodexConnector();
+      const connector = createConnector();
       const fileSet = await connector.getRepositoryFiles({
         repository: req.query.repo,
         branch: req.query.branch,
@@ -75,13 +83,13 @@ router.get(
       });
       res.json({ fileSet });
     } catch (error) {
-      const normalized = normalizeGitHubConnectorError(error);
+      const normalized = normalizeError(error);
       res.status(normalized.status).json(normalized.body);
     }
   },
 );
 
-router.post(
+  router.post(
   '/ingest',
   [
     body('repo').isString().trim().isLength({ min: 1, max: 240 }),
@@ -94,7 +102,7 @@ router.post(
     if (validationFail(req, res)) return;
 
     try {
-      const connector = createGitHubCodexConnector();
+      const connector = createConnector();
       const fileSet = await connector.getRepositoryFiles({
         repository: req.body.repo,
         branch: req.body.branch,
@@ -102,8 +110,8 @@ router.post(
         maxBytes: req.body.maxBytes,
       });
       const collection = req.body.collection?.trim() || fileSet.collection;
-      const files = buildCodeFilesForRag(fileSet.files);
-      const result = await rag.ingestCode(req.user.id, collection, files);
+      const files = codeFilesForRag(fileSet.files);
+      const result = await ragService.ingestCode(req.user.id, collection, files);
       const bytesIndexed = fileSet.files.reduce((sum, file) => sum + (Number(file.bytes) || 0), 0);
       res.json({
         ok: true,
@@ -118,7 +126,7 @@ router.post(
       });
     } catch (error) {
       if (error?.name === 'GitHubCodexConnectorError' || error?.status) {
-        const normalized = normalizeGitHubConnectorError(error);
+        const normalized = normalizeError(error);
         res.status(normalized.status).json(normalized.body);
         return;
       }
@@ -128,7 +136,7 @@ router.post(
   },
 );
 
-router.post(
+  router.post(
   '/retrieve',
   [
     body('query').isString().trim().isLength({ min: 1, max: 2000 }),
@@ -141,7 +149,7 @@ router.post(
     if (validationFail(req, res)) return;
 
     const collection = req.body.collection?.trim()
-      || (req.body.repo ? buildGitHubRagCollection({ repository: req.body.repo, branch: req.body.branch }) : '');
+      || (req.body.repo ? githubRagCollection({ repository: req.body.repo, branch: req.body.branch }) : '');
     if (!collection) {
       res.status(400).json({ error: 'collection or repo is required' });
       return;
@@ -149,7 +157,7 @@ router.post(
 
     try {
       const k = Math.min(12, Math.max(1, Number.parseInt(req.body.k || 5, 10) || 5));
-      const hits = await rag.retrieve(req.user.id, collection, req.body.query, k, {
+      const hits = await ragService.retrieve(req.user.id, collection, req.body.query, k, {
         useHybrid: true,
         useMMR: true,
         mmrLambda: 0.72,
@@ -162,4 +170,8 @@ router.post(
   },
 );
 
-module.exports = router;
+  return router;
+}
+
+module.exports = createGithubCodexRouter();
+module.exports.createGithubCodexRouter = createGithubCodexRouter;

@@ -13,6 +13,11 @@ const errorResponseSchema = z.object({
   code: z.string().optional(),
 }).passthrough();
 
+const healthCheckResponseSchema = z.object({
+  status: z.string(),
+  checks: z.array(z.any()),
+}).passthrough();
+
 const githubRepositoryQuerySchema = z.object({
   repo: z.string().trim().min(1).max(240),
   branch: z.string().trim().min(1).max(160).optional(),
@@ -99,9 +104,32 @@ const agentTaskBodySchema = z.object({
   maxRuntimeMs: z.number().int().min(60000).max(7200000).optional(),
 }).strict();
 
+const agentTaskParamsSchema = z.object({
+  taskId: z.string().trim().min(1).max(120),
+}).strict();
+
 const fileUploadBodySchema = z.object({
   files: z.array(z.string().describe('multipart/form-data binary file part')).min(1).max(10),
 }).strict();
+
+const queueBoardStatusResponseSchema = z.object({
+  ok: z.boolean(),
+  queueBoard: z.object({
+    enabled: z.boolean(),
+    redisUrlConfigured: z.boolean(),
+    queue: z.string(),
+    basePath: z.string(),
+    status: z.enum(['disabled', 'ready', 'degraded']),
+    reason: z.string().optional(),
+    counts: z.union([z.record(z.any()), z.null()]).optional(),
+  }).passthrough(),
+}).passthrough();
+
+const agentTaskStatusResponseSchema = z.object({
+  ok: z.boolean(),
+  taskId: z.string(),
+  status: z.string(),
+}).passthrough();
 
 const mcpToolContracts = Object.freeze([
   {
@@ -170,6 +198,15 @@ const mcpToolContracts = Object.freeze([
 
 const routeContracts = Object.freeze([
   {
+    id: 'health.live',
+    method: 'get',
+    path: '/health/live',
+    tags: ['Health'],
+    summary: 'Read process liveness without external dependencies.',
+    authRequired: false,
+    responses: { 200: healthCheckResponseSchema },
+  },
+  {
     id: 'github.codex.status',
     method: 'get',
     path: '/api/codex/github/status',
@@ -186,7 +223,7 @@ const routeContracts = Object.freeze([
     summary: 'Read GitHub repository context.',
     authRequired: true,
     query: githubRepositoryQuerySchema,
-    responses: { 200: z.object({ context: looseObject }).passthrough(), 400: errorResponseSchema },
+    responses: { 200: z.object({ context: looseObject }).passthrough(), 400: errorResponseSchema, 429: errorResponseSchema, 500: errorResponseSchema },
   },
   {
     id: 'github.codex.files',
@@ -196,7 +233,7 @@ const routeContracts = Object.freeze([
     summary: 'List bounded safe files from a GitHub repository.',
     authRequired: true,
     query: githubRepositoryFilesQuerySchema,
-    responses: { 200: z.object({ fileSet: looseObject }).passthrough(), 400: errorResponseSchema },
+    responses: { 200: z.object({ fileSet: looseObject }).passthrough(), 400: errorResponseSchema, 429: errorResponseSchema, 500: errorResponseSchema },
   },
   {
     id: 'github.codex.ingest',
@@ -226,7 +263,17 @@ const routeContracts = Object.freeze([
     summary: 'Create or queue an agent task.',
     authRequired: true,
     body: agentTaskBodySchema,
-    responses: { 200: looseObject, 400: errorResponseSchema, 500: errorResponseSchema },
+    responses: { 200: looseObject, 400: errorResponseSchema, 500: errorResponseSchema, 503: errorResponseSchema },
+  },
+  {
+    id: 'agent.task.status',
+    method: 'get',
+    path: '/api/agent/task/{taskId}',
+    tags: ['Agent Tasks'],
+    summary: 'Read a durable agent task snapshot for the authenticated owner.',
+    authRequired: true,
+    params: agentTaskParamsSchema,
+    responses: { 200: agentTaskStatusResponseSchema, 404: errorResponseSchema },
   },
   {
     id: 'files.upload',
@@ -238,6 +285,15 @@ const routeContracts = Object.freeze([
     body: fileUploadBodySchema,
     requestContentType: 'multipart/form-data',
     responses: { 200: looseObject, 400: errorResponseSchema },
+  },
+  {
+    id: 'admin.queues.status',
+    method: 'get',
+    path: '/api/admin/queues/status',
+    tags: ['Admin Queues'],
+    summary: 'Read BullMQ admin queue dashboard readiness.',
+    authRequired: true,
+    responses: { 200: queueBoardStatusResponseSchema, 403: errorResponseSchema, 503: queueBoardStatusResponseSchema },
   },
   {
     id: 'rag.ingest',
@@ -284,7 +340,27 @@ const routeContracts = Object.freeze([
 function stripJsonSchemaMeta(schema) {
   if (!schema || typeof schema !== 'object') return schema;
   const copy = JSON.parse(JSON.stringify(schema));
-  delete copy.$schema;
+  function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    delete node.$schema;
+    if (node.nullable === true) {
+      if (Array.isArray(node.enum) && node.enum.length === 1 && node.enum[0] === 'null') {
+        delete node.enum;
+        node.type = 'null';
+      } else if (typeof node.type === 'string') {
+        node.type = [node.type, 'null'];
+      }
+      delete node.nullable;
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item);
+      } else {
+        visit(value);
+      }
+    }
+  }
+  visit(copy);
   return copy;
 }
 
