@@ -199,17 +199,16 @@ jobs:
           retention-days: 7
 
   # ───────────────────────────────────────────────────────────────────
-  # SECURITY — npm audit (informational)
+  # SECURITY — npm audit + SBOM (hard gate for critical vulnerabilities)
   # ───────────────────────────────────────────────────────────────────
-  # Both workspaces have known high/critical advisories in transitive
-  # deps (radix-ui, next, prisma, etc.). Runs for visibility so
-  # newly-introduced vulns are surfaced in PRs, but never blocks merge —
-  # the fix for most of these is upstream, not in this repo.
+  # Blocks newly introduced critical production vulnerabilities and emits
+  # CycloneDX SBOM artifacts from the lockfiles for enterprise review.
+  # High/moderate advisories remain documented debt because several fixes
+  # require framework/runtime migrations that must be handled separately.
   security-audit:
-    name: Security · npm audit (informational)
+    name: Security · npm audit + SBOM
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -221,12 +220,20 @@ jobs:
 
       - name: Frontend · npm audit (critical only)
         run: npm audit --omit=dev --audit-level=critical
-        continue-on-error: true
 
       - name: Backend · npm audit (critical only)
         working-directory: backend
         run: npm audit --omit=dev --audit-level=critical
-        continue-on-error: true
+
+      - name: Generate CycloneDX SBOMs
+        run: npm run sbom:generate
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain-sbom
+          path: artifacts/sbom/*.cdx.json
+          retention-days: 30
 
   # ───────────────────────────────────────────────────────────────────
   # LICENSES — third-party license audit (hard gate)
@@ -323,7 +330,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, licenses]
+    needs: [frontend, backend, licenses, security-audit]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -339,6 +346,10 @@ jobs:
           fi
           if [[ "${{ needs.licenses.result }}" != "success" ]]; then
             echo "✗ licenses: ${{ needs.licenses.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.security-audit.result }}" != "success" ]]; then
+            echo "✗ security-audit: ${{ needs.security-audit.result }}"
             exit 1
           fi
           echo "✓ all required checks passed"

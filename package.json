@@ -13,7 +13,9 @@
     "export": "next export",
     "prepare": "husky",
     "licenses:report": "node scripts/generate-third-party-licenses.js",
-    "licenses:check": "node scripts/generate-third-party-licenses.js --check"
+    "licenses:check": "node scripts/generate-third-party-licenses.js --check",
+    "security:validate": "node scripts/validate-supply-chain.js",
+    "sbom:generate": "node scripts/validate-supply-chain.js --sbom-only"
   },
   "dependencies": {
     "@ai-sdk/langchain": "2.0.174",

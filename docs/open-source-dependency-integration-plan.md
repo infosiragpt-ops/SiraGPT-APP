@@ -18,14 +18,14 @@ Brechas contra un ecosistema ChatGPT + Gemini + Claude + Codex + Cursor:
 | Area | Estado actual | Brecha comercial |
 |---|---|---|
 | Seguridad de render Markdown | `rehype-raw` renderizaba HTML crudo en chat | Necesita sanitizacion AST centralizada antes de React |
-| Seguridad de supply chain | Existe gate de licencias, `npm audit` informativo | Falta SBOM estandar CycloneDX y politica de actualizacion de advisories |
+| Seguridad de supply chain | Gate de licencias, auditoria critica como hard gate y SBOM CycloneDX en CI | Quedan advisories high/moderate que requieren upgrades mayores controlados |
 | Next.js runtime | `next@14.2.35` aplicado en esta fase | Quedan advisories `high` que requieren migracion mayor a Next 16 o mitigaciones operativas |
 | Observabilidad | Metricas Prometheus propias y health checks | Falta trazado distribuido OpenTelemetry entre frontend, API, agentes y proveedores |
 | Data fetching frontend | Contextos y llamadas manuales | Falta deduplicacion/caching estandar para historial, proyectos, conectores y settings |
 | Cola/agentes | BullMQ/Redis y eventos durables | Falta dashboard operativo protegido para queues y workers |
 | RAG/cache | Implementaciones propias | Falta cache LRU/TTL estandar para resultados, manifests y metadata con limites claros |
 | Testing e2e | Playwright smoke informativo | Falta promocion gradual de e2e critico por flujos core: login, chat, upload, documento |
-| Licencias | `THIRD_PARTY_LICENSES.md` automatizado | Falta checklist por dependencia antes de install y reporte de decision |
+| Licencias | `THIRD_PARTY_LICENSES.md` automatizado y validacion local `npm run security:validate` | Falta formalizar aprobacion legal fuera del repositorio para excepciones futuras |
 | Upload/documentos | Magic-byte check basico + OCR/RAG | Fase 2 agrega politica central de extension/MIME/tamano y sanitizacion de previews; queda reemplazar/aislar `xlsx` |
 
 ## 2. Matriz priorizada de dependencias recomendadas
@@ -46,7 +46,7 @@ Todas las versiones fueron consultadas en npm/GitHub el 2026-05-01. Antes de ins
 | P1 | `quick-lru` | https://github.com/sindresorhus/quick-lru | `7.3.0` | MIT | Cache LRU en memoria | Limites claros para catlogos/modelos/search metadata | ESM; no sustituye Redis | RAG/search/model catalog | `lru-cache` | MIT; evita BlueOak en core |
 | P2 | `@bull-board/express` | https://github.com/felixmosh/bull-board | `7.0.0` | MIT | UI operativa de BullMQ | Debug de tareas/colas agenticas | Debe ir detras de admin auth | `backend/src/routes/admin.js`, queue services | dashboards propios | Madura y especifica para BullMQ |
 | P2 | `zod-to-json-schema` | https://github.com/StefanTerdell/zod-to-json-schema | `3.25.2` | ISC | Exportar contratos de tools/agentes | Documenta APIs internas para SDKs/conectores | Diferencias Zod v3/v4 | tool registry/docs | JSON schema manual | Reduce drift entre validacion y docs |
-| P2 | `@cyclonedx/cyclonedx-npm` | https://github.com/CycloneDX/cyclonedx-node-npm | `4.2.1` | Apache-2.0 | SBOM estandar | Evidencia enterprise/compliance | Nuevo artefacto CI | `.github/workflows/ci.yml`, scripts | licencia actual propia | Estandar comercial para auditorias |
+| P2 aplicada | `npm sbom` integrado | https://docs.npmjs.com/cli/commands/npm-sbom | npm CLI incluido | npm CLI | SBOM CycloneDX desde lockfiles | Evidencia enterprise/compliance sin dependencia nueva | Artefacto CI adicional | `.github/workflows/ci.yml`, `scripts/validate-supply-chain.js` | `@cyclonedx/cyclonedx-npm` | Menor superficie: usa herramienta oficial ya presente con Node/npm |
 
 Dependencias ya presentes reutilizadas en Fase 2:
 
@@ -135,6 +135,18 @@ Se agrego cobertura enfocada en los riesgos introducidos/cerrados por Fase 3:
 - `.github/workflows/ci.yml`: el test backend de `xlsx-safe-workbook` queda dentro del job de backend.
 
 El job e2e sigue como informativo a nivel branch protection, pero el paso `Run Playwright smoke` falla dentro del job para producir senal visible.
+
+### Fase 5 aplicada: validacion de seguridad y licencias
+
+Se convirtio la validacion de supply chain en un flujo reproducible:
+
+- `scripts/validate-supply-chain.js`: comando local para auditoria critica, licencias, drift de `THIRD_PARTY_LICENSES.md` y SBOM CycloneDX.
+- `package.json`: agrega `npm run security:validate` y `npm run sbom:generate`.
+- `.github/workflows/ci.yml`: `Security · npm audit + SBOM` deja de ser informativo y pasa a ser hard gate para vulnerabilidades criticas de produccion.
+- `.github/workflows/ci.yml`: publica `supply-chain-sbom` con `frontend.cdx.json` y `backend.cdx.json`.
+- `docs/phase-5-security-license-validation.md`: runbook de validacion, politica aplicada y riesgos residuales.
+
+No se agrego `@cyclonedx/cyclonedx-npm`: npm CLI ya incluye `npm sbom` y genera CycloneDX 1.5 desde lockfiles, reduciendo superficie de dependencias.
 
 ### Fase 3 aplicada: hardening de dependencias de documentos/codigo
 
