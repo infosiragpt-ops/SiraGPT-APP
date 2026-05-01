@@ -5,6 +5,12 @@ const {
     startOpenTelemetry,
 } = require('./src/services/observability/otel');
 startOpenTelemetry();
+const {
+    captureException: captureSentryException,
+    getSentryStatus,
+    startSentry,
+} = require('./src/services/observability/sentry');
+startSentry();
 
 const express = require('express');
 const cors = require('cors');
@@ -28,6 +34,7 @@ const documentGenerateAiRoutes = require('./src/routes/generate-document');
 
 const paymentRoutes = require('./src/routes/payments');
 const adminRoutes = require('./src/routes/admin');
+const adminQueuesRoutes = require('./src/routes/admin-queues');
 const userRoutes = require('./src/routes/users');
 const publicRoutes = require('./src/routes/public');
 const downloadRoutes = require('./src/routes/download');
@@ -254,6 +261,7 @@ app.get('/health', async (_req, res) => {
         redis: getHealthRedisClient(),
         queue: null,
         telemetry: getOpenTelemetryStatus(),
+        sentry: getSentryStatus(),
     });
     res.status(reportToHttpStatus(report)).json(report);
 });
@@ -277,6 +285,7 @@ app.use('/api/chats', chatRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/admin/queues', adminQueuesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/public', publicRoutes);
@@ -325,6 +334,13 @@ app.use('/api/codex/github', githubCodexRoutes);
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error('Error:', err);
+    captureSentryException(err, {
+        req,
+        tags: {
+            surface: 'express_error_handler',
+            status: err.status || 500,
+        },
+    });
 
     if (err.type === 'entity.too.large') {
         return res.status(413).json({ error: 'File too large' });

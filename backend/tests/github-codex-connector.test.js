@@ -2,7 +2,11 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  buildCodeFilesForRag,
+  buildGitHubRagCollection,
+  classifyRepositoryPath,
   createGitHubCodexConnector,
+  languageForPath,
   normalizeGitHubConnectorError,
   parseGitHubRepository,
   resolveAuth,
@@ -57,6 +61,40 @@ function createFakeOctokit({ actionsError } = {}) {
               size: 18,
               encoding: 'base64',
               content: Buffer.from('# SiraGPT\n\nCore docs').toString('base64'),
+            },
+          };
+        },
+        getBranch: async (params) => {
+          calls.push(['repos.getBranch', params]);
+          return {
+            data: {
+              name: params.branch,
+              commit: {
+                sha: 'commit-sha',
+                commit: {
+                  tree: { sha: 'tree-sha' },
+                },
+              },
+            },
+          };
+        },
+        getContent: async (params) => {
+          calls.push(['repos.getContent', params]);
+          const fixtures = {
+            'package.json': '{"name":"siragpt"}',
+            'app/page.tsx': 'export default function Page() { return <main>Sira</main> }',
+            'backend/src/index.js': 'module.exports = function boot() { return true; }',
+            'docs/phase.md': '# Phase',
+          };
+          const content = fixtures[params.path] || 'export const value = true';
+          return {
+            data: {
+              type: 'file',
+              path: params.path,
+              sha: `sha-${params.path}`,
+              html_url: `https://github.com/SiraGPT-ORg/siraGPT/blob/main/${params.path}`,
+              encoding: 'base64',
+              content: Buffer.from(content).toString('base64'),
             },
           };
         },
@@ -129,6 +167,31 @@ function createFakeOctokit({ actionsError } = {}) {
                   updated_at: '2026-04-30T12:04:00Z',
                 },
               ],
+            },
+          };
+        },
+      },
+      git: {
+        getTree: async (params) => {
+          calls.push(['git.getTree', params]);
+          return {
+            data: {
+              truncated: false,
+              tree: [
+                { path: 'package.json', type: 'blob', size: 18, sha: 'pkg' },
+                { path: 'app/page.tsx', type: 'blob', size: 60, sha: 'page' },
+                { path: 'backend/src/index.js', type: 'blob', size: 48, sha: 'backend' },
+                { path: 'docs/phase.md', type: 'blob', size: 8, sha: 'docs' },
+                { path: 'package-lock.json', type: 'blob', size: 100, sha: 'lock' },
+                { path: '.env.local', type: 'blob', size: 20, sha: 'env' },
+                { path: 'node_modules/x/index.js', type: 'blob', size: 10, sha: 'vendor' },
+                { path: 'public/logo.png', type: 'blob', size: 10, sha: 'binary' },
+                { path: 'app', type: 'tree', sha: 'tree' },
+              ],
+            },
+            headers: {
+              'x-ratelimit-limit': '5000',
+              'x-ratelimit-remaining': '4990',
             },
           };
         },
@@ -234,5 +297,58 @@ describe('GitHub Codex connector context aggregation', () => {
     assert.equal(normalized.status, 401);
     assert.equal(normalized.body.code, 'github_auth_failed');
     assert.equal(JSON.stringify(normalized).includes('Bad credentials'), false);
+  });
+});
+
+describe('GitHub Codex repository RAG file selection', () => {
+  test('classifies commercial-safe code paths and skips secrets, lockfiles and vendor files', () => {
+    assert.equal(classifyRepositoryPath({ path: 'app/page.tsx', type: 'blob', size: 100 }).ok, true);
+    assert.equal(classifyRepositoryPath({ path: '.env.local', type: 'blob', size: 10 }).reason, 'unsupported_extension');
+    assert.equal(classifyRepositoryPath({ path: 'package-lock.json', type: 'blob', size: 10 }).reason, 'unsupported_extension');
+    assert.equal(classifyRepositoryPath({ path: 'node_modules/a/index.js', type: 'blob', size: 10 }).reason, 'skipped_directory');
+    assert.equal(classifyRepositoryPath({ path: 'large.ts', type: 'blob', size: 5000 }, { maxBytes: 1000 }).reason, 'oversized');
+    assert.equal(languageForPath('components/button.tsx'), 'typescript');
+  });
+
+  test('fetches a bounded set of GitHub files ready for code RAG ingestion', async () => {
+    const fake = createFakeOctokit();
+    const connector = createGitHubCodexConnector({
+      env: { GITHUB_CODEX_TOKEN: 'ghp_secret' },
+      octokitFactory: async () => fake,
+    });
+
+    const fileSet = await connector.getRepositoryFiles({
+      repository: 'SiraGPT-ORg/siraGPT',
+      branch: 'main',
+      limit: 3,
+      maxBytes: 1000,
+    });
+
+    assert.equal(fileSet.repository.fullName, 'SiraGPT-ORg/siraGPT');
+    assert.equal(fileSet.branch, 'main');
+    assert.equal(fileSet.files.length, 3);
+    assert.deepEqual(fileSet.files.map((file) => file.path), [
+      'package.json',
+      'app/page.tsx',
+      'backend/src/index.js',
+    ]);
+    assert.equal(fileSet.files[1].language, 'typescript');
+    assert.equal(fileSet.skipped.skippedDirectory, 1);
+    assert.ok(fileSet.skipped.unsupportedExtension >= 3);
+    assert.equal(JSON.stringify(fileSet).includes('ghp_secret'), false);
+
+    const ragFiles = buildCodeFilesForRag(fileSet.files);
+    assert.deepEqual(ragFiles.map((file) => file.filename), [
+      'package.json',
+      'app/page.tsx',
+      'backend/src/index.js',
+    ]);
+    assert.equal(ragFiles[1].language, 'typescript');
+    assert.equal(
+      buildGitHubRagCollection({ repository: 'SiraGPT-ORg/siraGPT', branch: 'feature/test branch' }),
+      'github:SiraGPT-ORg/siraGPT:feature/test-branch',
+    );
+    assert.ok(fake.calls.some(([name]) => name === 'git.getTree'));
+    assert.equal(fake.calls.filter(([name]) => name === 'repos.getContent').length, 3);
   });
 });

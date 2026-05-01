@@ -120,6 +120,69 @@ export interface GitHubCodexContext {
   }
 }
 
+export interface GitHubCodexRepositoryFile {
+  path: string
+  language: string
+  bytes: number
+  sha: string | null
+  htmlUrl: string
+  content?: string
+}
+
+export interface GitHubCodexFileSet {
+  repository: GitHubCodexRepository
+  branch: string
+  auth: {
+    mode: "server_token" | "public_read_only"
+    configured: boolean
+    tokenSource: string | null
+  }
+  files: GitHubCodexRepositoryFile[]
+  collection: string
+  skipped: {
+    notFile: number
+    skippedDirectory: number
+    unsupportedExtension: number
+    oversized: number
+    fetchFailed: number
+  }
+  limits: {
+    fileLimit: number
+    maxFileBytes: number
+    candidates: number
+    selected: number
+    treeTruncated: boolean
+  }
+}
+
+export interface GitHubCodexRagIngestResult {
+  ok: true
+  collection: string
+  repository: GitHubCodexRepository
+  branch: string
+  filesIndexed: number
+  bytesIndexed: number
+  chunksAdded: number
+  totalChunks: number
+  skipped: GitHubCodexFileSet["skipped"]
+  limits: GitHubCodexFileSet["limits"]
+}
+
+export interface GitHubCodexRagHit {
+  text: string
+  source: string | null
+  title: string | null
+  score: number
+  retrievalMode?: string
+}
+
+export interface GitHubCodexRagSearchResult {
+  ok: true
+  collection: string
+  query: string
+  hits: GitHubCodexRagHit[]
+}
+
 function authHeader(): Record<string, string> {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -154,5 +217,57 @@ export const githubCodexService = {
     })
     const json = await handle<{ context: GitHubCodexContext }>(res)
     return json.context
+  },
+
+  async listRepositoryFiles(input: { repo: string; branch?: string; limit?: number; maxBytes?: number }): Promise<GitHubCodexFileSet> {
+    const qs = new URLSearchParams()
+    qs.set("repo", input.repo)
+    if (input.branch?.trim()) qs.set("branch", input.branch.trim())
+    if (input.limit) qs.set("limit", String(input.limit))
+    if (input.maxBytes) qs.set("maxBytes", String(input.maxBytes))
+    const res = await fetch(`${API_ROOT}/codex/github/files?${qs.toString()}`, {
+      credentials: "include",
+      headers: authHeader(),
+    })
+    const json = await handle<{ fileSet: GitHubCodexFileSet }>(res)
+    return json.fileSet
+  },
+
+  async ingestRepository(input: {
+    repo: string
+    branch?: string
+    collection?: string
+    limit?: number
+    maxBytes?: number
+  }): Promise<GitHubCodexRagIngestResult> {
+    const res = await fetch(`${API_ROOT}/codex/github/ingest`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeader(),
+      },
+      body: JSON.stringify(input),
+    })
+    return handle<GitHubCodexRagIngestResult>(res)
+  },
+
+  async searchRepositoryContext(input: {
+    query: string
+    repo?: string
+    branch?: string
+    collection?: string
+    k?: number
+  }): Promise<GitHubCodexRagSearchResult> {
+    const res = await fetch(`${API_ROOT}/codex/github/retrieve`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeader(),
+      },
+      body: JSON.stringify(input),
+    })
+    return handle<GitHubCodexRagSearchResult>(res)
   },
 }

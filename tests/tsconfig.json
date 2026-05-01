@@ -23,6 +23,7 @@
     "../lib/search-brain-ui.ts",
     "../lib/file-processing-vocab.ts",
     "../lib/download-utils.ts",
-    "../lib/xlsx-client.ts"
+    "../lib/xlsx-client.ts",
+    "../lib/sentry-config.ts"
   ]
 }

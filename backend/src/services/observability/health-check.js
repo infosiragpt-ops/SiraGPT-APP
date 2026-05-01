@@ -168,6 +168,30 @@ function checkOpenTelemetry(telemetry) {
   };
 }
 
+function checkSentry(sentry) {
+  const details = typeof sentry === "function" ? sentry() : (sentry || {});
+  const configured = Boolean(details.configured || details.enabled || details.started);
+
+  let status = "skipped";
+  if (details.started) status = "healthy";
+  else if (configured) status = "degraded";
+
+  return {
+    name: "sentry",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: {
+      configured,
+      enabled: Boolean(details.enabled),
+      started: Boolean(details.started),
+      environment: details.environment || process.env.NODE_ENV || "development",
+      reason: details.reason || (configured ? "not_started" : "not_configured"),
+      traces_sample_rate: Number(details.traces_sample_rate || 0),
+    },
+  };
+}
+
 // ── Composite probes ───────────────────────────────────────────────
 
 function runLivenessCheck() {
@@ -188,7 +212,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
@@ -197,6 +221,7 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry } = {}) {
   checks.push(checkProcess());
   checks.push(checkModelProvidersConfigured());
   checks.push(checkOpenTelemetry(telemetry));
+  checks.push(checkSentry(sentry));
   return composeStatus(checks);
 }
 
@@ -235,6 +260,7 @@ module.exports = {
   checkProcess,
   checkModelProvidersConfigured,
   checkOpenTelemetry,
+  checkSentry,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,

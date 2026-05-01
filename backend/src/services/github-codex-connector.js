@@ -1,9 +1,85 @@
 'use strict';
 
+const path = require('path');
+
 const DEFAULT_RECENT_ITEMS = 10;
 const MAX_RECENT_ITEMS = 20;
 const DEFAULT_README_PREVIEW_CHARS = 12000;
 const MAX_README_PREVIEW_CHARS = 24000;
+const DEFAULT_CODE_FILE_LIMIT = 40;
+const MAX_CODE_FILE_LIMIT = 120;
+const DEFAULT_CODE_FILE_MAX_BYTES = 60000;
+const MAX_CODE_FILE_MAX_BYTES = 120000;
+const CODE_FETCH_CONCURRENCY = 4;
+
+const SKIPPED_PATH_SEGMENTS = new Set([
+  '.git',
+  '.next',
+  '.turbo',
+  '.vercel',
+  'artifacts',
+  'build',
+  'coverage',
+  'dist',
+  'node_modules',
+  'tmp',
+  'uploads',
+]);
+
+const SKIPPED_FILE_NAMES = new Set([
+  '.env',
+  '.env.local',
+  '.env.development',
+  '.env.production',
+  '.env.test',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+]);
+
+const CODE_FILE_NAMES = new Set([
+  '.eslintrc',
+  '.eslintrc.cjs',
+  '.eslintrc.js',
+  '.prettierrc',
+  'Dockerfile',
+  'Makefile',
+  'README.md',
+  'next.config.js',
+  'next.config.mjs',
+  'next.config.ts',
+  'package.json',
+  'tsconfig.json',
+]);
+
+const CODE_FILE_EXTENSIONS = new Set([
+  '.c',
+  '.cc',
+  '.cjs',
+  '.cpp',
+  '.css',
+  '.go',
+  '.graphql',
+  '.h',
+  '.html',
+  '.java',
+  '.js',
+  '.json',
+  '.jsx',
+  '.md',
+  '.mdx',
+  '.mjs',
+  '.prisma',
+  '.py',
+  '.rs',
+  '.scss',
+  '.sh',
+  '.sql',
+  '.ts',
+  '.tsx',
+  '.yaml',
+  '.yml',
+]);
 
 class GitHubCodexConnectorError extends Error {
   constructor(code, status, message, details = {}) {
@@ -115,6 +191,127 @@ function clampInt(value, fallback, min, max) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
+}
+
+function normalisePosixPath(value) {
+  return trimString(value).replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function isSensitiveEnvPath(filePath) {
+  const base = path.posix.basename(filePath);
+  return base.startsWith('.env') && base !== '.env.example';
+}
+
+function hasSkippedSegment(filePath) {
+  const segments = normalisePosixPath(filePath).split('/').filter(Boolean);
+  return segments.some((segment) => SKIPPED_PATH_SEGMENTS.has(segment));
+}
+
+function isSupportedCodePath(filePath) {
+  const cleanPath = normalisePosixPath(filePath);
+  const base = path.posix.basename(cleanPath);
+  if (!cleanPath || isSensitiveEnvPath(cleanPath) || SKIPPED_FILE_NAMES.has(base)) return false;
+  if (CODE_FILE_NAMES.has(base)) return true;
+  return CODE_FILE_EXTENSIONS.has(path.posix.extname(cleanPath).toLowerCase());
+}
+
+function classifyRepositoryPath(entry, { maxBytes = DEFAULT_CODE_FILE_MAX_BYTES } = {}) {
+  const filePath = normalisePosixPath(entry?.path);
+  if (!filePath) return { ok: false, reason: 'missing_path' };
+  if (entry.type !== 'blob') return { ok: false, reason: 'not_file' };
+  if (hasSkippedSegment(filePath)) return { ok: false, reason: 'skipped_directory' };
+  if (!isSupportedCodePath(filePath)) return { ok: false, reason: 'unsupported_extension' };
+  const size = numberOrZero(entry.size);
+  if (size > maxBytes) return { ok: false, reason: 'oversized' };
+  return { ok: true, reason: 'selected' };
+}
+
+function languageForPath(filePath) {
+  const ext = path.posix.extname(filePath).toLowerCase();
+  const base = path.posix.basename(filePath);
+  if (base === 'Dockerfile') return 'dockerfile';
+  if (base === 'Makefile') return 'makefile';
+  const map = {
+    '.c': 'c',
+    '.cc': 'cpp',
+    '.cjs': 'javascript',
+    '.cpp': 'cpp',
+    '.css': 'css',
+    '.go': 'go',
+    '.graphql': 'graphql',
+    '.h': 'c',
+    '.html': 'html',
+    '.java': 'java',
+    '.js': 'javascript',
+    '.json': 'json',
+    '.jsx': 'javascript',
+    '.md': 'markdown',
+    '.mdx': 'mdx',
+    '.mjs': 'javascript',
+    '.prisma': 'prisma',
+    '.py': 'python',
+    '.rs': 'rust',
+    '.scss': 'scss',
+    '.sh': 'shell',
+    '.sql': 'sql',
+    '.ts': 'typescript',
+    '.tsx': 'typescript',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+  };
+  return map[ext] || 'text';
+}
+
+function repositoryPathPriority(filePath) {
+  const cleanPath = normalisePosixPath(filePath);
+  if (/^(README|package\.json|tsconfig\.json|next\.config\.)/i.test(cleanPath)) return 0;
+  if (/^(app|backend\/src|components|lib)\//.test(cleanPath)) return 1;
+  if (/^(backend\/tests|tests)\//.test(cleanPath)) return 3;
+  if (/^docs\//.test(cleanPath)) return 4;
+  return 2;
+}
+
+function decodeGitHubFileContent(data) {
+  if (!data || Array.isArray(data) || data.type !== 'file') return null;
+  if (data.encoding === 'base64' && data.content) {
+    return Buffer.from(String(data.content).replace(/\n/g, ''), 'base64').toString('utf8');
+  }
+  if (typeof data.content === 'string') return data.content;
+  return null;
+}
+
+async function mapLimit(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      results[current] = await mapper(items[current], current);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+function buildGitHubRagCollection(input = {}) {
+  const parsed = typeof input.repository === 'string' || typeof input.repo === 'string'
+    ? parseGitHubRepository(input.repository || input.repo)
+    : parseGitHubRepository(input.fullName || `${input.owner || ''}/${input.name || input.repo || ''}`);
+  const branch = trimString(input.branch) || 'main';
+  const safeBranch = branch.replace(/[^\w./-]+/g, '-').slice(0, 120);
+  return `github:${parsed.fullName}:${safeBranch}`;
+}
+
+function buildCodeFilesForRag(files = []) {
+  if (!Array.isArray(files)) return [];
+  return files
+    .filter((file) => file && typeof file.content === 'string' && file.content.trim())
+    .map((file) => ({
+      filename: file.path,
+      content: file.content,
+      language: file.language || languageForPath(file.path),
+    }));
 }
 
 async function createDefaultOctokit({ token }) {
@@ -297,6 +494,16 @@ function warningFromError(area, error) {
   };
 }
 
+async function resolveTreeSha(octokit, parsed, branch) {
+  try {
+    const branchResponse = await octokit.rest.repos.getBranch({ ...parsed, branch });
+    return branchResponse.data?.commit?.commit?.tree?.sha || branchResponse.data?.commit?.sha || branch;
+  } catch (error) {
+    if (Number(error.status) === 404) return branch;
+    throw error;
+  }
+}
+
 function settledValue(result, area, warnings, fallback) {
   if (result.status === 'fulfilled') return result.value;
   warnings.push(warningFromError(area, result.reason));
@@ -434,15 +641,122 @@ function createGitHubCodexConnector(options = {}) {
         rateLimit: readRateLimit(repositoryResponse.headers),
       };
     },
+
+    async getRepositoryFiles(params = {}) {
+      const parsed = parseGitHubRepository(params.repository || params.repo);
+      const limit = clampInt(params.limit, DEFAULT_CODE_FILE_LIMIT, 1, MAX_CODE_FILE_LIMIT);
+      const maxBytes = clampInt(
+        params.maxBytes || params.maxFileBytes,
+        DEFAULT_CODE_FILE_MAX_BYTES,
+        1000,
+        MAX_CODE_FILE_MAX_BYTES,
+      );
+      const auth = resolveAuth(env);
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source });
+
+      const repositoryResponse = await octokit.rest.repos.get(parsed);
+      const repository = normalizeRepository(repositoryResponse.data);
+      const branch = trimString(params.branch) || repository.defaultBranch;
+      const treeSha = await resolveTreeSha(octokit, parsed, branch);
+      const treeResponse = await octokit.rest.git.getTree({
+        ...parsed,
+        tree_sha: treeSha,
+        recursive: '1',
+      });
+
+      const skipped = {
+        notFile: 0,
+        skippedDirectory: 0,
+        unsupportedExtension: 0,
+        oversized: 0,
+        fetchFailed: 0,
+      };
+      const candidates = [];
+      for (const entry of treeResponse.data?.tree || []) {
+        const classification = classifyRepositoryPath(entry, { maxBytes });
+        if (classification.ok) {
+          candidates.push(entry);
+          continue;
+        }
+        if (classification.reason === 'not_file') skipped.notFile += 1;
+        else if (classification.reason === 'skipped_directory') skipped.skippedDirectory += 1;
+        else if (classification.reason === 'oversized') skipped.oversized += 1;
+        else skipped.unsupportedExtension += 1;
+      }
+
+      const selected = candidates
+        .sort((a, b) => (
+          repositoryPathPriority(a.path) - repositoryPathPriority(b.path)
+          || normalisePosixPath(a.path).localeCompare(normalisePosixPath(b.path))
+        ))
+        .slice(0, limit);
+
+      const fetched = await mapLimit(selected, CODE_FETCH_CONCURRENCY, async (entry) => {
+        try {
+          const filePath = normalisePosixPath(entry.path);
+          const response = await octokit.rest.repos.getContent({
+            ...parsed,
+            path: filePath,
+            ref: branch,
+          });
+          const content = decodeGitHubFileContent(response.data);
+          if (!content) return null;
+          const bytes = Buffer.byteLength(content, 'utf8');
+          if (bytes > maxBytes) {
+            skipped.oversized += 1;
+            return null;
+          }
+          return {
+            path: filePath,
+            language: languageForPath(filePath),
+            bytes,
+            sha: entry.sha || response.data?.sha || null,
+            htmlUrl: response.data?.html_url || `https://github.com/${parsed.fullName}/blob/${encodeURIComponent(branch)}/${filePath}`,
+            content,
+          };
+        } catch (_error) {
+          skipped.fetchFailed += 1;
+          return null;
+        }
+      });
+
+      const files = fetched.filter(Boolean);
+      return {
+        repository,
+        branch,
+        auth: {
+          mode: auth.configured ? 'server_token' : 'public_read_only',
+          configured: auth.configured,
+          tokenSource: auth.source,
+        },
+        files,
+        collection: buildGitHubRagCollection({ repository: parsed.fullName, branch }),
+        skipped,
+        limits: {
+          fileLimit: limit,
+          maxFileBytes: maxBytes,
+          candidates: candidates.length,
+          selected: selected.length,
+          treeTruncated: Boolean(treeResponse.data?.truncated),
+        },
+        rateLimit: readRateLimit(treeResponse.headers || repositoryResponse.headers),
+      };
+    },
   };
 }
 
 module.exports = {
+  buildCodeFilesForRag,
   DEFAULT_RECENT_ITEMS,
   DEFAULT_README_PREVIEW_CHARS,
+  DEFAULT_CODE_FILE_LIMIT,
+  DEFAULT_CODE_FILE_MAX_BYTES,
   GitHubCodexConnectorError,
   buildCodexSummary,
+  buildGitHubRagCollection,
+  classifyRepositoryPath,
   createGitHubCodexConnector,
+  languageForPath,
   normalizeGitHubConnectorError,
   parseGitHubRepository,
   resolveAuth,

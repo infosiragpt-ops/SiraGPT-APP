@@ -1,20 +1,24 @@
 "use client"
 
 import * as React from "react"
+import useSWR from "swr"
 import {
   Activity,
   AlertTriangle,
   CheckCircle2,
   CircleDot,
   Code2,
+  Database,
   ExternalLink,
   FileText,
   GitBranch,
   GitFork,
   Github,
   GitPullRequest,
+  Layers3,
   Loader2,
   RefreshCw,
+  Search,
   ShieldCheck,
   Star,
 } from "lucide-react"
@@ -27,6 +31,8 @@ import { cn } from "@/lib/utils"
 import {
   githubCodexService,
   type GitHubCodexContext,
+  type GitHubCodexRagIngestResult,
+  type GitHubCodexRagSearchResult,
   type GitHubCodexStatus,
 } from "@/lib/github-codex-service"
 
@@ -61,48 +67,110 @@ function healthClass(health?: GitHubCodexContext["codexSummary"]["health"]) {
 export default function CodexPage() {
   const [repo, setRepo] = React.useState(DEFAULT_REPO)
   const [branch, setBranch] = React.useState("main")
-  const [status, setStatus] = React.useState<GitHubCodexStatus | null>(null)
-  const [context, setContext] = React.useState<GitHubCodexContext | null>(null)
-  const [loading, setLoading] = React.useState(false)
-  const [statusLoading, setStatusLoading] = React.useState(true)
+  const [inspectRequest, setInspectRequest] = React.useState<{ repo: string; branch: string; nonce: number } | null>(null)
+  const [ragIndexing, setRagIndexing] = React.useState(false)
+  const [ragSearching, setRagSearching] = React.useState(false)
+  const [ragQuery, setRagQuery] = React.useState("¿Dónde se implementa el chat y el streaming?")
+  const [ragIngest, setRagIngest] = React.useState<GitHubCodexRagIngestResult | null>(null)
+  const [ragSearch, setRagSearch] = React.useState<GitHubCodexRagSearchResult | null>(null)
+
+  const {
+    data: status = null,
+    error: statusError,
+    isLoading: statusLoading,
+  } = useSWR<GitHubCodexStatus>("github-codex-status", () => githubCodexService.status(), {
+    dedupingInterval: 60_000,
+    revalidateOnFocus: false,
+  })
+
+  const {
+    data: context = null,
+    error: contextError,
+    isLoading: loading,
+  } = useSWR<GitHubCodexContext>(
+    inspectRequest ? ["github-codex-context", inspectRequest.repo, inspectRequest.branch, inspectRequest.nonce] : null,
+    ([, requestRepo, requestBranch]) => githubCodexService.inspectRepository({
+      repo: String(requestRepo),
+      branch: String(requestBranch || "") || undefined,
+      limit: 10,
+    }),
+    {
+      dedupingInterval: 15_000,
+      revalidateOnFocus: false,
+    },
+  )
 
   React.useEffect(() => {
-    let cancelled = false
-    setStatusLoading(true)
-    githubCodexService.status()
-      .then((next) => {
-        if (!cancelled) setStatus(next)
-      })
-      .catch((error) => {
-        if (!cancelled) toast.error(error?.message || "No se pudo leer el estado de GitHub")
-      })
-      .finally(() => {
-        if (!cancelled) setStatusLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [])
+    if (statusError) toast.error(statusError?.message || "No se pudo leer el estado de GitHub")
+  }, [statusError])
 
-  const inspect = React.useCallback(async () => {
+  React.useEffect(() => {
+    if (contextError) toast.error(contextError?.message || "No se pudo inspeccionar el repositorio")
+  }, [contextError])
+
+  React.useEffect(() => {
+    if (context?.branch && !branch.trim()) setBranch(context.branch)
+  }, [branch, context?.branch])
+
+  const inspect = React.useCallback(() => {
     const cleanRepo = repo.trim()
     if (!cleanRepo) {
       toast.error("Indica un repositorio GitHub")
       return
     }
-    setLoading(true)
-    try {
-      const next = await githubCodexService.inspectRepository({
-        repo: cleanRepo,
-        branch: branch.trim() || undefined,
-        limit: 10,
-      })
-      setContext(next)
-      if (next.branch && !branch.trim()) setBranch(next.branch)
-    } catch (error: any) {
-      toast.error(error?.message || "No se pudo inspeccionar el repositorio")
-    } finally {
-      setLoading(false)
-    }
+    setInspectRequest((previous) => ({
+      repo: cleanRepo,
+      branch: branch.trim(),
+      nonce: (previous?.nonce || 0) + 1,
+    }))
   }, [branch, repo])
+
+  const indexRepository = React.useCallback(async () => {
+    const cleanRepo = repo.trim()
+    if (!cleanRepo) {
+      toast.error("Indica un repositorio GitHub")
+      return
+    }
+    setRagIndexing(true)
+    try {
+      const next = await githubCodexService.ingestRepository({
+        repo: cleanRepo,
+        branch: branch.trim() || context?.branch || undefined,
+        limit: 45,
+        maxBytes: 60000,
+      })
+      setRagIngest(next)
+      setRagSearch(null)
+      toast.success(`RAG indexado: ${next.filesIndexed} archivos, ${next.chunksAdded} chunks`)
+    } catch (error: any) {
+      toast.error(error?.message || "No se pudo indexar el repositorio")
+    } finally {
+      setRagIndexing(false)
+    }
+  }, [branch, context?.branch, repo])
+
+  const searchRepository = React.useCallback(async () => {
+    const cleanQuery = ragQuery.trim()
+    if (!cleanQuery) {
+      toast.error("Escribe una pregunta para buscar en el repo")
+      return
+    }
+    setRagSearching(true)
+    try {
+      const next = await githubCodexService.searchRepositoryContext({
+        query: cleanQuery,
+        repo: repo.trim(),
+        branch: branch.trim() || context?.branch || undefined,
+        collection: ragIngest?.collection,
+        k: 5,
+      })
+      setRagSearch(next)
+    } catch (error: any) {
+      toast.error(error?.message || "No se pudo buscar contexto RAG")
+    } finally {
+      setRagSearching(false)
+    }
+  }, [branch, context?.branch, ragIngest?.collection, ragQuery, repo])
 
   return (
     <main className="flex min-h-screen min-w-0 flex-col bg-background text-foreground">
@@ -200,6 +268,17 @@ export default function CodexPage() {
 
         <aside className="min-w-0 space-y-4">
           <SummaryPanel context={context} status={status} />
+          <RagRepositoryPanel
+            context={context}
+            ingest={ragIngest}
+            search={ragSearch}
+            query={ragQuery}
+            indexing={ragIndexing}
+            searching={ragSearching}
+            onIndex={indexRepository}
+            onQueryChange={setRagQuery}
+            onSearch={searchRepository}
+          />
           <PullRequestsPanel context={context} />
           <IssuesPanel context={context} />
         </aside>
@@ -343,6 +422,121 @@ function SummaryPanel({ context, status }: { context: GitHubCodexContext | null;
             Ejecuta un análisis para preparar contexto de repositorio, PRs, issues, README y estado de CI.
           </p>
         )}
+      </div>
+    </section>
+  )
+}
+
+function RagRepositoryPanel({
+  context,
+  ingest,
+  search,
+  query,
+  indexing,
+  searching,
+  onIndex,
+  onQueryChange,
+  onSearch,
+}: {
+  context: GitHubCodexContext | null
+  ingest: GitHubCodexRagIngestResult | null
+  search: GitHubCodexRagSearchResult | null
+  query: string
+  indexing: boolean
+  searching: boolean
+  onIndex: () => void
+  onQueryChange: (value: string) => void
+  onSearch: () => void
+}) {
+  const activeCollection = ingest?.collection || (context ? `github:${context.repository.fullName}:${context.branch}` : "Sin colección")
+  return (
+    <section className="rounded-lg border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border/60 p-4">
+        <Database className="h-4 w-4 text-cyan-600" />
+        <h2 className="text-sm font-semibold">RAG de repo</h2>
+        <Badge variant="outline" className="ml-auto rounded-md">
+          {ingest ? `${ingest.totalChunks} chunks` : "No indexado"}
+        </Badge>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <div className="rounded-md border border-border bg-muted/15 p-3">
+          <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <Layers3 className="h-3.5 w-3.5" />
+            Colección
+          </div>
+          <div className="mt-2 break-all text-xs font-medium">{activeCollection}</div>
+          {ingest ? (
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+              <span>{ingest.filesIndexed} archivos</span>
+              <span>{Math.round(ingest.bytesIndexed / 1024)} KB</span>
+              <span>{ingest.skipped.oversized} grandes</span>
+              <span>{ingest.skipped.fetchFailed} fallos</span>
+            </div>
+          ) : null}
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onIndex}
+          disabled={indexing}
+          className="h-9 w-full rounded-md"
+        >
+          {indexing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+          Indexar RAG
+        </Button>
+
+        <div className="space-y-2">
+          <label className="block text-xs font-medium text-muted-foreground">Buscar en el código indexado</label>
+          <div className="flex gap-2">
+            <Input
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="Pregunta sobre arquitectura o archivos"
+              className="h-9"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") onSearch()
+              }}
+            />
+            <Button
+              type="button"
+              size="icon"
+              variant="secondary"
+              onClick={onSearch}
+              disabled={searching}
+              className="h-9 w-9 shrink-0 rounded-md"
+              aria-label="Buscar contexto RAG"
+            >
+              {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            </Button>
+          </div>
+        </div>
+
+        {search ? (
+          <div className="space-y-2">
+            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {search.hits.length} resultados
+            </div>
+            <div className="space-y-2">
+              {search.hits.length ? search.hits.map((hit, index) => (
+                <div key={`${hit.source}-${hit.title}-${index}`} className="rounded-md border border-border bg-background p-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate text-xs font-semibold">{hit.title || hit.source || "fragmento"}</span>
+                  </div>
+                  <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                    {hit.text}
+                  </p>
+                </div>
+              )) : (
+                <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground">
+                  No hay chunks para esa pregunta. Indexa el repo o cambia la consulta.
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
       </div>
     </section>
   )

@@ -41,11 +41,12 @@ Todas las versiones fueron consultadas en npm/GitHub el 2026-05-01. Antes de ins
 | P1 integrada | `@opentelemetry/api` + `@opentelemetry/sdk-node` + `@opentelemetry/resources` | https://github.com/open-telemetry/opentelemetry-js | `1.9.1` / `0.216.0` / `2.7.1` | Apache-2.0 | Trazas distribuidas | Correlacion request->LLM->tool->documento | Config/exporters; cardinalidad | `backend/index.js`, `backend/src/services/observability/*` | solo Pino/Prometheus | Estandar cloud, sin lock-in |
 | P1 integrada | `@opentelemetry/auto-instrumentations-node` + `@opentelemetry/exporter-trace-otlp-http` | https://github.com/open-telemetry/opentelemetry-js-contrib | `0.74.0` / `0.216.0` | Apache-2.0 | Auto-instrumentar HTTP/Express/Redis/Postgres/OpenAI y exportar OTLP | Visibilidad rapida de latencia y errores | Ruido inicial; se ignoran `/health*`, `/metrics`, `fs`, `dns` | `backend/src/services/observability/*`, middleware, docs/tests | instrumentacion manual | Alto impacto con bajo codigo propio |
 | P1 integrada | `octokit` | https://github.com/octokit/octokit.js | `5.0.5` | MIT | Conector GitHub tipo Codex/Cursor | Contexto profesional de repo, PRs, issues, README y Actions sin clonar codigo | ESM en backend CommonJS; requiere Node >=20 y token server-side para privados | `backend/src/services/github-codex-connector.js`, `backend/src/routes/github-codex.js`, `app/codex/page.tsx`, `lib/github-codex-service.ts` | `@octokit/rest`, REST manual con `fetch` | SDK oficial, MIT, mantenido y menor riesgo que clientes propios |
-| P1 | `swr` | https://github.com/vercel/swr | `2.4.1` | MIT | Fetch cache/dedup en React | Mejora historial, settings y conectores | Migracion gradual por pantalla | `lib/*service.ts`, paginas cliente | React Query | Mas ligero y alineado con Next/Vercel |
+| P1 integrada | `swr` | https://github.com/vercel/swr | `2.4.1` | MIT | Fetch cache/dedup en React | Mejora historial, settings y conectores | Migracion gradual por pantalla | `lib/*service.ts`, paginas cliente | React Query | Mas ligero y alineado con Next/Vercel |
 | P1 | `@tanstack/react-query` | https://github.com/TanStack/query | `5.100.6` | MIT | Estado servidor complejo | Mejor para dashboards/admin con invalidaciones | Provider global; mayor cambio UX | `app/layout.tsx`, admin/proyectos | SWR | Elegir si se priorizan mutaciones complejas |
 | P1 | `p-limit` | https://github.com/sindresorhus/p-limit | `7.3.0` | MIT | Concurrencia controlada | Evita bursts en RAG/OCR/providers | ESM; adaptar tests Node | RAG, OCR, file processing | Bottleneck existente | Minimalista para bucles internos |
 | P1 | `quick-lru` | https://github.com/sindresorhus/quick-lru | `7.3.0` | MIT | Cache LRU en memoria | Limites claros para catlogos/modelos/search metadata | ESM; no sustituye Redis | RAG/search/model catalog | `lru-cache` | MIT; evita BlueOak en core |
-| P2 | `@bull-board/express` | https://github.com/felixmosh/bull-board | `7.0.0` | MIT | UI operativa de BullMQ | Debug de tareas/colas agenticas | Debe ir detras de admin auth | `backend/src/routes/admin.js`, queue services | dashboards propios | Madura y especifica para BullMQ |
+| P2 integrada | `@bull-board/express` | https://github.com/felixmosh/bull-board | `6.12.0` | MIT | UI operativa de BullMQ | Debug de tareas/colas agenticas | Debe ir detras de admin auth | `backend/src/routes/admin-queues.js`, queue services | dashboards propios | Madura, especifica para BullMQ y compatible con Express 4 |
+| P2 integrada | `@sentry/browser` + `@sentry/node` | https://github.com/getsentry/sentry-javascript | `10.51.0` | MIT | Error monitoring opt-in | Captura errores frontend/backend sin bloquear runtime | Requiere DSN externo; se desactiva sin env | `components/sentry-client-init.tsx`, `backend/src/services/observability/sentry.js` | OpenTelemetry solo | SDK oficial, PII stripping y sin lock-in en core |
 | P2 | `zod-to-json-schema` | https://github.com/StefanTerdell/zod-to-json-schema | `3.25.2` | ISC | Exportar contratos de tools/agentes | Documenta APIs internas para SDKs/conectores | Diferencias Zod v3/v4 | tool registry/docs | JSON schema manual | Reduce drift entre validacion y docs |
 | P2 aplicada | `npm sbom` integrado | https://docs.npmjs.com/cli/commands/npm-sbom | npm CLI incluido | npm CLI | SBOM CycloneDX desde lockfiles | Evidencia enterprise/compliance sin dependencia nueva | Artefacto CI adicional | `.github/workflows/ci.yml`, `scripts/validate-supply-chain.js` | `@cyclonedx/cyclonedx-npm` | Menor superficie: usa herramienta oficial ya presente con Node/npm |
 
@@ -176,6 +177,28 @@ Se integro un conector GitHub de bajo riesgo y alto impacto con `octokit@5.0.5`:
 - `docs/phase-6b-github-codex-connector.md`: runbook de seguridad, pruebas y despliegue.
 
 No se clona codigo, no se ejecutan comandos del repositorio remoto y no se aceptan tokens GitHub desde el navegador.
+
+### Fase 6D + 7A/7B/7C aplicada: RAG GitHub, colas admin, SWR y Sentry
+
+Se agregaron integraciones operativas de bajo riesgo y alto impacto:
+
+- `backend/src/services/github-codex-connector.js`: seleccion segura de archivos de repositorio para RAG, con filtros contra secretos, lockfiles, vendor/build outputs, binarios y archivos sobredimensionados.
+- `backend/src/routes/github-codex.js`: endpoints autenticados `/files`, `/ingest` y `/retrieve` para indexar repos GitHub en `rag.ingestCode()` y buscar con retrieval hibrido.
+- `app/codex/page.tsx` y `lib/github-codex-service.ts`: panel Codex con cache SWR, indexado RAG y busqueda de contexto de codigo.
+- `backend/src/routes/admin-queues.js`: Bull Board admin-only para la cola BullMQ existente, con degradacion limpia si `REDIS_URL` no existe.
+- `backend/src/services/observability/sentry.js`, `components/sentry-client-init.tsx` y `lib/sentry-config.ts`: Sentry opt-in frontend/backend sin PII por defecto.
+- `backend/.env.example`: variables `SENTRY_*`.
+- `docs/phase-6d-7abc-operational-integrations.md`: runbook de dependencias, seguridad, pruebas y despliegue.
+
+Dependencias agregadas:
+
+- `swr@2.4.1` (MIT)
+- `@bull-board/api@6.12.0` (MIT)
+- `@bull-board/express@6.12.0` (MIT)
+- `@sentry/browser@10.51.0` (MIT)
+- `@sentry/node@10.51.0` (MIT)
+
+Decision importante: se eligio `@bull-board/express@6.12.0` en lugar de `7.0.0` porque mantiene compatibilidad con Express 4 ya instalado en backend; `7.0.0` eleva la superficie hacia Express 5 sin aportar valor necesario en esta fase.
 
 ### Fase 3 aplicada: hardening de dependencias de documentos/codigo
 
