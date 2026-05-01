@@ -1757,6 +1757,49 @@ async function runAdvancedDocumentPipeline({
     validation.checks.mime_type = true;
   }
 
+  // PptxPackageValidator (phase 6) — slide manifest vs. slide bodies
+  // on PPTX artifacts. Catches PowerPoint-specific failures: 0 slide
+  // bodies, manifest references slide ids that were never written.
+  if (plan.format === 'pptx') {
+    try {
+      const { validatePptxPackage } = require('../agents/pptx-package-validator');
+      const pptxReport = await validatePptxPackage({
+        buffer: artifact.buffer,
+        prompt: opts.prompt || promptText,
+      });
+      validation.checks = validation.checks || {};
+      validation.checks.pptx_package = pptxReport.ok;
+      if (!pptxReport.ok) validation.passed = false;
+      validation.pptxPackage = pptxReport;
+    } catch (err) {
+      console.warn('[document-pipeline] pptx-package-validator failed:', err?.message);
+      validation.checks = validation.checks || {};
+      validation.checks.pptx_package = true;
+    }
+  }
+
+  // XlsxWorkbookValidator (phase 6) — sheet manifest vs. sheet
+  // bodies and cell content count for XLSX artifacts. Catches
+  // Excel-specific failures: 0 sheets, manifest references sheets
+  // that don't exist, content-shape prompt + zero cells.
+  if (plan.format === 'xlsx') {
+    try {
+      const { validateXlsxWorkbook } = require('../agents/xlsx-workbook-validator');
+      const xlsxReport = await validateXlsxWorkbook({
+        buffer: artifact.buffer,
+        prompt: opts.prompt || promptText,
+      });
+      validation.checks = validation.checks || {};
+      validation.checks.xlsx_workbook = xlsxReport.ok;
+      if (!xlsxReport.ok) validation.passed = false;
+      validation.xlsxWorkbook = xlsxReport;
+    } catch (err) {
+      console.warn('[document-pipeline] xlsx-workbook-validator failed:', err?.message);
+      validation.checks = validation.checks || {};
+      validation.checks.xlsx_workbook = true;
+    }
+  }
+
   return {
     ...record,
     telemetryPath,
