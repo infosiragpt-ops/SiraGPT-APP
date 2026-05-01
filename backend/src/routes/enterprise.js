@@ -9,6 +9,9 @@
  *   GET  /asvs                         → OWASP ASVS catalogue
  *   POST /asvs/evaluate                → run evaluator over a context
  *   GET  /tool-manifests               → list tool manifests
+ *   GET  /mcp/status                   → internal MCP connector hub status
+ *   GET  /mcp/tools                    → list approved MCP tool manifests
+ *   POST /mcp/tools/:name/call         → invoke one approved read-only MCP tool
  *   POST /scraper-policy/review        → evaluate a scraper config
  *   POST /sql-safety/analyze           → analyse a SQL string
  *   POST /task-contract/validate       → validate a TaskContract
@@ -65,6 +68,11 @@ const ciraHybridRetrieval = require("../services/sira/hybrid-retrieval");
 const ciraDocPipeline = require("../services/sira/document-pipeline-registry");
 const ciraObservability = require("../services/sira/llm-observability");
 const ciraEvalHarness = require("../services/sira/eval-harness");
+const {
+  createMcpRequestContext,
+  createMcpToolRegistry,
+  normalizeMcpToolRegistryError,
+} = require("../services/connectors/mcp-tool-registry");
 
 // Single Sira tool registry shared across requests.
 // Production extends this via ciraSharedToolRegistry.register({...}) at boot.
@@ -87,6 +95,7 @@ const ciraObservabilityHub = ciraObservability.createObservabilityHub({ sinks: [
 // layer. Production deploys swap providers via createIntegrationStack
 // ({ providers: { agentSdk, orchestration, rag, ... } }).
 const sharedIntegration = createIntegrationStack();
+const sharedMcpHub = createMcpToolRegistry({ prisma });
 const { validateContract } = require("../services/agents/task-contract-resolver");
 const { runQaBoard } = require("../services/agents/qa-board");
 const { createTracer } = require("../services/observability/spans");
@@ -152,6 +161,40 @@ router.post(
 router.get("/tool-manifests", authenticateToken, (_req, res) => {
   ok(res, { manifests: listManifests() });
 });
+
+// ─── MCP Connector Hub ──────────────────────────────────────────────────
+
+router.get("/mcp/status", authenticateToken, (req, res) => {
+  const context = createMcpRequestContext(req);
+  ok(res, { mcp: sharedMcpHub.status(context) });
+});
+
+router.get("/mcp/tools", authenticateToken, (req, res) => {
+  const context = createMcpRequestContext(req);
+  ok(res, { tools: sharedMcpHub.listTools(context).tools });
+});
+
+router.post(
+  "/mcp/tools/:name/call",
+  authenticateToken,
+  [
+    param("name").isString().trim().matches(/^[a-z0-9_.-]{2,80}$/),
+    body("arguments").optional().isObject(),
+  ],
+  async (req, res) => {
+    const errs = validationResult(req);
+    if (!errs.isEmpty()) return fail(res, 400, errs.array());
+
+    try {
+      const context = createMcpRequestContext(req);
+      const result = await sharedMcpHub.callTool(req.params.name, req.body.arguments || {}, context);
+      ok(res, { result });
+    } catch (error) {
+      const normalized = normalizeMcpToolRegistryError(error);
+      res.status(normalized.status).json({ ok: false, ...normalized.body });
+    }
+  },
+);
 
 // ─── Scraper policy review ─────────────────────────────────────────────
 
