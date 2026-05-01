@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1229**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1245**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -295,7 +295,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yaml` | 2.8.3 | ISC | [link](https://github.com/eemeli/yaml) |
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 
-## MIT (985)
+## MIT (1001)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -411,6 +411,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@reduxjs/toolkit` | 2.11.2 | MIT | [link](https://github.com/reduxjs/redux-toolkit) |
 | `@schummar/icu-type-parser` | 1.21.5 | MIT | [link](https://github.com/schummar/schummar-translate) |
 | `@selderee/plugin-htmlparser2` | 0.11.0 | MIT | [link](https://github.com/mxxii/selderee) |
+| `@shikijs/core` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
+| `@shikijs/engine-javascript` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
+| `@shikijs/engine-oniguruma` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
+| `@shikijs/langs` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
+| `@shikijs/themes` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
+| `@shikijs/types` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
+| `@shikijs/vscode-textmate` | 10.0.2 | MIT | [link](https://github.com/shikijs/vscode-textmate) |
 | `@splinetool/react-spline` | 4.1.0 | MIT |  |
 | `@standard-schema/spec` | 1.1.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
 | `@standard-schema/utils` | 0.3.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
@@ -676,6 +683,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `embla-carousel-react` | 8.5.1 | MIT | [link](https://github.com/davidjerleke/embla-carousel) |
 | `embla-carousel-reactive-utils` | 8.5.1 | MIT | [link](https://github.com/davidjerleke/embla-carousel) |
 | `emoji-regex` | 8.0.0, 9.2.2 | MIT | [link](https://github.com/mathiasbynens/emoji-regex) |
+| `emoji-regex-xs` | 1.0.0 | MIT | [link](https://github.com/slevithan/emoji-regex-xs) |
 | `empathic` | 2.0.0 | MIT | [link](https://github.com/lukeed/empathic) |
 | `encodeurl` | 1.0.2, 2.0.0 | MIT | [link](https://github.com/pillarjs/encodeurl) |
 | `encoding-sniffer` | 0.2.1 | MIT | [link](https://github.com/fb55/encoding-sniffer) |
@@ -757,6 +765,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `hast-util-is-element` | 3.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-is-element) |
 | `hast-util-parse-selector` | 2.2.5, 4.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-parse-selector) |
 | `hast-util-raw` | 9.1.0 | MIT | [link](https://github.com/syntax-tree/hast-util-raw) |
+| `hast-util-sanitize` | 5.0.2 | MIT | [link](https://github.com/syntax-tree/hast-util-sanitize) |
+| `hast-util-to-html` | 9.0.5 | MIT | [link](https://github.com/syntax-tree/hast-util-to-html) |
 | `hast-util-to-jsx-runtime` | 2.3.6 | MIT | [link](https://github.com/syntax-tree/hast-util-to-jsx-runtime) |
 | `hast-util-to-parse5` | 8.0.1 | MIT | [link](https://github.com/syntax-tree/hast-util-to-parse5) |
 | `hast-util-to-text` | 4.0.2 | MIT | [link](https://github.com/syntax-tree/hast-util-to-text) |
@@ -985,6 +995,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `on-exit-leak-free` | 2.1.2 | MIT | [link](https://github.com/mcollina/on-exit-or-gc) |
 | `on-finished` | 2.3.0, 2.4.1 | MIT | [link](https://github.com/jshttp/on-finished) |
 | `on-headers` | 1.1.0 | MIT | [link](https://github.com/jshttp/on-headers) |
+| `oniguruma-to-es` | 2.3.0 | MIT | [link](https://github.com/slevithan/oniguruma-to-es) |
 | `opencollective-postinstall` | 2.0.3 | MIT | [link](https://github.com/opencollective/opencollective-postinstall) |
 | `openid-client` | 5.7.1 | MIT | [link](https://github.com/panva/openid-client) |
 | `opentype.js` | 1.3.4 | MIT | [link](https://github.com/opentypejs/opentype.js) |
@@ -1117,8 +1128,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `redux-thunk` | 3.1.0 | MIT | [link](https://github.com/reduxjs/redux-thunk) |
 | `refractor` | 3.6.0 | MIT | [link](https://github.com/wooorm/refractor) |
 | `regenerator-runtime` | 0.13.11 | MIT | [link](https://github.com/facebook/regenerator.git#main) |
+| `regex` | 5.1.1 | MIT | [link](https://github.com/slevithan/regex) |
+| `regex-recursion` | 5.1.1 | MIT | [link](https://github.com/slevithan/regex-recursion) |
+| `regex-utilities` | 2.3.0 | MIT | [link](https://github.com/slevithan/regex-utilities) |
 | `rehype-katex` | 7.0.1 | MIT | [link](https://github.com/remarkjs/remark-math.git#main) |
 | `rehype-raw` | 7.0.0 | MIT | [link](https://github.com/rehypejs/rehype-raw) |
+| `rehype-sanitize` | 6.0.0 | MIT | [link](https://github.com/rehypejs/rehype-sanitize) |
 | `remark-gfm` | 4.0.1 | MIT | [link](https://github.com/remarkjs/remark-gfm) |
 | `remark-math` | 6.0.0 | MIT | [link](https://github.com/remarkjs/remark-math.git#main) |
 | `remark-parse` | 11.0.0 | MIT | [link](https://github.com/remarkjs/remark.git#main) |
@@ -1150,6 +1165,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `setimmediate` | 1.0.5 | MIT | [link](https://github.com/YuzuJS/setImmediate) |
 | `shebang-command` | 2.0.0 | MIT | [link](https://github.com/kevva/shebang-command) |
 | `shebang-regex` | 3.0.0 | MIT | [link](https://github.com/sindresorhus/shebang-regex) |
+| `shiki` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `side-channel` | 1.1.0 | MIT | [link](https://github.com/ljharb/side-channel) |
 | `side-channel-list` | 1.0.0, 1.0.1 | MIT | [link](https://github.com/ljharb/side-channel-list) |
 | `side-channel-map` | 1.0.1 | MIT | [link](https://github.com/ljharb/side-channel-map) |
