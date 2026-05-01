@@ -1,3 +1,11 @@
+require('dotenv').config();
+const {
+    getOpenTelemetryStatus,
+    shutdownOpenTelemetry,
+    startOpenTelemetry,
+} = require('./src/services/observability/otel');
+startOpenTelemetry();
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -10,7 +18,6 @@ const fs = require('fs');
 const path = require('path');
 const passport = require('./src/config/passport');
 const { bigintSerializerMiddleware } = require('./src/utils/bigint-serializer');
-require('dotenv').config();
 
 const prisma = require('./src/config/database');
 const authRoutes = require('./src/routes/auth');
@@ -143,6 +150,8 @@ app.use(httpLogger);
 // every response (including errors).
 const { requestIdMiddleware } = require('./src/middleware/request-id');
 app.use(requestIdMiddleware);
+const { otelRequestContextMiddleware } = require('./src/middleware/otel-request-context');
+app.use(otelRequestContextMiddleware);
 if (process.env.NODE_ENV !== 'production') {
     app.use(morgan('dev'));
 }
@@ -243,6 +252,7 @@ app.get('/health', async (_req, res) => {
         prisma,
         redis: getHealthRedisClient(),
         queue: null,
+        telemetry: getOpenTelemetryStatus(),
     });
     res.status(reportToHttpStatus(report)).json(report);
 });
@@ -356,6 +366,7 @@ async function shutdown(signal) {
         closeAgentTaskWorker(),
         closeAgentTaskQueue(),
         new Promise((resolve) => server.close(resolve)),
+        shutdownOpenTelemetry(),
     ]);
     process.exit(0);
 }

@@ -20,7 +20,7 @@ Brechas contra un ecosistema ChatGPT + Gemini + Claude + Codex + Cursor:
 | Seguridad de render Markdown | `rehype-raw` renderizaba HTML crudo en chat | Necesita sanitizacion AST centralizada antes de React |
 | Seguridad de supply chain | Gate de licencias, auditoria critica como hard gate y SBOM CycloneDX en CI | Quedan advisories high/moderate que requieren upgrades mayores controlados |
 | Next.js runtime | `next@14.2.35` aplicado en esta fase | Quedan advisories `high` que requieren migracion mayor a Next 16 o mitigaciones operativas |
-| Observabilidad | Metricas Prometheus propias y health checks | Falta trazado distribuido OpenTelemetry entre frontend, API, agentes y proveedores |
+| Observabilidad | Metricas Prometheus propias, health checks y trazas OpenTelemetry backend activables por OTLP HTTP | Falta propagar spans manuales finos dentro de herramientas/RAG/agentes y agregar tracing frontend |
 | Data fetching frontend | Contextos y llamadas manuales | Falta deduplicacion/caching estandar para historial, proyectos, conectores y settings |
 | Cola/agentes | BullMQ/Redis y eventos durables | Falta dashboard operativo protegido para queues y workers |
 | RAG/cache | Implementaciones propias | Falta cache LRU/TTL estandar para resultados, manifests y metadata con limites claros |
@@ -38,8 +38,8 @@ Todas las versiones fueron consultadas en npm/GitHub el 2026-05-01. Antes de ins
 | P0 integrada | `next` + `eslint-config-next` | https://github.com/vercel/next.js | `14.2.35` | MIT | Patch de runtime Next 14 | Elimina el advisory critico detectado por `npm audit --audit-level=critical` sin salto mayor | Build/regresion SSR; requiere smoke completo | `package.json`, `package-lock.json`, CI | Migrar a Next 15/16 | Patch semver-compatible frente a upgrade mayor |
 | P0 integrada | `shiki` | https://github.com/shikijs/shiki | `1.29.2` | MIT | Highlighting TextMate para bloques de codigo | Hace consistente el commit actual que ya importa Shiki y evita `Module not found` en `npm ci` | Bundle pesado; debe cargarse lazy como ya hace `useShikiHighlight` | `package.json`, `package-lock.json`, `THIRD_PARTY_LICENSES.md` | `react-syntax-highlighter`, `lowlight` | MIT, activo y con carga dinamica existente |
 | P0 integrada | `exceljs` | https://github.com/exceljs/exceljs | `4.4.0` | MIT | Lectura/generacion XLSX controlada | Sustituye `xlsx` npm, elimina advisories high sin fix y mantiene uso comercial compatible | Bundle cliente grande; se carga dinamicamente. No soporta `.xls` binario legacy | `package.json`, `backend/package.json`, viewers, previews, download routes, upload policy, tests/docs | `xlsx`, `@e965/xlsx`, `openpyxl`, `xlsxwriter` | MIT, mantenida, API Node/browser y menor riesgo legal/supply-chain para core comercial |
-| P1 | `@opentelemetry/api` + `@opentelemetry/sdk-node` | https://github.com/open-telemetry/opentelemetry-js | `1.9.1` / `0.216.0` | Apache-2.0 | Trazas distribuidas | Correlacion request->LLM->tool->documento | Config/exporters; cardinalidad | `backend/index.js`, `backend/src/services/observability/*` | solo Pino/Prometheus | Estandar cloud, sin lock-in |
-| P1 | `@opentelemetry/auto-instrumentations-node` | https://github.com/open-telemetry/opentelemetry-js-contrib | `0.74.0` | Apache-2.0 | Auto-instrumentar HTTP/Express/Redis/Postgres | Visibilidad rapida de latencia y errores | Ruido inicial; debe configurarse por env | `backend/src/services/observability/*` | instrumentacion manual | Alto impacto con bajo codigo propio |
+| P1 integrada | `@opentelemetry/api` + `@opentelemetry/sdk-node` + `@opentelemetry/resources` | https://github.com/open-telemetry/opentelemetry-js | `1.9.1` / `0.216.0` / `2.7.1` | Apache-2.0 | Trazas distribuidas | Correlacion request->LLM->tool->documento | Config/exporters; cardinalidad | `backend/index.js`, `backend/src/services/observability/*` | solo Pino/Prometheus | Estandar cloud, sin lock-in |
+| P1 integrada | `@opentelemetry/auto-instrumentations-node` + `@opentelemetry/exporter-trace-otlp-http` | https://github.com/open-telemetry/opentelemetry-js-contrib | `0.74.0` / `0.216.0` | Apache-2.0 | Auto-instrumentar HTTP/Express/Redis/Postgres/OpenAI y exportar OTLP | Visibilidad rapida de latencia y errores | Ruido inicial; se ignoran `/health*`, `/metrics`, `fs`, `dns` | `backend/src/services/observability/*`, middleware, docs/tests | instrumentacion manual | Alto impacto con bajo codigo propio |
 | P1 | `swr` | https://github.com/vercel/swr | `2.4.1` | MIT | Fetch cache/dedup en React | Mejora historial, settings y conectores | Migracion gradual por pantalla | `lib/*service.ts`, paginas cliente | React Query | Mas ligero y alineado con Next/Vercel |
 | P1 | `@tanstack/react-query` | https://github.com/TanStack/query | `5.100.6` | MIT | Estado servidor complejo | Mejor para dashboards/admin con invalidaciones | Provider global; mayor cambio UX | `app/layout.tsx`, admin/proyectos | SWR | Elegir si se priorizan mutaciones complejas |
 | P1 | `p-limit` | https://github.com/sindresorhus/p-limit | `7.3.0` | MIT | Concurrencia controlada | Evita bursts en RAG/OCR/providers | ESM; adaptar tests Node | RAG, OCR, file processing | Bottleneck existente | Minimalista para bucles internos |
@@ -147,6 +147,20 @@ Se convirtio la validacion de supply chain en un flujo reproducible:
 - `docs/phase-5-security-license-validation.md`: runbook de validacion, politica aplicada y riesgos residuales.
 
 No se agrego `@cyclonedx/cyclonedx-npm`: npm CLI ya incluye `npm sbom` y genera CycloneDX 1.5 desde lockfiles, reduciendo superficie de dependencias.
+
+### Fase 6A aplicada: OpenTelemetry backend
+
+Se integro trazado distribuido activable por entorno:
+
+- `backend/src/services/observability/otel.js`: bootstrap oficial del SDK Node con OTLP HTTP.
+- `backend/src/middleware/otel-request-context.js`: correlacion de `X-Request-Id` con `X-Trace-Id` sin adjuntar payloads ni PII.
+- `backend/index.js`: OpenTelemetry arranca antes de Express/HTTP y se apaga limpiamente en shutdown.
+- `backend/src/services/observability/health-check.js`: `/health` incluye check informativo `opentelemetry`.
+- `backend/.env.example`: variables `OTEL_*`.
+- `backend/tests/otel-observability.test.js`: pruebas de configuracion y correlacion.
+- `docs/phase-6a-opentelemetry.md`: runbook de despliegue y validacion.
+
+La integracion es opt-in: no intenta contactar un collector si no se configura `OTEL_ENABLED=true` o un endpoint OTLP.
 
 ### Fase 3 aplicada: hardening de dependencias de documentos/codigo
 

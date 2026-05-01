@@ -144,6 +144,30 @@ function checkModelProvidersConfigured() {
   };
 }
 
+function checkOpenTelemetry(telemetry) {
+  const details = typeof telemetry === "function" ? telemetry() : (telemetry || {});
+  const configured = Boolean(details.configured || details.enabled || details.started);
+
+  let status = "skipped";
+  if (details.started) status = "healthy";
+  else if (configured) status = "degraded";
+
+  return {
+    name: "opentelemetry",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: {
+      configured,
+      enabled: Boolean(details.enabled),
+      started: Boolean(details.started),
+      service_name: details.service_name || details.serviceName || "siragpt-backend",
+      exporter: details.exporter || "none",
+      reason: details.reason || (configured ? "not_started" : "not_configured"),
+    },
+  };
+}
+
 // ── Composite probes ───────────────────────────────────────────────
 
 function runLivenessCheck() {
@@ -164,7 +188,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
@@ -172,6 +196,7 @@ async function runFullHealthCheck({ prisma, redis, queue } = {}) {
   ]);
   checks.push(checkProcess());
   checks.push(checkModelProvidersConfigured());
+  checks.push(checkOpenTelemetry(telemetry));
   return composeStatus(checks);
 }
 
@@ -209,6 +234,7 @@ module.exports = {
   checkQueue,
   checkProcess,
   checkModelProvidersConfigured,
+  checkOpenTelemetry,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,

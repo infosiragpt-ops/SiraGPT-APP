@@ -7,7 +7,36 @@ the signals** that ops, support, and engineering need to see.
 | File | Purpose |
 |---|---|
 | `health-check.js` | Deep liveness / readiness / full health probes. Pure functions; caller injects `prisma` / `redis` / `queue` so tests run offline. Mounted by `backend/index.js` at `/health`, `/health/live`, `/health/ready`. |
+| `otel.js` | Optional OpenTelemetry SDK bootstrap for distributed traces. Starts before Express/HTTP imports when `OTEL_ENABLED=true` or an OTLP endpoint is configured. |
 | `spans.js` | OpenTelemetry-compatible span helpers (caller-side tracing). |
+
+## OpenTelemetry runtime
+
+Tracing is intentionally opt-in. The backend starts the SDK only when:
+
+- `OTEL_ENABLED=true`, or
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+
+Required production exporter:
+
+```bash
+OTEL_ENABLED=true
+OTEL_SERVICE_NAME=siragpt-backend
+OTEL_TRACES_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://otel-collector.example.com/v1/traces
+```
+
+If only `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318` is set, the
+bootstrap derives `http://collector:4318/v1/traces`.
+
+Behavior:
+
+- HTTP/Express, Pino, ioredis, pg, undici and OpenAI calls are auto-instrumented.
+- `/health*` and `/metrics` are ignored to keep traces focused on user work.
+- Every traced request receives `X-Trace-Id` and keeps `X-Request-Id`.
+- The active request span gets `siragpt.request_id` and `siragpt.authenticated`.
+- No user prompts, file contents, auth tokens or raw tool payloads are attached.
+- `/health` includes a non-critical `opentelemetry` check so ops can see whether tracing is `healthy`, `degraded` or `skipped`.
 
 ## Health-check contract
 

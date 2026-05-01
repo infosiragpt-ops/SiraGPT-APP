@@ -16,6 +16,7 @@ const {
   checkQueue,
   checkProcess,
   checkModelProvidersConfigured,
+  checkOpenTelemetry,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,
@@ -158,6 +159,44 @@ describe("checkModelProvidersConfigured", () => {
   });
 });
 
+// ── checkOpenTelemetry ─────────────────────────────────────────────
+
+describe("checkOpenTelemetry", () => {
+  test("skipped when tracing is not configured", () => {
+    const r = checkOpenTelemetry({ configured: false, enabled: false, started: false });
+    assert.equal(r.name, "opentelemetry");
+    assert.equal(r.status, "skipped");
+    assert.equal(r.critical, false);
+  });
+
+  test("healthy when tracing started", () => {
+    const r = checkOpenTelemetry({
+      configured: true,
+      enabled: true,
+      started: true,
+      service_name: "siragpt-backend",
+      exporter: "otlp-http",
+      reason: "started",
+    });
+    assert.equal(r.status, "healthy");
+    assert.equal(r.details.service_name, "siragpt-backend");
+    assert.equal(r.details.exporter, "otlp-http");
+  });
+
+  test("degraded when tracing was requested but did not start", () => {
+    const r = checkOpenTelemetry({
+      configured: true,
+      enabled: true,
+      started: false,
+      exporter: "otlp-http",
+      reason: "missing_otlp_trace_endpoint",
+    });
+    assert.equal(r.status, "degraded");
+    assert.equal(r.critical, false);
+    assert.equal(r.details.reason, "missing_otlp_trace_endpoint");
+  });
+});
+
 // ── composeStatus ──────────────────────────────────────────────────
 
 describe("composeStatus", () => {
@@ -248,12 +287,14 @@ describe("runReadinessCheck", () => {
 });
 
 describe("runFullHealthCheck", () => {
-  test("includes model_providers informational check", async () => {
+  test("includes model_providers and opentelemetry informational checks", async () => {
     const r = await runFullHealthCheck({
       prisma: { $queryRawUnsafe: async () => 1 },
       redis: { ping: async () => "PONG" },
+      telemetry: { configured: true, enabled: true, started: true, exporter: "otlp-http" },
     });
     assert.ok(r.checks.find((c) => c.name === "model_providers"));
+    assert.ok(r.checks.find((c) => c.name === "opentelemetry"));
   });
 });
 
