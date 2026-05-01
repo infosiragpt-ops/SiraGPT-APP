@@ -12,6 +12,8 @@
  *   GET  /mcp/status                   → internal MCP connector hub status
  *   GET  /mcp/tools                    → list approved MCP tool manifests
  *   POST /mcp/tools/:name/call         → invoke one approved read-only MCP tool
+ *   GET  /contracts/json-schema        → export selected route/tool JSON Schemas
+ *   GET  /contracts/openapi            → export selected OpenAPI contract
  *   POST /scraper-policy/review        → evaluate a scraper config
  *   POST /sql-safety/analyze           → analyse a SQL string
  *   POST /task-contract/validate       → validate a TaskContract
@@ -73,6 +75,10 @@ const {
   createMcpToolRegistry,
   normalizeMcpToolRegistryError,
 } = require("../services/connectors/mcp-tool-registry");
+const {
+  buildJsonSchemaRegistry,
+  buildOpenApiSpec,
+} = require("../services/contracts/schema-registry");
 
 // Single Sira tool registry shared across requests.
 // Production extends this via ciraSharedToolRegistry.register({...}) at boot.
@@ -195,6 +201,16 @@ router.post(
     }
   },
 );
+
+// ─── Tool Contracts / OpenAPI ──────────────────────────────────────────
+
+router.get("/contracts/json-schema", authenticateToken, (_req, res) => {
+  ok(res, { contracts: buildJsonSchemaRegistry() });
+});
+
+router.get("/contracts/openapi", authenticateToken, (_req, res) => {
+  res.json(buildOpenApiSpec());
+});
 
 // ─── Scraper policy review ─────────────────────────────────────────────
 

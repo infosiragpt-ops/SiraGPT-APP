@@ -7,19 +7,18 @@ const {
 } = require('@modelcontextprotocol/sdk/types.js');
 
 const { createGitHubCodexConnector } = require('../github-codex-connector');
+const {
+  getMcpToolContract,
+  getMcpToolJsonSchema,
+  listMcpToolContractNames,
+} = require('../contracts/schema-registry');
 const ragService = require('../rag-service');
 const projectMemory = require('../project-memory');
 
 const MCP_HUB_VERSION = 'sira-mcp-hub-2026-05';
 const DEFAULT_MAX_PREVIEW_CHARS = 4000;
 const MAX_PREVIEW_CHARS = 12000;
-const DEFAULT_MCP_TOOLS = Object.freeze([
-  'github.codex.status',
-  'github.codex.repository_context',
-  'rag.retrieve',
-  'project.memory.list',
-  'document.preview',
-]);
+const DEFAULT_MCP_TOOLS = Object.freeze(listMcpToolContractNames());
 
 class McpToolRegistryError extends Error {
   constructor(code, status, message, details = {}) {
@@ -186,7 +185,7 @@ async function assertProjectOwner(prisma, userId, projectId) {
   return project;
 }
 
-function buildTool(name, description, inputSchema, outputSchema = { type: 'object', additionalProperties: true }) {
+function buildTool(name, description, inputSchema, outputSchema = { type: 'object', additionalProperties: true }, annotations = {}) {
   return assertMcpSchema(ToolSchema, {
     name,
     description,
@@ -197,6 +196,7 @@ function buildTool(name, description, inputSchema, outputSchema = { type: 'objec
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: name.startsWith('github.'),
+      ...annotations,
     },
     _meta: {
       'siragpt.io/mcpHubVersion': MCP_HUB_VERSION,
@@ -205,34 +205,31 @@ function buildTool(name, description, inputSchema, outputSchema = { type: 'objec
   }, 'invalid_mcp_tool_manifest');
 }
 
+function buildContractTool(name) {
+  const contract = getMcpToolContract(name);
+  if (!contract) {
+    throw new McpToolRegistryError('mcp_contract_missing', 500, 'MCP tool contract is not registered', { tool: name });
+  }
+  return buildTool(
+    name,
+    contract.description,
+    getMcpToolJsonSchema(name, 'input'),
+    getMcpToolJsonSchema(name, 'output'),
+    contract.annotations,
+  );
+}
+
 function buildApprovedTools() {
   return {
     'github.codex.status': {
-      tool: buildTool(
-        'github.codex.status',
-        'Read sanitized GitHub Codex connector status and resilience capabilities.',
-        { type: 'object', additionalProperties: false },
-      ),
+      tool: buildContractTool('github.codex.status'),
       handler: async (_args, context, deps) => {
         const connector = deps.createGitHubConnector();
         return textResult({ github: connector.getStatus(), tenant: { id: context.tenantScope.tenantId } });
       },
     },
     'github.codex.repository_context': {
-      tool: buildTool(
-        'github.codex.repository_context',
-        'Read repository metadata, pull requests, issues, Actions summaries and README context through the backend GitHub Codex connector.',
-        {
-          type: 'object',
-          additionalProperties: false,
-          required: ['repository'],
-          properties: {
-            repository: { type: 'string', minLength: 1, maxLength: 240 },
-            branch: { type: 'string', minLength: 1, maxLength: 160 },
-            limit: { type: 'integer', minimum: 1, maximum: 20 },
-          },
-        },
-      ),
+      tool: buildContractTool('github.codex.repository_context'),
       handler: async (args, _context, deps) => {
         const repository = trimString(args.repository);
         if (!repository) {
@@ -248,20 +245,7 @@ function buildApprovedTools() {
       },
     },
     'rag.retrieve': {
-      tool: buildTool(
-        'rag.retrieve',
-        'Retrieve read-only snippets from the authenticated user private RAG collection.',
-        {
-          type: 'object',
-          additionalProperties: false,
-          required: ['collection', 'query'],
-          properties: {
-            collection: { type: 'string', minLength: 1, maxLength: 180 },
-            query: { type: 'string', minLength: 1, maxLength: 2000 },
-            k: { type: 'integer', minimum: 1, maximum: 12 },
-          },
-        },
-      ),
+      tool: buildContractTool('rag.retrieve'),
       handler: async (args, context, deps) => {
         const collection = trimString(args.collection);
         const query = trimString(args.query);
@@ -279,19 +263,7 @@ function buildApprovedTools() {
       },
     },
     'project.memory.list': {
-      tool: buildTool(
-        'project.memory.list',
-        'List durable project memory facts for a project owned by the authenticated user.',
-        {
-          type: 'object',
-          additionalProperties: false,
-          required: ['projectId'],
-          properties: {
-            projectId: { type: 'string', minLength: 1, maxLength: 120 },
-            limit: { type: 'integer', minimum: 1, maximum: 100 },
-          },
-        },
-      ),
+      tool: buildContractTool('project.memory.list'),
       handler: async (args, context, deps) => {
         const project = await assertProjectOwner(deps.prisma, context.tenantScope.userId, args.projectId);
         const memory = await deps.projectMemory.listMemory(project.id, {
@@ -301,20 +273,7 @@ function buildApprovedTools() {
       },
     },
     'document.preview': {
-      tool: buildTool(
-        'document.preview',
-        'Read a bounded Markdown preview of a project document owned by the authenticated user.',
-        {
-          type: 'object',
-          additionalProperties: false,
-          required: ['projectId', 'docId'],
-          properties: {
-            projectId: { type: 'string', minLength: 1, maxLength: 120 },
-            docId: { type: 'string', minLength: 1, maxLength: 120 },
-            maxChars: { type: 'integer', minimum: 100, maximum: MAX_PREVIEW_CHARS },
-          },
-        },
-      ),
+      tool: buildContractTool('document.preview'),
       handler: async (args, context, deps) => {
         const project = await assertProjectOwner(deps.prisma, context.tenantScope.userId, args.projectId);
         if (!deps.prisma?.projectDocument?.findFirst) {
