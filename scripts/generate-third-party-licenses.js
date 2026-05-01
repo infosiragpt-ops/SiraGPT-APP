@@ -27,6 +27,19 @@ const OUTPUT = path.join(ROOT, 'THIRD_PARTY_LICENSES.md');
 
 const FORBIDDEN_PATTERNS = ['GPL', 'AGPL', 'LGPL', 'CDDL', 'EPL', 'MPL-1.1', 'NPOSL'];
 
+// Platform-suffixed native binary packages (sharp, esbuild, swc, rollup, etc.)
+// resolve as optionalDependencies keyed by os/cpu in npm. Locally on macOS
+// only the darwin-arm64 variant is installed; in CI on Linux only linux-x64
+// (and sometimes linuxmusl-x64) is installed. Including them in the report
+// makes it fluctuate per-host and breaks the drift gate. They are documented
+// generically in the "Platform-conditional native binaries" footer instead.
+const PLATFORM_BIN_PATTERN =
+  /-(darwin|linux|linuxmusl|android|win32|windows|freebsd|openbsd|netbsd|sunos|aix)-(x64|arm64|arm|ia32|x86|riscv64|s390x|loongarch64|ppc64|mips64el)(-[a-z]+)?$/;
+
+function isPlatformBinary(name) {
+  return PLATFORM_BIN_PATTERN.test(name);
+}
+
 // Documented exceptions. Each entry must include a reason; CI will print it.
 // Keys are package names (no version) so platform-suffixed variants share the
 // same justification (e.g. @img/sharp-libvips-{linux,darwin}-{x64,arm64}).
@@ -81,6 +94,7 @@ function flagForbidden(license, name) {
 
 function collect() {
   const all = new Map();
+  let platformBinariesSkipped = 0;
   for (const [workspace, cwd] of [['frontend (root)', ROOT], ['backend', BACKEND]]) {
     let entries;
     try {
@@ -94,6 +108,10 @@ function collect() {
       const at = pkgVersion.lastIndexOf('@');
       const name = pkgVersion.slice(0, at);
       const version = pkgVersion.slice(at + 1);
+      if (isPlatformBinary(name)) {
+        platformBinariesSkipped += 1;
+        continue;
+      }
       const key = name; // dedupe across workspaces by name
       if (!all.has(key)) {
         all.set(key, {
@@ -112,7 +130,9 @@ function collect() {
       e.workspaces.add(workspace);
     }
   }
-  return [...all.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const list = [...all.values()].sort((a, b) => a.name.localeCompare(b.name));
+  list._platformBinariesSkipped = platformBinariesSkipped;
+  return list;
 }
 
 function groupByFamily(entries) {
@@ -199,6 +219,24 @@ function render(entries) {
       const versions = [...e.versions].sort().join(', ');
       lines.push(`| \`${e.name}\` | ${versions} | ${e.license} | ${repo} |`);
     }
+    lines.push('');
+  }
+
+  if (entries._platformBinariesSkipped) {
+    lines.push('## Platform-conditional native binaries');
+    lines.push('');
+    lines.push(
+      `${entries._platformBinariesSkipped} platform-suffixed packages (sharp, esbuild, ` +
+      'rollup, swc, …) are intentionally omitted from the tables above. npm only ' +
+      'installs the variants matching the host\'s `os`/`cpu`, so listing them ' +
+      'directly would make this report drift between dev (macOS) and CI/prod ' +
+      '(Linux). They are documented in the parent package\'s entry instead.',
+    );
+    lines.push('');
+    lines.push('Currently the only family with non-permissive licensing in this ' +
+      'group is `@img/sharp-libvips-*` (LGPL-3.0-or-later via N-API), which is ' +
+      'allowlisted under the policy at the top of ' +
+      '`scripts/generate-third-party-licenses.js`.');
     lines.push('');
   }
 

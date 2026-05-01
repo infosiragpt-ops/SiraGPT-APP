@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1237**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1230**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -10,7 +10,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 
 | Package | Declared License | Reason |
 |---|---|---|
-| `@img/sharp-libvips-darwin-arm64` | LGPL-3.0-or-later | LGPL-3.0 native binding via N-API; replaceable |
 | `jszip` | MIT OR GPL-3.0-or-later | Dual MIT OR GPL-3.0 — we elect MIT |
 
 ## 0BSD (1)
@@ -25,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (89)
+## Apache-2.0 (88)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -45,7 +44,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@chevrotain/utils` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `@google/genai` | 1.28.0 | Apache-2.0 | [link](https://github.com/googleapis/js-genai) |
 | `@google/generative-ai` | 0.24.1 | Apache-2.0 | [link](https://github.com/google/generative-ai-js) |
-| `@img/sharp-darwin-arm64` | 0.34.4, 0.34.5 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
 | `@opentelemetry/api` | 1.9.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@playwright/test` | 1.59.1 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
 | `@prisma/client` | 6.18.0 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
@@ -297,13 +295,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yaml` | 2.8.3 | ISC | [link](https://github.com/eemeli/yaml) |
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 
-## LGPL-3.0-or-later (1)
-
-| Package | Version(s) | License | Source |
-|---|---|---|---|
-| `@img/sharp-libvips-darwin-arm64` | 1.2.3, 1.2.4 | LGPL-3.0-or-later | [link](https://github.com/lovell/sharp-libvips) |
-
-## MIT (991)
+## MIT (986)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -350,18 +342,14 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@llamaindex/workflow` | 1.1.24, 1.1.25 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/workflow-core` | 1.3.4 | MIT | [link](https://github.com/run-llama/workflows-ts) |
 | `@mermaid-js/parser` | 1.1.0 | MIT | [link](https://github.com/mermaid-js/mermaid) |
-| `@msgpackr-extract/msgpackr-extract-darwin-arm64` | 3.0.3 | MIT | [link](https://github.com/kriszyp/msgpackr-extract) |
 | `@napi-rs/canvas` | 0.1.81, 0.1.99 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
-| `@napi-rs/canvas-darwin-arm64` | 0.1.81, 0.1.99 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
 | `@next/env` | 14.2.16 | MIT | [link](https://github.com/vercel/next.js) |
-| `@next/swc-darwin-arm64` | 14.2.16 | MIT | [link](https://github.com/vercel/next.js) |
 | `@nodable/entities` | 2.1.0 | MIT | [link](https://github.com/nodable/val-parsers) |
 | `@nodelib/fs.scandir` | 2.1.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@nodelib/fs.stat` | 2.0.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@nodelib/fs.walk` | 1.2.8 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
 | `@panva/hkdf` | 1.2.1 | MIT | [link](https://github.com/panva/hkdf) |
 | `@parcel/watcher` | 2.5.6 | MIT | [link](https://github.com/parcel-bundler/watcher) |
-| `@parcel/watcher-darwin-arm64` | 2.5.6 | MIT | [link](https://github.com/parcel-bundler/watcher) |
 | `@pdf-lib/standard-fonts` | 1.0.0 | MIT | [link](https://github.com/Hopding/standard-fonts) |
 | `@pdf-lib/upng` | 1.0.1 | MIT | [link](https://github.com/Hopding/upng) |
 | `@pinojs/redact` | 0.4.0 | MIT | [link](https://github.com/pinojs/redact) |
@@ -426,7 +414,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@splinetool/react-spline` | 4.1.0 | MIT |  |
 | `@standard-schema/spec` | 1.1.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
 | `@standard-schema/utils` | 0.3.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
-| `@swc/core-darwin-arm64` | 1.15.30 | Apache-2.0 AND MIT | [link](https://github.com/swc-project/swc) |
 | `@tabby_ai/hijri-converter` | 1.0.5 | MIT |  |
 | `@tarikjabiri/dxf` | 2.8.9 | MIT | [link](https://github.com/dxfjs/writer) |
 | `@tiptap/core` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
@@ -1319,3 +1306,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@splinetool/runtime` | 1.12.87 | UNKNOWN | [link](https://github.com/splinetool/spline) |
 | `buffers` | 0.1.1 | UNKNOWN | [link](https://github.com/substack/node-buffers) |
 | `openwebui-backend` | 1.0.0 | UNKNOWN |  |
+
+## Platform-conditional native binaries
+
+10 platform-suffixed packages (sharp, esbuild, rollup, swc, …) are intentionally omitted from the tables above. npm only installs the variants matching the host's `os`/`cpu`, so listing them directly would make this report drift between dev (macOS) and CI/prod (Linux). They are documented in the parent package's entry instead.
+
+Currently the only family with non-permissive licensing in this group is `@img/sharp-libvips-*` (LGPL-3.0-or-later via N-API), which is allowlisted under the policy at the top of `scripts/generate-third-party-licenses.js`.
