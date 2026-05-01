@@ -110,6 +110,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "license-checker-rseidelsohn": "^4.4.2",
     "nodemon": "^3.0.2"
   }
 }

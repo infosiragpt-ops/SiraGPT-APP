@@ -229,6 +229,48 @@ jobs:
         continue-on-error: true
 
   # ───────────────────────────────────────────────────────────────────
+  # LICENSES — third-party license audit (hard gate)
+  # ───────────────────────────────────────────────────────────────────
+  # Phase-1 of the open-source-integration program. Fails the build if a
+  # GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL dependency lands in either
+  # workspace without an entry in the documented ALLOWLIST inside
+  # scripts/generate-third-party-licenses.js. Dual-licensed packages
+  # (e.g. MIT OR GPL) elect the permissive side automatically.
+  licenses:
+    name: Licenses · third-party audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install root dependencies (production + dev for the checker)
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Verify no forbidden licenses in either workspace
+        run: npm run licenses:check
+
+      - name: Verify THIRD_PARTY_LICENSES.md is in sync with package-locks
+        run: |
+          npm run licenses:report >/dev/null
+          if ! git diff --quiet -- THIRD_PARTY_LICENSES.md; then
+            echo "::error::THIRD_PARTY_LICENSES.md is stale. Run 'npm run licenses:report' and commit the diff."
+            git --no-pager diff -- THIRD_PARTY_LICENSES.md | head -120
+            exit 1
+          fi
+
+  # ───────────────────────────────────────────────────────────────────
   # E2E — Playwright browser smoke (informational, stricter step)
   # ───────────────────────────────────────────────────────────────────
   # Boots `next dev` on :3005 (per playwright.config.ts) and runs the
@@ -281,7 +323,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend]
+    needs: [frontend, backend, licenses]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -293,6 +335,10 @@ jobs:
           fi
           if [[ "${{ needs.backend.result }}" != "success" ]]; then
             echo "✗ backend: ${{ needs.backend.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.licenses.result }}" != "success" ]]; then
+            echo "✗ licenses: ${{ needs.licenses.result }}"
             exit 1
           fi
           echo "✓ all required checks passed"
