@@ -1357,7 +1357,7 @@ router.post(
       // have both an authenticated user and a chatId (the identity the
       // resume endpoint keys on).
       const cacheHandle = isAuth && chatId
-        ? streamCache.start(userId, chatId, { title: typeof prompt === 'string' ? prompt.slice(0, 80) : '' })
+        ? await streamCache.start(userId, chatId, { title: typeof prompt === 'string' ? prompt.slice(0, 80) : '' })
         : null;
       if (cacheHandle) {
         const origWrite = res.write.bind(res);

@@ -48,8 +48,8 @@ const projectChatSelect = {
 // Returns the server-side cached partial content for an in-flight
 // stream so the UI can resume after a tab reload / reconnect.
 // See services/stream-cache.js for the lifecycle + TTL.
-router.get('/:chatId/pending-stream', authenticateToken, (req, res) => {
-  const snapshot = streamCache.resume(req.user.id, req.params.chatId);
+router.get('/:chatId/pending-stream', authenticateToken, async (req, res) => {
+  const snapshot = await streamCache.resume(req.user.id, req.params.chatId);
   if (!snapshot) return res.json({ ok: true, pending: null });
   return res.json({ ok: true, pending: snapshot });
 });
