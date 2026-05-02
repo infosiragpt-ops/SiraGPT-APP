@@ -119,39 +119,58 @@ const {
     resolveRateLimitConfig,
     makeJwtAwareKeyGenerator,
 } = require('./src/middleware/rate-limit-policy');
+const { createRateLimitStore } = require('./src/middleware/rate-limit-store');
 const rateLimitCfg = resolveRateLimitConfig(process.env);
 const rateLimitKeyGenerator = makeJwtAwareKeyGenerator(process.env.JWT_SECRET);
 
-// Anti-bruteforce: login / register / password reset / OAuth callbacks.
-const authLimiter = rateLimit({
-    windowMs: rateLimitCfg.windowMs,
-    max: rateLimitCfg.auth,
+// Redis-backed shared counters when REDIS_URL is set; in-memory
+// fallback for local dev / single-instance deploys. See
+// rate-limit-store.js for the chicken-and-egg discussion. We log
+// the resolved mode in the listen() callback so the operator can
+// confirm at boot which store is active.
+const rateLimitStoreInfo = createRateLimitStore(process.env);
+
+// Common options shared across the three tiers — keyGenerator,
+// store, fail-open posture, and modern RateLimit-* headers.
+const limiterCommon = {
     keyGenerator: rateLimitKeyGenerator,
-    message: 'Too many auth attempts, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
+    // If the Redis store throws (network blip, Redis restarting),
+    // let the request through rather than 500-ing the API. Pair this
+    // with operator alerts on the health probe — a sustained Redis
+    // outage is a real incident, but a transient blip should not
+    // break user-facing chat.
+    passOnStoreError: true,
+};
+if (rateLimitStoreInfo.store) {
+    limiterCommon.store = rateLimitStoreInfo.store;
+}
+
+// Anti-bruteforce: login / register / password reset / OAuth callbacks.
+const authLimiter = rateLimit({
+    ...limiterCommon,
+    windowMs: rateLimitCfg.windowMs,
+    max: rateLimitCfg.auth,
+    message: 'Too many auth attempts, please try again later.',
 });
 
 // Expensive endpoints — agent task creation, RAG indexing, document
 // generation. These spawn background workers and consume LLM tokens.
 const expensiveLimiter = rateLimit({
+    ...limiterCommon,
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.expensive,
-    keyGenerator: rateLimitKeyGenerator,
     message: 'Too many expensive operations, please slow down.',
-    standardHeaders: true,
-    legacyHeaders: false,
 });
 
 // Default API limit — covers polling endpoints (model lists, plan
 // status, history) without giving abuse scripts a free ride.
 const apiLimiter = rateLimit({
+    ...limiterCommon,
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.api,
-    keyGenerator: rateLimitKeyGenerator,
     message: 'Too many requests, please try again later.',
-    standardHeaders: true,
-    legacyHeaders: false,
 });
 
 app.use('/api/auth', authLimiter);
@@ -443,6 +462,8 @@ function startServer() {
                 env: process.env.NODE_ENV || 'development',
                 healthUrl: `http://localhost:${PORT}/health`,
                 allowedOrigins: ALLOWED_ORIGINS,
+                rateLimitStore: rateLimitStoreInfo.mode,
+                rateLimitStoreReason: rateLimitStoreInfo.reason,
             },
             'server_started',
         );
