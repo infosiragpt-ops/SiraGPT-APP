@@ -11,6 +11,12 @@ const {
     startSentry,
 } = require('./src/services/observability/sentry');
 startSentry();
+const {
+    getLangfuseStatus,
+    shutdownLangfuse,
+    startLangfuse,
+} = require('./src/services/observability/langfuse');
+startLangfuse();
 
 const express = require('express');
 const cors = require('cors');
@@ -302,6 +308,7 @@ app.get('/health', async (_req, res) => {
         queue: null,
         telemetry: getOpenTelemetryStatus(),
         sentry: getSentryStatus(),
+        langfuse: getLangfuseStatus(),
     });
     res.status(reportToHttpStatus(report)).json(report);
 });
@@ -456,6 +463,8 @@ function startServer() {
             closeAgentTaskQueue(),
             new Promise((resolve) => server.close(resolve)),
             shutdownOpenTelemetry(),
+            // Drain any in-flight langfuse events; safe no-op if disabled.
+            shutdownLangfuse(),
         ]);
         process.exit(0);
     }

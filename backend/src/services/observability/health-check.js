@@ -192,6 +192,31 @@ function checkSentry(sentry) {
   };
 }
 
+function checkLangfuse(langfuse) {
+  const details = typeof langfuse === "function" ? langfuse() : (langfuse || {});
+  const configured = Boolean(details.configured || details.enabled || details.started);
+
+  // Mirrors checkSentry: a configured-but-not-started state is
+  // "degraded" so an ops dashboard can spot the misconfig without
+  // failing the whole readiness probe (langfuse is non-critical).
+  let status = "skipped";
+  if (details.started && details.enabled !== false) status = "healthy";
+  else if (configured) status = "degraded";
+
+  return {
+    name: "langfuse",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: {
+      configured,
+      enabled: Boolean(details.enabled),
+      started: Boolean(details.started),
+      reason: details.reason || (configured ? "not_started" : "not_configured"),
+    },
+  };
+}
+
 // ── Composite probes ───────────────────────────────────────────────
 
 function runLivenessCheck() {
@@ -212,7 +237,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
@@ -222,6 +247,7 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry } = 
   checks.push(checkModelProvidersConfigured());
   checks.push(checkOpenTelemetry(telemetry));
   checks.push(checkSentry(sentry));
+  checks.push(checkLangfuse(langfuse));
   return composeStatus(checks);
 }
 
@@ -261,6 +287,7 @@ module.exports = {
   checkModelProvidersConfigured,
   checkOpenTelemetry,
   checkSentry,
+  checkLangfuse,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,
