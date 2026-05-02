@@ -213,6 +213,31 @@ const mcpToolContracts = Object.freeze([
     }).passthrough(),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
+  {
+    // Outbound HTTP fetch — the FIRST MCP tool that touches the
+    // public internet. Disabled by default; even with both
+    // MCP_WEB_FETCH_ENABLED=true and MCP_WEB_FETCH_ALLOWED_HOSTS
+    // set, the implementation rejects IP literals, private /
+    // loopback / metadata addresses, and DNS-resolved private
+    // addresses (rebinding defense). See backend/src/services/
+    // connectors/web-fetch.js for the security posture.
+    name: 'web.fetch',
+    description: 'Fetch a URL from a configured host allowlist. Disabled by default; SSRF-defended (no IP literals, no private/loopback/metadata addresses, DNS-resolution rebinding check, post-redirect host re-validation, hard size + timeout caps).',
+    input: z.object({
+      url: z.string().url().max(2048),
+      maxBytes: z.number().int().min(1024).max(2 * 1024 * 1024).optional(),
+      timeoutMs: z.number().int().min(1000).max(30_000).optional(),
+    }).strict(),
+    output: z.object({
+      status: z.number().int(),
+      contentType: z.string(),
+      body: z.string(),
+      bytesRead: z.number().int(),
+      truncated: z.boolean(),
+      finalUrl: z.string(),
+    }).passthrough(),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
 ]);
 
 const routeContracts = Object.freeze([

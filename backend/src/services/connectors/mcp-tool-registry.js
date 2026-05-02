@@ -14,6 +14,7 @@ const {
 } = require('../contracts/schema-registry');
 const ragService = require('../rag-service');
 const projectMemory = require('../project-memory');
+const webFetch = require('./web-fetch');
 
 const MCP_HUB_VERSION = 'sira-mcp-hub-2026-05';
 const DEFAULT_MAX_PREVIEW_CHARS = 4000;
@@ -272,6 +273,29 @@ function buildApprovedTools() {
         return textResult({ memory });
       },
     },
+    'web.fetch': {
+      tool: buildContractTool('web.fetch'),
+      handler: async (args, _context, deps) => {
+        // Delegate every safety decision to web-fetch.js — schemes,
+        // IP literals, allowlist match, DNS rebinding, post-redirect
+        // re-validation, body cap, timeout. The handler stays thin
+        // so the security posture is observable in one place.
+        try {
+          const result = await deps.webFetch.executeWebFetch(args, deps.env || process.env);
+          return textResult({ fetched: result });
+        } catch (err) {
+          if (err && err.name === 'WebFetchError') {
+            throw new McpToolRegistryError(
+              err.code,
+              err.status,
+              err.message,
+              err.details || {},
+            );
+          }
+          throw err;
+        }
+      },
+    },
     'document.preview': {
       tool: buildContractTool('document.preview'),
       handler: async (args, context, deps) => {
@@ -319,6 +343,8 @@ function createMcpToolRegistry(options = {}) {
     rag: options.rag || ragService,
     projectMemory: options.projectMemory || projectMemory,
     prisma: options.prisma || null,
+    webFetch: options.webFetch || webFetch,
+    env,
   };
 
   function visibleToolEntries(context = {}) {
