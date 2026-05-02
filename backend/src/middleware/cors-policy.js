@@ -12,6 +12,9 @@
  *
  * Behavior:
  *   - `CORS_ORIGINS=a.com,b.com` → allowlist = ['a.com', 'b.com'].
+ *   - `CORS_ORIGINS=*` → explicitly allow every browser origin. The
+ *     cors package reflects the request origin when the callback
+ *     returns `true`, so credentialed local requests still work.
  *   - Empty CORS_ORIGINS in production → empty allowlist (every browser-
  *     issued request rejected). This is the deliberate fail-closed
  *     posture; index.js logs a loud warn at startup so the misconfig
@@ -37,10 +40,12 @@ function resolveAllowedOrigins(env = process.env) {
 
 function makeOriginCallback(allowed) {
   const allowSet = new Set(allowed);
+  const allowAnyOrigin = allowSet.has('*');
   return (origin, callback) => {
     // No Origin header → not a browser cross-origin request. Allow
     // through; cors's own logic skips the response header anyway.
     if (!origin) return callback(null, true);
+    if (allowAnyOrigin) return callback(null, true);
     if (allowSet.has(origin)) return callback(null, true);
     return callback(new Error(`CORS: origin not allowed (${origin})`));
   };

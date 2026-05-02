@@ -75,6 +75,13 @@ describe("makeOriginCallback", () => {
     assert.equal(allow, true);
   });
 
+  test("explicit wildcard allows every browser origin", async () => {
+    const cb = makeOriginCallback(["*"]);
+    const { err, allow } = await decide(cb, "http://localhost:3000");
+    assert.equal(err, null);
+    assert.equal(allow, true);
+  });
+
   test("rejects an origin not in the allowlist", async () => {
     const cb = makeOriginCallback(["https://app.example.com"]);
     const { err } = await decide(cb, "https://evil.example.com");

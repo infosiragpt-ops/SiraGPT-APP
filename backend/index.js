@@ -109,11 +109,9 @@ app.use(helmet({
 // scaling, swap to `rate-limit-redis` (small, Apache-2.0, vetted).
 //
 // Order matters in Express: more specific path prefixes are mounted
-// FIRST so they fire before the catch-all `/api/` limiter. Express
-// runs every matching middleware in registration order, so an auth
-// request counts against BOTH the auth bucket and the general bucket
-// — by design, since a hot auth endpoint should also pressure the
-// general quota.
+// FIRST so they can apply tighter budgets. The catch-all `/api/`
+// limiter skips those route families to avoid double-counting a
+// single request across two express-rate-limit instances.
 //
 // Bucketing key: see makeJwtAwareKeyGenerator in rate-limit-policy.js.
 // Authenticated requests are bucketed by user-id (`user:<id>`); anon
@@ -137,8 +135,10 @@ const rateLimitKeyGenerator = makeJwtAwareKeyGenerator(process.env.JWT_SECRET);
 const rateLimitStoreInfo = createRateLimitStore(process.env);
 
 // Common options shared across the three tiers — keyGenerator,
-// store, fail-open posture, and modern RateLimit-* headers.
-const limiterCommon = {
+// fail-open posture, and modern RateLimit-* headers. Redis stores
+// are created per limiter because express-rate-limit requires a
+// distinct Store instance for each bucket.
+const baseLimiterCommon = {
     keyGenerator: rateLimitKeyGenerator,
     standardHeaders: true,
     legacyHeaders: false,
@@ -149,13 +149,22 @@ const limiterCommon = {
     // break user-facing chat.
     passOnStoreError: true,
 };
-if (rateLimitStoreInfo.store) {
-    limiterCommon.store = rateLimitStoreInfo.store;
+
+function makeLimiterCommon(bucket) {
+    const options = { ...baseLimiterCommon };
+    const prefixBase = process.env.RATE_LIMIT_REDIS_PREFIX || 'rl:';
+    const bucketStoreInfo = createRateLimitStore(process.env, {
+        prefix: `${prefixBase}${bucket}:`,
+    });
+    if (bucketStoreInfo.store) {
+        options.store = bucketStoreInfo.store;
+    }
+    return options;
 }
 
 // Anti-bruteforce: login / register / password reset / OAuth callbacks.
 const authLimiter = rateLimit({
-    ...limiterCommon,
+    ...makeLimiterCommon('auth'),
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.auth,
     message: 'Too many auth attempts, please try again later.',
@@ -164,7 +173,7 @@ const authLimiter = rateLimit({
 // Expensive endpoints — agent task creation, RAG indexing, document
 // generation. These spawn background workers and consume LLM tokens.
 const expensiveLimiter = rateLimit({
-    ...limiterCommon,
+    ...makeLimiterCommon('expensive'),
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.expensive,
     message: 'Too many expensive operations, please slow down.',
@@ -172,10 +181,17 @@ const expensiveLimiter = rateLimit({
 
 // Default API limit — covers polling endpoints (model lists, plan
 // status, history) without giving abuse scripts a free ride.
+const apiLimiterSpecificPrefixes = [
+    '/api/auth',
+    '/api/agent',
+    '/api/rag',
+    '/api/document-ai',
+];
 const apiLimiter = rateLimit({
-    ...limiterCommon,
+    ...makeLimiterCommon('api'),
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.api,
+    skip: (req) => apiLimiterSpecificPrefixes.some((prefix) => req.originalUrl.startsWith(prefix)),
     message: 'Too many requests, please try again later.',
 });
 
