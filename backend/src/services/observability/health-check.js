@@ -217,6 +217,31 @@ function checkLangfuse(langfuse) {
   };
 }
 
+function checkPostHog(posthog) {
+  const details = typeof posthog === "function" ? posthog() : (posthog || {});
+  const configured = Boolean(details.configured || details.enabled || details.started);
+
+  // Same posture as checkLangfuse: non-critical (analytics buffer
+  // outages don't take the API down), with degraded surface for
+  // configured-but-not-started so the misconfig is visible in dashboards.
+  let status = "skipped";
+  if (details.started && details.enabled !== false) status = "healthy";
+  else if (configured) status = "degraded";
+
+  return {
+    name: "posthog",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: {
+      configured,
+      enabled: Boolean(details.enabled),
+      started: Boolean(details.started),
+      reason: details.reason || (configured ? "not_started" : "not_configured"),
+    },
+  };
+}
+
 // ── Composite probes ───────────────────────────────────────────────
 
 function runLivenessCheck() {
@@ -237,7 +262,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
@@ -248,6 +273,7 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   checks.push(checkOpenTelemetry(telemetry));
   checks.push(checkSentry(sentry));
   checks.push(checkLangfuse(langfuse));
+  checks.push(checkPostHog(posthog));
   return composeStatus(checks);
 }
 
@@ -288,6 +314,7 @@ module.exports = {
   checkOpenTelemetry,
   checkSentry,
   checkLangfuse,
+  checkPostHog,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,

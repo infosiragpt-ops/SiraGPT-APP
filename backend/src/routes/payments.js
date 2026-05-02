@@ -10,6 +10,7 @@ const usageMonitor = require('../services/usage-monitor');
 const prorationService = require('../services/proration');
 const subscriptionAnalyticsService = require('../services/subscription-analytics');
 const { serializeBigIntFields } = require('../utils/bigint-serializer');
+const { capturePostHogEvent } = require('../services/observability/posthog');
 const axios = require('axios');
 
 const router = express.Router();
@@ -830,7 +831,25 @@ async function handleCheckoutSessionCompleted(session) {
     });
 
     console.log(`Subscription activated for user ${userId}, plan: ${plan}`);
-    
+
+    // Server-authoritative funnel event: a real Stripe webhook
+    // delivery completed AND we mutated the user row. We emit from
+    // the backend (not the frontend success page) because this is
+    // the single source of truth — a malicious frontend could spoof
+    // a "thank you" event without ever paying.
+    capturePostHogEvent({
+      distinctId: userId,
+      event: 'plan.upgraded',
+      properties: {
+        plan,
+        previous_plan: currentUser?.plan || null,
+        monthly_limit: newTotalLimit,
+        added_credits: planCredits[plan],
+        stripe_session_id: session.id,
+        source: 'stripe.checkout.session.completed',
+      },
+    });
+
   } catch (error) {
     console.error('Error handling checkout session completed:', error);
   }

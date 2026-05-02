@@ -17,6 +17,12 @@ const {
     startLangfuse,
 } = require('./src/services/observability/langfuse');
 startLangfuse();
+const {
+    getPostHogStatus,
+    shutdownPostHog,
+    startPostHog,
+} = require('./src/services/observability/posthog');
+startPostHog();
 
 const express = require('express');
 const cors = require('cors');
@@ -342,6 +348,7 @@ app.get('/health', async (_req, res) => {
         telemetry: getOpenTelemetryStatus(),
         sentry: getSentryStatus(),
         langfuse: getLangfuseStatus(),
+        posthog: getPostHogStatus(),
     });
     res.status(reportToHttpStatus(report)).json(report);
 });
@@ -500,6 +507,8 @@ function startServer() {
             shutdownOpenTelemetry(),
             // Drain any in-flight langfuse events; safe no-op if disabled.
             shutdownLangfuse(),
+            // Drain any in-flight posthog events; safe no-op if disabled.
+            shutdownPostHog(),
         ]);
         process.exit(0);
     }
