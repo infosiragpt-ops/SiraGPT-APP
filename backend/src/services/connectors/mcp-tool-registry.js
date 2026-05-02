@@ -273,29 +273,6 @@ function buildApprovedTools() {
         return textResult({ memory });
       },
     },
-    'web.fetch': {
-      tool: buildContractTool('web.fetch'),
-      handler: async (args, _context, deps) => {
-        // Delegate every safety decision to web-fetch.js — schemes,
-        // IP literals, allowlist match, DNS rebinding, post-redirect
-        // re-validation, body cap, timeout. The handler stays thin
-        // so the security posture is observable in one place.
-        try {
-          const result = await deps.webFetch.executeWebFetch(args, deps.env || process.env);
-          return textResult({ fetched: result });
-        } catch (err) {
-          if (err && err.name === 'WebFetchError') {
-            throw new McpToolRegistryError(
-              err.code,
-              err.status,
-              err.message,
-              err.details || {},
-            );
-          }
-          throw err;
-        }
-      },
-    },
     'document.preview': {
       tool: buildContractTool('document.preview'),
       handler: async (args, context, deps) => {
@@ -330,6 +307,33 @@ function buildApprovedTools() {
             truncated: content.length > maxChars,
           },
         });
+      },
+    },
+    'web.fetch': {
+      // Position MUST match the order of `web.fetch` in
+      // schema-registry.js#mcpToolContracts (last entry). The
+      // tool-schema-export test pins listTools() output against
+      // listMcpToolContractNames() so any drift here surfaces in CI.
+      tool: buildContractTool('web.fetch'),
+      handler: async (args, _context, deps) => {
+        // Delegate every safety decision to web-fetch.js — schemes,
+        // IP literals, allowlist match, DNS rebinding, post-redirect
+        // re-validation, body cap, timeout. The handler stays thin
+        // so the security posture is observable in one place.
+        try {
+          const result = await deps.webFetch.executeWebFetch(args, deps.env || process.env);
+          return textResult({ fetched: result });
+        } catch (err) {
+          if (err && err.name === 'WebFetchError') {
+            throw new McpToolRegistryError(
+              err.code,
+              err.status,
+              err.message,
+              err.details || {},
+            );
+          }
+          throw err;
+        }
       },
     },
   };
