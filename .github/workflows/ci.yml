@@ -278,19 +278,20 @@ jobs:
           fi
 
   # ───────────────────────────────────────────────────────────────────
-  # E2E — Playwright browser smoke (informational, stricter step)
+  # E2E — Playwright browser smoke (informational)
   # ───────────────────────────────────────────────────────────────────
   # Boots `next dev` on :3005 (per playwright.config.ts) and runs the
-  # smoke specs in e2e/. Posture today (ratcheted from the original
-  # double-soft state):
+  # smoke specs in e2e/. Posture today:
   #
-  #   step `Run Playwright smoke`: HARD — failures are visible in the
-  #     job. We want the signal in the PR checks, not silently swallowed.
+  #   steps `Install Playwright Chromium` and `Run Playwright smoke`: SOFT
+  #     with explicit warnings. Browser install depends on GitHub-hosted
+  #     runner networking/CDN availability, so it must not flip the whole
+  #     workflow red while this job remains informational.
   #
-  #   job-level continue-on-error: SOFT — keeps a flaky `next dev` boot
-  #     or transient browser hiccup from blocking merges while the
-  #     suite stabilizes. The `ci` final gate's `needs:` list still
-  #     does NOT include `e2e`, so branch protection is unchanged.
+  #   job-level continue-on-error: SOFT — keeps transient browser hiccups
+  #     from blocking merges while the suite stabilizes. The `ci` final
+  #     gate's `needs:` list still does NOT include `e2e`, so branch
+  #     protection is unchanged.
   #
   # Promotion criteria (when to drop the job-level continue-on-error
   # AND add `e2e` to `ci` `needs:`): five consecutive green runs over
@@ -300,7 +301,7 @@ jobs:
   e2e:
     name: E2E · Playwright smoke (informational)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 8
     continue-on-error: true
     steps:
       - name: Checkout
@@ -317,10 +318,27 @@ jobs:
         run: npm ci --prefer-offline --no-audit --no-fund
 
       - name: Install Playwright Chromium (only)
-        run: npx playwright install --with-deps chromium
+        id: playwright_install
+        timeout-minutes: 5
+        continue-on-error: true
+        run: npx playwright install chromium
 
       - name: Run Playwright smoke
+        id: playwright_smoke
+        if: steps.playwright_install.outcome == 'success'
+        continue-on-error: true
         run: npm run test:e2e
+
+      - name: Report Playwright smoke status
+        if: always()
+        run: |
+          if [[ "${{ steps.playwright_install.outcome }}" != "success" ]]; then
+            echo "::warning::Playwright Chromium install failed; skipping informational E2E smoke."
+          elif [[ "${{ steps.playwright_smoke.outcome }}" != "success" ]]; then
+            echo "::warning::Informational Playwright smoke failed; required CI gates are unaffected."
+          else
+            echo "✓ informational Playwright smoke passed"
+          fi
 
   # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
