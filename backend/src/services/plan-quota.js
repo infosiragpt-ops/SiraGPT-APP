@@ -1,0 +1,177 @@
+'use strict';
+
+/**
+ * plan-quota — single source of truth for "how much of their plan
+ * has this user consumed?". The Prisma User model carries two
+ * orthogonal counters that previously lived only inside ad-hoc
+ * checks scattered across `/api/ai`:
+ *
+ *   FREE plan:
+ *     `monthlyCallLimit` is a REMAINING-call counter. New FREE users
+ *     start at 3 (passport.js seeds it on signup) and the chat path
+ *     atomically decrements it on each generation. The "limit" is
+ *     the original allowance — also 3 for FREE.
+ *
+ *   PRO / PRO_MAX / ENTERPRISE:
+ *     `apiUsage` is a token counter incremented after each
+ *     generation. `monthlyLimit` is the user-record cap (paid plans
+ *     accumulate credits via the Stripe webhook, so the cap lives
+ *     on the user row, not in a constant).
+ *
+ * This module exposes two pure helpers and one thin DB helper. The
+ * pure helpers can be unit-tested without booting Prisma; the DB
+ * helper is the single place we touch the database when a route
+ * needs the freshest counter.
+ *
+ * Why this exists as its own service:
+ *   The same FREE-vs-PAID branching logic appears at four call sites
+ *   in `backend/src/routes/ai.js` (decrement-or-fail patterns at
+ *   lines 824, 3020, 3164, 3299). A future commit will refactor
+ *   those to use this module; for now we ship the module + the new
+ *   `enforce-plan-quota` middleware that uses it on the expensive
+ *   endpoints (/api/agent, /api/rag, /api/document-ai) which had
+ *   ZERO quota enforcement before this change.
+ */
+
+const FREE_CALL_LIMIT = 3;
+
+// Threshold below which we emit a "warning" event but still allow
+// the request through. 80% matches usage-monitor.js's existing
+// thresholds for email alerts so the dashboards line up.
+const WARNING_THRESHOLD = 0.8;
+
+/**
+ * Coerce a Prisma BigInt-ish value (BigInt, number, string, null)
+ * to a finite plain number. Snapshots are read-only and used for
+ * percent math, so a JS number is more useful than a BigInt.
+ * Returns 0 for missing / invalid values rather than NaN — the
+ * caller uses these in arithmetic and an undetected NaN would silently
+ * disable threshold checks.
+ */
+function toNumber(value) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'bigint') return Number(value);
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function clampPercentage(used, limit) {
+  if (!limit || limit <= 0) return 0;
+  const ratio = used / limit;
+  if (!Number.isFinite(ratio)) return 0;
+  return Math.max(0, Math.min(1, ratio));
+}
+
+/**
+ * getPlanQuotaSnapshot — pure function. Returns a normalized view
+ * of the user's quota state with `kind: 'calls' | 'tokens'`. Never
+ * throws; null/undefined input returns a "no quota" snapshot so
+ * upstream code can treat anonymous traffic uniformly.
+ *
+ * Returned shape (stable; downstream tooling reads these field names):
+ *   {
+ *     plan:       'FREE' | 'PRO' | 'PRO_MAX' | 'ENTERPRISE' | null,
+ *     kind:       'calls' | 'tokens' | 'none',
+ *     used:       number,    // how many calls / tokens consumed this period
+ *     limit:      number,    // the cap; 0 means "unlimited / no enforcement"
+ *     remaining:  number,    // max(0, limit - used) — clamped, never negative
+ *     percentage: number,    // 0..1, clamped
+ *     exceeded:   boolean,   // percentage >= 1 (used >= limit)
+ *     warning:    boolean,   // percentage >= WARNING_THRESHOLD (and not exceeded)
+ *   }
+ */
+function getPlanQuotaSnapshot(user) {
+  if (!user || !user.plan) {
+    return {
+      plan: null,
+      kind: 'none',
+      used: 0,
+      limit: 0,
+      remaining: 0,
+      percentage: 0,
+      exceeded: false,
+      warning: false,
+    };
+  }
+
+  if (user.plan === 'FREE') {
+    // monthlyCallLimit on the user row is the REMAINING counter,
+    // not the cap. FREE plans always cap at FREE_CALL_LIMIT (currently
+    // 3); changing the cap is a config change here, not a per-user
+    // mutation. `used` is derived: limit - remaining, clamped to
+    // [0, limit] so a transient negative-remaining race (rare but
+    // possible under concurrent atomic decrements) doesn't surface
+    // a "used 4 of 3" UI artifact.
+    const remaining = toNumber(user.monthlyCallLimit);
+    const limit = FREE_CALL_LIMIT;
+    const used = Math.max(0, Math.min(limit, limit - remaining));
+    const percentage = clampPercentage(used, limit);
+    return {
+      plan: 'FREE',
+      kind: 'calls',
+      used,
+      limit,
+      remaining: Math.max(0, remaining),
+      percentage,
+      exceeded: percentage >= 1 || remaining <= 0,
+      warning: percentage >= WARNING_THRESHOLD && percentage < 1,
+    };
+  }
+
+  // Paid plans (PRO / PRO_MAX / ENTERPRISE): token-based metering.
+  // apiUsage is incremented after each generation; monthlyLimit is
+  // the per-user cap (Stripe webhook adds plan credits on upgrade).
+  const used = toNumber(user.apiUsage);
+  const limit = toNumber(user.monthlyLimit);
+  const percentage = clampPercentage(used, limit);
+  const remaining = Math.max(0, limit - used);
+  return {
+    plan: user.plan,
+    kind: 'tokens',
+    used,
+    limit,
+    remaining,
+    percentage,
+    exceeded: limit > 0 && percentage >= 1,
+    warning: limit > 0 && percentage >= WARNING_THRESHOLD && percentage < 1,
+  };
+}
+
+/**
+ * fetchUserPlanQuota — DB helper that re-reads the latest counters
+ * from Prisma and returns a snapshot. Use this when the request's
+ * `req.user` may be stale (e.g., after a long-running websocket).
+ *
+ * Returns null when the user does not exist, so the caller can
+ * decide between "deny" (treat as exhausted) and "allow" (treat as
+ * anonymous). Never throws — DB errors degrade to null with a
+ * console.warn so a flaky DB doesn't block all requests.
+ */
+async function fetchUserPlanQuota(userId, prisma) {
+  if (!userId || !prisma) return null;
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        plan: true,
+        apiUsage: true,
+        monthlyCallLimit: true,
+        monthlyLimit: true,
+      },
+    });
+    if (!user) return null;
+    return getPlanQuotaSnapshot(user);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[plan-quota] fetchUserPlanQuota failed:', err && err.message);
+    return null;
+  }
+}
+
+module.exports = {
+  getPlanQuotaSnapshot,
+  fetchUserPlanQuota,
+  FREE_CALL_LIMIT,
+  WARNING_THRESHOLD,
+};

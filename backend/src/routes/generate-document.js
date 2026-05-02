@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const prisma = require('../config/database');
 const aiService = require('../services/ai-service');
 const OpenAI = require('openai');
@@ -95,6 +96,12 @@ router.post(
 
     ],
     authenticateToken,
+    // Plan-quota enforcement: 429 when the user has exhausted their
+    // FREE/PRO/PRO_MAX/ENTERPRISE quota, 200 with X-Plan-Quota-*
+    // headers otherwise. See backend/src/services/plan-quota.js for
+    // the FREE-vs-paid accounting model and docs/plan-quotas.md for
+    // the operator runbook (PLAN_QUOTAS_ENFORCED kill switch).
+    enforcePlanQuota({ surface: 'document-ai.generate-word' }),
     async (req, res) => {
         const controller = new AbortController();
         const signal = controller.signal;
