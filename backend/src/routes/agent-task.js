@@ -35,6 +35,7 @@ const { body, validationResult } = require('express-validator');
 const OpenAI = require('openai');
 
 const { authenticateToken } = require('../middleware/auth');
+const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const reactAgent = require('../services/react-agent');
 const { buildTaskTools, ARTIFACT_DIR } = require('../services/agents/task-tools');
 const taskStore = require('../services/agents/task-store');
@@ -363,6 +364,10 @@ router.post(
     body('maxRuntimeMs').optional().isInt({ min: 60000, max: 7200000 }),
   ],
   authenticateToken,
+  // Plan-quota enforcement on the durable task creation path.
+  // Agent tasks consume LLM tokens and queue worker time, so they
+  // belong with the FREE/PAID quota check. See docs/plan-quotas.md.
+  enforcePlanQuota({ surface: 'agent.task.create' }),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });

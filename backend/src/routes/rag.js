@@ -8,6 +8,7 @@
 const express = require('express');
 const { body, query, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const rag = require('../services/rag-service');
 const queryTransforms = require('../services/rag/query-transforms');
 const advancedChunking = require('../services/rag/advanced-chunking');
@@ -38,6 +39,9 @@ const router = express.Router();
 router.post(
   '/ingest',
   authenticateToken,
+  // Plan-quota enforcement: ingest pipeline triggers chunking +
+  // embedding API calls, both billed against the user's monthly cap.
+  enforcePlanQuota({ surface: 'rag.ingest' }),
   [
     body('docs').isArray({ min: 1 }).withMessage('docs must be a non-empty array'),
     body('collection').optional().isString().isLength({ min: 1, max: 64 }),

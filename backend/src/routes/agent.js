@@ -121,9 +121,16 @@ function buildTools({ openai, userId, collection }) {
   ];
 }
 
+const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
+
 router.post(
   '/run',
   authenticateAgent,
+  // Plan-quota enforcement. authenticateAgent populates req.user from
+  // either a JWT or an agent-key. Agent-key callers won't carry plan
+  // metadata and the snapshot returns kind:'none' → middleware passes
+  // through (agent keys are billed separately via the agentKeys table).
+  enforcePlanQuota({ surface: 'agent.run' }),
   [
     body('query').trim().isLength({ min: 3 }).withMessage('query too short'),
     body('maxSteps').optional().isInt({ min: 2, max: 15 }),
