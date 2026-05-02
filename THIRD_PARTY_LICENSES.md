@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1385**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1392**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (166)
+## Apache-2.0 (167)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -47,13 +47,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@grpc/grpc-js` | 1.14.3 | Apache-2.0 | [link](https://github.com/grpc/grpc-node.git#master) |
 | `@grpc/proto-loader` | 0.8.0 | Apache-2.0 | [link](https://github.com/grpc/grpc-node) |
 | `@opentelemetry/api` | 1.9.0, 1.9.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/api-logs` | 0.207.0, 0.212.0, 0.214.0, 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/api-logs` | 0.207.0, 0.208.0, 0.212.0, 0.214.0, 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/auto-instrumentations-node` | 0.74.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/configuration` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/context-async-hooks` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/core` | 2.6.1, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/core` | 2.2.0, 2.6.1, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/exporter-logs-otlp-grpc` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/exporter-logs-otlp-http` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/exporter-logs-otlp-http` | 0.208.0, 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/exporter-logs-otlp-proto` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/exporter-metrics-otlp-grpc` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/exporter-metrics-otlp-http` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
@@ -104,9 +104,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@opentelemetry/instrumentation-tedious` | 0.33.0, 0.35.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/instrumentation-undici` | 0.26.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/instrumentation-winston` | 0.60.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
-| `@opentelemetry/otlp-exporter-base` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/otlp-exporter-base` | 0.208.0, 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/otlp-grpc-exporter-base` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/otlp-transformer` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/otlp-transformer` | 0.208.0, 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/propagator-b3` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/propagator-jaeger` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/redis-common` | 0.38.3 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
@@ -115,11 +115,11 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@opentelemetry/resource-detector-azure` | 0.24.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/resource-detector-container` | 0.8.7 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/resource-detector-gcp` | 0.51.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
-| `@opentelemetry/resources` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/sdk-logs` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/sdk-metrics` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/resources` | 2.2.0, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/sdk-logs` | 0.208.0, 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/sdk-metrics` | 2.2.0, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/sdk-node` | 0.216.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
-| `@opentelemetry/sdk-trace-base` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
+| `@opentelemetry/sdk-trace-base` | 2.2.0, 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/sdk-trace-node` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/semantic-conventions` | 1.40.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/sql-common` | 0.41.2 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
@@ -193,6 +193,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `ts-interface-checker` | 0.1.13 | Apache-2.0 | [link](https://github.com/gristlabs/ts-interface-checker) |
 | `tunnel-agent` | 0.6.0 | Apache-2.0 | [link](https://github.com/mikeal/tunnel-agent) |
 | `wasm-feature-detect` | 1.8.0 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/wasm-feature-detect) |
+| `web-vitals` | 5.2.0 | Apache-2.0 | [link](https://github.com/GoogleChrome/web-vitals) |
 | `webdriver-bidi-protocol` | 0.3.8 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/webdriver-bidi-protocol) |
 
 ## BSD (56)
@@ -270,6 +271,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 | Package | Version(s) | License | Source |
 |---|---|---|---|
 | `caniuse-lite` | 1.0.30001790 | CC-BY-4.0 | [link](https://github.com/browserslist/caniuse-lite) |
+
+## Custom: LICENSE (1)
+
+| Package | Version(s) | License | Source |
+|---|---|---|---|
+| `posthog-js` | 1.372.6 | Custom: LICENSE | [link](https://github.com/PostHog/posthog-js) |
 
 ## Custom: license (23)
 
@@ -386,7 +393,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1045)
+## MIT (1050)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -482,6 +489,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@pdf-lib/upng` | 1.0.1 | MIT | [link](https://github.com/Hopding/upng) |
 | `@pinojs/redact` | 0.4.0 | MIT | [link](https://github.com/pinojs/redact) |
 | `@pkgjs/parseargs` | 0.11.0 | MIT | [link](https://github.com/pkgjs/parseargs) |
+| `@posthog/core` | 1.28.0 | MIT | [link](https://github.com/PostHog/posthog-js) |
+| `@posthog/types` | 1.372.6 | MIT | [link](https://github.com/PostHog/posthog-js) |
 | `@radix-ui/number` | 1.1.0, 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/primitive` | 1.1.1, 1.1.3 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-accordion` | 1.2.2 | MIT | [link](https://github.com/radix-ui/primitives) |
@@ -772,6 +781,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `cookie-parser` | 1.4.7 | MIT | [link](https://github.com/expressjs/cookie-parser) |
 | `cookie-signature` | 1.0.6, 1.0.7, 1.2.2 | MIT | [link](https://github.com/visionmedia/node-cookie-signature) |
 | `cookiejar` | 2.1.4 | MIT | [link](https://github.com/bmeck/node-cookiejar) |
+| `core-js` | 3.49.0 | MIT | [link](https://github.com/zloirock/core-js) |
 | `core-util-is` | 1.0.3 | MIT | [link](https://github.com/isaacs/core-util-is) |
 | `cors` | 2.8.5 | MIT | [link](https://github.com/expressjs/cors) |
 | `cose-base` | 1.0.3, 2.2.0 | MIT | [link](https://github.com/iVis-at-Bilkent/cose-base) |
@@ -862,7 +872,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `fd-slicer` | 1.1.0 | MIT | [link](https://github.com/andrewrk/node-fd-slicer) |
 | `fdir` | 6.5.0 | MIT | [link](https://github.com/thecodrr/fdir) |
 | `fetch-blob` | 3.2.0 | MIT | [link](https://github.com/node-fetch/fetch-blob) |
-| `fflate` | 0.8.2 | MIT | [link](https://github.com/101arrowz/fflate) |
+| `fflate` | 0.4.8, 0.8.2 | MIT | [link](https://github.com/101arrowz/fflate) |
 | `file-saver` | 2.0.5 | MIT | [link](https://github.com/eligrey/FileSaver.js) |
 | `file-type` | 22.0.1 | MIT | [link](https://github.com/sindresorhus/file-type) |
 | `fill-range` | 7.1.1 | MIT | [link](https://github.com/jonschlinkert/fill-range) |
@@ -1196,6 +1206,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `postgres-bytea` | 1.0.1 | MIT | [link](https://github.com/bendrucker/postgres-bytea) |
 | `postgres-date` | 1.0.7 | MIT | [link](https://github.com/bendrucker/postgres-date) |
 | `postgres-interval` | 1.2.0 | MIT | [link](https://github.com/bendrucker/postgres-interval) |
+| `posthog-node` | 4.18.0 | MIT | [link](https://github.com/PostHog/posthog-js-lite) |
 | `pptxgenjs` | 4.0.1 | MIT | [link](https://github.com/gitbrent/PptxGenJS) |
 | `preact` | 10.29.1 | MIT | [link](https://github.com/preactjs/preact) |
 | `preact-render-to-string` | 5.2.6 | MIT | [link](https://github.com/developit/preact-render-to-string) |
@@ -1223,6 +1234,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `proxy-from-env` | 1.1.0, 2.1.0 | MIT | [link](https://github.com/Rob--W/proxy-from-env) |
 | `pump` | 3.0.3, 3.0.4 | MIT | [link](https://github.com/mafintosh/pump) |
 | `pure-rand` | 6.1.0 | MIT | [link](https://github.com/dubzzz/pure-rand) |
+| `query-selector-shadow-dom` | 1.0.1 | MIT | [link](https://github.com/webdriverio/query-selector-shadow-dom) |
 | `queue` | 6.0.2 | MIT | [link](https://github.com/jessetane/queue) |
 | `queue-microtask` | 1.2.3 | MIT | [link](https://github.com/feross/queue-microtask) |
 | `quick-format-unescaped` | 4.0.4 | MIT | [link](https://github.com/davidmarkclements/quick-format) |
