@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
+const { tryConsumePlanQuota } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
@@ -820,34 +821,12 @@ router.post(
         }
       }
 
-      // ✅ Check monthly limit
+      // ✅ Check monthly limit (atomic FREE decrement / paid cap check
+      // delegated to services/plan-quota.js; behavior preserved
+      // byte-for-byte from the previous inline implementation).
       if (isAuth) {
-        if (req.user.plan === 'FREE') {
-          const result = await prisma.user.updateMany({
-            where: {
-              id: userId,
-              monthlyCallLimit: { gt: 0 }
-            },
-            data: {
-              monthlyCallLimit: { decrement: 1 }
-            }
-          });
-
-          if (!result || result.count === 0) {
-            return res.status(429).json({
-              error: 'Free monthly queries exhausted. Please upgrade to continue.',
-              remaining: 0
-            });
-          }
-
-        } else {
-          if (req.user.apiUsage >= req.user.monthlyLimit) {
-            return res.status(429).json({
-              error: 'Monthly API limit exceeded',
-              usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-            });
-          }
-        }
+        const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
+        if (!quota.ok) return res.status(quota.status).json(quota.body);
       }
 
       // ✅ Process attached files
@@ -3013,31 +2992,8 @@ router.post(
       console.log('🎨 Vector PPT generation request:', { prompt, chatId, provider, model });
 
       // Check monthly limit
-      if (req.user.plan === 'FREE') {
-        const result = await prisma.user.updateMany({
-          where: {
-            id: userId,
-            monthlyCallLimit: { gt: 0 }
-          },
-          data: {
-            monthlyCallLimit: { decrement: 1 }
-          }
-        });
-
-        if (!result || result.count === 0) {
-          return res.status(429).json({
-            error: 'Free monthly queries exhausted. Please upgrade to continue.',
-            remaining: 0
-          });
-        }
-      } else {
-        if (req.user.apiUsage >= req.user.monthlyLimit) {
-          return res.status(429).json({
-            error: 'Monthly API limit exceeded',
-            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-          });
-        }
-      }
+      const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
+      if (!quota.ok) return res.status(quota.status).json(quota.body);
 
       const chat = await prisma.chat.findUnique({ where: { id: chatId } });
       if (!chat || chat.userId !== userId) {
@@ -3157,31 +3113,8 @@ router.post(
       console.log('📊 PPT generation request:', { prompt, chatId, provider, model });
 
       // Check monthly limit
-      if (req.user.plan === 'FREE') {
-        const result = await prisma.user.updateMany({
-          where: {
-            id: userId,
-            monthlyCallLimit: { gt: 0 }
-          },
-          data: {
-            monthlyCallLimit: { decrement: 1 }
-          }
-        });
-
-        if (!result || result.count === 0) {
-          return res.status(429).json({
-            error: 'Free monthly queries exhausted. Please upgrade to continue.',
-            remaining: 0
-          });
-        }
-      } else {
-        if (req.user.apiUsage >= req.user.monthlyLimit) {
-          return res.status(429).json({
-            error: 'Monthly API limit exceeded',
-            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-          });
-        }
-      }
+      const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
+      if (!quota.ok) return res.status(quota.status).json(quota.body);
 
       const chats = await prisma.chat.findUnique({ where: { id: chatId } });
       if (!chats || chats.userId !== userId) {
@@ -3292,31 +3225,8 @@ router.post(
       console.log('📧 Gmail AI request:', { prompt, chatId, model, userId });
 
       // Check monthly limit
-      if (req.user.plan === 'FREE') {
-        const result = await prisma.user.updateMany({
-          where: {
-            id: userId,
-            monthlyCallLimit: { gt: 0 }
-          },
-          data: {
-            monthlyCallLimit: { decrement: 1 }
-          }
-        });
-
-        if (!result || result.count === 0) {
-          return res.status(429).json({
-            error: 'Free monthly queries exhausted. Please upgrade to continue.',
-            remaining: 0
-          });
-        }
-      } else {
-        if (req.user.apiUsage >= req.user.monthlyLimit) {
-          return res.status(429).json({
-            error: 'Monthly API limit exceeded',
-            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-          });
-        }
-      }
+      const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
+      if (!quota.ok) return res.status(quota.status).json(quota.body);
 
       // Check if Gmail is connected
       const user = await prisma.user.findUnique({
@@ -3827,31 +3737,8 @@ router.post(
       console.log('🌐 Web development streaming request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
 
       // Check monthly limit
-      if (req.user.plan === 'FREE') {
-        const result = await prisma.user.updateMany({
-          where: {
-            id: userId,
-            monthlyCallLimit: { gt: 0 }
-          },
-          data: {
-            monthlyCallLimit: { decrement: 1 }
-          }
-        });
-
-        if (!result || result.count === 0) {
-          return res.status(429).json({
-            error: 'Free monthly queries exhausted. Please upgrade to continue.',
-            remaining: 0
-          });
-        }
-      } else {
-        if (req.user.apiUsage >= req.user.monthlyLimit) {
-          return res.status(429).json({
-            error: 'Monthly API limit exceeded',
-            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-          });
-        }
-      }
+      const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
+      if (!quota.ok) return res.status(quota.status).json(quota.body);
 
       // Verify chat exists and belongs to user
       const chat = await prisma.chat.findUnique({ where: { id: chatId } });
@@ -4144,31 +4031,8 @@ router.post(
       console.log('📅🗂️ Google Services AI request:', { prompt, chatId, model, service, userId });
 
       // Check monthly limit
-      if (req.user.plan === 'FREE') {
-        const result = await prisma.user.updateMany({
-          where: {
-            id: userId,
-            monthlyCallLimit: { gt: 0 }
-          },
-          data: {
-            monthlyCallLimit: { decrement: 1 }
-          }
-        });
-
-        if (!result || result.count === 0) {
-          return res.status(429).json({
-            error: 'Free monthly queries exhausted. Please upgrade to continue.',
-            remaining: 0
-          });
-        }
-      } else {
-        if (req.user.apiUsage >= req.user.monthlyLimit) {
-          return res.status(429).json({
-            error: 'Monthly API limit exceeded',
-            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-          });
-        }
-      }
+      const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
+      if (!quota.ok) return res.status(quota.status).json(quota.body);
 
       // Check if Google Services is connected
       const user = await prisma.user.findUnique({
@@ -4543,31 +4407,8 @@ router.post(
       console.log('📊 Excel Workbook generation request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
 
       // Check monthly limit
-      if (req.user.plan === 'FREE') {
-        const result = await prisma.user.updateMany({
-          where: {
-            id: userId,
-            monthlyCallLimit: { gt: 0 }
-          },
-          data: {
-            monthlyCallLimit: { decrement: 1 }
-          }
-        });
-
-        if (!result || result.count === 0) {
-          return res.status(429).json({
-            error: 'Free monthly queries exhausted. Please upgrade to continue.',
-            remaining: 0
-          });
-        }
-      } else {
-        if (req.user.apiUsage >= req.user.monthlyLimit) {
-          return res.status(429).json({
-            error: 'Monthly API limit exceeded',
-            usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-          });
-        }
-      }
+      const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
+      if (!quota.ok) return res.status(quota.status).json(quota.body);
 
       // Verify chat exists and belongs to user
       let chat = null;

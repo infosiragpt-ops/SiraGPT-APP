@@ -169,9 +169,109 @@ async function fetchUserPlanQuota(userId, prisma) {
   }
 }
 
+/**
+ * tryConsumePlanQuota — atomic check-and-consume primitive used by
+ * the chat path (`backend/src/routes/ai.js`). Replaces seven byte-
+ * identical inline blocks that each:
+ *
+ *   FREE plan:
+ *     - prisma.user.updateMany({
+ *         where: { id, monthlyCallLimit: { gt: 0 } },
+ *         data:  { monthlyCallLimit: { decrement: 1 } },
+ *       })
+ *     - if no row matched → 429 with the exhausted-queries message.
+ *
+ *   PAID plans:
+ *     - if user.apiUsage >= user.monthlyLimit → 429 with the
+ *       monthly-API-limit message and the current usage / limit.
+ *
+ * The shape of the 429 responses is preserved BYTE-FOR-BYTE so a
+ * client UI that branches off `error === 'Free monthly queries
+ * exhausted. Please upgrade to continue.'` continues to work
+ * unchanged. Field order and types in the response body are also
+ * preserved (BigInt apiUsage / monthlyLimit are forwarded as-is;
+ * the existing `bigintSerializerMiddleware` in index.js handles
+ * JSON serialization).
+ *
+ * Why a discriminated `{ ok, status, body }` and not `throw`:
+ *   The caller already owns the response object. Throwing forces
+ *   the route into a try/catch that turns a 429 into a 500, which
+ *   is exactly the regression we want to avoid. A plain object
+ *   keeps the existing call shape (`if (!result) return ...`).
+ *
+ * @param {Object} params
+ * @param {string} params.userId   The Prisma User id (must match
+ *                                 req.user.id; passed separately for
+ *                                 stub-friendly testing).
+ * @param {Object} params.prisma   The Prisma client (so tests can
+ *                                 inject a stub without booting
+ *                                 the real DB).
+ * @param {Object|null} params.user The req.user row. When null/
+ *                                 undefined (anonymous traffic) the
+ *                                 function returns `{ ok: true }`
+ *                                 immediately — anonymous traffic is
+ *                                 already gated by other layers
+ *                                 (rate limit, auth middleware) and
+ *                                 has no plan to enforce against.
+ * @returns {Promise<{ok: true} | {ok: false, status: number, body: object}>}
+ */
+async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
+  if (!user) return { ok: true };
+
+  if (user.plan === 'FREE') {
+    // Atomic CAS-style decrement: the WHERE clause both reads the
+    // current counter (>0) and the UPDATE writes the new value in
+    // a single Prisma query. Concurrent requests that race for the
+    // last call will see exactly one winner — the loser gets count:0.
+    const result = await prisma.user.updateMany({
+      where: {
+        id: userId,
+        monthlyCallLimit: { gt: 0 },
+      },
+      data: {
+        monthlyCallLimit: { decrement: 1 },
+      },
+    });
+    if (!result || result.count === 0) {
+      return {
+        ok: false,
+        status: 429,
+        body: {
+          error: 'Free monthly queries exhausted. Please upgrade to continue.',
+          remaining: 0,
+        },
+      };
+    }
+    return { ok: true };
+  }
+
+  // Paid plans: token-based check is non-atomic on purpose. The
+  // counter (apiUsage) is incremented AFTER the LLM call returns,
+  // so there's a race where two concurrent calls both pass this
+  // check and the running total exceeds the cap by one request.
+  // That's acceptable — token over-shoot of one request is far
+  // cheaper than the latency cost of a synchronous DB roundtrip
+  // before every chat turn. The snapshot in `getPlanQuotaSnapshot`
+  // already clamps percentage to 1 so dashboards and headers
+  // never lie about a 110% used count.
+  if (user.apiUsage >= user.monthlyLimit) {
+    return {
+      ok: false,
+      status: 429,
+      body: {
+        error: 'Monthly API limit exceeded',
+        usage: { current: user.apiUsage, limit: user.monthlyLimit },
+      },
+    };
+  }
+
+  return { ok: true };
+}
+
 module.exports = {
   getPlanQuotaSnapshot,
   fetchUserPlanQuota,
+  tryConsumePlanQuota,
   FREE_CALL_LIMIT,
   WARNING_THRESHOLD,
 };
