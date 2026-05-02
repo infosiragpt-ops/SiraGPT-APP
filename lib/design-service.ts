@@ -1,5 +1,7 @@
 "use client"
 
+import { streamSseJson } from "./sse-client"
+
 /**
  * design-service — client for /api/design.
  *
@@ -146,22 +148,8 @@ export const designService = {
     }
     if (!res.body) throw new Error("Stream body missing")
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ""
-
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      let idx
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const raw = buffer.slice(0, idx)
-        buffer = buffer.slice(idx + 2)
-        const payload = raw.split("\n").filter(l => l.startsWith("data: ")).map(l => l.slice(6)).join("\n")
-        if (!payload) continue
-        try { yield JSON.parse(payload) as GenerateEvent } catch {}
-      }
+    for await (const event of streamSseJson<GenerateEvent>(res.body, { signal })) {
+      yield event
     }
   },
 }

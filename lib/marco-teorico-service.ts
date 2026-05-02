@@ -1,5 +1,7 @@
 "use client"
 
+import { streamSseJson } from "./sse-client"
+
 /**
  * marco-teorico-service — client for the SSE generation pipeline.
  *
@@ -88,30 +90,8 @@ export async function* generate({ projectId, signal, ...body }: GenerateArgs): A
   }
   if (!resp.body) throw new Error("Stream body missing")
 
-  const reader = resp.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    // SSE frames are delimited by blank lines. Pull complete frames
-    // off the front of the buffer; leave the partial tail for the
-    // next iteration.
-    let idx
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const raw = buffer.slice(0, idx)
-      buffer = buffer.slice(idx + 2)
-      const payload = raw.split("\n").filter(l => l.startsWith("data: ")).map(l => l.slice(6)).join("\n")
-      if (!payload) continue
-      try {
-        yield JSON.parse(payload) as MarcoEvent
-      } catch {
-        // Bad frame — skip; the server normally produces valid JSON.
-      }
-    }
+  for await (const event of streamSseJson<MarcoEvent>(resp.body, { signal })) {
+    yield event
   }
 }
 

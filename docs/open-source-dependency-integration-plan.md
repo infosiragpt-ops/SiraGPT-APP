@@ -2,7 +2,7 @@
 
 Fecha: 2026-05-01
 
-Actualizacion CTO: ver tambien [`docs/cto-commercial-ai-ecosystem-roadmap.md`](./cto-commercial-ai-ecosystem-roadmap.md) para el diagnostico consolidado posterior a Fase 6D + 7A/7B/7C, la matriz de brechas frente a ChatGPT/Gemini/Claude/Codex/Cursor y la priorizacion de Fase 8. La siguiente integracion recomendada es **Fase 8A: hardening del conector GitHub Codex/Cursor** con plugins oficiales Octokit de retry/throttle.
+Actualizacion CTO: ver tambien [`docs/cto-commercial-ai-ecosystem-roadmap.md`](./cto-commercial-ai-ecosystem-roadmap.md) para el diagnostico consolidado posterior a Fase 6D + 7A/7B/7C, la matriz de brechas frente a ChatGPT/Gemini/Claude/Codex/Cursor y la priorizacion de Fase 8. La integracion mas reciente es [`docs/phase-9a-sse-stream-parser-hardening.md`](./phase-9a-sse-stream-parser-hardening.md): hardening del parsing SSE del cliente con `eventsource-parser@3.0.8` (MIT).
 
 ## 1. Diagnostico del estado actual
 

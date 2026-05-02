@@ -99,6 +99,7 @@
     "dompurify": "^3.4.0",
     "dxf-viewer": "^1.0.47",
     "embla-carousel-react": "8.5.1",
+    "eventsource-parser": "3.0.8",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
     "framer-motion": "^12.23.12",

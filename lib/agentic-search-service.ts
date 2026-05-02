@@ -1,5 +1,7 @@
 "use client"
 
+import { streamSseJson } from "./sse-client"
+
 /**
  * agentic-search-service — client adapter for POST /api/search/agentic.
  *
@@ -99,31 +101,8 @@ export async function* runIterator(args: AgenticRunArgs): AsyncGenerator<Agentic
   }
   if (!resp.body) throw new Error("Stream body missing")
 
-  const reader = resp.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      let idx
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const raw = buffer.slice(0, idx)
-        buffer = buffer.slice(idx + 2)
-        const dataLine = raw.split("\n").find(l => l.startsWith("data: "))
-        if (!dataLine) continue
-        try {
-          yield JSON.parse(dataLine.slice(6)) as AgenticEvent
-        } catch {
-          /* malformed frame — skip */
-        }
-      }
-    }
-  } finally {
-    try { reader.releaseLock() } catch { /* already released */ }
+  for await (const event of streamSseJson<AgenticEvent>(resp.body, { signal })) {
+    yield event
   }
 }
 

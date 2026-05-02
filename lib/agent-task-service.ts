@@ -1,5 +1,7 @@
 "use client"
 
+import { streamSseJson } from "./sse-client"
+
 /**
  * agent-task-service — SSE adapter for POST /api/agent/task.
  *
@@ -167,9 +169,6 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
   }
   if (!resp.body) throw new Error("Stream body missing")
 
-  const reader = resp.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   let timedOut = false
 
@@ -180,41 +179,28 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
       // Abort the underlying fetch so reader.read() rejects and we
       // exit the loop instead of waiting on a dead socket.
       internal.abort(new AgentTaskIdleTimeoutError(idleMs))
-      try { reader.cancel("idle-timeout").catch(() => {}) } catch { /* noop */ }
     }, idleMs)
   }
 
   try {
     armIdleTimer()
-    while (true) {
-      let chunk: ReadableStreamReadResult<Uint8Array>
-      try {
-        chunk = await reader.read()
-      } catch (err: any) {
-        if (timedOut) throw new AgentTaskIdleTimeoutError(idleMs)
-        if (signal?.aborted) throw err
-        throw err
+    try {
+      for await (const event of streamSseJson<AgentTaskEvent>(resp.body, {
+        signal: internal.signal,
+        // Reset the idle timer on every successful chunk — even an
+        // empty heartbeat keeps the stream alive.
+        onChunk: armIdleTimer,
+      })) {
+        yield event
       }
-      // Reset the idle timer on every successful chunk — even an
-      // empty heartbeat keeps the stream alive.
-      armIdleTimer()
-      if (chunk.done) break
-      buffer += decoder.decode(chunk.value, { stream: true })
-      let idx
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const raw = buffer.slice(0, idx)
-        buffer = buffer.slice(idx + 2)
-        const dataLine = raw.split("\n").find(l => l.startsWith("data: "))
-        if (!dataLine) continue
-        try {
-          yield JSON.parse(dataLine.slice(6)) as AgentTaskEvent
-        } catch { /* malformed frame */ }
-      }
+    } catch (err: any) {
+      if (timedOut) throw new AgentTaskIdleTimeoutError(idleMs)
+      if (signal?.aborted) throw err
+      throw err
     }
   } finally {
     if (idleTimer) clearTimeout(idleTimer)
     if (signal) signal.removeEventListener("abort", onUpstreamAbort)
-    try { reader.releaseLock() } catch { /* already released */ }
   }
 }
 

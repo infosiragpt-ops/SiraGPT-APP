@@ -1,4 +1,6 @@
 // Frontend API client for backend integration
+import { streamSseJson } from "./sse-client"
+
 /** Backend mounts routes under `/api` (e.g. `/api/auth/login`). Accept env with or without `/api`. */
 export function getNormalizedApiBaseUrl(): string {
   const raw = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
@@ -1242,34 +1244,12 @@ class ApiClient {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) {
+      if (!response.body) {
         throw new Error('No response body');
       }
 
-      const decoder = new TextDecoder('utf-8');
-
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          // The onComplete call is now handled by the 'done' message type
-          break;
-        }
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const jsonData = JSON.parse(line.slice(6));
-              onData(jsonData);
-            } catch (e) {
-              // Skip invalid JSON
-            }
-          }
-        }
+      for await (const jsonData of streamSseJson<any>(response.body)) {
+        onData(jsonData);
       }
     } catch (error: any) {
       console.error('Web search stream failed:', error);
@@ -1502,41 +1482,19 @@ class ApiClient {
         throw new Error('Response body is null');
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
-
-          for (const line of lines) {
-            if (line.startsWith('data: ') && line.length > 6) {
-              try {
-                const jsonStr = line.slice(6);
-                if (jsonStr.trim() === '[DONE]') {
-                  onClose();
-                  return;
-                }
-                const data = JSON.parse(jsonStr);
-                if (data.content) {
-                  onData(data.content);
-                }
-                if (data.error) {
-                  onError(new Error(data.error));
-                  return;
-                }
-              } catch (parseError) {
-                console.warn('Failed to parse SSE data:', parseError);
-              }
-            }
-          }
+      for await (const event of streamSseJson<any>(response.body, {
+        stopOnDoneMessage: true,
+        onMalformedMessage: (_raw, parseError) => {
+          console.warn('Failed to parse SSE data:', parseError);
+        },
+      })) {
+        if (event.content) {
+          onData(event.content);
         }
-      } finally {
-        reader.releaseLock();
+        if (event.error) {
+          onError(new Error(event.error));
+          return;
+        }
       }
 
       onClose();

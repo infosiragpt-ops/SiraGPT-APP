@@ -24,6 +24,7 @@
     "../lib/file-processing-vocab.ts",
     "../lib/download-utils.ts",
     "../lib/xlsx-client.ts",
+    "../lib/sse-client.ts",
     "../lib/sentry-config.ts"
   ]
 }
