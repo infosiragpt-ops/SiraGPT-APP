@@ -218,7 +218,7 @@ app.use(passport.session());
 // `req.id` for correlation; downstream code can use `req.log.info(...)`
 // to inherit that id. Morgan stays in dev for the familiar coloured
 // per-request line during local development.
-const { httpLogger } = require('./src/middleware/logger');
+const { logger, httpLogger } = require('./src/middleware/logger');
 app.use(httpLogger);
 // Pin req.id onto req.requestId / res.locals.requestId and echo it
 // back as `X-Request-Id`. Must run *after* httpLogger so req.id is
@@ -401,7 +401,15 @@ app.use('/api/codex/github', githubCodexRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
+    // Use the request-bound logger so the error correlates with the
+    // request id already emitted in the access log. Falls back to the
+    // module-level logger if pino-http didn't run for some reason
+    // (e.g. error thrown before middleware chain attached).
+    const log = req.log || logger;
+    log.error(
+        { err, status: err.status || 500 },
+        'request_failed',
+    );
     captureSentryException(err, {
         req,
         tags: {
@@ -436,9 +444,25 @@ app.use('*', (req, res) => {
 function startServer() {
     prisma.connectDatabase();
     const server = app.listen(PORT, () => {
-        console.log(`🚀 Backend server running on port ${PORT}`);
-        console.log(`📊 Environment: ${process.env.NODE_ENV}`);
-        console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+        logger.info(
+            {
+                port: PORT,
+                env: process.env.NODE_ENV || 'development',
+                healthUrl: `http://localhost:${PORT}/health`,
+                allowedOrigins: ALLOWED_ORIGINS,
+            },
+            'server_started',
+        );
+        // Loud warning when production boots without an explicit CORS
+        // allowlist. The fail-closed CORS callback will then reject
+        // every browser request — surface this in the access log so
+        // ops can spot the misconfig before users do.
+        if (process.env.NODE_ENV === 'production' && ALLOWED_ORIGINS.length === 0) {
+            logger.warn(
+                { hint: 'set CORS_ORIGINS to a comma-separated allowlist' },
+                'cors_allowlist_empty_in_production',
+            );
+        }
     });
 
     startAgentTaskWorker();
@@ -453,7 +477,7 @@ function startServer() {
     scheduler.start();
 
     async function shutdown(signal) {
-        console.log(`[shutdown] ${signal} received`);
+        logger.info({ signal }, 'shutdown_initiated');
         try { scheduler.stop?.(); } catch {}
         await Promise.allSettled([
             closeAgentTaskWorker(),
