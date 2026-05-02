@@ -179,17 +179,11 @@ const apiLimiter = rateLimit({
     message: 'Too many requests, please try again later.',
 });
 
-app.use('/api/auth', authLimiter);
-app.use('/api/agent', expensiveLimiter);
-app.use('/api/rag', expensiveLimiter);
-app.use('/api/document-ai', expensiveLimiter);
-app.use('/api/', apiLimiter);
-
 // CORS allowlist — resolved once at startup. See cors-policy.js for
 // the fail-closed-in-production semantics and the localhost dev
-// fallback. `ALLOWED_ORIGINS` is also referenced in the listen()
-// callback below to surface a loud warn when production boots without
-// a configured allowlist.
+// fallback. This must run before route rate-limiters so browser
+// preflight requests receive Access-Control-* headers before any
+// auth-specific middleware can short-circuit the response.
 const { resolveAllowedOrigins, makeOriginCallback } = require('./src/middleware/cors-policy');
 const ALLOWED_ORIGINS = resolveAllowedOrigins(process.env);
 app.use(cors({
@@ -197,6 +191,12 @@ app.use(cors({
     credentials: true,
     optionsSuccessStatus: 200,
 }));
+
+app.use('/api/auth', authLimiter);
+app.use('/api/agent', expensiveLimiter);
+app.use('/api/rag', expensiveLimiter);
+app.use('/api/document-ai', expensiveLimiter);
+app.use('/api/', apiLimiter);
 
 // Body parsing middleware
 app.use(compression({
@@ -365,6 +365,15 @@ app.get('/metrics', (_req, res) => {
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.send(observabilityMetrics.renderText());
 });
+
+// ── Interactive API documentation ───────────────────────────────
+// Renders the OpenAPI 3.1 spec (built by services/contracts/
+// schema-registry.js) into Swagger UI at /api-docs. Default ON in
+// non-production, OFF in production unless API_DOCS_ENABLED=true.
+// See backend/src/routes/api-docs.js for the env-gate semantics
+// and docs/api-docs.md for the operator runbook.
+const { buildApiDocsRouter } = require('./src/routes/api-docs');
+app.use('/api-docs', buildApiDocsRouter());
 
 // API Routes
 app.use('/api/auth', authRoutes);

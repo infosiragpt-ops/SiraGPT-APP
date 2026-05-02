@@ -30,12 +30,34 @@ function resolveSentryConfig(env = process.env) {
     environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV || 'development',
     release: env.SENTRY_RELEASE || env.npm_package_version || undefined,
     tracesSampleRate: parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE, 0),
+    // Profiling sample rate is APPLIED to traces, so a profile only
+    // exists for traces that were already sampled. Setting this > 0
+    // without `tracesSampleRate > 0` is a no-op — `@sentry/profiling-
+    // node` documents this explicitly. Default 0 keeps the new
+    // integration completely silent until an operator opts in.
+    profilesSampleRate: parseSampleRate(env.SENTRY_PROFILES_SAMPLE_RATE, 0),
     sendDefaultPii: false,
   };
 }
 
 function getSentryStatus() {
   return { ...runtimeStatus };
+}
+
+// Try to load the optional `@sentry/profiling-node` integration.
+// Returns either a configured integration instance or `null` when
+// the package is unavailable (fresh checkout pre-`npm install`) or
+// when profiling is disabled. The require is wrapped in try/catch
+// so a missing native binary on an exotic platform never crashes
+// boot — Sentry continues to work without profiles.
+function loadProfilingIntegration(profilesSampleRate) {
+  if (!profilesSampleRate || profilesSampleRate <= 0) return null;
+  try {
+    const { nodeProfilingIntegration } = require('@sentry/profiling-node');
+    return nodeProfilingIntegration();
+  } catch (_err) {
+    return null;
+  }
 }
 
 function startSentry(env = process.env) {
@@ -47,6 +69,8 @@ function startSentry(env = process.env) {
     environment: config.environment,
     release: config.release || null,
     traces_sample_rate: config.tracesSampleRate,
+    profiles_sample_rate: config.profilesSampleRate,
+    profiling_loaded: false,
     reason: config.configured ? 'disabled' : 'not_configured',
   };
 
@@ -59,11 +83,19 @@ function startSentry(env = process.env) {
 
   try {
     sentryClient = require('@sentry/node');
+    const profilingIntegration = loadProfilingIntegration(config.profilesSampleRate);
+    runtimeStatus.profiling_loaded = Boolean(profilingIntegration);
     sentryClient.init({
       dsn: config.dsn,
       environment: config.environment,
       release: config.release,
       tracesSampleRate: config.tracesSampleRate,
+      profilesSampleRate: config.profilesSampleRate,
+      // Only attach the integration when profiling is enabled AND
+      // the optional package loaded. Sentry's defaults still cover
+      // error capture when the integrations array is omitted, so we
+      // leave that path untouched.
+      ...(profilingIntegration ? { integrations: [profilingIntegration] } : {}),
       sendDefaultPii: false,
       beforeSend(event) {
         if (event?.request) {

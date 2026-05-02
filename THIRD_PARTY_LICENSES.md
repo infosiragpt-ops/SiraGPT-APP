@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1392**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1397**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (167)
+## Apache-2.0 (169)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -134,6 +134,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@prisma/instrumentation` | 7.6.0 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
 | `@profoundlogic/hogan` | 3.0.4 | Apache-2.0 | [link](https://github.com/ProfoundLogic/hogan.js-ProfoundLogic) |
 | `@puppeteer/browsers` | 2.10.12 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
+| `@scarf/scarf` | 1.4.0 | Apache-2.0 | [link](https://github.com/scarf-sh/scarf-js) |
 | `@smithy/is-array-buffer` | 2.2.0 | Apache-2.0 | [link](https://github.com/awslabs/smithy-typescript) |
 | `@smithy/types` | 4.14.1 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
 | `@smithy/util-buffer-from` | 2.2.0 | Apache-2.0 | [link](https://github.com/awslabs/smithy-typescript) |
@@ -187,6 +188,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `puppeteer-core` | 24.27.0 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `readdir-glob` | 1.1.3 | Apache-2.0 | [link](https://github.com/Yqnn/node-readdir-glob) |
 | `sharp` | 0.34.4, 0.34.5 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
+| `swagger-ui-dist` | 5.32.5 | Apache-2.0 | [link](https://github.com/swagger-api/swagger-ui) |
 | `tesseract.js` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js) |
 | `tesseract.js-core` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js-core) |
 | `text-decoder` | 1.2.3 | Apache-2.0 | [link](https://github.com/holepunchto/text-decoder) |
@@ -393,7 +395,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1050)
+## MIT (1053)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -550,6 +552,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@selderee/plugin-htmlparser2` | 0.11.0 | MIT | [link](https://github.com/mxxii/selderee) |
 | `@sentry-internal/browser-utils` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@sentry-internal/feedback` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
+| `@sentry-internal/node-cpu-profiler` | 2.2.0 | MIT | [link](https://github.com/getsentry/sentry-javascript-profiling-node-binaries) |
 | `@sentry-internal/replay` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@sentry-internal/replay-canvas` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@sentry/browser` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
@@ -557,6 +560,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@sentry/node` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@sentry/node-core` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@sentry/opentelemetry` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
+| `@sentry/profiling-node` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@shikijs/core` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/engine-javascript` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/engine-oniguruma` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
@@ -1107,7 +1111,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `next-intl` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-intl-swc-plugin-extractor` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-themes` | 0.4.6 | MIT | [link](https://github.com/pacocoursey/next-themes) |
-| `node-abi` | 3.89.0 | MIT | [link](https://github.com/electron/node-abi) |
+| `node-abi` | 3.89.0, 3.90.0 | MIT | [link](https://github.com/electron/node-abi) |
 | `node-abort-controller` | 3.1.1 | MIT | [link](https://github.com/southpolesteve/node-abort-controller) |
 | `node-addon-api` | 7.1.1, 8.7.0 | MIT | [link](https://github.com/nodejs/node-addon-api) |
 | `node-domexception` | 1.0.0 | MIT | [link](https://github.com/jimmywarting/node-domexception) |
@@ -1348,6 +1352,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `superagent` | 10.3.0, 6.1.0 | MIT | [link](https://github.com/ladjs/superagent) |
 | `supertest` | 7.2.2 | MIT | [link](https://github.com/ladjs/supertest) |
 | `supports-preserve-symlinks-flag` | 1.0.0 | MIT | [link](https://github.com/inspect-js/node-supports-preserve-symlinks-flag) |
+| `swagger-ui-express` | 5.0.1 | MIT | [link](https://github.com/scottie1984/swagger-ui-express) |
 | `swr` | 2.4.1 | MIT | [link](https://github.com/vercel/swr) |
 | `tailwind-merge` | 2.6.1 | MIT | [link](https://github.com/dcastil/tailwind-merge) |
 | `tailwind-scrollbar` | 3.1.0 | MIT | [link](https://github.com/adoxography/tailwind-scrollbar) |
