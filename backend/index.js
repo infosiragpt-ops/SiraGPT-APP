@@ -108,14 +108,26 @@ app.use(helmet({
 // request counts against BOTH the auth bucket and the general bucket
 // — by design, since a hot auth endpoint should also pressure the
 // general quota.
-const { resolveRateLimitConfig } = require('./src/middleware/rate-limit-policy');
+//
+// Bucketing key: see makeJwtAwareKeyGenerator in rate-limit-policy.js.
+// Authenticated requests are bucketed by user-id (`user:<id>`); anon
+// or invalid-token requests fall back to IP. This makes "PRO users
+// get more headroom" actually mean something even for users behind
+// shared NATs / corporate proxies, where IP-only bucketing collapsed
+// every paying customer into one quota.
+const {
+    resolveRateLimitConfig,
+    makeJwtAwareKeyGenerator,
+} = require('./src/middleware/rate-limit-policy');
 const rateLimitCfg = resolveRateLimitConfig(process.env);
+const rateLimitKeyGenerator = makeJwtAwareKeyGenerator(process.env.JWT_SECRET);
 
 // Anti-bruteforce: login / register / password reset / OAuth callbacks.
 const authLimiter = rateLimit({
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.auth,
-    message: 'Too many auth attempts from this IP, please try again later.',
+    keyGenerator: rateLimitKeyGenerator,
+    message: 'Too many auth attempts, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
 });
@@ -125,7 +137,8 @@ const authLimiter = rateLimit({
 const expensiveLimiter = rateLimit({
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.expensive,
-    message: 'Too many expensive operations from this IP, please slow down.',
+    keyGenerator: rateLimitKeyGenerator,
+    message: 'Too many expensive operations, please slow down.',
     standardHeaders: true,
     legacyHeaders: false,
 });
@@ -135,7 +148,8 @@ const expensiveLimiter = rateLimit({
 const apiLimiter = rateLimit({
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.api,
-    message: 'Too many requests from this IP, please try again later.',
+    keyGenerator: rateLimitKeyGenerator,
+    message: 'Too many requests, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
 });
