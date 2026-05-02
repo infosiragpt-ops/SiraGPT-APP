@@ -36,9 +36,7 @@ import { apiClient } from "@/lib/api"
 import { useVoiceControls } from './voice-controls';
 import ReactMarkdown from 'react-markdown'
 import { PerformanceOptimizer } from "@/lib/performance-optimizer"
-import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
-import { markdownRehypePlugins } from '@/lib/markdown-sanitize'
+import { markdownRehypePlugins, markdownRemarkPlugins } from '@/lib/markdown-sanitize'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
 import ImageGenerationEffect from './ImageGenerationEffect';
@@ -1309,7 +1307,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 onCopyCapture={handleRenderedCopy}
             >
                 <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkMath]}
+                    remarkPlugins={markdownRemarkPlugins}
                     rehypePlugins={markdownRehypePlugins}
                     components={components}
                 >
@@ -1893,7 +1891,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
             return (
                 <div className="mb-2 text-md text-foreground/90 prose prose-sm dark:prose-invert max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={markdownRehypePlugins}>
+                    <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins}>
                         {cleaned}
                     </ReactMarkdown>
                 </div>
