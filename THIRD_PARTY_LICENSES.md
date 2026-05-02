@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1368**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1371**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -385,12 +385,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1029)
+## MIT (1032)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
 | `@alloc/quick-lru` | 5.2.0 | MIT | [link](https://github.com/sindresorhus/quick-lru) |
 | `@antfu/install-pkg` | 1.1.0 | MIT | [link](https://github.com/antfu/install-pkg) |
+| `@anthropic-ai/sdk` | 0.92.0 | MIT | [link](https://github.com/anthropics/anthropic-sdk-typescript) |
 | `@babel/code-frame` | 7.27.1 | MIT | [link](https://github.com/babel/babel) |
 | `@babel/helper-validator-identifier` | 7.28.5 | MIT | [link](https://github.com/babel/babel) |
 | `@babel/runtime` | 7.29.2 | MIT | [link](https://github.com/babel/babel) |
@@ -951,6 +952,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `js-yaml` | 4.1.1 | MIT | [link](https://github.com/nodeca/js-yaml) |
 | `json-bigint` | 1.0.0 | MIT | [link](https://github.com/sidorares/json-bigint) |
 | `json-parse-even-better-errors` | 2.3.1 | MIT | [link](https://github.com/npm/json-parse-even-better-errors) |
+| `json-schema-to-ts` | 3.1.1 | MIT | [link](https://github.com/ThomasAribart/json-schema-to-ts) |
 | `json-schema-traverse` | 1.0.0 | MIT | [link](https://github.com/epoberezkin/json-schema-traverse) |
 | `json-with-bigint` | 3.5.8 | MIT | [link](https://github.com/Ivan-Korolenko/json-with-bigint) |
 | `jsonwebtoken` | 9.0.2, 9.0.3 | MIT | [link](https://github.com/auth0/node-jsonwebtoken) |
@@ -1349,6 +1351,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `trigram-utils` | 2.0.1 | MIT | [link](https://github.com/wooorm/trigram-utils) |
 | `trim-lines` | 3.0.1 | MIT | [link](https://github.com/wooorm/trim-lines) |
 | `trough` | 2.2.0 | MIT | [link](https://github.com/wooorm/trough) |
+| `ts-algebra` | 2.0.0 | MIT | [link](https://github.com/ThomasAribart/ts-algebra) |
 | `ts-dedent` | 2.2.0 | MIT | [link](https://github.com/tamino-martinius/node-ts-dedent) |
 | `turndown` | 7.2.4 | MIT | [link](https://github.com/mixmark-io/turndown) |
 | `type-is` | 1.6.18, 2.0.1 | MIT | [link](https://github.com/jshttp/type-is) |
