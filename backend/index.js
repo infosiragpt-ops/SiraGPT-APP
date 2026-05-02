@@ -89,12 +89,12 @@ app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// Rate limiting — tiered by route sensitivity. We keep the per-IP
-// limits in the in-process memory store on purpose: the readiness
-// probe gates traffic when Redis is unhealthy, so a Redis-backed
-// counter would have a chicken-and-egg problem on cold start. When
-// the platform moves to multi-instance horizontal scaling, swap to
-// `rate-limit-redis` (small, Apache-2.0, vetted).
+// Rate limiting — tiered by route sensitivity. See rate-limit-policy.js
+// for the env-var parsing + defaults. Counters live in-process by
+// design: the readiness probe gates traffic when Redis is unhealthy,
+// so a Redis-backed counter would have a chicken-and-egg problem on
+// cold start. When the platform moves to multi-instance horizontal
+// scaling, swap to `rate-limit-redis` (small, Apache-2.0, vetted).
 //
 // Order matters in Express: more specific path prefixes are mounted
 // FIRST so they fire before the catch-all `/api/` limiter. Express
@@ -102,40 +102,33 @@ app.use(helmet({
 // request counts against BOTH the auth bucket and the general bucket
 // — by design, since a hot auth endpoint should also pressure the
 // general quota.
-const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || (15 * 60 * 1000);
-const RATE_LIMIT_AUTH_MAX = parseInt(process.env.RATE_LIMIT_AUTH_MAX, 10) || 30;
-const RATE_LIMIT_EXPENSIVE_MAX = parseInt(process.env.RATE_LIMIT_EXPENSIVE_MAX, 10) || 60;
-const RATE_LIMIT_API_MAX = parseInt(process.env.RATE_LIMIT_API_MAX, 10) || 1000;
+const { resolveRateLimitConfig } = require('./src/middleware/rate-limit-policy');
+const rateLimitCfg = resolveRateLimitConfig(process.env);
 
 // Anti-bruteforce: login / register / password reset / OAuth callbacks.
-// 30 attempts per 15 min per IP is generous for legitimate users
-// recovering from typos and ruinous for credential stuffing.
 const authLimiter = rateLimit({
-    windowMs: RATE_LIMIT_WINDOW_MS,
-    max: RATE_LIMIT_AUTH_MAX,
+    windowMs: rateLimitCfg.windowMs,
+    max: rateLimitCfg.auth,
     message: 'Too many auth attempts from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
 });
 
 // Expensive endpoints — agent task creation, RAG indexing, document
-// generation. These spawn background workers and consume LLM tokens;
-// a tighter cap here matters more than raw throughput.
+// generation. These spawn background workers and consume LLM tokens.
 const expensiveLimiter = rateLimit({
-    windowMs: RATE_LIMIT_WINDOW_MS,
-    max: RATE_LIMIT_EXPENSIVE_MAX,
+    windowMs: rateLimitCfg.windowMs,
+    max: rateLimitCfg.expensive,
     message: 'Too many expensive operations from this IP, please slow down.',
     standardHeaders: true,
     legacyHeaders: false,
 });
 
 // Default API limit — covers polling endpoints (model lists, plan
-// status, history) without giving abuse scripts a free ride. Tunable
-// via RATE_LIMIT_API_MAX when an upstream CDN does first-pass
-// throttling.
+// status, history) without giving abuse scripts a free ride.
 const apiLimiter = rateLimit({
-    windowMs: RATE_LIMIT_WINDOW_MS,
-    max: RATE_LIMIT_API_MAX,
+    windowMs: rateLimitCfg.windowMs,
+    max: rateLimitCfg.api,
     message: 'Too many requests from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
@@ -147,39 +140,18 @@ app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/', apiLimiter);
 
-// CORS allowlist — read once at startup from CORS_ORIGINS (comma-
-// separated). Empty in production fails closed: a misconfigured deploy
-// rejects every browser-issued request rather than silently allowing
-// any origin (which is what `callback(null, true)` used to do here).
-//
-// Local-dev fallback only kicks in when CORS_ORIGINS is empty AND
-// NODE_ENV !== 'production', so `npm run dev` works out of the box but
-// production is forced to set the env var.
-const CORS_ORIGIN_LIST = (process.env.CORS_ORIGINS || '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
-const ALLOWED_ORIGINS = CORS_ORIGIN_LIST.length > 0
-    ? CORS_ORIGIN_LIST
-    : process.env.NODE_ENV === 'production'
-        ? []
-        : ['http://localhost:3000', 'http://localhost:3001'];
-
-const corsOptions = {
-    origin(origin, callback) {
-        // No `Origin` header → not a browser cross-origin request
-        // (mobile app, curl, server-to-server, same-origin). cors's
-        // own behavior already skips the response header in this case;
-        // we just allow the request through.
-        if (!origin) return callback(null, true);
-        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-        return callback(new Error(`CORS: origin not allowed (${origin})`));
-    },
+// CORS allowlist — resolved once at startup. See cors-policy.js for
+// the fail-closed-in-production semantics and the localhost dev
+// fallback. `ALLOWED_ORIGINS` is also referenced in the listen()
+// callback below to surface a loud warn when production boots without
+// a configured allowlist.
+const { resolveAllowedOrigins, makeOriginCallback } = require('./src/middleware/cors-policy');
+const ALLOWED_ORIGINS = resolveAllowedOrigins(process.env);
+app.use(cors({
+    origin: makeOriginCallback(ALLOWED_ORIGINS),
     credentials: true,
     optionsSuccessStatus: 200,
-};
-app.use(cors(corsOptions));
+}));
 
 // Body parsing middleware
 app.use(compression({
