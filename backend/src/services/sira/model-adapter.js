@@ -55,7 +55,7 @@ const SUPPORTED_MODALITIES = Object.freeze([
 async function callUserSelectedModel(
   { selectedModel, systemPrompt, messages, responseFormat = "text", tools = [] } = {},
   {
-    providers = createDefaultProviders(),
+    providers = resolveProviders(),
     gatewayPolicy = {},
     gateway = null,
     telemetry = null,
@@ -225,10 +225,43 @@ function listSupportedModalities() {
 }
 
 /**
+ * Phase 8F.2 — auto-resolve providers when the caller does not pass
+ * its own map. Starts from `createDefaultProviders()` (deterministic
+ * stubs, see below) and overlays a real implementation per provider
+ * when the corresponding integration module is enabled by env. Today
+ * only the Anthropic native SDK is wired here; future integrations
+ * (Claude streaming, OpenAI-native, Vertex AI, etc.) follow the same
+ * pattern.
+ *
+ * Tests that want the pure-stubs behavior should call
+ * `createDefaultProviders()` explicitly and pass it as `providers`.
+ * Production callers that just call `callUserSelectedModel(args)`
+ * without an explicit `providers` get the resolved set transparently.
+ */
+function resolveProviders() {
+  const base = createDefaultProviders();
+
+  // Anthropic native: opt-in via ANTHROPIC_API_KEY (and not explicitly
+  // disabled). Falls back to the stub on env miss or module load
+  // failure so the adapter never breaks for misconfigured hosts.
+  try {
+    const anthropicNative = require("../providers/anthropic-native");
+    const fn = anthropicNative.createAnthropicProvider();
+    if (typeof fn === "function") base.anthropic = fn;
+  } catch (_e) {
+    // Optional integration unavailable — keep the stub.
+  }
+
+  return base;
+}
+
+/**
  * Default in-memory provider stubs. Each one returns a deterministic
- * synthetic response so the platform works zero-deps. Production
- * passes its own provider map via the second argument of
- * callUserSelectedModel.
+ * synthetic response so the platform works zero-deps. Tests that want
+ * the pure-stub contract pass this map explicitly via `providers`.
+ * Production callers that omit `providers` get `resolveProviders()`,
+ * which overlays real implementations on top of these stubs when
+ * env-flagged.
  */
 function createDefaultProviders() {
   const stub = (label) => async ({ selectedModel, systemPrompt, messages, responseFormat }) => {
@@ -289,6 +322,7 @@ module.exports = {
   listSupportedProviders,
   listSupportedModalities,
   createDefaultProviders,
+  resolveProviders,
   createGatewayPlan: liteLLMGateway.createGatewayPlan,
   createLiteLLMGateway: liteLLMGateway.createLiteLLMGateway,
   SUPPORTED_PROVIDERS,

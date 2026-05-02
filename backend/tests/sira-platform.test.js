@@ -51,12 +51,16 @@ describe("sira model-adapter", () => {
   });
 
   test("default stub dispatches by provider", async () => {
+    // Phase 8F.2: pass createDefaultProviders() explicitly so this test
+    // remains deterministic even when ANTHROPIC_API_KEY is set in the
+    // surrounding environment. Without the override, resolveProviders()
+    // would substitute the native Anthropic SDK and try a live call.
     const r = await modelAdapter.callUserSelectedModel({
       selectedModel: { provider: "anthropic", modelId: "claude-x", modality: "text" },
       systemPrompt: "you are sira",
       messages: [{ role: "user", content: "hola" }],
       responseFormat: "json",
-    });
+    }, { providers: modelAdapter.createDefaultProviders() });
     expect(r.provider).toBe("anthropic");
     expect(r.text).toMatch(/anthropic:claude-x/);
     expect(r.parsed.echo).toBe("hola");
