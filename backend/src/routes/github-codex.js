@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { body, query, validationResult } = require('express-validator');
+const { body, param, query, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const rag = require('../services/rag-service');
 const {
@@ -55,6 +55,108 @@ function createGithubCodexRouter({
         limit: req.query.limit,
       });
       res.json({ context });
+    } catch (error) {
+      const normalized = normalizeError(error);
+      res.status(normalized.status).json(normalized.body);
+    }
+  },
+);
+
+  router.get(
+  '/actions/runs',
+  [
+    query('repo').isString().trim().isLength({ min: 1, max: 240 }),
+    query('branch').optional().isString().trim().isLength({ min: 1, max: 160 }),
+    query('limit').optional().isInt({ min: 1, max: 30 }),
+    query('status').optional().isString().trim().isLength({ min: 1, max: 40 }),
+    query('event').optional().isString().trim().isLength({ min: 1, max: 80 }),
+  ],
+  async (req, res) => {
+    if (validationFail(req, res)) return;
+
+    try {
+      const connector = createConnector();
+      const result = await connector.listActionRuns({
+        repository: req.query.repo,
+        branch: req.query.branch,
+        limit: req.query.limit,
+        status: req.query.status,
+        event: req.query.event,
+      });
+      res.json(result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      res.status(normalized.status).json(normalized.body);
+    }
+  },
+);
+
+  router.get(
+  '/actions/runs/:runId/jobs',
+  [
+    query('repo').isString().trim().isLength({ min: 1, max: 240 }),
+    param('runId').isInt({ min: 1 }),
+  ],
+  async (req, res) => {
+    if (validationFail(req, res)) return;
+
+    try {
+      const connector = createConnector();
+      const result = await connector.listActionJobs({
+        repository: req.query.repo,
+        runId: req.params.runId,
+      });
+      res.json(result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      res.status(normalized.status).json(normalized.body);
+    }
+  },
+);
+
+  router.get(
+  '/actions/runs/:runId',
+  [
+    query('repo').isString().trim().isLength({ min: 1, max: 240 }),
+    param('runId').isInt({ min: 1 }),
+  ],
+  async (req, res) => {
+    if (validationFail(req, res)) return;
+
+    try {
+      const connector = createConnector();
+      const result = await connector.getActionRun({
+        repository: req.query.repo,
+        runId: req.params.runId,
+      });
+      res.json(result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      res.status(normalized.status).json(normalized.body);
+    }
+  },
+);
+
+  router.post(
+  '/actions/analyze-failure',
+  [
+    body('repo').isString().trim().isLength({ min: 1, max: 240 }),
+    body('runId').isInt({ min: 1 }),
+    body('includeLogs').optional().isBoolean(),
+    body('maxLogBytes').optional().isInt({ min: 1000, max: 160000 }),
+  ],
+  async (req, res) => {
+    if (validationFail(req, res)) return;
+
+    try {
+      const connector = createConnector();
+      const result = await connector.analyzeActionFailure({
+        repository: req.body.repo,
+        runId: req.body.runId,
+        includeLogs: req.body.includeLogs,
+        maxLogBytes: req.body.maxLogBytes,
+      });
+      res.json(result);
     } catch (error) {
       const normalized = normalizeError(error);
       res.status(normalized.status).json(normalized.body);

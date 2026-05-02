@@ -14,6 +14,11 @@ const MAX_CODE_FILE_MAX_BYTES = 120000;
 const CODE_FETCH_CONCURRENCY = 4;
 const REPOSITORY_GITIGNORE_PATH = '.gitignore';
 const MAX_REPOSITORY_GITIGNORE_BYTES = 128000;
+const DEFAULT_ACTION_RUN_LIMIT = 10;
+const MAX_ACTION_RUN_LIMIT = 30;
+const DEFAULT_ACTION_LOG_BYTES = 60000;
+const MAX_ACTION_LOG_BYTES = 160000;
+const ACTION_LOG_FAILED_JOB_LIMIT = 3;
 const DEFAULT_GITHUB_CODEX_RETRY_LIMIT = 2;
 const MAX_GITHUB_CODEX_RETRY_LIMIT = 5;
 const DEFAULT_GITHUB_CODEX_THROTTLE_MAX_RETRIES = 2;
@@ -211,6 +216,25 @@ function publicAuthStatus(auth, resilience) {
     ],
     resilience,
     repositoryFiltering: publicRepositoryFilteringStatus(),
+    actionsIntelligence: {
+      enabled: true,
+      readOnly: true,
+      runLimit: {
+        default: DEFAULT_ACTION_RUN_LIMIT,
+        max: MAX_ACTION_RUN_LIMIT,
+      },
+      logAnalysis: {
+        maxBytes: MAX_ACTION_LOG_BYTES,
+        failedJobLimit: ACTION_LOG_FAILED_JOB_LIMIT,
+        sanitization: [
+          'github_tokens',
+          'authorization_headers',
+          'masked_values',
+          'basic_auth_urls',
+          'ansi_control_sequences',
+        ],
+      },
+    },
   };
 }
 
@@ -509,6 +533,19 @@ function numberOrZero(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
+function positiveIntOrZero(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function durationMs(start, end) {
+  if (!start || !end) return null;
+  const from = new Date(start).getTime();
+  const to = new Date(end).getTime();
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
+  return to - from;
+}
+
 function normalizeRepository(data) {
   return {
     id: data.id,
@@ -564,8 +601,11 @@ function normalizeIssue(issue) {
 }
 
 function normalizeWorkflowRun(run) {
+  const createdAt = isoOrNull(run.created_at);
+  const updatedAt = isoOrNull(run.updated_at);
   return {
     id: run.id,
+    workflowId: run.workflow_id || null,
     name: run.name || run.display_title || `run-${run.run_number}`,
     displayTitle: run.display_title || run.name || '',
     status: run.status || null,
@@ -573,11 +613,54 @@ function normalizeWorkflowRun(run) {
     event: run.event || null,
     htmlUrl: run.html_url,
     runNumber: run.run_number,
+    runAttempt: run.run_attempt || null,
     branch: run.head_branch || null,
     headSha: run.head_sha ? String(run.head_sha).slice(0, 12) : null,
+    headShaFull: run.head_sha || null,
     actor: run.actor?.login || null,
-    createdAt: isoOrNull(run.created_at),
-    updatedAt: isoOrNull(run.updated_at),
+    createdAt,
+    updatedAt,
+    durationMs: durationMs(createdAt, updatedAt),
+    headCommit: run.head_commit ? {
+      id: run.head_commit.id ? String(run.head_commit.id).slice(0, 12) : null,
+      message: trimString(run.head_commit.message).slice(0, 240),
+      timestamp: isoOrNull(run.head_commit.timestamp),
+      author: run.head_commit.author?.name || null,
+    } : null,
+  };
+}
+
+function normalizeWorkflowStep(step) {
+  const startedAt = isoOrNull(step.started_at);
+  const completedAt = isoOrNull(step.completed_at);
+  return {
+    name: step.name || `step-${step.number || ''}`.trim(),
+    number: numberOrZero(step.number),
+    status: step.status || null,
+    conclusion: step.conclusion || null,
+    startedAt,
+    completedAt,
+    durationMs: durationMs(startedAt, completedAt),
+  };
+}
+
+function normalizeWorkflowJob(job) {
+  const startedAt = isoOrNull(job.started_at);
+  const completedAt = isoOrNull(job.completed_at);
+  return {
+    id: job.id,
+    runId: job.run_id || null,
+    name: job.name || `job-${job.id}`,
+    status: job.status || null,
+    conclusion: job.conclusion || null,
+    htmlUrl: job.html_url || null,
+    runnerName: job.runner_name || null,
+    runnerGroupName: job.runner_group_name || null,
+    labels: Array.isArray(job.labels) ? job.labels.slice(0, 8) : [],
+    startedAt,
+    completedAt,
+    durationMs: durationMs(startedAt, completedAt),
+    steps: Array.isArray(job.steps) ? job.steps.map(normalizeWorkflowStep) : [],
   };
 }
 
@@ -594,6 +677,169 @@ function readRateLimit(headers) {
     used: headerValue(headers, 'x-ratelimit-used'),
     retryAfter: headerValue(headers, 'retry-after'),
   };
+}
+
+function isFailureConclusion(conclusion) {
+  return ['failure', 'cancelled', 'timed_out', 'action_required'].includes(String(conclusion || ''));
+}
+
+function buildActionsSummary(runs = []) {
+  const latest = runs[0] || null;
+  const failing = runs.filter((run) => isFailureConclusion(run.conclusion));
+  const inProgress = runs.filter((run) =>
+    ['queued', 'in_progress', 'requested', 'waiting', 'pending'].includes(String(run.status || '')),
+  );
+
+  return {
+    health: latest?.conclusion === 'success'
+      ? 'green'
+      : isFailureConclusion(latest?.conclusion)
+        ? 'red'
+        : inProgress.length
+          ? 'running'
+          : latest
+            ? 'unknown'
+            : 'empty',
+    latestConclusion: latest?.conclusion || latest?.status || null,
+    latestRunId: latest?.id || null,
+    failingRuns: failing.length,
+    inProgressRuns: inProgress.length,
+    totalRuns: runs.length,
+  };
+}
+
+function octokitDataToString(data) {
+  if (!data) return '';
+  if (typeof data === 'string') return data;
+  if (Buffer.isBuffer(data)) return data.toString('utf8');
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8');
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('utf8');
+  if (typeof data === 'object' && typeof data.text === 'function') {
+    return '';
+  }
+  return String(data);
+}
+
+function sanitizeGitHubActionsText(value, maxChars = DEFAULT_ACTION_LOG_BYTES) {
+  const limit = clampInt(maxChars, DEFAULT_ACTION_LOG_BYTES, 1000, MAX_ACTION_LOG_BYTES);
+  const raw = octokitDataToString(value);
+  const withoutAnsi = raw
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+    .replace(/\r/g, '');
+  const sanitized = withoutAnsi
+    .split('\n')
+    .filter((line) => !/^::add-mask::/i.test(line.trim()))
+    .join('\n')
+    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g, '[redacted-github-token]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[redacted-github-token]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{20,}/gi, '$1 [redacted]')
+    .replace(/\b(authorization|x-github-token|github_token|token|password|secret|api[_-]?key)\s*[:=]\s*["']?[^"'\s]+["']?/gi, '$1=[redacted]')
+    .replace(/(https?:\/\/)([^:\s/@]+):([^@\s/]+)@/gi, '$1[redacted]@');
+
+  return {
+    text: sanitized.slice(0, limit),
+    truncated: sanitized.length > limit,
+    originalBytes: Buffer.byteLength(raw, 'utf8'),
+    sanitizedBytes: Buffer.byteLength(sanitized, 'utf8'),
+  };
+}
+
+function extractFailureLines(text, maxLines = 8) {
+  const seen = new Set();
+  const lines = [];
+  for (const line of String(text || '').split('\n')) {
+    const clean = line.trim();
+    if (!clean || clean.length < 4) continue;
+    if (!/\b(?:error|failed|failure|fatal|exception|assert|typeerror|referenceerror|syntaxerror|enoent|eaddrinuse|npm err|pnpm err|yarn error|err_)\b/i.test(clean)) {
+      continue;
+    }
+    const compact = clean.replace(/\s+/g, ' ').slice(0, 280);
+    if (seen.has(compact)) continue;
+    seen.add(compact);
+    lines.push(compact);
+    if (lines.length >= maxLines) break;
+  }
+  return lines;
+}
+
+function buildActionFailureAnalysis({ run, jobs, logExcerpts, warnings }) {
+  const failedJobs = jobs.filter((job) => isFailureConclusion(job.conclusion));
+  const failedSteps = failedJobs.flatMap((job) =>
+    (job.steps || [])
+      .filter((step) => isFailureConclusion(step.conclusion))
+      .map((step) => `${job.name} / ${step.name}`),
+  );
+  const logSignals = logExcerpts.flatMap((entry) => extractFailureLines(entry.excerpt, 4));
+  const rootCauseCandidates = [...new Set([...failedSteps, ...logSignals])].slice(0, 10);
+  const health = run.conclusion === 'success'
+    ? 'green'
+    : failedJobs.length
+      ? 'red'
+      : run.status && run.status !== 'completed'
+        ? 'running'
+        : 'unknown';
+
+  const nextActions = [];
+  if (failedSteps.length) {
+    nextActions.push('Abrir el job fallido y revisar el primer step marcado como failure.');
+  }
+  if (logSignals.length) {
+    nextActions.push('Corregir primero la primera línea de error real; los errores posteriores pueden ser cascada.');
+  }
+  if (!failedJobs.length && health === 'running') {
+    nextActions.push('Esperar a que el workflow termine antes de diagnosticar.');
+  }
+  if (warnings.length) {
+    nextActions.push('Revisar permisos actions:read si los logs no están disponibles.');
+  }
+  if (!nextActions.length) {
+    nextActions.push('Workflow sin fallos accionables visibles desde GitHub Actions.');
+  }
+
+  return {
+    health,
+    runId: run.id,
+    runName: run.name,
+    conclusion: run.conclusion,
+    status: run.status,
+    failedJobs: failedJobs.map((job) => ({
+      id: job.id,
+      name: job.name,
+      conclusion: job.conclusion,
+      htmlUrl: job.htmlUrl,
+      failedSteps: (job.steps || [])
+        .filter((step) => isFailureConclusion(step.conclusion))
+        .map((step) => step.name),
+    })),
+    rootCauseCandidates,
+    nextActions,
+    warnings,
+  };
+}
+
+async function downloadJobLogExcerpt(octokit, parsed, jobId, maxBytes) {
+  if (!octokit.rest.actions.downloadJobLogsForWorkflowRun) {
+    return {
+      warning: {
+        area: 'actions_logs',
+        code: 'github_actions_logs_unavailable',
+        status: 200,
+        message: 'GitHub Actions job log download is not supported by this Octokit instance',
+      },
+      log: null,
+    };
+  }
+
+  try {
+    const response = await octokit.rest.actions.downloadJobLogsForWorkflowRun({
+      ...parsed,
+      job_id: Number(jobId),
+    });
+    const sanitized = sanitizeGitHubActionsText(response.data, maxBytes);
+    return { warning: null, log: sanitized };
+  } catch (error) {
+    return { warning: warningFromError('actions_logs', error), log: null };
+  }
 }
 
 async function fetchReadmePreview(octokit, { owner, repo, ref, readmePreviewChars }) {
@@ -826,6 +1072,196 @@ function createGitHubCodexConnector(options = {}) {
       };
     },
 
+    async listActionRuns(params = {}) {
+      const parsed = parseGitHubRepository(params.repository || params.repo);
+      const limit = clampInt(params.limit, DEFAULT_ACTION_RUN_LIMIT, 1, MAX_ACTION_RUN_LIMIT);
+      const auth = resolveAuth(env);
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source, env });
+
+      const repositoryResponse = await octokit.rest.repos.get(parsed);
+      const repository = normalizeRepository(repositoryResponse.data);
+      const branch = trimString(params.branch) || repository.defaultBranch;
+      const request = {
+        ...parsed,
+        per_page: limit,
+      };
+      if (branch) request.branch = branch;
+      if (trimString(params.status)) request.status = trimString(params.status);
+      if (trimString(params.event)) request.event = trimString(params.event);
+
+      const response = await octokit.rest.actions.listWorkflowRunsForRepo(request);
+      const runs = (response.data?.workflow_runs || []).map(normalizeWorkflowRun);
+      return {
+        repository,
+        branch,
+        auth: {
+          mode: auth.configured ? 'server_token' : 'public_read_only',
+          configured: auth.configured,
+          tokenSource: auth.source,
+        },
+        runs,
+        summary: buildActionsSummary(runs),
+        limits: {
+          runLimit: limit,
+        },
+        rateLimit: readRateLimit(response.headers || repositoryResponse.headers),
+      };
+    },
+
+    async getActionRun(params = {}) {
+      const parsed = parseGitHubRepository(params.repository || params.repo);
+      const runId = positiveIntOrZero(params.runId || params.run_id);
+      if (!runId) {
+        throw new GitHubCodexConnectorError('invalid_github_actions_run', 400, 'GitHub Actions run id is required');
+      }
+      const auth = resolveAuth(env);
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source, env });
+
+      const [repositoryResponse, runResponse] = await Promise.all([
+        octokit.rest.repos.get(parsed),
+        octokit.rest.actions.getWorkflowRun({
+          ...parsed,
+          run_id: runId,
+        }),
+      ]);
+      const repository = normalizeRepository(repositoryResponse.data);
+      const run = normalizeWorkflowRun(runResponse.data);
+      return {
+        repository,
+        branch: run.branch || repository.defaultBranch,
+        auth: {
+          mode: auth.configured ? 'server_token' : 'public_read_only',
+          configured: auth.configured,
+          tokenSource: auth.source,
+        },
+        run,
+        rateLimit: readRateLimit(runResponse.headers || repositoryResponse.headers),
+      };
+    },
+
+    async listActionJobs(params = {}) {
+      const parsed = parseGitHubRepository(params.repository || params.repo);
+      const runId = positiveIntOrZero(params.runId || params.run_id);
+      if (!runId) {
+        throw new GitHubCodexConnectorError('invalid_github_actions_run', 400, 'GitHub Actions run id is required');
+      }
+      const auth = resolveAuth(env);
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source, env });
+
+      const [repositoryResponse, runResponse, jobsResponse] = await Promise.all([
+        octokit.rest.repos.get(parsed),
+        octokit.rest.actions.getWorkflowRun({
+          ...parsed,
+          run_id: runId,
+        }),
+        octokit.rest.actions.listJobsForWorkflowRun({
+          ...parsed,
+          run_id: runId,
+          filter: 'latest',
+          per_page: 100,
+        }),
+      ]);
+      const repository = normalizeRepository(repositoryResponse.data);
+      const run = normalizeWorkflowRun(runResponse.data);
+      const jobs = (jobsResponse.data?.jobs || []).map(normalizeWorkflowJob);
+      return {
+        repository,
+        branch: run.branch || repository.defaultBranch,
+        auth: {
+          mode: auth.configured ? 'server_token' : 'public_read_only',
+          configured: auth.configured,
+          tokenSource: auth.source,
+        },
+        run,
+        jobs,
+        summary: {
+          totalJobs: jobs.length,
+          failedJobs: jobs.filter((job) => isFailureConclusion(job.conclusion)).length,
+          completedJobs: jobs.filter((job) => job.status === 'completed').length,
+        },
+        rateLimit: readRateLimit(jobsResponse.headers || runResponse.headers || repositoryResponse.headers),
+      };
+    },
+
+    async analyzeActionFailure(params = {}) {
+      const parsed = parseGitHubRepository(params.repository || params.repo);
+      const runId = positiveIntOrZero(params.runId || params.run_id);
+      if (!runId) {
+        throw new GitHubCodexConnectorError('invalid_github_actions_run', 400, 'GitHub Actions run id is required');
+      }
+      const maxLogBytes = clampInt(
+        params.maxLogBytes || params.maxBytes,
+        DEFAULT_ACTION_LOG_BYTES,
+        1000,
+        MAX_ACTION_LOG_BYTES,
+      );
+      const includeLogs = params.includeLogs !== false;
+      const auth = resolveAuth(env);
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source, env });
+
+      const [repositoryResponse, runResponse, jobsResponse] = await Promise.all([
+        octokit.rest.repos.get(parsed),
+        octokit.rest.actions.getWorkflowRun({
+          ...parsed,
+          run_id: runId,
+        }),
+        octokit.rest.actions.listJobsForWorkflowRun({
+          ...parsed,
+          run_id: runId,
+          filter: 'latest',
+          per_page: 100,
+        }),
+      ]);
+      const repository = normalizeRepository(repositoryResponse.data);
+      const run = normalizeWorkflowRun(runResponse.data);
+      const jobs = (jobsResponse.data?.jobs || []).map(normalizeWorkflowJob);
+      const failedJobs = jobs.filter((job) => isFailureConclusion(job.conclusion));
+      const warnings = [];
+      const logExcerpts = [];
+
+      if (includeLogs) {
+        for (const job of failedJobs.slice(0, ACTION_LOG_FAILED_JOB_LIMIT)) {
+          const { warning, log } = await downloadJobLogExcerpt(octokit, parsed, job.id, maxLogBytes);
+          if (warning) warnings.push(warning);
+          if (log) {
+            logExcerpts.push({
+              jobId: job.id,
+              jobName: job.name,
+              excerpt: log.text,
+              truncated: log.truncated,
+              originalBytes: log.originalBytes,
+              sanitizedBytes: log.sanitizedBytes,
+            });
+          }
+        }
+      }
+
+      return {
+        repository,
+        branch: run.branch || repository.defaultBranch,
+        auth: {
+          mode: auth.configured ? 'server_token' : 'public_read_only',
+          configured: auth.configured,
+          tokenSource: auth.source,
+        },
+        run,
+        jobs,
+        analysis: buildActionFailureAnalysis({
+          run,
+          jobs,
+          logExcerpts,
+          warnings,
+        }),
+        logs: {
+          included: includeLogs,
+          maxBytes: maxLogBytes,
+          failedJobLimit: ACTION_LOG_FAILED_JOB_LIMIT,
+          excerpts: logExcerpts,
+        },
+        rateLimit: readRateLimit(jobsResponse.headers || runResponse.headers || repositoryResponse.headers),
+      };
+    },
+
     async getRepositoryFiles(params = {}) {
       const parsed = parseGitHubRepository(params.repository || params.repo);
       const limit = clampInt(params.limit, DEFAULT_CODE_FILE_LIMIT, 1, MAX_CODE_FILE_LIMIT);
@@ -963,4 +1399,5 @@ module.exports = {
   resolveAuth,
   resolveGitHubRetryConfig,
   resolveGitHubThrottleConfig,
+  sanitizeGitHubActionsText,
 };

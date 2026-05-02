@@ -10,6 +10,16 @@ export interface GitHubCodexStatus {
   tokenSource: string | null
   tokenPlacement: string
   recommendedScopes: string[]
+  actionsIntelligence?: {
+    enabled: boolean
+    readOnly: boolean
+    runLimit: { default: number; max: number }
+    logAnalysis: {
+      maxBytes: number
+      failedJobLimit: number
+      sanitization: string[]
+    }
+  }
 }
 
 export interface GitHubCodexRepository {
@@ -58,6 +68,7 @@ export interface GitHubCodexIssue {
 
 export interface GitHubCodexWorkflowRun {
   id: number
+  workflowId?: number | null
   name: string
   displayTitle: string
   status: string | null
@@ -65,11 +76,46 @@ export interface GitHubCodexWorkflowRun {
   event: string | null
   htmlUrl: string
   runNumber: number
+  runAttempt?: number | null
   branch: string | null
   headSha: string | null
+  headShaFull?: string | null
   actor: string | null
   createdAt: string | null
   updatedAt: string | null
+  durationMs?: number | null
+  headCommit?: {
+    id: string | null
+    message: string
+    timestamp: string | null
+    author: string | null
+  } | null
+}
+
+export interface GitHubCodexWorkflowStep {
+  name: string
+  number: number
+  status: string | null
+  conclusion: string | null
+  startedAt: string | null
+  completedAt: string | null
+  durationMs: number | null
+}
+
+export interface GitHubCodexWorkflowJob {
+  id: number
+  runId: number | null
+  name: string
+  status: string | null
+  conclusion: string | null
+  htmlUrl: string | null
+  runnerName: string | null
+  runnerGroupName: string | null
+  labels: string[]
+  startedAt: string | null
+  completedAt: string | null
+  durationMs: number | null
+  steps: GitHubCodexWorkflowStep[]
 }
 
 export interface GitHubCodexReadme {
@@ -142,9 +188,21 @@ export interface GitHubCodexFileSet {
   skipped: {
     notFile: number
     skippedDirectory: number
+    gitignored: number
     unsupportedExtension: number
     oversized: number
     fetchFailed: number
+  }
+  filtering?: {
+    gitignore?: {
+      applied: boolean
+      source: {
+        path: string
+        sha: string | null
+        bytes: number
+        htmlUrl: string | null
+      } | null
+    }
   }
   limits: {
     fileLimit: number
@@ -153,6 +211,78 @@ export interface GitHubCodexFileSet {
     selected: number
     treeTruncated: boolean
   }
+}
+
+export interface GitHubCodexActionsSummary {
+  health: "green" | "red" | "running" | "unknown" | "empty"
+  latestConclusion: string | null
+  latestRunId: number | null
+  failingRuns: number
+  inProgressRuns: number
+  totalRuns: number
+}
+
+export interface GitHubCodexActionRunsResult {
+  repository: GitHubCodexRepository
+  branch: string
+  auth: GitHubCodexContext["auth"]
+  runs: GitHubCodexWorkflowRun[]
+  summary: GitHubCodexActionsSummary
+  limits: { runLimit: number }
+  rateLimit: GitHubCodexContext["rateLimit"]
+}
+
+export interface GitHubCodexActionJobsResult {
+  repository: GitHubCodexRepository
+  branch: string
+  auth: GitHubCodexContext["auth"]
+  run: GitHubCodexWorkflowRun
+  jobs: GitHubCodexWorkflowJob[]
+  summary: {
+    totalJobs: number
+    failedJobs: number
+    completedJobs: number
+  }
+  rateLimit: GitHubCodexContext["rateLimit"]
+}
+
+export interface GitHubCodexActionFailureAnalysisResult {
+  repository: GitHubCodexRepository
+  branch: string
+  auth: GitHubCodexContext["auth"]
+  run: GitHubCodexWorkflowRun
+  jobs: GitHubCodexWorkflowJob[]
+  analysis: {
+    health: "green" | "red" | "running" | "unknown"
+    runId: number
+    runName: string
+    conclusion: string | null
+    status: string | null
+    failedJobs: Array<{
+      id: number
+      name: string
+      conclusion: string | null
+      htmlUrl: string | null
+      failedSteps: string[]
+    }>
+    rootCauseCandidates: string[]
+    nextActions: string[]
+    warnings: GitHubCodexWarning[]
+  }
+  logs: {
+    included: boolean
+    maxBytes: number
+    failedJobLimit: number
+    excerpts: Array<{
+      jobId: number
+      jobName: string
+      excerpt: string
+      truncated: boolean
+      originalBytes: number
+      sanitizedBytes: number
+    }>
+  }
+  rateLimit: GitHubCodexContext["rateLimit"]
 }
 
 export interface GitHubCodexRagIngestResult {
@@ -231,6 +361,54 @@ export const githubCodexService = {
     })
     const json = await handle<{ fileSet: GitHubCodexFileSet }>(res)
     return json.fileSet
+  },
+
+  async listActionRuns(input: {
+    repo: string
+    branch?: string
+    limit?: number
+    status?: string
+    event?: string
+  }): Promise<GitHubCodexActionRunsResult> {
+    const qs = new URLSearchParams()
+    qs.set("repo", input.repo)
+    if (input.branch?.trim()) qs.set("branch", input.branch.trim())
+    if (input.limit) qs.set("limit", String(input.limit))
+    if (input.status?.trim()) qs.set("status", input.status.trim())
+    if (input.event?.trim()) qs.set("event", input.event.trim())
+    const res = await fetch(`${API_ROOT}/codex/github/actions/runs?${qs.toString()}`, {
+      credentials: "include",
+      headers: authHeader(),
+    })
+    return handle<GitHubCodexActionRunsResult>(res)
+  },
+
+  async listActionJobs(input: { repo: string; runId: number }): Promise<GitHubCodexActionJobsResult> {
+    const qs = new URLSearchParams()
+    qs.set("repo", input.repo)
+    const res = await fetch(`${API_ROOT}/codex/github/actions/runs/${input.runId}/jobs?${qs.toString()}`, {
+      credentials: "include",
+      headers: authHeader(),
+    })
+    return handle<GitHubCodexActionJobsResult>(res)
+  },
+
+  async analyzeActionFailure(input: {
+    repo: string
+    runId: number
+    includeLogs?: boolean
+    maxLogBytes?: number
+  }): Promise<GitHubCodexActionFailureAnalysisResult> {
+    const res = await fetch(`${API_ROOT}/codex/github/actions/analyze-failure`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeader(),
+      },
+      body: JSON.stringify(input),
+    })
+    return handle<GitHubCodexActionFailureAnalysisResult>(res)
   },
 
   async ingestRepository(input: {

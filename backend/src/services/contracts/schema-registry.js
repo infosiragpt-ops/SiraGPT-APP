@@ -47,6 +47,25 @@ const githubRepositoryRetrieveBodySchema = z.object({
   k: z.number().int().min(1).max(12).optional(),
 }).strict();
 
+const githubActionsRunsQuerySchema = z.object({
+  repo: z.string().trim().min(1).max(240),
+  branch: z.string().trim().min(1).max(160).optional(),
+  limit: z.coerce.number().int().min(1).max(30).optional(),
+  status: z.string().trim().min(1).max(40).optional(),
+  event: z.string().trim().min(1).max(80).optional(),
+}).strict();
+
+const githubActionsRunQuerySchema = z.object({
+  repo: z.string().trim().min(1).max(240),
+}).strict();
+
+const githubActionsAnalyzeBodySchema = z.object({
+  repo: z.string().trim().min(1).max(240),
+  runId: z.number().int().min(1),
+  includeLogs: z.boolean().optional(),
+  maxLogBytes: z.number().int().min(1000).max(160000).optional(),
+}).strict();
+
 const ragDocSchema = z.object({
   text: z.string().min(1),
   title: z.string().min(1).max(500).optional(),
@@ -254,6 +273,46 @@ const routeContracts = Object.freeze([
     authRequired: true,
     body: githubRepositoryRetrieveBodySchema,
     responses: { 200: z.object({ ok: z.boolean(), collection: z.string(), query: z.string(), hits: z.array(z.any()) }).passthrough(), 400: errorResponseSchema },
+  },
+  {
+    id: 'github.codex.actions.runs',
+    method: 'get',
+    path: '/api/codex/github/actions/runs',
+    tags: ['GitHub Codex'],
+    summary: 'List sanitized GitHub Actions workflow runs for a repository.',
+    authRequired: true,
+    query: githubActionsRunsQuerySchema,
+    responses: { 200: looseObject, 400: errorResponseSchema, 403: errorResponseSchema, 429: errorResponseSchema, 500: errorResponseSchema },
+  },
+  {
+    id: 'github.codex.actions.run',
+    method: 'get',
+    path: '/api/codex/github/actions/runs/:runId',
+    tags: ['GitHub Codex'],
+    summary: 'Read a single sanitized GitHub Actions workflow run.',
+    authRequired: true,
+    query: githubActionsRunQuerySchema,
+    responses: { 200: looseObject, 400: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 500: errorResponseSchema },
+  },
+  {
+    id: 'github.codex.actions.jobs',
+    method: 'get',
+    path: '/api/codex/github/actions/runs/:runId/jobs',
+    tags: ['GitHub Codex'],
+    summary: 'List sanitized jobs and steps for a GitHub Actions workflow run.',
+    authRequired: true,
+    query: githubActionsRunQuerySchema,
+    responses: { 200: looseObject, 400: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 500: errorResponseSchema },
+  },
+  {
+    id: 'github.codex.actions.analyze_failure',
+    method: 'post',
+    path: '/api/codex/github/actions/analyze-failure',
+    tags: ['GitHub Codex'],
+    summary: 'Analyze a GitHub Actions failure from jobs and sanitized log excerpts.',
+    authRequired: true,
+    body: githubActionsAnalyzeBodySchema,
+    responses: { 200: looseObject, 400: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 500: errorResponseSchema },
   },
   {
     id: 'agent.task.create',

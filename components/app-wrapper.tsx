@@ -24,6 +24,18 @@ export function AppWrapper({ children }: AppWrapperProps) {
 
   // For pages that need chat context and sidebar
   if (pageNeedsChatContext) {
+    if (!pageNeedsSidebar) {
+      return (
+        <BackgroundStreamsProvider>
+          <ChatProvider>
+            <ArtifactPanelProvider>
+              {children}
+            </ArtifactPanelProvider>
+          </ChatProvider>
+        </BackgroundStreamsProvider>
+      )
+    }
+
     return (
       <BackgroundStreamsProvider>
         <ChatProvider>

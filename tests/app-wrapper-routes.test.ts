@@ -34,8 +34,8 @@ describe("needsSidebar", () => {
     assert.equal(needsSidebar("/library"), true)
   })
 
-  it("enables the sidebar on Codex pages", () => {
-    assert.equal(needsSidebar("/codex"), true)
+  it("keeps Codex full-screen while preserving chat context", () => {
+    assert.equal(needsSidebar("/codex"), false)
     assert.equal(needsChatContext("/codex"), true)
   })
 

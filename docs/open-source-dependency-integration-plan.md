@@ -2,7 +2,7 @@
 
 Fecha: 2026-05-01
 
-Actualizacion CTO: ver tambien [`docs/cto-commercial-ai-ecosystem-roadmap.md`](./cto-commercial-ai-ecosystem-roadmap.md) para el diagnostico consolidado posterior a Fase 6D + 7A/7B/7C, la matriz de brechas frente a ChatGPT/Gemini/Claude/Codex/Cursor y la priorizacion de Fase 8. La integracion mas reciente es [`docs/phase-9b-github-codex-gitignore-filtering.md`](./phase-9b-github-codex-gitignore-filtering.md): filtrado `.gitignore` del conector GitHub Codex/RAG con `ignore@7.0.5` (MIT). La fase anterior fue [`docs/phase-9a-sse-stream-parser-hardening.md`](./phase-9a-sse-stream-parser-hardening.md): hardening del parsing SSE del cliente con `eventsource-parser@3.0.8` (MIT).
+Actualizacion CTO: ver tambien [`docs/cto-commercial-ai-ecosystem-roadmap.md`](./cto-commercial-ai-ecosystem-roadmap.md) para el diagnostico consolidado posterior a Fase 6D + 7A/7B/7C, la matriz de brechas frente a ChatGPT/Gemini/Claude/Codex/Cursor y la priorizacion de Fase 8. La integracion mas reciente es [`docs/phase-9c-github-actions-intelligence.md`](./phase-9c-github-actions-intelligence.md): GitHub Actions Intelligence read-only para Codex, sin dependencia nueva y reutilizando `octokit`. La fase anterior fue [`docs/phase-9b-github-codex-gitignore-filtering.md`](./phase-9b-github-codex-gitignore-filtering.md): filtrado `.gitignore` del conector GitHub Codex/RAG con `ignore@7.0.5` (MIT).
 
 ## 1. Diagnostico del estado actual
 
@@ -202,6 +202,19 @@ Dependencias agregadas:
 - `@sentry/node@10.51.0` (MIT)
 
 Decision importante: se eligio `@bull-board/express@6.12.0` en lugar de `7.0.0` porque mantiene compatibilidad con Express 4 ya instalado en backend; `7.0.0` eleva la superficie hacia Express 5 sin aportar valor necesario en esta fase.
+
+### Fase 9C aplicada: GitHub Actions Intelligence para Codex
+
+Se amplio el conector GitHub sin agregar dependencias nuevas:
+
+- `backend/src/services/github-codex-connector.js`: metodos read-only para listar workflow runs, leer un run, listar jobs/steps y analizar fallos con logs sanitizados.
+- `backend/src/routes/github-codex.js`: endpoints autenticados `/actions/runs`, `/actions/runs/:runId`, `/actions/runs/:runId/jobs` y `/actions/analyze-failure`.
+- `lib/github-codex-service.ts`: cliente tipado para GitHub Actions Intelligence.
+- `app/codex/page.tsx`: layout minimalista tipo Codex con panel izquierdo de indicaciones y panel derecho tipo navegador/visor para web, CI, repo y RAG.
+- `backend/tests/github-codex-connector.test.js`: cobertura para runs, jobs fallidos, steps fallidos y redaccion de tokens/logs.
+- `docs/phase-9c-github-actions-intelligence.md`: runbook de seguridad y validacion.
+
+No se clona repositorio, no se ejecuta codigo remoto y no se aceptan tokens GitHub desde el navegador. Los logs quedan truncados y se eliminan tokens, headers de autorizacion, credenciales basic-auth y secuencias ANSI antes de llegar al frontend.
 
 ### Fase 3 aplicada: hardening de dependencias de documentos/codigo
 

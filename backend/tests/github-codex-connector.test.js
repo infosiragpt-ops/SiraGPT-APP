@@ -14,6 +14,7 @@ const {
   resolveAuth,
   resolveGitHubRetryConfig,
   resolveGitHubThrottleConfig,
+  sanitizeGitHubActionsText,
 } = require('../src/services/github-codex-connector');
 
 function baseRepoData() {
@@ -173,6 +174,98 @@ function createFakeOctokit({ actionsError } = {}) {
                 },
               ],
             },
+          };
+        },
+        getWorkflowRun: async (params) => {
+          calls.push(['actions.getWorkflowRun', params]);
+          return {
+            data: {
+              id: Number(params.run_id),
+              name: 'CI',
+              display_title: 'main',
+              status: 'completed',
+              conclusion: 'failure',
+              event: 'push',
+              html_url: `https://github.com/SiraGPT-ORg/siraGPT/actions/runs/${params.run_id}`,
+              run_number: 78,
+              run_attempt: 1,
+              head_branch: 'main',
+              head_sha: 'abcdef1234567890',
+              actor: { login: 'builder' },
+              head_commit: {
+                id: 'abcdef1234567890',
+                message: 'feat: break build',
+                timestamp: '2026-04-30T13:00:00Z',
+                author: { name: 'Dev' },
+              },
+              created_at: '2026-04-30T13:00:00Z',
+              updated_at: '2026-04-30T13:04:00Z',
+            },
+            headers: {
+              'x-ratelimit-limit': '5000',
+              'x-ratelimit-remaining': '4980',
+            },
+          };
+        },
+        listJobsForWorkflowRun: async (params) => {
+          calls.push(['actions.listJobsForWorkflowRun', params]);
+          return {
+            data: {
+              jobs: [
+                {
+                  id: 9001,
+                  run_id: Number(params.run_id),
+                  name: 'Frontend · build',
+                  status: 'completed',
+                  conclusion: 'failure',
+                  html_url: 'https://github.com/SiraGPT-ORg/siraGPT/actions/runs/78/job/9001',
+                  runner_name: 'GitHub Actions 1',
+                  runner_group_name: 'GitHub Actions',
+                  labels: ['ubuntu-latest'],
+                  started_at: '2026-04-30T13:01:00Z',
+                  completed_at: '2026-04-30T13:03:00Z',
+                  steps: [
+                    {
+                      name: 'Install dependencies',
+                      number: 1,
+                      status: 'completed',
+                      conclusion: 'success',
+                      started_at: '2026-04-30T13:01:00Z',
+                      completed_at: '2026-04-30T13:01:30Z',
+                    },
+                    {
+                      name: 'Next.js build',
+                      number: 2,
+                      status: 'completed',
+                      conclusion: 'failure',
+                      started_at: '2026-04-30T13:01:31Z',
+                      completed_at: '2026-04-30T13:03:00Z',
+                    },
+                  ],
+                },
+                {
+                  id: 9002,
+                  run_id: Number(params.run_id),
+                  name: 'Security',
+                  status: 'completed',
+                  conclusion: 'success',
+                  html_url: 'https://github.com/SiraGPT-ORg/siraGPT/actions/runs/78/job/9002',
+                  labels: ['ubuntu-latest'],
+                  steps: [],
+                },
+              ],
+            },
+          };
+        },
+        downloadJobLogsForWorkflowRun: async (params) => {
+          calls.push(['actions.downloadJobLogsForWorkflowRun', params]);
+          return {
+            data: [
+              'Run npm run build',
+              'Authorization: Bearer ghp_secret123456789012345678901234567890',
+              'Error: Next.js build failed in app/codex/page.tsx',
+              'npm ERR! command failed',
+            ].join('\n'),
           };
         },
       },
@@ -409,6 +502,69 @@ describe('GitHub Codex connector context aggregation', () => {
     assert.equal(unavailableNormalized.body.code, 'github_api_error');
     assert.equal(unavailableNormalized.body.error, 'GitHub API request failed');
     assert.equal(JSON.stringify(unavailableNormalized).includes('ghp_secret'), false);
+  });
+});
+
+describe('GitHub Codex Actions intelligence', () => {
+  test('lists workflow runs with sanitized operational status', async () => {
+    const fake = createFakeOctokit();
+    const connector = createGitHubCodexConnector({
+      env: { GITHUB_CODEX_TOKEN: 'ghp_secret' },
+      octokitFactory: async () => fake,
+    });
+
+    const result = await connector.listActionRuns({
+      repository: 'SiraGPT-ORg/siraGPT',
+      branch: 'main',
+      limit: 5,
+    });
+
+    assert.equal(result.repository.fullName, 'SiraGPT-ORg/siraGPT');
+    assert.equal(result.branch, 'main');
+    assert.equal(result.runs.length, 1);
+    assert.equal(result.summary.health, 'green');
+    assert.equal(result.auth.mode, 'server_token');
+    assert.equal(JSON.stringify(result).includes('ghp_secret'), false);
+    assert.deepEqual(fake.calls.find(([name]) => name === 'actions.listWorkflowRunsForRepo')[1].per_page, 5);
+  });
+
+  test('analyzes failed workflow jobs and redacts log secrets', async () => {
+    const fake = createFakeOctokit();
+    const connector = createGitHubCodexConnector({
+      env: { GITHUB_CODEX_TOKEN: 'ghp_secret' },
+      octokitFactory: async () => fake,
+    });
+
+    const result = await connector.analyzeActionFailure({
+      repository: 'SiraGPT-ORg/siraGPT',
+      runId: 78,
+      includeLogs: true,
+      maxLogBytes: 2000,
+    });
+
+    assert.equal(result.run.id, 78);
+    assert.equal(result.analysis.health, 'red');
+    assert.equal(result.analysis.failedJobs.length, 1);
+    assert.equal(result.analysis.failedJobs[0].failedSteps[0], 'Next.js build');
+    assert.ok(result.analysis.rootCauseCandidates.some((line) => /Next\.js build/i.test(line)));
+    assert.equal(result.logs.excerpts.length, 1);
+    assert.match(result.logs.excerpts[0].excerpt, /Next\.js build failed/);
+    assert.equal(JSON.stringify(result).includes('ghp_secret'), false);
+    assert.ok(fake.calls.some(([name]) => name === 'actions.downloadJobLogsForWorkflowRun'));
+  });
+
+  test('sanitizes GitHub Actions text before it can reach the UI', () => {
+    const sanitized = sanitizeGitHubActionsText([
+      '::add-mask::ghp_secret123456789012345678901234567890',
+      'Authorization: Bearer ghp_secret123456789012345678901234567890',
+      'https://user:password@example.com/repo.git',
+      'Error: build failed',
+    ].join('\n'), 1000);
+
+    assert.match(sanitized.text, /Error: build failed/);
+    assert.equal(sanitized.text.includes('ghp_secret'), false);
+    assert.equal(sanitized.text.includes('password@example.com'), false);
+    assert.equal(sanitized.text.includes('::add-mask::'), false);
   });
 });
 

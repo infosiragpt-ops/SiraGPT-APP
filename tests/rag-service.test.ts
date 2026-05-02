@@ -17,17 +17,17 @@ type StreamCache = {
     userId: string,
     chatId: string,
     opts?: { ttlMs?: number; title?: string }
-  ) => { append: (c: string) => void; complete: () => void; fail: (m: string) => void; forget: () => void }
-  resume: (userId: string, chatId: string) => null | {
+  ) => Promise<{ append: (c: string) => void; complete: () => void; fail: (m: string) => void; forget: () => void }>
+  resume: (userId: string, chatId: string) => Promise<null | {
     status: "streaming" | "done" | "error"
     content: string
     title: string
     error: string | null
     startedAt: number
     updatedAt: number
-  }
-  _reset: () => void
-  _size: () => number
+  }>
+  _reset: () => Promise<void>
+  _size: () => Promise<number>
 }
 
 const rag = cjsRequire("../../backend/src/services/rag-service") as Rag
@@ -135,70 +135,70 @@ describe("rag-service · retrieval hit diagnostics", () => {
 })
 
 describe("stream-cache · lifecycle", () => {
-  it("creates an entry that resume() can read", () => {
-    streamCache._reset()
-    const h = streamCache.start("u1", "c1", { title: "hello" })
+  it("creates an entry that resume() can read", async () => {
+    await streamCache._reset()
+    const h = await streamCache.start("u1", "c1", { title: "hello" })
     h.append("first ")
     h.append("second")
-    const snap = streamCache.resume("u1", "c1")
+    const snap = await streamCache.resume("u1", "c1")
     assert.ok(snap, "resume should return a snapshot")
     assert.equal(snap!.status, "streaming")
     assert.equal(snap!.content, "first second")
     assert.equal(snap!.title, "hello")
   })
 
-  it("marks complete → status 'done'", () => {
-    streamCache._reset()
-    streamCache.start("u2", "c2").complete()
-    assert.equal(streamCache.resume("u2", "c2")!.status, "done")
+  it("marks complete → status 'done'", async () => {
+    await streamCache._reset()
+    ;(await streamCache.start("u2", "c2")).complete()
+    assert.equal((await streamCache.resume("u2", "c2"))!.status, "done")
   })
 
-  it("marks fail → status 'error' with message", () => {
-    streamCache._reset()
-    streamCache.start("u3", "c3").fail("kaboom")
-    const snap = streamCache.resume("u3", "c3")!
+  it("marks fail → status 'error' with message", async () => {
+    await streamCache._reset()
+    ;(await streamCache.start("u3", "c3")).fail("kaboom")
+    const snap = (await streamCache.resume("u3", "c3"))!
     assert.equal(snap.status, "error")
     assert.equal(snap.error, "kaboom")
   })
 
-  it("returns null for an unknown chat", () => {
-    streamCache._reset()
-    assert.equal(streamCache.resume("ghost", "nope"), null)
+  it("returns null for an unknown chat", async () => {
+    await streamCache._reset()
+    assert.equal(await streamCache.resume("ghost", "nope"), null)
   })
 
-  it("isolates entries across users", () => {
-    streamCache._reset()
-    streamCache.start("userA", "sharedChat").append("A only")
-    streamCache.start("userB", "sharedChat").append("B only")
-    assert.equal(streamCache.resume("userA", "sharedChat")!.content, "A only")
-    assert.equal(streamCache.resume("userB", "sharedChat")!.content, "B only")
+  it("isolates entries across users", async () => {
+    await streamCache._reset()
+    ;(await streamCache.start("userA", "sharedChat")).append("A only")
+    ;(await streamCache.start("userB", "sharedChat")).append("B only")
+    assert.equal((await streamCache.resume("userA", "sharedChat"))!.content, "A only")
+    assert.equal((await streamCache.resume("userB", "sharedChat"))!.content, "B only")
   })
 
-  it("forget() removes the entry", () => {
-    streamCache._reset()
-    const h = streamCache.start("u4", "c4")
+  it("forget() removes the entry", async () => {
+    await streamCache._reset()
+    const h = await streamCache.start("u4", "c4")
     h.append("temp")
-    assert.equal(streamCache._size(), 1)
+    assert.equal(await streamCache._size(), 1)
     h.forget()
-    assert.equal(streamCache._size(), 0)
+    assert.equal(await streamCache._size(), 0)
   })
 
-  it("append on a complete()'d stream still extends content", () => {
-    streamCache._reset()
-    const h = streamCache.start("u5", "c5")
+  it("append on a complete()'d stream still extends content", async () => {
+    await streamCache._reset()
+    const h = await streamCache.start("u5", "c5")
     h.append("before")
     h.complete()
     h.append(" after")
-    assert.equal(streamCache.resume("u5", "c5")!.content, "before after")
+    assert.equal((await streamCache.resume("u5", "c5"))!.content, "before after")
   })
 
-  it("append ignores empty / falsy chunks", () => {
-    streamCache._reset()
-    const h = streamCache.start("u6", "c6")
+  it("append ignores empty / falsy chunks", async () => {
+    await streamCache._reset()
+    const h = await streamCache.start("u6", "c6")
     h.append("")
     h.append(null as unknown as string)
     h.append("real")
-    assert.equal(streamCache.resume("u6", "c6")!.content, "real")
+    assert.equal((await streamCache.resume("u6", "c6"))!.content, "real")
   })
 })
 
