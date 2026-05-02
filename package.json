@@ -126,6 +126,7 @@
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.10.38",
     "plotly.js-basic-dist-min": "^3.5.0",
+    "posthog-js": "^1.372.6",
     "react": "^18",
     "react-day-picker": "latest",
     "react-dom": "^18",

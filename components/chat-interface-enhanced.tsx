@@ -69,6 +69,7 @@ import {
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
+import { track } from "@/lib/analytics"
 import { aiService, buildProfessionalCapabilityPrompt, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -5015,6 +5016,17 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
+
+    // Capture the user's intent to send BEFORE the busy-queue branch
+    // so queued messages count toward the same funnel as immediately-
+    // sent ones. Properties stay non-PII: only the shape of the
+    // message (length, attachments) and the routing context (model).
+    track("chat.message_sent", {
+      text_length: rawMsg.length,
+      has_text: rawMsg.length > 0,
+      attachment_count: composerFiles.length,
+      model: selectedModel || null,
+    });
 
     const isBusy = isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
 

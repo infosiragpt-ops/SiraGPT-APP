@@ -11,6 +11,7 @@ import 'katex/dist/katex.min.css';
 import { SettingsProvider } from "@/lib/settings-context"
 import { SyncfusionBannerRemover } from "@/components/SyncfusionBannerRemover"
 import { SentryClientInit } from "@/components/sentry-client-init"
+import { PostHogClientInit } from "@/components/posthog-client-init"
 import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
@@ -77,6 +78,7 @@ export default async function RootLayout({
       </head>
       <body className={GeistSans.className}>
         <SentryClientInit />
+        <PostHogClientInit />
         <SyncfusionBannerRemover />
         <NextIntlClientProvider locale={locale} messages={messages}>
           <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
