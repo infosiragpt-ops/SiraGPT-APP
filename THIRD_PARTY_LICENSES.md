@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1371**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1384**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -299,7 +299,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@syncfusion/ej2-spreadsheet` | 32.2.9 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls.git#master) |
 | `@syncfusion/ej2-svg-base` | 32.2.3 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls) |
 
-## ISC (81)
+## ISC (82)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -348,6 +348,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `fs.realpath` | 1.0.0 | ISC | [link](https://github.com/isaacs/fs.realpath) |
 | `fstream` | 1.0.12 | ISC | [link](https://github.com/npm/fstream) |
 | `get-caller-file` | 2.0.5 | ISC | [link](https://github.com/stefanpenner/get-caller-file) |
+| `github-slugger` | 2.0.0 | ISC | [link](https://github.com/Flet/github-slugger) |
 | `glob` | 10.5.0, 7.2.3 | ISC | [link](https://github.com/isaacs/node-glob) |
 | `glob-parent` | 5.1.2, 6.0.2 | ISC | [link](https://github.com/gulpjs/glob-parent) |
 | `graceful-fs` | 4.2.11 | ISC | [link](https://github.com/isaacs/node-graceful-fs) |
@@ -385,7 +386,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1032)
+## MIT (1044)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -440,6 +441,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@llamaindex/workflow-core` | 1.3.4 | MIT | [link](https://github.com/run-llama/workflows-ts) |
 | `@mermaid-js/parser` | 1.1.0 | MIT | [link](https://github.com/mermaid-js/mermaid) |
 | `@modelcontextprotocol/sdk` | 1.29.0 | MIT | [link](https://github.com/modelcontextprotocol/typescript-sdk) |
+| `@monaco-editor/loader` | 1.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-loader) |
+| `@monaco-editor/react` | 4.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-react) |
 | `@napi-rs/canvas` | 0.1.100, 0.1.99 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
 | `@next/env` | 14.2.35 | MIT | [link](https://github.com/vercel/next.js) |
 | `@noble/hashes` | 1.8.0 | MIT | [link](https://github.com/paulmillr/noble-hashes) |
@@ -896,6 +899,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `hast-util-from-html` | 2.0.3 | MIT | [link](https://github.com/syntax-tree/hast-util-from-html) |
 | `hast-util-from-html-isomorphic` | 2.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-from-html-isomorphic) |
 | `hast-util-from-parse5` | 8.0.3 | MIT | [link](https://github.com/syntax-tree/hast-util-from-parse5) |
+| `hast-util-heading-rank` | 3.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-heading-rank) |
 | `hast-util-is-element` | 3.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-is-element) |
 | `hast-util-parse-selector` | 4.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-parse-selector) |
 | `hast-util-raw` | 9.1.0 | MIT | [link](https://github.com/syntax-tree/hast-util-raw) |
@@ -903,6 +907,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `hast-util-to-html` | 9.0.5 | MIT | [link](https://github.com/syntax-tree/hast-util-to-html) |
 | `hast-util-to-jsx-runtime` | 2.3.6 | MIT | [link](https://github.com/syntax-tree/hast-util-to-jsx-runtime) |
 | `hast-util-to-parse5` | 8.0.1 | MIT | [link](https://github.com/syntax-tree/hast-util-to-parse5) |
+| `hast-util-to-string` | 3.0.1 | MIT | [link](https://github.com/rehypejs/rehype-minify.git#main) |
 | `hast-util-to-text` | 4.0.2 | MIT | [link](https://github.com/syntax-tree/hast-util-to-text) |
 | `hast-util-whitespace` | 3.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-whitespace) |
 | `hastscript` | 9.0.1 | MIT | [link](https://github.com/syntax-tree/hastscript) |
@@ -962,6 +967,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `katex` | 0.16.45 | MIT | [link](https://github.com/KaTeX/KaTeX) |
 | `khroma` | 2.1.0 | MIT | [link](https://github.com/fabiospampinato/khroma) |
 | `langchain` | 1.3.4 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
+| `langfuse` | 3.38.20 | MIT | [link](https://github.com/langfuse/langfuse-js) |
+| `langfuse-core` | 3.38.20 | MIT | [link](https://github.com/langfuse/langfuse-js) |
 | `langium` | 4.2.2 | MIT | [link](https://github.com/eclipse-langium/langium) |
 | `langsmith` | 0.5.25 | MIT | [link](https://github.com/langchain-ai/langsmith-sdk) |
 | `layout-base` | 1.0.2, 2.0.1 | MIT | [link](https://github.com/iVis-at-Bilkent/layout-base) |
@@ -1007,6 +1014,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `markdown-table` | 3.0.4 | MIT | [link](https://github.com/wooorm/markdown-table) |
 | `marked` | 16.4.1, 16.4.2 | MIT | [link](https://github.com/markedjs/marked) |
 | `math-intrinsics` | 1.1.0 | MIT | [link](https://github.com/es-shims/math-intrinsics) |
+| `mdast-util-directive` | 3.1.0 | MIT | [link](https://github.com/syntax-tree/mdast-util-directive) |
 | `mdast-util-find-and-replace` | 3.0.2 | MIT | [link](https://github.com/syntax-tree/mdast-util-find-and-replace) |
 | `mdast-util-from-markdown` | 2.0.3 | MIT | [link](https://github.com/syntax-tree/mdast-util-from-markdown) |
 | `mdast-util-gfm` | 3.1.0 | MIT | [link](https://github.com/syntax-tree/mdast-util-gfm) |
@@ -1032,6 +1040,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `methods` | 1.1.2 | MIT | [link](https://github.com/jshttp/methods) |
 | `micromark` | 4.0.2 | MIT | [link](https://github.com/micromark/micromark.git#main) |
 | `micromark-core-commonmark` | 2.0.3 | MIT | [link](https://github.com/micromark/micromark.git#main) |
+| `micromark-extension-directive` | 4.0.0 | MIT | [link](https://github.com/micromark/micromark-extension-directive) |
 | `micromark-extension-gfm` | 3.0.0 | MIT | [link](https://github.com/micromark/micromark-extension-gfm) |
 | `micromark-extension-gfm-autolink-literal` | 2.1.0 | MIT | [link](https://github.com/micromark/micromark-extension-gfm-autolink-literal) |
 | `micromark-extension-gfm-footnote` | 2.1.0 | MIT | [link](https://github.com/micromark/micromark-extension-gfm-footnote) |
@@ -1253,9 +1262,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `regex` | 5.1.1 | MIT | [link](https://github.com/slevithan/regex) |
 | `regex-recursion` | 5.1.1 | MIT | [link](https://github.com/slevithan/regex-recursion) |
 | `regex-utilities` | 2.3.0 | MIT | [link](https://github.com/slevithan/regex-utilities) |
+| `rehype-autolink-headings` | 7.1.0 | MIT | [link](https://github.com/rehypejs/rehype-autolink-headings) |
 | `rehype-katex` | 7.0.1 | MIT | [link](https://github.com/remarkjs/remark-math.git#main) |
 | `rehype-raw` | 7.0.0 | MIT | [link](https://github.com/rehypejs/rehype-raw) |
 | `rehype-sanitize` | 6.0.0 | MIT | [link](https://github.com/rehypejs/rehype-sanitize) |
+| `rehype-slug` | 6.0.0 | MIT | [link](https://github.com/rehypejs/rehype-slug) |
+| `remark-directive` | 4.0.0 | MIT | [link](https://github.com/remarkjs/remark-directive) |
 | `remark-gfm` | 4.0.1 | MIT | [link](https://github.com/remarkjs/remark-gfm) |
 | `remark-math` | 6.0.0 | MIT | [link](https://github.com/remarkjs/remark-math.git#main) |
 | `remark-parse` | 11.0.0 | MIT | [link](https://github.com/remarkjs/remark.git#main) |
@@ -1302,6 +1314,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `space-separated-tokens` | 2.0.2 | MIT | [link](https://github.com/wooorm/space-separated-tokens) |
 | `spotify-web-api-node` | 5.0.2 | MIT | [link](https://github.com/thelinmichael/spotify-web-api-node) |
 | `standard-as-callback` | 2.1.0 | MIT | [link](https://github.com/luin/asCallback) |
+| `state-local` | 1.0.7 | MIT | [link](https://github.com/suren-atoyan/state-local) |
 | `statuses` | 2.0.1, 2.0.2 | MIT | [link](https://github.com/jshttp/statuses) |
 | `streamsearch` | 1.1.0 | MIT | [link](https://github.com/mscdex/streamsearch) |
 | `streamx` | 2.23.0 | MIT | [link](https://github.com/mafintosh/streamx) |
