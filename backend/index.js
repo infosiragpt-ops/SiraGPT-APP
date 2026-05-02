@@ -97,20 +97,37 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// CORS configuration
-// const corsOptions = {
-//   origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:3000'],
-//   credentials: true,
-//   optionsSuccessStatus: 200
-// };
-// app.use(cors(corsOptions));
+// CORS allowlist — read once at startup from CORS_ORIGINS (comma-
+// separated). Empty in production fails closed: a misconfigured deploy
+// rejects every browser-issued request rather than silently allowing
+// any origin (which is what `callback(null, true)` used to do here).
+//
+// Local-dev fallback only kicks in when CORS_ORIGINS is empty AND
+// NODE_ENV !== 'production', so `npm run dev` works out of the box but
+// production is forced to set the env var.
+const CORS_ORIGIN_LIST = (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const ALLOWED_ORIGINS = CORS_ORIGIN_LIST.length > 0
+    ? CORS_ORIGIN_LIST
+    : process.env.NODE_ENV === 'production'
+        ? []
+        : ['http://localhost:3000', 'http://localhost:3001'];
 
 const corsOptions = {
-    origin: function (origin, callback) {
-        callback(null, true); // allow any origin
+    origin(origin, callback) {
+        // No `Origin` header → not a browser cross-origin request
+        // (mobile app, curl, server-to-server, same-origin). cors's
+        // own behavior already skips the response header in this case;
+        // we just allow the request through.
+        if (!origin) return callback(null, true);
+        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+        return callback(new Error(`CORS: origin not allowed (${origin})`));
     },
     credentials: true,
-    optionsSuccessStatus: 200
+    optionsSuccessStatus: 200,
 };
 app.use(cors(corsOptions));
 
