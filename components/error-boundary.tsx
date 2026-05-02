@@ -3,6 +3,7 @@
 import { Component, ErrorInfo, ReactNode } from "react"
 import { AlertTriangle, RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { track } from "@/lib/analytics"
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -35,6 +36,21 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   componentDidCatch(error: Error, info: ErrorInfo): void {
     const label = this.props.label ?? "ErrorBoundary"
     console.error(`[${label}] caught render error:`, error, info.componentStack)
+    // Always emit a structured analytics event before the optional
+    // onError side-channel so PostHog dashboards can track which
+    // boundary labels are firing without each parent having to wire
+    // the call themselves. The analytics façade is no-op-safe when
+    // PostHog is disabled (NEXT_PUBLIC_POSTHOG_KEY unset), so this
+    // costs nothing in dev / closed-source deploys.
+    track("error.client_boundary", {
+      label,
+      // Cap message + name so a runaway error string doesn't blow
+      // up the analytics payload. Component stack is intentionally
+      // NOT included — it can leak file paths and is bulky; Sentry
+      // already captures it via SentryClientInit.
+      name: error.name,
+      message: (error.message || "").slice(0, 500),
+    })
     this.props.onError?.(error, info)
   }
 

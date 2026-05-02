@@ -824,6 +824,16 @@ const ActionsDropdown = ({
 
   const handleFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
+      // Per-batch funnel event (not per-file) — captures the user's
+      // intent to attach with non-PII shape (count + total bytes).
+      // Filenames are deliberately excluded — they can carry user
+      // names / project codenames / sensitive info that doesn't
+      // belong in a product-analytics stream.
+      const files = Array.from(e.target.files);
+      track("chat.file_uploaded", {
+        count: files.length,
+        total_bytes: files.reduce((acc, f) => acc + (f.size || 0), 0),
+      });
       handleAndUploadFiles(e.target.files);
       // Clear the input to allow re-uploading the same file
       e.target.value = '';
@@ -2186,6 +2196,13 @@ const NavbarModelSelector = ({
     setSelectedProvider(model.provider);
     recordRecent(model.name);
     setCurrentChat?.((chat: any) => chat ? { ...chat, model: model.name } : chat);
+    // User-initiated model swap on a Custom GPT — distinguish from
+    // the picker swap below via the `surface` property.
+    track("model.selected", {
+      model: model.name,
+      provider: model.provider || null,
+      surface: "gpt",
+    });
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
@@ -2383,6 +2400,13 @@ const NavbarModelSelector = ({
                     onSelect={() => {
                       setSelectedModel(model.name);
                       setSearchQuery("");
+                      // Video model swap — separate surface so video-
+                      // specific funnels stay distinct from text models.
+                      track("model.selected", {
+                        model: model.name,
+                        provider: (model as any).provider || null,
+                        surface: "video-picker",
+                      });
                     }}
                     className="flex items-center gap-2 py-2"
                   >
@@ -2872,6 +2896,16 @@ const NavbarModelSelector = ({
     setSelectedProvider(model.provider);
     recordRecent(model.name);
     setSearchQuery("");
+    // Main model-picker funnel event. Programmatic model swaps
+    // (auto-fallback, pickModelForTier, etc.) intentionally do NOT
+    // emit — only direct user picks do. Dashboards can compare
+    // surface=picker vs surface=gpt to see how much of model
+    // churn comes from the dropdown vs Custom-GPT navigation.
+    track("model.selected", {
+      model: model.name,
+      provider: model.provider || null,
+      surface: "picker",
+    });
   };
 
   // ModelRow — single picker entry. Active state = subtle bg + Check on
