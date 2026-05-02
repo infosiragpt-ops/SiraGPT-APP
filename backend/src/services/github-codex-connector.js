@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const createIgnore = require('ignore');
 
 const DEFAULT_RECENT_ITEMS = 10;
 const MAX_RECENT_ITEMS = 20;
@@ -11,6 +12,8 @@ const MAX_CODE_FILE_LIMIT = 120;
 const DEFAULT_CODE_FILE_MAX_BYTES = 60000;
 const MAX_CODE_FILE_MAX_BYTES = 120000;
 const CODE_FETCH_CONCURRENCY = 4;
+const REPOSITORY_GITIGNORE_PATH = '.gitignore';
+const MAX_REPOSITORY_GITIGNORE_BYTES = 128000;
 const DEFAULT_GITHUB_CODEX_RETRY_LIMIT = 2;
 const MAX_GITHUB_CODEX_RETRY_LIMIT = 5;
 const DEFAULT_GITHUB_CODEX_THROTTLE_MAX_RETRIES = 2;
@@ -178,6 +181,19 @@ function resolveAuth(env = process.env) {
   };
 }
 
+function publicRepositoryFilteringStatus() {
+  return {
+    gitignore: {
+      enabled: true,
+      maxBytes: MAX_REPOSITORY_GITIGNORE_BYTES,
+    },
+    secretFiles: '.env* except .env.example',
+    skippedDirectories: Array.from(SKIPPED_PATH_SEGMENTS).sort(),
+    skippedFileNames: Array.from(SKIPPED_FILE_NAMES).sort(),
+    codeExtensions: Array.from(CODE_FILE_EXTENSIONS).sort(),
+  };
+}
+
 function publicAuthStatus(auth, resilience) {
   return {
     provider: 'github',
@@ -194,6 +210,7 @@ function publicAuthStatus(auth, resilience) {
       'actions:read',
     ],
     resilience,
+    repositoryFiltering: publicRepositoryFilteringStatus(),
   };
 }
 
@@ -289,6 +306,25 @@ function hasSkippedSegment(filePath) {
   return segments.some((segment) => SKIPPED_PATH_SEGMENTS.has(segment));
 }
 
+function createRepositoryIgnoreMatcher(content) {
+  const raw = typeof content === 'string' ? content : '';
+  if (!raw.trim()) return null;
+  const matcher = createIgnore();
+  matcher.add(raw);
+  return matcher;
+}
+
+function isGitIgnoredPath(filePath, ignoreMatcher) {
+  if (!ignoreMatcher) return false;
+  const cleanPath = normalisePosixPath(filePath);
+  if (!cleanPath) return false;
+  try {
+    return ignoreMatcher.ignores(cleanPath);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function isSupportedCodePath(filePath) {
   const cleanPath = normalisePosixPath(filePath);
   const base = path.posix.basename(cleanPath);
@@ -297,11 +333,12 @@ function isSupportedCodePath(filePath) {
   return CODE_FILE_EXTENSIONS.has(path.posix.extname(cleanPath).toLowerCase());
 }
 
-function classifyRepositoryPath(entry, { maxBytes = DEFAULT_CODE_FILE_MAX_BYTES } = {}) {
+function classifyRepositoryPath(entry, { maxBytes = DEFAULT_CODE_FILE_MAX_BYTES, ignoreMatcher = null } = {}) {
   const filePath = normalisePosixPath(entry?.path);
   if (!filePath) return { ok: false, reason: 'missing_path' };
   if (entry.type !== 'blob') return { ok: false, reason: 'not_file' };
   if (hasSkippedSegment(filePath)) return { ok: false, reason: 'skipped_directory' };
+  if (isGitIgnoredPath(filePath, ignoreMatcher)) return { ok: false, reason: 'gitignored' };
   if (!isSupportedCodePath(filePath)) return { ok: false, reason: 'unsupported_extension' };
   const size = numberOrZero(entry.size);
   if (size > maxBytes) return { ok: false, reason: 'oversized' };
@@ -360,6 +397,52 @@ function decodeGitHubFileContent(data) {
   }
   if (typeof data.content === 'string') return data.content;
   return null;
+}
+
+async function fetchRepositoryIgnoreMatcher(octokit, parsed, branch) {
+  try {
+    const response = await octokit.rest.repos.getContent({
+      ...parsed,
+      path: REPOSITORY_GITIGNORE_PATH,
+      ref: branch,
+    });
+    const data = response.data;
+    if (!data || Array.isArray(data) || data.type !== 'file') {
+      return { matcher: null, source: null, warning: null };
+    }
+
+    const bytes = numberOrZero(data.size);
+    const source = {
+      path: data.path || REPOSITORY_GITIGNORE_PATH,
+      sha: data.sha || null,
+      bytes,
+      htmlUrl: data.html_url || null,
+    };
+    if (bytes > MAX_REPOSITORY_GITIGNORE_BYTES) {
+      return {
+        matcher: null,
+        source,
+        warning: {
+          area: 'gitignore',
+          code: 'github_gitignore_oversized',
+          status: 200,
+          message: '.gitignore is too large to apply safely',
+        },
+      };
+    }
+
+    const content = decodeGitHubFileContent(data);
+    return {
+      matcher: createRepositoryIgnoreMatcher(content),
+      source,
+      warning: null,
+    };
+  } catch (error) {
+    if (Number(error.status) === 404) {
+      return { matcher: null, source: null, warning: null };
+    }
+    return { matcher: null, source: null, warning: warningFromError('gitignore', error) };
+  }
 }
 
 async function mapLimit(items, limit, mapper) {
@@ -764,23 +847,30 @@ function createGitHubCodexConnector(options = {}) {
         tree_sha: treeSha,
         recursive: '1',
       });
+      const ignoreResult = await fetchRepositoryIgnoreMatcher(octokit, parsed, branch);
+      const warnings = ignoreResult.warning ? [ignoreResult.warning] : [];
 
       const skipped = {
         notFile: 0,
         skippedDirectory: 0,
+        gitignored: 0,
         unsupportedExtension: 0,
         oversized: 0,
         fetchFailed: 0,
       };
       const candidates = [];
       for (const entry of treeResponse.data?.tree || []) {
-        const classification = classifyRepositoryPath(entry, { maxBytes });
+        const classification = classifyRepositoryPath(entry, {
+          maxBytes,
+          ignoreMatcher: ignoreResult.matcher,
+        });
         if (classification.ok) {
           candidates.push(entry);
           continue;
         }
         if (classification.reason === 'not_file') skipped.notFile += 1;
         else if (classification.reason === 'skipped_directory') skipped.skippedDirectory += 1;
+        else if (classification.reason === 'gitignored') skipped.gitignored += 1;
         else if (classification.reason === 'oversized') skipped.oversized += 1;
         else skipped.unsupportedExtension += 1;
       }
@@ -833,6 +923,13 @@ function createGitHubCodexConnector(options = {}) {
         files,
         collection: buildGitHubRagCollection({ repository: parsed.fullName, branch }),
         skipped,
+        filtering: {
+          gitignore: {
+            applied: Boolean(ignoreResult.matcher),
+            source: ignoreResult.source,
+          },
+        },
+        warnings,
         limits: {
           fileLimit: limit,
           maxFileBytes: maxBytes,
@@ -856,6 +953,7 @@ module.exports = {
   buildCodexSummary,
   buildGitHubRagCollection,
   classifyRepositoryPath,
+  createRepositoryIgnoreMatcher,
   createDefaultOctokit,
   createGitHubOctokitClass,
   createGitHubCodexConnector,

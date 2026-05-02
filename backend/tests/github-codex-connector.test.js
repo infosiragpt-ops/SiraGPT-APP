@@ -7,6 +7,7 @@ const {
   classifyRepositoryPath,
   createDefaultOctokit,
   createGitHubCodexConnector,
+  createRepositoryIgnoreMatcher,
   languageForPath,
   normalizeGitHubConnectorError,
   parseGitHubRepository,
@@ -84,6 +85,7 @@ function createFakeOctokit({ actionsError } = {}) {
         getContent: async (params) => {
           calls.push(['repos.getContent', params]);
           const fixtures = {
+            '.gitignore': 'app/generated.ts\nbackend/src/private/*.js\n',
             'package.json': '{"name":"siragpt"}',
             'app/page.tsx': 'export default function Page() { return <main>Sira</main> }',
             'backend/src/index.js': 'module.exports = function boot() { return true; }',
@@ -183,7 +185,9 @@ function createFakeOctokit({ actionsError } = {}) {
               tree: [
                 { path: 'package.json', type: 'blob', size: 18, sha: 'pkg' },
                 { path: 'app/page.tsx', type: 'blob', size: 60, sha: 'page' },
+                { path: 'app/generated.ts', type: 'blob', size: 24, sha: 'generated' },
                 { path: 'backend/src/index.js', type: 'blob', size: 48, sha: 'backend' },
+                { path: 'backend/src/private/secret.js', type: 'blob', size: 20, sha: 'private' },
                 { path: 'docs/phase.md', type: 'blob', size: 8, sha: 'docs' },
                 { path: 'package-lock.json', type: 'blob', size: 100, sha: 'lock' },
                 { path: '.env.local', type: 'blob', size: 20, sha: 'env' },
@@ -418,6 +422,22 @@ describe('GitHub Codex repository RAG file selection', () => {
     assert.equal(languageForPath('components/button.tsx'), 'typescript');
   });
 
+  test('applies repository .gitignore rules without weakening built-in secret filters', () => {
+    const ignoreMatcher = createRepositoryIgnoreMatcher('scratch/*.ts\n!scratch/keep.ts\n');
+    assert.equal(classifyRepositoryPath(
+      { path: 'scratch/generated.ts', type: 'blob', size: 10 },
+      { ignoreMatcher },
+    ).reason, 'gitignored');
+    assert.equal(classifyRepositoryPath(
+      { path: 'scratch/keep.ts', type: 'blob', size: 10 },
+      { ignoreMatcher },
+    ).ok, true);
+    assert.equal(classifyRepositoryPath(
+      { path: '.env.production', type: 'blob', size: 10 },
+      { ignoreMatcher },
+    ).ok, false);
+  });
+
   test('fetches a bounded set of GitHub files ready for code RAG ingestion', async () => {
     const fake = createFakeOctokit();
     const connector = createGitHubCodexConnector({
@@ -441,8 +461,11 @@ describe('GitHub Codex repository RAG file selection', () => {
       'backend/src/index.js',
     ]);
     assert.equal(fileSet.files[1].language, 'typescript');
+    assert.equal(fileSet.skipped.gitignored, 2);
     assert.equal(fileSet.skipped.skippedDirectory, 1);
     assert.ok(fileSet.skipped.unsupportedExtension >= 3);
+    assert.equal(fileSet.filtering.gitignore.applied, true);
+    assert.equal(fileSet.filtering.gitignore.source.path, '.gitignore');
     assert.equal(JSON.stringify(fileSet).includes('ghp_secret'), false);
 
     const ragFiles = buildCodeFilesForRag(fileSet.files);
@@ -457,6 +480,9 @@ describe('GitHub Codex repository RAG file selection', () => {
       'github:SiraGPT-ORg/siraGPT:feature/test-branch',
     );
     assert.ok(fake.calls.some(([name]) => name === 'git.getTree'));
-    assert.equal(fake.calls.filter(([name]) => name === 'repos.getContent').length, 3);
+    assert.equal(
+      fake.calls.filter(([name, params]) => name === 'repos.getContent' && params.path !== '.gitignore').length,
+      3,
+    );
   });
 });

@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1366**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1367**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -385,7 +385,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1027)
+## MIT (1028)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -916,6 +916,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `https-proxy-agent` | 7.0.6 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
 | `iconv-lite` | 0.4.24, 0.6.3, 0.7.2 | MIT | [link](https://github.com/ashtuchkin/iconv-lite) |
 | `icu-minify` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
+| `ignore` | 7.0.5 | MIT | [link](https://github.com/kaelzhang/node-ignore) |
 | `image-size` | 1.2.1 | MIT | [link](https://github.com/image-size/image-size) |
 | `immediate` | 3.0.6 | MIT | [link](https://github.com/calvinmetcalf/immediate) |
 | `immer` | 10.2.0, 11.1.4 | MIT | [link](https://github.com/immerjs/immer) |
