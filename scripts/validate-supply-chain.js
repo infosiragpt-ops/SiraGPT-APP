@@ -23,6 +23,13 @@ function run(label, command, args, options = {}) {
     encoding: 'utf8',
     stdio: options.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     env: process.env,
+    // 32 MB headroom for `npm sbom` and any other capture target.
+    // Node's default (1 MB) silently SIGKILLs the child once the
+    // captured stdout crosses the threshold — we hit that as the
+    // dependency tree grew past ~1380 entries. Bumping here is
+    // cheaper than streaming to a file because the SBOM is already
+    // small enough to fit in process memory comfortably.
+    maxBuffer: 32 * 1024 * 1024,
   });
 
   if (result.status !== 0) {
