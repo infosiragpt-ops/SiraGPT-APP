@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1397**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1420**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (169)
+## Apache-2.0 (172)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -37,11 +37,14 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@aws-crypto/sha256-js` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
 | `@aws-crypto/util` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
 | `@aws-sdk/types` | 3.973.8 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@bufbuild/protobuf` | 2.12.0 | Apache-2.0 AND BSD-3-Clause | [link](https://github.com/bufbuild/protobuf-es) |
 | `@chevrotain/cst-dts-gen` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `@chevrotain/gast` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `@chevrotain/regexp-to-ast` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `@chevrotain/types` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `@chevrotain/utils` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
+| `@connectrpc/connect` | 2.0.0-rc.3 | Apache-2.0 | [link](https://github.com/connectrpc/connect-es) |
+| `@connectrpc/connect-web` | 2.0.0-rc.3 | Apache-2.0 | [link](https://github.com/connectrpc/connect-es) |
 | `@google/genai` | 1.28.0 | Apache-2.0 | [link](https://github.com/googleapis/js-genai) |
 | `@google/generative-ai` | 0.24.1 | Apache-2.0 | [link](https://github.com/google/generative-ai-js) |
 | `@grpc/grpc-js` | 1.14.3 | Apache-2.0 | [link](https://github.com/grpc/grpc-node.git#master) |
@@ -198,7 +201,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `web-vitals` | 5.2.0 | Apache-2.0 | [link](https://github.com/GoogleChrome/web-vitals) |
 | `webdriver-bidi-protocol` | 0.3.8 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/webdriver-bidi-protocol) |
 
-## BSD (56)
+## BSD (57)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -213,6 +216,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@protobufjs/path` | 1.1.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/pool` | 1.1.0 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/utf8` | 1.1.1 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
+| `asn1js` | 3.0.10 | BSD-3-Clause | [link](https://github.com/PeculiarVentures/ASN1.js) |
 | `bcryptjs` | 3.0.2, 3.0.3 | BSD-3-Clause | [link](https://github.com/dcodeIO/bcrypt.js) |
 | `buffer-equal-constant-time` | 1.0.1 | BSD-3-Clause | [link](https://github.com/goinstant/buffer-equal-constant-time) |
 | `cheerio-select` | 2.1.0 | BSD-2-Clause | [link](https://github.com/cheeriojs/cheerio-select) |
@@ -395,7 +399,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1053)
+## MIT (1072)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -412,6 +416,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@bull-board/ui` | 6.12.0 | MIT | [link](https://github.com/felixmosh/bull-board) |
 | `@cfworker/json-schema` | 4.1.1 | MIT | [link](https://github.com/cfworker/cfworker) |
 | `@date-fns/tz` | 1.4.1 | MIT | [link](https://github.com/date-fns/tz) |
+| `@e2b/code-interpreter` | 1.5.1 | MIT | [link](https://github.com/e2b-dev/code-interpreter) |
 | `@elevenlabs/elevenlabs-js` | 2.25.1 | MIT | [link](https://github.com/elevenlabs/elevenlabs-js) |
 | `@fal-ai/client` | 1.7.0 | MIT | [link](https://github.com/fal-ai/fal-js) |
 | `@fast-csv/format` | 4.3.5 | MIT | [link](https://github.com/C2FO/fast-csv) |
@@ -425,6 +430,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@formatjs/icu-messageformat-parser` | 3.5.4 | MIT | [link](https://github.com/formatjs/formatjs) |
 | `@formatjs/icu-skeleton-parser` | 2.1.4 | MIT | [link](https://github.com/formatjs/formatjs) |
 | `@formatjs/intl-localematcher` | 0.8.3 | MIT | [link](https://github.com/formatjs/formatjs) |
+| `@hexagon/base64` | 1.1.28 | MIT | [link](https://github.com/hexagon/base64) |
 | `@hono/node-server` | 1.19.14 | MIT | [link](https://github.com/honojs/node-server) |
 | `@hookform/resolvers` | 3.10.0 | MIT | [link](https://github.com/react-hook-form/resolvers) |
 | `@iconify/types` | 2.0.0 | MIT | [link](https://github.com/iconify/iconify) |
@@ -442,6 +448,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@langchain/langgraph-checkpoint` | 1.0.1 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-sdk` | 1.8.10, 1.8.9 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/openai` | 1.4.4 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
+| `@levischuck/tiny-cbor` | 0.2.11 | MIT | [link](https://github.com/levischuck/tiny-cbor) |
 | `@llamaindex/core` | 0.6.22, 0.6.23 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/env` | 0.1.30, 0.1.31 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/node-parser` | 2.0.22 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
@@ -489,6 +496,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@parcel/watcher` | 2.5.6 | MIT | [link](https://github.com/parcel-bundler/watcher) |
 | `@pdf-lib/standard-fonts` | 1.0.0 | MIT | [link](https://github.com/Hopding/standard-fonts) |
 | `@pdf-lib/upng` | 1.0.1 | MIT | [link](https://github.com/Hopding/upng) |
+| `@peculiar/asn1-android` | 2.7.0 | MIT | [link](https://github.com/PeculiarVentures/asn1-schema) |
+| `@peculiar/asn1-ecc` | 2.7.0 | MIT | [link](https://github.com/PeculiarVentures/asn1-schema) |
+| `@peculiar/asn1-rsa` | 2.7.0 | MIT | [link](https://github.com/PeculiarVentures/asn1-schema) |
+| `@peculiar/asn1-schema` | 2.7.0 | MIT | [link](https://github.com/PeculiarVentures/asn1-schema) |
+| `@peculiar/asn1-x509` | 2.7.0 | MIT | [link](https://github.com/PeculiarVentures/asn1-schema) |
+| `@peculiar/utils` | 2.0.3 | MIT | [link](https://github.com/PeculiarVentures/pvtsutils) |
 | `@pinojs/redact` | 0.4.0 | MIT | [link](https://github.com/pinojs/redact) |
 | `@pkgjs/parseargs` | 0.11.0 | MIT | [link](https://github.com/pkgjs/parseargs) |
 | `@posthog/core` | 1.28.0 | MIT | [link](https://github.com/PostHog/posthog-js) |
@@ -568,6 +581,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@shikijs/themes` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/types` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/vscode-textmate` | 10.0.2 | MIT | [link](https://github.com/shikijs/vscode-textmate) |
+| `@simplewebauthn/server` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
+| `@simplewebauthn/types` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
 | `@splinetool/react-spline` | 4.1.0 | MIT |  |
 | `@standard-schema/spec` | 1.1.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
 | `@standard-schema/utils` | 0.3.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
@@ -771,6 +786,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `comma-separated-tokens` | 2.0.3 | MIT | [link](https://github.com/wooorm/comma-separated-tokens) |
 | `command-exists` | 1.2.9 | MIT | [link](https://github.com/mathisonian/command-exists) |
 | `commander` | 4.1.1, 7.2.0, 8.3.0 | MIT | [link](https://github.com/tj/commander.js) |
+| `compare-versions` | 6.1.1 | MIT | [link](https://github.com/omichelsen/compare-versions) |
 | `component-emitter` | 1.3.1 | MIT | [link](https://github.com/sindresorhus/component-emitter) |
 | `compress-commons` | 4.1.2 | MIT | [link](https://github.com/archiverjs/node-compress-commons) |
 | `compressible` | 2.0.18 | MIT | [link](https://github.com/jshttp/compressible) |
@@ -792,6 +808,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `cosmiconfig` | 9.0.0 | MIT | [link](https://github.com/cosmiconfig/cosmiconfig) |
 | `crc32-stream` | 4.0.3 | MIT | [link](https://github.com/archiverjs/node-crc32-stream) |
 | `cron-parser` | 4.9.0 | MIT | [link](https://github.com/harrisiirak/cron-parser) |
+| `cross-fetch` | 4.1.0 | MIT | [link](https://github.com/lquixada/cross-fetch) |
 | `cross-spawn` | 7.0.6 | MIT | [link](https://github.com/moxystudio/node-cross-spawn) |
 | `crypto-js` | 4.2.0 | MIT | [link](https://github.com/brix/crypto-js) |
 | `cssesc` | 3.0.0 | MIT | [link](https://github.com/mathiasbynens/cssesc) |
@@ -827,6 +844,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `docxtemplater` | 3.67.1 | MIT | [link](https://github.com/open-xml-templating/docxtemplater) |
 | `dom-serializer` | 2.0.0 | MIT | [link](https://github.com/cheeriojs/dom-serializer) |
 | `dunder-proto` | 1.0.1 | MIT | [link](https://github.com/es-shims/dunder-proto) |
+| `e2b` | 1.13.2 | MIT | [link](https://github.com/e2b-dev/e2b) |
 | `eastasianwidth` | 0.2.0 | MIT | [link](https://github.com/komagata/eastasianwidth) |
 | `ee-first` | 1.1.1 | MIT | [link](https://github.com/jonathanong/ee-first) |
 | `effect` | 3.21.0 | MIT | [link](https://github.com/Effect-TS/effect) |
@@ -1140,6 +1158,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `on-finished` | 2.3.0, 2.4.1 | MIT | [link](https://github.com/jshttp/on-finished) |
 | `on-headers` | 1.1.0 | MIT | [link](https://github.com/jshttp/on-headers) |
 | `oniguruma-to-es` | 2.3.0 | MIT | [link](https://github.com/slevithan/oniguruma-to-es) |
+| `openapi-fetch` | 0.9.8 | MIT | [link](https://github.com/openapi-ts/openapi-typescript) |
+| `openapi-typescript-helpers` | 0.0.8 | MIT | [link](https://github.com/drwpow/openapi-typescript) |
 | `opencollective-postinstall` | 2.0.3 | MIT | [link](https://github.com/opencollective/opencollective-postinstall) |
 | `openid-client` | 5.7.1 | MIT | [link](https://github.com/panva/openid-client) |
 | `opentype.js` | 1.3.4 | MIT | [link](https://github.com/opentypejs/opentype.js) |
@@ -1194,6 +1214,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `pizzip` | 3.2.0 | MIT OR GPL-3.0 | [link](https://github.com/open-xml-templating/pizzip) |
 | `pkce-challenge` | 5.0.1 | MIT | [link](https://github.com/crouchcd/pkce-challenge) |
 | `pkg-types` | 1.3.1, 2.3.1 | MIT | [link](https://github.com/unjs/pkg-types) |
+| `platform` | 1.3.6 | MIT | [link](https://github.com/bestiejs/platform.js) |
 | `plotly.js-basic-dist-min` | 3.5.0 | MIT | [link](https://github.com/plotly/plotly.js) |
 | `png-js` | 1.0.0 | MIT | [link](https://github.com/devongovett/png.js) |
 | `po-parser` | 2.1.1 | MIT | [link](https://github.com/amannn/po-parser) |
@@ -1238,6 +1259,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `proxy-from-env` | 1.1.0, 2.1.0 | MIT | [link](https://github.com/Rob--W/proxy-from-env) |
 | `pump` | 3.0.3, 3.0.4 | MIT | [link](https://github.com/mafintosh/pump) |
 | `pure-rand` | 6.1.0 | MIT | [link](https://github.com/dubzzz/pure-rand) |
+| `pvtsutils` | 1.3.6 | MIT | [link](https://github.com/PeculiarVentures/pvtsutils) |
+| `pvutils` | 1.1.5 | MIT | [link](https://github.com/PeculiarVentures/pvutils) |
 | `query-selector-shadow-dom` | 1.0.1 | MIT | [link](https://github.com/webdriverio/query-selector-shadow-dom) |
 | `queue` | 6.0.2 | MIT | [link](https://github.com/jessetane/queue) |
 | `queue-microtask` | 1.2.3 | MIT | [link](https://github.com/feross/queue-microtask) |
