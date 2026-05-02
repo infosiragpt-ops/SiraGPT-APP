@@ -15,6 +15,7 @@ const {
 const ragService = require('../rag-service');
 const projectMemory = require('../project-memory');
 const webFetch = require('./web-fetch');
+const e2bSandbox = require('../sandbox/e2b-sandbox');
 
 const MCP_HUB_VERSION = 'sira-mcp-hub-2026-05';
 const DEFAULT_MAX_PREVIEW_CHARS = 4000;
@@ -311,9 +312,9 @@ function buildApprovedTools() {
     },
     'web.fetch': {
       // Position MUST match the order of `web.fetch` in
-      // schema-registry.js#mcpToolContracts (last entry). The
-      // tool-schema-export test pins listTools() output against
-      // listMcpToolContractNames() so any drift here surfaces in CI.
+      // schema-registry.js#mcpToolContracts. The tool-schema-export
+      // test pins listTools() output against listMcpToolContractNames
+      // so any drift here surfaces in CI.
       tool: buildContractTool('web.fetch'),
       handler: async (args, _context, deps) => {
         // Delegate every safety decision to web-fetch.js — schemes,
@@ -336,6 +337,49 @@ function buildApprovedTools() {
         }
       },
     },
+    'code.execute': {
+      // Position is the LAST entry — must match the LAST entry in
+      // schema-registry.js#mcpToolContracts. Drift caught by the
+      // tool-schema-export test in CI.
+      //
+      // Triple opt-in (E2B_API_KEY + MCP_CODE_EXECUTE_ENABLED +
+      // MCP_CONNECTOR_ALLOWLIST contains 'code.execute') is enforced
+      // ABOVE this layer:
+      //   - The allowlist check runs in assertAuthorized() before
+      //     the handler is even invoked.
+      //   - The MCP_CODE_EXECUTE_ENABLED gate runs here as a
+      //     belt-and-braces second check, so an operator who lists
+      //     the tool in MCP_CONNECTOR_ALLOWLIST without also
+      //     setting MCP_CODE_EXECUTE_ENABLED gets a clear error
+      //     (not a mysterious sandbox_disabled from the wrapper).
+      //   - The wrapper itself returns sandbox_disabled when
+      //     E2B_API_KEY is missing.
+      tool: buildContractTool('code.execute'),
+      handler: async (args, _context, deps) => {
+        const env = deps.env || process.env;
+        const explicit = String(env.MCP_CODE_EXECUTE_ENABLED || '').trim().toLowerCase();
+        if (!['1', 'true', 'yes', 'on'].includes(explicit)) {
+          throw new McpToolRegistryError(
+            'code_execute_disabled',
+            403,
+            'code.execute requires MCP_CODE_EXECUTE_ENABLED=true alongside E2B_API_KEY',
+          );
+        }
+        const result = await deps.e2bSandbox.executeCode(args, env);
+        if (!result.ok) {
+          // Map disabled / language / runtime errors to McpTool
+          // errors so the calling agent sees a structured failure
+          // rather than a free-text string buried in textResult.
+          const status = result.code === 'sandbox_disabled' ? 503
+            : result.code === 'sandbox_language_not_allowed' ? 400
+            : result.code === 'sandbox_empty_code' ? 400
+            : result.code === 'sandbox_timeout' ? 504
+            : 502;
+          throw new McpToolRegistryError(result.code, status, result.message || 'code.execute failed');
+        }
+        return textResult({ executed: result });
+      },
+    },
   };
 }
 
@@ -348,6 +392,7 @@ function createMcpToolRegistry(options = {}) {
     projectMemory: options.projectMemory || projectMemory,
     prisma: options.prisma || null,
     webFetch: options.webFetch || webFetch,
+    e2bSandbox: options.e2bSandbox || e2bSandbox,
     env,
   };
 

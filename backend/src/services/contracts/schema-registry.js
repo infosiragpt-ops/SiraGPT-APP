@@ -238,6 +238,39 @@ const mcpToolContracts = Object.freeze([
     }).passthrough(),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   },
+  {
+    // Sandboxed code execution backed by `@e2b/code-interpreter`.
+    // TRIPLE opt-in: requires (1) E2B_API_KEY set, (2)
+    // MCP_CODE_EXECUTE_ENABLED=true, AND (3) `code.execute` listed
+    // in MCP_CONNECTOR_ALLOWLIST. The wrapper at backend/src/
+    // services/sandbox/e2b-sandbox.js bounds language + timeout,
+    // creates and tears down the sandbox per call, and translates
+    // SDK exceptions to discriminated `{ ok: false, code }` returns.
+    name: 'code.execute',
+    description: 'Run code in a one-shot sandboxed VM (Cursor / ChatGPT-tier code interpreter). Disabled by default; requires E2B_API_KEY + MCP_CODE_EXECUTE_ENABLED + the tool listed in MCP_CONNECTOR_ALLOWLIST. Languages: python, javascript, typescript, bash, r. Timeout cap 5 min, default 60 s.',
+    input: z.object({
+      code: z.string().min(1).max(64 * 1024),
+      language: z.enum(['python', 'javascript', 'typescript', 'bash', 'r']).optional(),
+      timeoutMs: z.number().int().min(1000).max(5 * 60_000).optional(),
+    }).strict(),
+    output: z.object({
+      executed: z.object({
+        ok: z.boolean(),
+        stdout: z.string().optional(),
+        stderr: z.string().optional(),
+        exitCode: z.number().int().optional(),
+        durationMs: z.number().int().optional(),
+        error: z.any().nullable().optional(),
+        code: z.string().optional(),
+        message: z.string().optional(),
+      }).passthrough(),
+    }).passthrough(),
+    // openWorldHint = true because the sandbox can in theory reach
+    // outbound; destructiveHint = true because user code can write
+    // files / mutate the sandbox FS (even though that state is
+    // discarded between calls).
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
 ]);
 
 const routeContracts = Object.freeze([
