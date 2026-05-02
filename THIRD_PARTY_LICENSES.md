@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1367**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1368**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -385,7 +385,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1028)
+## MIT (1029)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -1215,6 +1215,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `queue` | 6.0.2 | MIT | [link](https://github.com/jessetane/queue) |
 | `queue-microtask` | 1.2.3 | MIT | [link](https://github.com/feross/queue-microtask) |
 | `quick-format-unescaped` | 4.0.4 | MIT | [link](https://github.com/davidmarkclements/quick-format) |
+| `quick-lru` | 7.3.0 | MIT | [link](https://github.com/sindresorhus/quick-lru) |
 | `random-bytes` | 1.0.0 | MIT | [link](https://github.com/crypto-utils/random-bytes) |
 | `range-parser` | 1.2.1 | MIT | [link](https://github.com/jshttp/range-parser) |
 | `raw-body` | 2.5.3, 3.0.2 | MIT | [link](https://github.com/stream-utils/raw-body) |

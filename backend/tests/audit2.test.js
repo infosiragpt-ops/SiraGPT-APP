@@ -87,7 +87,7 @@ test('tripleGraph.clearSource: unknown source is a no-op', () => {
 // ─── BUG #2: llm-reranker cache capped at CACHE_MAX ───────────────────────
 
 test('reranker cache: does not grow beyond CACHE_MAX even when nothing expires', async () => {
-  reranker.clearCache();
+  await reranker.clearCache();
   // Manufacture responses. We need the reranker to actually call setCache,
   // which happens inside rerank() after a successful LLM call.
   const stub = {
@@ -110,9 +110,10 @@ test('reranker cache: does not grow beyond CACHE_MAX even when nothing expires',
     ], { cacheTtlMs: 10 * 60 * 1000 });
   }
 
+  const observed = await reranker.cacheSize();
   assert.ok(
-    reranker.cacheSize() <= reranker.CACHE_MAX,
-    `cache size ${reranker.cacheSize()} exceeded CACHE_MAX=${reranker.CACHE_MAX}`,
+    observed <= reranker.CACHE_MAX,
+    `cache size ${observed} exceeded CACHE_MAX=${reranker.CACHE_MAX}`,
   );
 });
 

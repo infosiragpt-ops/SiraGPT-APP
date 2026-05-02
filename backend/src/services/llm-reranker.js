@@ -37,45 +37,37 @@ const DEFAULT_CONFIG = {
 };
 
 const CACHE_MAX = 200;
-const rerankCache = new Map();
+const CACHE_MAX_AGE_MS = DEFAULT_CONFIG.cacheTtlMs;
+
+// quick-lru@7 is ESM-only; the backend is CommonJS, so we lazy-load via
+// dynamic import the first time the cache is touched. Subsequent calls
+// reuse the same instance. quick-lru gives us a hard maxSize (200) plus
+// per-entry maxAge (10 minutes) so the cache no longer needs the manual
+// two-phase eviction sweep that used to live here.
+let _cachePromise = null;
+function getCacheInstance() {
+  if (!_cachePromise) {
+    _cachePromise = import('quick-lru').then(({ default: QuickLRU }) =>
+      new QuickLRU({ maxSize: CACHE_MAX, maxAge: CACHE_MAX_AGE_MS })
+    );
+  }
+  return _cachePromise;
+}
 
 function cacheKey(query, ids) {
   const payload = `${query}:${[...ids].sort().join(',')}`;
   return crypto.createHash('sha256').update(payload).digest('hex').slice(0, 20);
 }
 
-function getCached(key) {
-  const entry = rerankCache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    rerankCache.delete(key);
-    return null;
-  }
-  return entry;
+async function getCached(key) {
+  const cache = await getCacheInstance();
+  const scores = cache.get(key);
+  return scores ?? null;
 }
 
-function setCache(key, scores, ttlMs) {
-  // Two-tier eviction: expired entries first, FIFO oldest second.
-  // Previously we only swept expired entries — if all CACHE_MAX entries
-  // were still within their TTL, the cache grew unbounded. Under a
-  // steady load of distinct queries with a 10-minute TTL you'd see
-  // thousands of entries sitting in memory. Now the cache size is
-  // hard-capped at CACHE_MAX.
-  if (rerankCache.size >= CACHE_MAX) {
-    const now = Date.now();
-    // Phase 1: drop expired.
-    for (const [k, v] of rerankCache) {
-      if (now > v.expiresAt) rerankCache.delete(k);
-    }
-    // Phase 2: if still at cap, evict oldest by insertion order (Map's
-    // iteration order is insertion order in ES2015+).
-    while (rerankCache.size >= CACHE_MAX) {
-      const firstKey = rerankCache.keys().next().value;
-      if (firstKey === undefined) break;
-      rerankCache.delete(firstKey);
-    }
-  }
-  rerankCache.set(key, { scores, expiresAt: Date.now() + ttlMs });
+async function setCache(key, scores) {
+  const cache = await getCacheInstance();
+  cache.set(key, scores);
 }
 
 function buildPrompt(query, candidates, snippetMax) {
@@ -168,7 +160,7 @@ async function rerank(openai, query, candidates, opts = {}) {
   const ids = pool.map((_, i) => String(i));
   const key = cacheKey(query, ids);
 
-  let scores = getCached(key)?.scores;
+  let scores = await getCached(key);
   if (!scores) {
     try {
       const resp = await openai.chat.completions.create({
@@ -183,7 +175,7 @@ async function rerank(openai, query, candidates, opts = {}) {
       });
       const raw = resp.choices?.[0]?.message?.content || '';
       scores = parseResponse(raw, pool.length);
-      setCache(key, scores, config.cacheTtlMs);
+      await setCache(key, scores);
     } catch (err) {
       // Never let a reranker error break retrieval — fall back to cosine order.
       console.warn('[llm-reranker] call failed, falling back to original order:', err.message);
@@ -202,11 +194,15 @@ async function rerank(openai, query, candidates, opts = {}) {
   return reranked.concat(tailAnnotated).slice(0, k);
 }
 
-function clearCache() {
-  rerankCache.clear();
+async function clearCache() {
+  const cache = await getCacheInstance();
+  cache.clear();
 }
 
-function cacheSize() { return rerankCache.size; }
+async function cacheSize() {
+  const cache = await getCacheInstance();
+  return cache.size;
+}
 
 module.exports = {
   rerank,

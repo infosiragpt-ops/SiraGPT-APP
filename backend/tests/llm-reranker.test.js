@@ -126,7 +126,7 @@ test('rerank: null openai client skips LLM call and returns cosine order', async
 });
 
 test('rerank: uses stubbed LLM response to reorder', async () => {
-  clearCache();
+  await clearCache();
   // Stub: an OpenAI-shaped client whose completion returns fixed JSON.
   const fakeOpenAI = {
     chat: {
