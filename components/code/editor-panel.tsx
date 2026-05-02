@@ -200,17 +200,18 @@ function FileSwitchButton({
   )
 }
 
-function CodeArea({
-  value,
-  language,
-  onChange,
-  path,
-}: {
+type CodeAreaProps = {
   value: string
   language: string
   onChange: (value: string) => void
   path: string
-}) {
+}
+
+// Plain-textarea editor — first paint surface AND fallback when the
+// Monaco bundle fails to load (offline build, slow network, library
+// regression). Keeps the page interactive without shipping the ~2 MB
+// Monaco chunk on the critical path.
+function TextareaCodeArea({ value, language, onChange, path }: CodeAreaProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border/40 bg-muted/20 px-3 text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -234,6 +235,41 @@ function CodeArea({
       />
     </div>
   )
+}
+
+// Lazy Monaco swap-in. Renders the textarea immediately so the user
+// can start typing during the network round-trip; once the Monaco
+// chunk loads we swap to the richer editor. If the import fails (rare)
+// we stay on the textarea — the user never sees a broken state.
+//
+// Why not `next/dynamic` directly: dynamic's `loading` prop receives
+// no parent props, so the fallback couldn't render with the live value.
+// A local effect-driven swap keeps the value consistent across the
+// boundary.
+function CodeArea(props: CodeAreaProps) {
+  const [MonacoComponent, setMonacoComponent] = React.useState<
+    React.ComponentType<CodeAreaProps> | null
+  >(null)
+
+  React.useEffect(() => {
+    let cancelled = false
+    import("./monaco-code-area")
+      .then((mod) => {
+        if (cancelled) return
+        setMonacoComponent(() => mod.default)
+      })
+      .catch(() => {
+        // Stay on the textarea fallback. The error is intentionally
+        // swallowed — surfacing it to the user gives them no useful
+        // recovery option (the textarea still works).
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (MonacoComponent) return <MonacoComponent {...props} />
+  return <TextareaCodeArea {...props} />
 }
 
 function VirtualBrowserPanel({
