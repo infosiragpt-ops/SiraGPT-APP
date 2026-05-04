@@ -95,10 +95,27 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1)
 
-// Security middleware
+// Security middleware. CSP defaults to report-only mode so a fresh
+// deploy never breaks inline content; operators tighten the policy
+// after observing reports for a few days. See csp-policy.js for the
+// directive shape and the CSP_* env knobs.
+const { resolveCspConfig, buildCspDirectives } = require('./src/middleware/csp-policy');
+const cspConfig = resolveCspConfig(process.env);
 app.use(helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" }
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: cspConfig.enabled ? {
+        directives: buildCspDirectives(cspConfig),
+        reportOnly: cspConfig.reportOnly,
+    } : false,
 }));
+
+// Idempotency — Stripe-style replay support for POST/PUT/PATCH.
+// Disabled by default (IDEMPOTENCY_ENABLED=true to activate).
+// Mounted EARLY (after rate limit, before route handlers) so a
+// replay short-circuits the heavy work. See idempotency.js for the
+// tenant-scoping + 2xx-only caching contract.
+const { idempotencyMiddleware } = require('./src/middleware/idempotency');
+const idempotency = idempotencyMiddleware();
 
 // Rate limiting — tiered by route sensitivity. See rate-limit-policy.js
 // for the env-var parsing + defaults. Counters live in-process by
@@ -212,6 +229,11 @@ app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/', apiLimiter);
+
+// Idempotency runs AFTER rate-limit (so a flood of replays still
+// costs the limiter quota) but BEFORE every other handler so a
+// cache hit short-circuits everything downstream.
+app.use(idempotency);
 
 // Body parsing middleware
 app.use(compression({
