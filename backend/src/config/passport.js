@@ -5,27 +5,35 @@ const ExtractJwt = require('passport-jwt').ExtractJwt;
 const prisma = require('./database');
 const bcrypt = require('bcryptjs');
 
-// Google OAuth Strategy with extended scopes
-passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: process.env.GOOGLE_AUTH_URI,
-  scope: [
-    'profile',
-    'email',
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.send',
-    'https://www.googleapis.com/auth/gmail.modify',
-    'https://www.googleapis.com/auth/calendar',
-    'https://www.googleapis.com/auth/calendar.events',
-    'https://www.googleapis.com/auth/drive',
-    'https://www.googleapis.com/auth/drive.file',
-    'https://www.googleapis.com/auth/drive.readonly',
-    'https://www.googleapis.com/auth/drive.metadata.readonly'
-  ],
-  accessType: 'offline',  // Important: Get refresh token
-  prompt: 'consent'        // Force consent screen to get refresh token
-}, async (accessToken, refreshToken, profile, done) => {
+const googleOAuthConfigured = Boolean(
+  process.env.GOOGLE_CLIENT_ID &&
+  process.env.GOOGLE_CLIENT_SECRET &&
+  process.env.GOOGLE_AUTH_URI
+);
+
+// Google OAuth Strategy with extended scopes. Keep email/password auth available
+// when Google OAuth is not configured on a given environment.
+if (googleOAuthConfigured) {
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: process.env.GOOGLE_AUTH_URI,
+    scope: [
+      'profile',
+      'email',
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/gmail.send',
+      'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/drive.metadata.readonly'
+    ],
+    accessType: 'offline',  // Important: Get refresh token
+    prompt: 'consent'        // Force consent screen to get refresh token
+  }, async (accessToken, refreshToken, profile, done) => {
   try {
     console.log('Google OAuth callback - accessToken:', !!accessToken);
     console.log('Google OAuth callback - refreshToken:', !!refreshToken);
@@ -142,7 +150,10 @@ passport.use(new GoogleStrategy({
     console.error('Google OAuth error:', error);
     return done(error, null);
   }
-}));
+  }));
+} else {
+  console.warn('Google OAuth disabled: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET or GOOGLE_AUTH_URI is missing');
+}
 
 // ... rest of your passport config
 

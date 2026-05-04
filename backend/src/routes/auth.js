@@ -9,6 +9,29 @@ const { OAuth2Client } = require('google-auth-library');
 const { serializeUser } = require('../utils/bigint-serializer');
 
 const router = express.Router();
+const googleOAuthConfigured = Boolean(
+  process.env.GOOGLE_CLIENT_ID &&
+  process.env.GOOGLE_CLIENT_SECRET &&
+  process.env.GOOGLE_AUTH_URI
+);
+const googleIntegrationsConfigured = Boolean(
+  process.env.GOOGLE_CLIENT_ID &&
+  process.env.GOOGLE_CLIENT_SECRET
+);
+
+const requireGoogleOAuth = (req, res, next) => {
+  if (googleOAuthConfigured) return next();
+  return res.status(503).json({
+    error: 'Google OAuth is not configured for this environment'
+  });
+};
+
+const requireGoogleIntegrations = (req, res, next) => {
+  if (googleIntegrationsConfigured) return next();
+  return res.status(503).json({
+    error: 'Google integrations are not configured for this environment'
+  });
+};
 
 // Gmail OAuth configuration
 const gmailOauth2Client = new OAuth2Client(
@@ -26,6 +49,7 @@ const googleServicesOauth2Client = new OAuth2Client(
 
 // Google OAuth routes
 router.get('/google',
+  requireGoogleOAuth,
   passport.authenticate('google', {
     scope: [
       'profile',
@@ -46,6 +70,7 @@ router.get('/google',
 );
 
 router.get('/google/callback',
+  requireGoogleOAuth,
   passport.authenticate('google', { session: false }),
   async (req, res) => {
     try {
@@ -79,6 +104,7 @@ router.get('/google/callback',
 // Gmail OAuth routes - separate from regular Google auth
 router.get('/gmail',
   authenticateToken,
+  requireGoogleIntegrations,
   async (req, res) => {
     try {
       const scopes = [
@@ -280,6 +306,7 @@ router.get('/gmail/reauth', authenticateToken, (req, res) => {
 // Google Calendar & Drive OAuth routes
 router.get('/google-services',
   authenticateToken,
+  requireGoogleIntegrations,
   async (req, res) => {
     try {
       const scopes = [
