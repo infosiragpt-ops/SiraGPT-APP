@@ -112,7 +112,7 @@ describe("rag-service · retrieval hit diagnostics", () => {
     assert.equal("diagnostics" in clean, false)
   })
 
-  it("returns OpenClaw-style vector/text/fusion diagnostics when requested", () => {
+  it("returns vector/text/fusion diagnostics when requested", () => {
     const explained = rag.formatRetrievalHit({
       text: "beta",
       score: 0.02,

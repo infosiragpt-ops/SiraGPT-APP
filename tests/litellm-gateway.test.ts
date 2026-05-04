@@ -36,7 +36,7 @@ describe("litellm gateway · provider normalization and route contracts", () => 
     assert.equal(selected.modelId, "gemini-2.5-flash")
   })
 
-  it("builds DeepSeek V4 payloads with OpenClaw-style thinking controls", () => {
+  it("builds DeepSeek V4 payloads with thinking controls", () => {
     const built = gateway.buildProviderChatPayload({
       provider: "DeepSeek",
       model: "deepseek-v4-flash",

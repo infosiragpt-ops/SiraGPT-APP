@@ -4,8 +4,8 @@
  * Problem: /api/agent/run is JWT-authenticated, which is correct for
  * interactive sessions. But a user might want to wire the agent into
  * external tools (a CRON on their own machine, a Zapier-like pipeline,
- * a CLI they wrote) that can't roundtrip a web login. openclaw
- * handles this for messaging channels with a pairing flow: an unknown
+ * a CLI they wrote) that can't roundtrip a web login. Sira handles this
+ * with a pairing flow: an unknown
  * sender is held until the owner approves via a code.
  *
  * Adapted to siraGPT's HTTP API:

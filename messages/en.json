@@ -30,18 +30,7 @@
     "projects": "Projects",
     "searchBrain": "Search",
     "post": "POST",
-    "design": "Design",
-    "openclaw": "OpenClaw"
-  },
-  "openclaw": {
-    "loginRequired": "Sign in to use OpenClaw",
-    "loginRequiredDescription": "The instance is assigned per user and governed by the active plan.",
-    "planLockedTitle": "OpenClaw is not included in your plan",
-    "planLockedDescription": "Upgrade your plan to enable the isolated workspace and OpenClaw models.",
-    "viewPlans": "View plans",
-    "retry": "Retry",
-    "errorTitle": "Could not load OpenClaw",
-    "errorFallback": "Please try again in a few seconds."
+    "design": "Design"
   },
   "projects": {
     "title": "Projects",

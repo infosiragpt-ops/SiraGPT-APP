@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Downloads Tesseract trained-data files used by the OpenClaw OCR engine.
+# Downloads Tesseract trained-data files used by the OCR engine.
 # Skipped automatically when both files are already present.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

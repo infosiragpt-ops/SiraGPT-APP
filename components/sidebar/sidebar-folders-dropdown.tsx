@@ -170,11 +170,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("siragpt:collapse-sidebar"))
       }
-      // Folders open in the OpenClaw workspace by default. /code is
-      // still accessible as a focused two-pane view (chat + editor)
-      // when a user wants to deep-link to it, but the sidebar entry
-      // points at OpenClaw to match the new IA.
-      router.push(`/openclaw?folder=${encodeURIComponent(folder.id)}`)
+      router.push(`/code?folder=${encodeURIComponent(folder.id)}`)
       onMobileNavigate?.()
     },
     [handleSelectFolder, onMobileNavigate, router],

@@ -1,4 +1,4 @@
-const CHAT_PAGES = ['/chat', '/gpts', '/openclaw', '/parafraseo', '/projects', '/design', '/codex', '/code', '/plan', '/profile', '/library', '/billing', '/settings', '/thesis', '/documents'] as const
+const CHAT_PAGES = ['/chat', '/gpts', '/parafraseo', '/projects', '/design', '/codex', '/code', '/plan', '/profile', '/library', '/billing', '/settings', '/thesis', '/documents'] as const
 const FULLSCREEN_CHAT_PAGES = ['/codex'] as const
 // /admin owns its full layout (own SidebarProvider + AdminSidebar in
 // app/admin/layout.tsx), so AppWrapper must render children as-is.

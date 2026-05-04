@@ -6,7 +6,7 @@
  * permitted if its required capabilities are all granted AND the
  * per-call/per-skill usage budget has not been exhausted.
  *
- * This is the openclaw "main vs non-main" sandbox idea adapted: the
+ * This is the "main vs non-main" sandbox idea adapted: the
  * `main` session (authenticated human user at their own UI) gets broad
  * access by default, while sub-sessions spawned by agent:spawn or
  * triggered by schedules get the tighter `sandbox` defaults.

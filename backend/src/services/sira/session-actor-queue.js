@@ -3,9 +3,9 @@
 /**
  * Session actor queue for Sira chat turns.
  *
- * OpenClaw serializes mutable session operations behind a keyed actor queue so
- * concurrent events for the same session cannot race. Sira uses the same
- * contract at the chat-controller boundary: one conversation/user pair is one
+ * Mutable session operations are serialized behind a keyed actor queue so
+ * concurrent events for the same session cannot race. Sira uses this contract
+ * at the chat-controller boundary: one conversation/user pair is one
  * actor. Different conversations can still run concurrently.
  */
 

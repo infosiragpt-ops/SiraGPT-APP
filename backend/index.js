@@ -85,7 +85,6 @@ const docRoutes = require('./src/routes/doc');
 const artifactRoutes = require('./src/routes/artifact');
 const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
-const openClawRoutes = require('./src/routes/openclaw');
 const githubCodexRoutes = require('./src/routes/github-codex');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
@@ -439,7 +438,6 @@ app.use('/api/doc', docRoutes);
 app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
-app.use('/api/openclaw', openClawRoutes);
 app.use('/api/codex/github', githubCodexRoutes);
 
 

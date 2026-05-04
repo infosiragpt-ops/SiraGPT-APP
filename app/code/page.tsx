@@ -34,20 +34,20 @@ const CodeWorkspace = dynamic(
   },
 )
 
-const OPENCLAW_PLANS = ["PRO", "PRO_MAX", "ENTERPRISE"]
+const CODE_WORKSPACE_PLANS = ["PRO", "PRO_MAX", "ENTERPRISE"]
 
 export default function CodeWorkspacePage() {
   return (
-    <OpenclawGate>
+    <CodeWorkspaceGate>
       <CodeWorkspaceProvider>
         <ActiveFolderHydrator />
         <CodeWorkspace />
       </CodeWorkspaceProvider>
-    </OpenclawGate>
+    </CodeWorkspaceGate>
   )
 }
 
-function OpenclawGate({ children }: { children: React.ReactNode }) {
+function CodeWorkspaceGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
   const router = useRouter()
 
@@ -58,20 +58,19 @@ function OpenclawGate({ children }: { children: React.ReactNode }) {
     return <CodeWorkspaceSkeleton />
   }
 
-  if (!OPENCLAW_PLANS.includes(user.plan)) {
-    return <OpenclawUpsell currentPlan={user.plan} />
+  if (!CODE_WORKSPACE_PLANS.includes(user.plan)) {
+    return <CodeWorkspaceUpsell currentPlan={user.plan} />
   }
 
   return <>{children}</>
 }
 
-function OpenclawUpsell({ currentPlan }: { currentPlan: string }) {
+function CodeWorkspaceUpsell({ currentPlan }: { currentPlan: string }) {
   return (
     <div className="flex h-screen items-center justify-center bg-background px-6">
       <div className="max-w-md space-y-5 text-center">
         <div className="flex items-center justify-center gap-3">
-          <span className="text-4xl leading-none" role="img" aria-label="Langosta">🦞</span>
-          <span className="text-xl font-semibold tracking-[-0.02em]">Openclaw</span>
+          <span className="text-xl font-semibold tracking-[-0.02em]">Cursor</span>
         </div>
         <h1 className="text-2xl font-semibold tracking-[-0.02em]">El workspace de código requiere un plan PRO</h1>
         <p className="text-sm text-muted-foreground">

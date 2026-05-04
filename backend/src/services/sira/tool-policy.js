@@ -3,7 +3,7 @@
 /**
  * Sira tool policy
  *
- * Runtime trust boundary inspired by OpenClaw's tool profiles: the model can
+ * Runtime trust boundary: the model can
  * request tools, but the backend decides whether the current session profile
  * may expose or execute them. This module is deterministic and shared by the
  * agent preflight runtime and the real workflow executor.

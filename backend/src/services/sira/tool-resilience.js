@@ -3,8 +3,8 @@
 /**
  * Tool resilience controller for the concrete Sira workflow runtime.
  *
- * OpenClaw keeps retries/timeouts as runtime concerns, not model concerns. This
- * module applies the same separation for Cira: the envelope can request retry
+ * Retries/timeouts are runtime concerns, not model concerns. This module
+ * applies that separation for Sira: the envelope can request retry
  * policy, but the backend deterministically decides when a failed tool call is
  * safe to retry and records every attempt in the audit trace.
  */

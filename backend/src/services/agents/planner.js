@@ -10,9 +10,8 @@
  * to be local — the model dives into the first subproblem and may
  * never plan the others.
  *
- * Explicitly separating planning from execution (openclaw's
- * `--thinking high` mode, and a well-studied pattern in the survey
- * literature — Plan-and-Execute, ReWOO, LLMCompiler) buys us:
+ * Explicitly separating planning from execution, a well-studied pattern in
+ * the survey literature — Plan-and-Execute, ReWOO, LLMCompiler — buys us:
  *
  *   1. Visibility: the plan is JSON, streamable to the UI.
  *   2. Determinism: the executor runs steps in order; the model
