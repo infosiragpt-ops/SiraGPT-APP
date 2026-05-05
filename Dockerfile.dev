@@ -1,0 +1,22 @@
+# ──────────────────────────────────────────────────────────────
+# siraGPT — Frontend (Next.js) Development Build
+# ──────────────────────────────────────────────────────────────
+# Lightweight image for local dev with hot-reload. Source is
+# mounted as a volume by docker-compose.override.yml, so changes
+# on the host are immediately reflected.
+# ──────────────────────────────────────────────────────────────
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache wget
+
+# Install all deps (including devDependencies) for hot-reload
+COPY package.json package-lock.json ./
+RUN npm ci --prefer-offline --no-audit --no-fund
+
+EXPOSE 3000
+
+# Default: dev server with Turbopack
+CMD ["npm", "run", "dev"]

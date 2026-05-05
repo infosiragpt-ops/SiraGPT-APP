@@ -59,9 +59,24 @@ jobs:
       - name: TypeScript check (hard gate)
         run: npx tsc --noEmit --skipLibCheck --ignoreDeprecations 5.0
 
+      # All 363+ tests — auth validation, payments, agent runtime,
+      # memory, citations, SSE, pipeline, security policies, etc.
+      - name: Unit & integration tests
+        run: npm test
+
       # Hard gate — `next build` is the source of truth. Catches
       # missing modules, import errors, static-analysis failures, and
       # env-usage bugs that lint/tsc may miss.
+      # Cache .next/cache between runs so `next build` reuses
+      # previously compiled modules, speeding up PR rebuilds.
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.ref_name }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-
       - name: Next.js build
         run: npm run build
 
@@ -165,7 +180,7 @@ jobs:
         run: npx prisma db push --accept-data-loss --skip-generate
 
       - name: Agentic runtime tests
-        run: node --test tests/agentic-frameworks.test.js tests/document-delivery-policy.test.js tests/agent-task-durable-events.test.js tests/agent-task-queue.test.js tests/admin-queues.test.js tests/github-codex-connector.test.js tests/mcp-tool-registry.test.js tests/tool-schema-export.test.js tests/openapi-contracts.test.js tests/http-codex.test.js tests/http-upload.test.js tests/http-agent-task.test.js tests/sentry-observability.test.js tests/file-processing-status.test.js tests/math-render-validator.test.js tests/pdf-render-validator.test.js tests/mime-type-validator.test.js tests/upload-security-policy.test.js tests/preview-html-sanitizer.test.js tests/pptx-package-validator.test.js tests/xlsx-workbook-validator.test.js tests/xlsx-safe-workbook.test.js tests/preview-screenshot-validator.test.js tests/canonical-document-ast.test.js tests/self-repair-engine.test.js tests/sira-request-id.test.js tests/sira-pipeline-errors.test.js tests/sira-health-and-metrics.test.js tests/sira-http-integration.test.js tests/sira-context-compactor.test.js tests/sira-llm-instrumentation.test.js tests/sira-citation-frame.test.js tests/sira-chat-modes.test.js tests/sira-memory-store.test.js tests/sira-project-workspace.test.js tests/sira-model-adapter-instrumentation.test.js tests/sira-chat-controller-modes-projects.test.js tests/sira-chat-controller-context.test.js tests/sira-memory-store-adapters.test.js tests/sira-chat-controller-citations.test.js tests/sira-pipeline-errors-migration.test.js tests/sira-turn-events.test.js tests/sira-chat-controller-events.test.js tests/sira-chat-controller-memory.test.js tests/sira-sse-route.test.js tests/sira-production-wiring.test.js tests/sira-model-adapter-migration.test.js tests/sira-stage-duration.test.js tests/sira-hybrid-retrieval-migration.test.js tests/sira-mkErr-migrations-bulk.test.js
+        run: node --test tests/agentic-frameworks.test.js tests/document-delivery-policy.test.js tests/agent-task-durable-events.test.js tests/agent-task-queue.test.js tests/admin-queues.test.js tests/github-codex-connector.test.js tests/mcp-tool-registry.test.js tests/tool-schema-export.test.js tests/openapi-contracts.test.js tests/http-codex.test.js tests/http-upload.test.js tests/http-agent-task.test.js tests/sentry-observability.test.js tests/file-processing-status.test.js tests/math-render-validator.test.js tests/pdf-render-validator.test.js tests/mime-type-validator.test.js tests/upload-security-policy.test.js tests/preview-html-sanitizer.test.js tests/pptx-package-validator.test.js tests/xlsx-workbook-validator.test.js tests/xlsx-safe-workbook.test.js tests/preview-screenshot-validator.test.js tests/canonical-document-ast.test.js tests/self-repair-engine.test.js tests/sira-request-id.test.js tests/sira-pipeline-errors.test.js tests/sira-health-and-metrics.test.js tests/sira-http-integration.test.js tests/sira-context-compactor.test.js tests/sira-llm-instrumentation.test.js tests/sira-citation-frame.test.js tests/sira-chat-modes.test.js tests/sira-memory-store.test.js tests/sira-project-workspace.test.js tests/sira-model-adapter-instrumentation.test.js tests/sira-chat-controller-modes-projects.test.js tests/sira-chat-controller-context.test.js tests/sira-memory-store-adapters.test.js tests/sira-chat-controller-citations.test.js tests/sira-pipeline-errors-migration.test.js tests/sira-turn-events.test.js tests/sira-chat-controller-events.test.js tests/sira-chat-controller-memory.test.js tests/sira-sse-route.test.js tests/sira-production-wiring.test.js tests/sira-model-adapter-migration.test.js tests/sira-stage-duration.test.js tests/sira-hybrid-retrieval-migration.test.js tests/sira-mkErr-migrations-bulk.test.js tests/auth-integration.test.js
 
       - name: Boot server and verify /health
         run: |
@@ -341,6 +356,46 @@ jobs:
           fi
 
   # ───────────────────────────────────────────────────────────────────
+  # DOCKER BUILD — verify both images build without errors
+  # ───────────────────────────────────────────────────────────────────
+  # Non-blocking (informational) — validates that the multi-stage
+  # Dockerfiles compile properly. When the project adds a registry push
+  # step, this job can be promoted to a hard gate.
+  docker:
+    name: Docker · build images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          tags: siragpt-api:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Speed up: skip healthcheck validation during CI (no DB/Redis)
+          build-args: BUILDKIT_CONTEXT_KEEP_GIT_DIR=1
+
+      - name: Build frontend image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          tags: siragpt-frontend:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
   # Branch protection on `main` can require this single status instead
@@ -348,7 +403,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, licenses, security-audit]
+    needs: [frontend, backend, docker, licenses, security-audit]
     runs-on: ubuntu-latest
     if: always()
     steps:

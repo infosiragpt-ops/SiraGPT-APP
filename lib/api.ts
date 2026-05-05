@@ -15,6 +15,20 @@ class ApiClient {
   private baseURL: string;
   private token: string | null = null;
 
+  // Retry config — transient network blips shouldn't fail the UI.
+  // Only retries on network errors / 5xx; 4xx passes through immediately.
+  private readonly MAX_RETRIES = 2;
+  private readonly BASE_RETRY_DELAY_MS = 500;
+  private readonly DEFAULT_TIMEOUT_MS = 30000; // 30s
+
+  // Refresh-token state — when a 401 fires, we attempt /auth/refresh once
+  // and queue concurrent requests until it resolves.
+  private _refreshing: Promise<boolean> | null = null;
+  private _pendingQueue: Array<{
+    resolve: (value: any) => void;
+    reject: (err: any) => void;
+  }> = [];
+
   constructor(baseURL: string) {
     this.baseURL = baseURL;
 
@@ -24,9 +38,15 @@ class ApiClient {
     }
   }
 
-  private async request(endpoint: string, options: RequestInit = {}) {
+  /**
+   * Core request method with timeout + retry.
+   * Throws on final failure with status, statusCode, and errorData attached.
+   */
+  private async request(endpoint: string, options: RequestInit & { timeoutMs?: number } = {}) {
     const url = `${this.baseURL}${endpoint}`;
+    const timeoutMs = options.timeoutMs ?? this.DEFAULT_TIMEOUT_MS;
 
+    // Build headers once (they don't change between retries)
     const headers = new Headers(options.headers);
 
     if (this.token) {
@@ -38,35 +58,154 @@ class ApiClient {
       headers.set('Content-Type', 'application/json');
     }
 
-    const config: RequestInit = {
-      headers,
-      credentials: 'include',
-      ...options,
-    };
+    // Track last error for re-throw on final failure
+    let lastError: Error & { status?: number; statusCode?: number; errorData?: any } | null = null;
 
-    try {
-      const response = await fetch(url, config);
+    for (let attempt = 0; attempt <= this.MAX_RETRIES; attempt++) {
+      // AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Network error' }));
-        const error = new Error(errorData.error || `HTTP ${response.status}`);
-        // Preserve status code and full error data for proper handling
-        (error as any).status = response.status;
-        (error as any).statusCode = response.status;
-        (error as any).errorData = errorData;
+      try {
+        const config: RequestInit = {
+          ...options,
+          headers,
+          credentials: 'include',
+          signal: controller.signal as AbortSignal,
+        };
+
+        const response = await fetch(url, config);
+
+        // HTTP-level success (2xx)
+        if (response.ok) {
+          clearTimeout(timeoutId);
+          // Handle 204 No Content
+          if (response.status === 204) return null;
+          return await response.json();
+        }
+
+        // 4xx — client error, don't retry (except 401 with refresh)
+        if (response.status >= 400 && response.status < 500) {
+          // 401 — attempt token refresh once before failing
+          if (response.status === 401 && this.token) {
+            const refreshed = await this._tryRefresh();
+            if (refreshed) {
+              // Update Authorization header with new token
+              headers.set('Authorization', `Bearer ${this.token}`);
+              clearTimeout(timeoutId);
+              // Reset attempt counter so this doesn't consume a retry slot
+              attempt = -1;
+              continue;
+            }
+          }
+
+          clearTimeout(timeoutId);
+          const errorData = await response.json().catch(() => ({ error: 'Request failed' }));
+          const error = new Error(errorData.error || `HTTP ${response.status}`);
+          (error as any).status = response.status;
+          (error as any).statusCode = response.status;
+          (error as any).errorData = errorData;
+          throw error;
+        }
+
+        // 5xx — server error, retry with backoff
+        clearTimeout(timeoutId);
+        lastError = new Error(`HTTP ${response.status}`);
+        (lastError as any).status = response.status;
+        (lastError as any).statusCode = response.status;
+
+        // If it's the last attempt, try to parse the body for better error
+        if (attempt === this.MAX_RETRIES) {
+          const errorData = await response.json().catch(() => ({ error: 'Server error' }));
+          lastError!.message = errorData.error || lastError!.message;
+          (lastError as any).errorData = errorData;
+        }
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+
+        // AbortError (timeout) — retry
+        if (error.name === 'AbortError') {
+          lastError = new Error(`Request timed out after ${timeoutMs}ms`);
+          (lastError as any).status = 408;
+          (lastError as any).statusCode = 408;
+          continue;
+        }
+
+        // TypeError (network error, CORS, etc.) — retry
+        if (error instanceof TypeError || error.message === 'Failed to fetch' || error.message?.includes('NetworkError')) {
+          lastError = error;
+          (lastError as any).status = 0;
+          (lastError as any).statusCode = 0;
+          // Not the last attempt — retry
+          if (attempt < this.MAX_RETRIES) {
+            const delay = this.BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+        }
+
+        // For errors thrown inside our block (4xx, already handled), re-throw
         throw error;
       }
 
-      return await response.json();
-    } catch (error) {
-      console.error('API request failed:', error);
-      throw error;
+      // Exponential backoff before retry
+      if (attempt < this.MAX_RETRIES) {
+        const delay = this.BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
+        await new Promise(r => setTimeout(r, delay));
+      }
     }
+
+    // All retries exhausted
+    const finalError = lastError || new Error('Request failed after retries');
+    console.error(`[ApiClient] Request failed after ${this.MAX_RETRIES + 1} attempts:`, endpoint, finalError.message);
+    throw finalError;
   }
 
   // Public getter for baseURL
   get apiBaseURL() {
     return this.baseURL;
+  }
+
+  /**
+   * Try to refresh the JWT token by calling /auth/refresh.
+   * Ensures only one refresh is in-flight at a time.
+   * Returns true if successful, false otherwise.
+   */
+  async _tryRefresh(): Promise<boolean> {
+    // If a refresh is already in progress, wait for it
+    if (this._refreshing) {
+      return this._refreshing;
+    }
+
+    this._refreshing = (async () => {
+      try {
+        const res = await fetch(`${this.baseURL}/auth/refresh`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.token}`,
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+        });
+
+        if (!res.ok) {
+          // Refresh failed — clear token to force re-login
+          this.setToken(null);
+          return false;
+        }
+
+        const data = await res.json();
+        this.setToken(data.token);
+        return true;
+      } catch {
+        this.setToken(null);
+        return false;
+      }
+    })();
+
+    const result = await this._refreshing;
+    this._refreshing = null;
+    return result;
   }
 
   setToken(token: string | null) {

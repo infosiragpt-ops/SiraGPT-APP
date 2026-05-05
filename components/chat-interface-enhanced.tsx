@@ -139,6 +139,7 @@ import {
   getLongPasteMetadata,
   shouldCompilePastedTextAsDocument,
 } from "@/lib/long-paste"
+import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 
 const resolveUploadFileId = (file: any): string | null => {
   if (!file) return null
@@ -914,6 +915,105 @@ const ActionsDropdown = ({
     };
   }, []);
 
+  const connectorItems = [
+    {
+      key: "gmail",
+      brand: "gmail",
+      label: isGmailActive ? "Gmail Active" : "Gmail",
+      active: isGmailActive,
+      disabled: isProcessingGmail,
+      dotClassName: "bg-red-500",
+      iconClassName: "bg-red-100 dark:bg-red-900/20",
+      icon: <img src="/icons/google.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      onClick: handleGmailToggle,
+    },
+    {
+      key: "calendar",
+      brand: "calendar",
+      label: isGoogleCalendarActive ? "Calendar Active" : "Google Calendar",
+      active: isGoogleCalendarActive,
+      disabled: isProcessingGoogleServices,
+      dotClassName: "bg-blue-500",
+      iconClassName: "bg-blue-100 dark:bg-blue-900/20",
+      icon: <img src="/icons/google-calendar.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      onClick: handleGoogleCalendarToggle,
+    },
+    {
+      key: "drive",
+      brand: "drive",
+      label: isGoogleDriveActive ? "Drive Active" : "Google Drive",
+      active: isGoogleDriveActive,
+      disabled: isProcessingGoogleServices,
+      dotClassName: "bg-green-500",
+      iconClassName: "bg-green-100 dark:bg-green-900/20",
+      icon: <img src="/icons/google-drive.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      onClick: handleGoogleDriveToggle,
+    },
+    {
+      key: "spotify",
+      brand: "spotify",
+      label: isSpotifyActive ? "Spotify Active" : "Spotify",
+      active: isSpotifyActive,
+      disabled: isProcessingSpotify,
+      dotClassName: "bg-green-500",
+      iconClassName: "bg-green-100 dark:bg-green-900/20",
+      icon: <img src="/icons/spotify.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      onClick: handleSpotifyToggle,
+    },
+    {
+      key: "word",
+      brand: "word",
+      label: isWordConnectorActive ? "Word Connector Active" : "Word Connector",
+      active: isWordConnectorActive,
+      disabled: isToolSwitchDisabled,
+      dotClassName: "bg-blue-500",
+      iconClassName: "bg-blue-100 dark:bg-blue-900/20",
+      icon: <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      onClick: () => {
+        handleWordConnectorToggle?.();
+        setIsOpen(false);
+      },
+    },
+    {
+      key: "excel",
+      brand: "excel",
+      label: isExcelConnectorActive ? "Excel Connector Active" : "Excel Connector",
+      active: isExcelConnectorActive,
+      disabled: isToolSwitchDisabled,
+      dotClassName: "bg-blue-500",
+      iconClassName: "bg-blue-100 dark:bg-blue-900/20",
+      icon: <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      onClick: () => {
+        handleExcelConnectorToggle?.();
+        setIsOpen(false);
+      },
+    },
+  ];
+
+  const renderConnectorItems = () => connectorItems.map((item) => (
+    <DropdownMenuItem
+      key={item.key}
+      className="liquid-menu-item"
+      data-brand={item.brand}
+      onClick={item.onClick}
+      disabled={item.disabled}
+    >
+      <div className="flex items-center gap-3 w-full">
+        <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${item.iconClassName}`}>
+          {item.icon}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="liquid-label truncate font-medium text-sm">
+            {item.label}
+          </div>
+        </div>
+        {item.active && (
+          <div className={`h-2 w-2 shrink-0 rounded-full ${item.dotClassName}`} />
+        )}
+      </div>
+    </DropdownMenuItem>
+  ));
+
   return (
     <TooltipProvider>
       <DropdownMenu dir="ltr" open={isOpen} onOpenChange={handleDropdownOpenChange}>
@@ -935,7 +1035,12 @@ const ActionsDropdown = ({
             <p>Attach files & tools</p>
           </TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="start" sideOffset={10} className="liquid-menu-surface w-64 overflow-visible">
+        <DropdownMenuContent
+          align="start"
+          sideOffset={10}
+          collisionPadding={12}
+          className="chat-tools-menu liquid-menu-surface"
+        >
           {/* File Upload - Only for text chats */}
 
           <DropdownMenuItem
@@ -989,9 +1094,13 @@ const ActionsDropdown = ({
               )}
             </div>
           </DropdownMenuItem>
+          <div className="chat-mobile-connectors-list md:hidden">
+            <div className="chat-mobile-connectors-heading">Connectors</div>
+            {renderConnectorItems()}
+          </div>
           <DropdownMenuSub open={connectorsOpen} onOpenChange={setConnectorsOpen}>
             <DropdownMenuSubTrigger
-              className="liquid-menu-item"
+              className="liquid-menu-item hidden md:flex"
               onFocus={() => setConnectorsOpen(true)}
               onPointerEnter={() => setConnectorsOpen(true)}
               onClick={(e) => {
@@ -1014,7 +1123,7 @@ const ActionsDropdown = ({
               <DropdownMenuSubContent
                 sideOffset={10}
                 alignOffset={-4}
-                avoidCollisions={false}
+                collisionPadding={12}
                 className="liquid-menu-surface w-64"
               >
                 {/* Gmail */}
@@ -2369,15 +2478,15 @@ const NavbarModelSelector = ({
       <DropdownMenu onOpenChange={(open) => {
         if (!open) setSearchQuery("");
       }}>
-        <DropdownMenuTrigger className="flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
+        <DropdownMenuTrigger className="chat-model-trigger flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
           <Video className="h-4 w-4" />
-          <span className="text-sm font-medium">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
+          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
           <div className="flex items-center gap-1">
             <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
             <ChevronDown className="h-4 w-4 opacity-70" />
           </div>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56 p-0">
+        <DropdownMenuContent align="end" className="w-[calc(100vw-1.5rem)] p-0 sm:w-56">
           <div className="p-2 border-b">
             <div className="relative">
               <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -2438,7 +2547,7 @@ const NavbarModelSelector = ({
         <DropdownMenu>
           <DropdownMenuTrigger
             className={cn(
-              "group/project inline-flex h-11 max-w-[360px] items-center gap-2 rounded-2xl px-3",
+              "chat-context-trigger group/project inline-flex h-11 max-w-[360px] items-center gap-2 rounded-2xl px-3",
               "bg-emerald-500/10 text-foreground hover:bg-emerald-500/15",
               "text-[15px] font-semibold tracking-tight",
               "transition-colors duration-200",
@@ -2453,7 +2562,7 @@ const NavbarModelSelector = ({
             <ChevronDown className="h-4 w-4 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/project:rotate-180" />
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[342px] overflow-hidden rounded-3xl border-border/70 p-2 shadow-2xl">
+          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[calc(100vw-1.5rem)] overflow-hidden rounded-3xl border-border/70 p-2 shadow-2xl sm:w-[342px]">
             <div className="mb-1 flex items-center gap-3 rounded-2xl px-2 py-2">
               <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                 <FolderOpen className="h-5 w-5" />
@@ -2624,7 +2733,7 @@ const NavbarModelSelector = ({
         <DropdownMenu>
           <DropdownMenuTrigger
             className={cn(
-              "group/gpt inline-flex h-11 max-w-[360px] items-center gap-2 rounded-2xl px-3",
+              "chat-context-trigger group/gpt inline-flex h-11 max-w-[360px] items-center gap-2 rounded-2xl px-3",
               "bg-muted/50 text-foreground hover:bg-muted",
               "text-[15px] font-semibold tracking-tight",
               "transition-colors duration-200",
@@ -2637,7 +2746,7 @@ const NavbarModelSelector = ({
             <ChevronDown className="h-4 w-4 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/gpt:rotate-180" />
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[328px] overflow-hidden rounded-3xl border-border/70 p-2 shadow-2xl">
+          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[calc(100vw-1.5rem)] overflow-hidden rounded-3xl border-border/70 p-2 shadow-2xl sm:w-[328px]">
             <div className="mb-1 flex items-center gap-3 rounded-2xl px-2 py-2">
               <GptIcon />
               <div className="min-w-0 flex-1">
@@ -2960,7 +3069,7 @@ const NavbarModelSelector = ({
           which is visual noise and contradicts the premium target. */}
       <DropdownMenuTrigger
         className={cn(
-          "group/model inline-flex h-10 items-center gap-2 rounded-xl px-3",
+          "chat-model-trigger group/model inline-flex h-10 items-center gap-2 rounded-xl px-3",
           "bg-transparent text-foreground",
           "border border-transparent",
           "text-[13.5px] font-semibold tracking-tight",
@@ -2971,11 +3080,11 @@ const NavbarModelSelector = ({
         )}
       >
         {selectedModelData && <IconProvider name={resolveModelIconName(selectedModelData)} className="h-4 w-4 shrink-0" />}
-        <span className="max-w-[180px] truncate">{selectedModelData?.displayName || selectedModel}</span>
+        <span className="chat-model-label max-w-[180px] truncate">{selectedModelData?.displayName || selectedModel}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" sideOffset={6} collisionPadding={12} className="w-[340px] p-0 overflow-hidden rounded-xl border-border/60 shadow-lg">
+      <DropdownMenuContent align="start" sideOffset={6} collisionPadding={12} className="w-[calc(100vw-1.5rem)] p-0 overflow-hidden rounded-xl border-border/60 shadow-lg sm:w-[340px]">
         <div className="border-b border-border/50 p-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
@@ -2991,7 +3100,7 @@ const NavbarModelSelector = ({
           </div>
         </div>
 
-        <ScrollArea className="h-[440px]">
+        <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,440px)]">
           {/* Recents — only shown when no search query is active. */}
           {recentModels.length > 0 && (
             <div className="px-1.5 pt-2">
@@ -3747,7 +3856,9 @@ But first, you need to connect your Spotify account securely using the button be
 
   // Search sources state - all enabled by default
 
-  // No longer need dynamic padding, handled by layout
+  const chatViewportRef = React.useRef<HTMLDivElement>(null);
+  const chatHeaderRef = React.useRef<HTMLDivElement>(null);
+  const chatComposerDockRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
   React.useEffect(() => {
@@ -3767,55 +3878,74 @@ But first, you need to connect your Spotify account securely using the button be
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   }, []);
 
+  const getComposerTextareaMaxHeight = React.useCallback(() => {
+    if (typeof window === "undefined") return 200;
+    const viewportHeight = window.visualViewport?.height || window.innerHeight || 720;
+    const isMobileViewport = window.matchMedia("(max-width: 767px)").matches;
+    if (!isMobileViewport) return 200;
+    return Math.max(96, Math.min(180, Math.floor(viewportHeight * 0.28)));
+  }, []);
+
+  const syncChatLayoutVars = React.useCallback(() => {
+    const root = chatViewportRef.current;
+    if (!root) return;
+
+    const setPx = (name: string, value: number) => {
+      root.style.setProperty(name, `${Math.max(0, Math.ceil(value))}px`);
+    };
+
+    setPx("--chat-header-height", chatHeaderRef.current?.getBoundingClientRect().height || 64);
+    setPx("--chat-composer-height", chatComposerDockRef.current?.getBoundingClientRect().height || 96);
+    setPx("--chat-textarea-max-height", getComposerTextareaMaxHeight());
+  }, [getComposerTextareaMaxHeight]);
+
+  const resizeComposerTextarea = React.useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const maxHeight = getComposerTextareaMaxHeight();
+    textarea.style.height = "auto";
+    const scrollHeight = textarea.scrollHeight;
+
+    if (scrollHeight > maxHeight) {
+      textarea.style.height = `${maxHeight}px`;
+      textarea.style.overflowY = "auto";
+      window.setTimeout(() => {
+        textarea.scrollTop = textarea.scrollHeight;
+      }, 0);
+    } else {
+      textarea.style.height = `${scrollHeight}px`;
+      textarea.style.overflowY = "hidden";
+    }
+
+    syncChatLayoutVars();
+    window.requestAnimationFrame(() => {
+      syncChatLayoutVars();
+      if (document.activeElement === textarea) {
+        scrollToBottom();
+      }
+    });
+  }, [getComposerTextareaMaxHeight, scrollToBottom, syncChatLayoutVars]);
+
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
 
     // Use requestAnimationFrame to ensure DOM is updated before scrolling
-    requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        const textarea = textareaRef.current;
-        const maxHeight = 350;
-
-        // Reset height to recalculate
-        textarea.style.height = 'auto';
-        const scrollHeight = textarea.scrollHeight;
-
-        if (scrollHeight > maxHeight) {
-          textarea.style.height = `${maxHeight}px`;
-          textarea.style.overflowY = 'auto';
-          // Auto-scroll to bottom to keep cursor visible when typing
-          setTimeout(() => {
-            textarea.scrollTop = textarea.scrollHeight;
-          }, 0);
-        } else {
-          textarea.style.height = `${scrollHeight}px`;
-          textarea.style.overflowY = 'hidden';
-        }
-      }
-    });
+    requestAnimationFrame(resizeComposerTextarea);
   };
 
+  const handleTextareaFocus = React.useCallback(() => {
+    resizeComposerTextarea();
+    window.requestAnimationFrame(() => {
+      syncChatLayoutVars();
+      scrollToBottom();
+    });
+  }, [resizeComposerTextarea, scrollToBottom, syncChatLayoutVars]);
+
   React.useEffect(() => {
-    if (textareaRef.current) {
-      const textarea = textareaRef.current;
-      const maxHeight = 350;
-
-      // Reset height to recalculate
-      textarea.style.height = 'auto';
-      const scrollHeight = textarea.scrollHeight;
-
-      if (scrollHeight > maxHeight) {
-        textarea.style.height = `${maxHeight}px`;
-        textarea.style.overflowY = 'auto';
-      } else {
-        textarea.style.height = `${scrollHeight}px`;
-        textarea.style.overflowY = 'hidden';
-      }
-    }
-  }, [input]);
-
-
+    resizeComposerTextarea();
+  }, [input, resizeComposerTextarea]);
 
   // Instant upgrade function
   const instantUpgrade = async (plan: 'BASIC' | 'STANDARD' | 'ENTERPRISE') => {
@@ -4814,6 +4944,12 @@ But first, you need to connect your Spotify account securely using the button be
       handleAndUploadFiles(filesToFileList(accepted), channel);
     }
   }, []);
+
+  const handleTextareaPaste = React.useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    handleClipboardPaste(e);
+    window.requestAnimationFrame(resizeComposerTextarea);
+    window.setTimeout(resizeComposerTextarea, 0);
+  }, [handleClipboardPaste, resizeComposerTextarea]);
 
   // Document-level paste listener — catches pastes when the textarea
   // isn't focused (e.g., user paste into the canvas while reading a
@@ -6510,6 +6646,64 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     activeArtifact
   );
 
+  React.useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      resizeComposerTextarea();
+      if (currentChat?.id) {
+        scrollToBottom();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    currentChat?.id,
+    detectedLinks.length,
+    hasActiveTools,
+    resizeComposerTextarea,
+    scrollToBottom,
+    selectedWordText,
+    uploadedFiles.length,
+  ]);
+
+  useVisualViewportCssVars({
+    targetRef: chatViewportRef,
+    prefix: "chat",
+    onSync: syncChatLayoutVars,
+  });
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let frame = 0;
+    let resizeObserver: ResizeObserver | null = null;
+
+    const scheduleSync = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        syncChatLayoutVars();
+      });
+    };
+
+    syncChatLayoutVars();
+
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(scheduleSync);
+      if (chatHeaderRef.current) resizeObserver.observe(chatHeaderRef.current);
+      if (chatComposerDockRef.current) resizeObserver.observe(chatComposerDockRef.current);
+      if (textareaRef.current) resizeObserver.observe(textareaRef.current);
+    }
+
+    window.addEventListener("resize", scheduleSync);
+    window.addEventListener("orientationchange", scheduleSync);
+
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleSync);
+      window.removeEventListener("orientationchange", scheduleSync);
+    };
+  }, [syncChatLayoutVars, isInitial, hasActiveTools, rightPanelActive]);
+
   const handleWebSearch = async (searchQuery: string) => {
     if (!searchQuery) {
       toast.error('Please enter a search query');
@@ -7056,7 +7250,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
   return (
     <div
-      className="flex h-screen flex-col relative overflow-hidden"
+      ref={chatViewportRef}
+      className="chat-viewport flex flex-col relative overflow-hidden"
       onDragEnter={handleDragIn}
       onDragOver={handleDrag}
       onDragLeave={handleDragOut}
@@ -7107,14 +7302,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           className={`relative flex flex-col h-full min-w-0 overflow-hidden ${rightPanelActive ? '' : 'w-full'}`}
         >
           {/* Header */}
-          <div className="absolute top-0 left-0 right-0 z-10 px-4 pt-4  backdrop-blur-sm ">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="md:hidden">
+          <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10 backdrop-blur-sm">
+            <div className="chat-header-row flex items-center justify-between">
+              <div className="chat-header-left flex min-w-0 items-center gap-2">
+                <div className="shrink-0 md:hidden">
                   <Sidebar>
                     <AppSidebar />
                   </Sidebar>
-                  <SidebarTrigger>
+                  <SidebarTrigger className="chat-header-icon-btn rounded-full">
                     <Menu className="h-6 w-6" />
                   </SidebarTrigger>
                 </div>
@@ -7137,7 +7332,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-0.5">
+              <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
                     Hidden when a right-side panel (preview/artifact/connector) is
                     active so the header fits the narrower pane. */}
@@ -7147,7 +7342,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     size="icon"
                     onClick={handleCompleteShare}
                     title="Share complete chat"
-                    className="h-11 w-11 rounded-full"
+                    className="chat-header-icon-btn chat-share-action h-11 w-11 rounded-full"
                   >
                     <Share className="h-5 w-5" />
                   </Button>
@@ -7155,9 +7350,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 {/* WhatsApp CTA — marketing surface; hide it when the pane
                     is narrow (split active) so the primary controls stay visible. */}
                 {!rightPanelActive && (
-                  <WhatsAppButton message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?" />
+                  <WhatsAppButton
+                    className="chat-header-icon-btn chat-optional-action"
+                    message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?"
+                  />
                 )}
-                <ThemeToggle />
+                <ThemeToggle className="chat-header-icon-btn" />
                 {/* Plan / Upgrade button — unified icon-system:
                     Free plan → text CTA "Subir de plan"
                     Paid + near-quota → text CTA "Upgrade Now" + warning border
@@ -7190,6 +7388,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         showTextCta && 'h-11 gap-1.5 rounded-full px-3 text-[13px] font-semibold',
                         warn && 'border-red-500/70 text-red-600 hover:bg-red-500/10 hover:text-red-600',
                         caution && 'border-amber-500/70 text-amber-600 hover:bg-amber-500/10 hover:text-amber-600',
+                        'chat-header-icon-btn',
+                        'chat-plan-action',
                         'transition-all duration-200',
                       )}
                     >
@@ -7270,7 +7470,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
 
           {isInitial ? (
-            <div className="canvas-ambient flex flex-1 items-center justify-center p-4">
+            <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
               <div className="w-full max-w-[860px]">
                 <div className="space-y-3">
                   {/*
@@ -7379,7 +7579,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           onChange={handleTextareaChange}
                           onKeyDown={handleKeyDown}
                           onKeyPress={handleKeyPress}
-                          onPaste={handleClipboardPaste}
+                          onFocus={handleTextareaFocus}
+                          onPaste={handleTextareaPaste}
                           onCompositionStart={() => { isComposingRef.current = true }}
                           onCompositionEnd={() => { isComposingRef.current = false }}
                           placeholder={
@@ -7410,7 +7611,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           )}
                           style={{
                             minHeight: "24px",
-                            maxHeight: "200px",
+                            maxHeight: "var(--chat-textarea-max-height, 200px)",
                             overflowY: "auto",
                             overflowX: "hidden",
                             wordWrap: "break-word",
@@ -7608,8 +7809,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               ) : (
                 <>
                   {/* Messages */}
-                  <ScrollArea className="flex-1 w-full pb-2 mb-6" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
-                    <div className="space-y-2 max-w-3xl mx-auto w-full px-4 md:px-4 pt-24 pb-40">
+                  <ScrollArea className="chat-message-scroll flex-1 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
+                    <div className="chat-message-scroll-content space-y-2 max-w-3xl mx-auto w-full">
                       {(() => {
                         const messages = currentChat?.messages || [];
                         const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
@@ -7692,7 +7893,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                   {/* Input & Actions */}
 
-                  <div className="absolute bottom-0 left-0 right-0 z-10 px-2 md:px-4 py-4">
+                  <div ref={chatComposerDockRef} className="chat-composer-dock absolute bottom-0 left-0 right-0 z-10">
                     <div className="max-w-3xl mx-auto space-y-2 bg-background">
                       {/* Input Area */}
 
@@ -7778,7 +7979,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               onChange={handleTextareaChange}
                               onKeyDown={handleKeyDown}
                               onKeyPress={handleKeyPress}
-                              onPaste={handleClipboardPaste}
+                              onFocus={handleTextareaFocus}
+                              onPaste={handleTextareaPaste}
                               onCompositionStart={() => { isComposingRef.current = true }}
                               onCompositionEnd={() => { isComposingRef.current = false }}
                               placeholder={
@@ -7809,7 +8011,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               )}
                               style={{
                                 minHeight: "24px",
-                                maxHeight: "200px",
+                                maxHeight: "var(--chat-textarea-max-height, 200px)",
                                 overflowY: "auto",
                                 overflowX: "hidden",
                                 wordWrap: "break-word",

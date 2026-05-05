@@ -6,7 +6,11 @@ import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 
-export function ThemeToggle() {
+type ThemeToggleProps = {
+  className?: string
+}
+
+export function ThemeToggle({ className }: ThemeToggleProps) {
   const { setTheme, theme } = useTheme()
 
   return (
@@ -23,6 +27,7 @@ export function ThemeToggle() {
             "relative h-11 w-11 rounded-full text-muted-foreground transition-all duration-200",
             "hover:bg-foreground/[0.06] hover:text-foreground",
             "active:scale-[0.96]",
+            className,
           )}
         >
           <Sun

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarInset, useSidebar } from "@/components/ui/sidebar"
 import { AuthGuard } from "@/components/auth-guard"
+import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 
 interface AppShellProps {
   children: React.ReactNode
@@ -16,9 +17,11 @@ export function AppShell({ children }: AppShellProps) {
   // hook count. Removing it once caused "Rendered fewer hooks than
   // expected" during HMR until a full page reload.
   usePathname()
+  useVisualViewportCssVars({ prefix: "app" })
+
   return (
     <AuthGuard>
-      <div className="flex h-screen w-full">
+      <div className="app-shell-viewport flex w-full">
         <AppSidebar />
         <SidebarInset className="w-0 min-w-0 flex-1">
           {/* Bridges window-level tool-activation events into

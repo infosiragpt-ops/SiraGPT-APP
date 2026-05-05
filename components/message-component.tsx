@@ -2511,7 +2511,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 {message.role === 'USER' && (
                     <>
                         {hasFiles && (
-                            <div className="w-full max-w-[85%] md:max-w-2xl mb-2">
+                            <div className="w-full max-w-[92%] md:max-w-2xl mb-2">
                                 <FileDisplay />
                             </div>
                         )}
@@ -2530,7 +2530,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             //                      around short text like "hola".
                             //   rounded-br-[6px]   subtle "tail" toward sender side
                             <Card className={cn(
-                                "relative w-fit max-w-[min(70%,32rem)] rounded-[16px] rounded-br-[6px]",
+                                "chat-user-bubble relative w-fit rounded-[16px] rounded-br-[6px]",
                                 "px-3 py-1.5",
                                 "bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white",
                                 "border border-transparent shadow-none",
@@ -2594,7 +2594,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 )}
 
                 {message.role === 'ASSISTANT' && (
-                    <div className="w-full max-w-[90%] md:max-w-3xl">
+                    <div className="chat-assistant-message w-full max-w-full md:max-w-3xl">
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (

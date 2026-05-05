@@ -1,0 +1,74 @@
+# ──────────────────────────────────────────────────────────────
+# siraGPT — Frontend (Next.js)
+# Multi-stage build: deps → build → production runner
+# ──────────────────────────────────────────────────────────────
+# Usage during Docker Compose:
+#   docker compose build frontend
+#
+# The DOCKER_BUILD=true env var triggers `output: 'standalone'`
+# in next.config.mjs, producing a lean .next/standalone/ output.
+# ──────────────────────────────────────────────────────────────
+
+# ─── Stage 1: Install dependencies ───────────────────────────
+FROM node:22-alpine AS deps
+WORKDIR /app
+
+RUN apk add --no-cache libc6-compat
+
+# Install deps separately for layer caching
+COPY package.json package-lock.json ./
+RUN npm ci --prefer-offline --no-audit --no-fund
+
+# ─── Stage 2: Build ─────────────────────────────────────────
+FROM node:22-alpine AS build
+WORKDIR /app
+
+# Install build-time OS deps
+RUN apk add --no-cache libc6-compat
+
+# Copy node_modules from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Build with standalone output
+ENV DOCKER_BUILD=true
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# Prune dev dependencies
+RUN npm prune --omit=dev --prefer-offline
+
+# ─── Stage 3: Production runner ─────────────────────────────
+FROM node:22-alpine AS runner
+WORKDIR /app
+
+RUN apk add --no-cache wget
+
+# Security: run as non-root 'node' user (uid 1000 in alpine image)
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Set correct env
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+
+# ─── Copy standalone output ─────────────────────────────────
+# Next.js `output: 'standalone'` copies minimal runtime files:
+#   .next/standalone/  — server + config
+#   .next/standalone/.next/static/  — client assets
+#   public/  — public directory
+COPY --from=build --chown=appuser:appgroup /app/.next/standalone ./
+COPY --from=build --chown=appuser:appgroup /app/.next/static ./.next/static
+COPY --from=build --chown=appuser:appgroup /app/public ./public
+
+# Switch to non-root user
+USER appuser
+
+EXPOSE 3000
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
+
+# Run the standalone server directly
+CMD ["node", "server.js"]

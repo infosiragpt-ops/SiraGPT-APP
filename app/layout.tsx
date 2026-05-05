@@ -16,23 +16,6 @@ import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
 
-// Geist Sans — Vercel's in-house UI typeface, the same font used on
-// v0.dev, Vercel's dashboard, and most serious AI/dev tooling built
-// on Next.js. It replaces the previous Inter choice because at the
-// small UI sizes we actually ship (13–15 px) Geist reads crisper,
-// has tighter apertures, and a more distinctive character-set
-// calibration than Inter.
-//
-// The `geist` package already exposes both fonts as variable-font
-// CSS vars (`--font-geist-sans` / `--font-geist-mono`). We re-expose
-// them as `--font-sans` / `--font-mono` so globals.css and Tailwind
-// stay format-agnostic — if we ever swap Geist for another typeface,
-// nothing downstream changes.
-//
-// Geist Mono pairs with it for code, pre, kbd, samp — the 0 has a
-// dot, l / 1 / I are unambiguous, ligatures off by default so AI
-// code blocks read like real source.
-
 export const metadata: Metadata = {
   title: "Sira Gpt Platform",
   description: "Multi-LLM AI Platform with Text, Image, Audio & Video Generation",
@@ -46,10 +29,6 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode
 }) {
-  // Resolve the per-request locale + messages on the server so the
-  // first paint already ships in the right language. The messages
-  // object is handed to the client provider; any hook call via
-  // useTranslations() reads from it without an extra round-trip.
   const locale = await getLocale()
   const messages = await getMessages()
   const dir = isRTL(locale) ? "rtl" : "ltr"
@@ -60,15 +39,11 @@ export default async function RootLayout({
       suppressHydrationWarning
       className={`${GeistSans.variable} ${GeistMono.variable}`}
       style={{
-        // Mirror Geist's native variables onto our app-wide alias so
-        // globals.css + Tailwind can reference a single --font-sans /
-        // --font-mono regardless of which typeface is active.
         "--font-sans": "var(--font-geist-sans)",
         "--font-mono": "var(--font-geist-mono)",
       } as React.CSSProperties}
     >
       <head>
-        {/* Fallback CDN if local CSS fails */}
         <link
           rel="stylesheet"
           href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"

@@ -27,6 +27,9 @@ export type AnalyticsEvent =
   | "model.selected"
   | "plan.upgrade_started"
   | "error.client_boundary"
+  | "error.route"
+  | "error.global"
+  | "page.not_found"
 
 type AnalyticsProperties = Record<string, string | number | boolean | null | undefined>
 

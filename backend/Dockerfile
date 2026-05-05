@@ -1,0 +1,70 @@
+# ──────────────────────────────────────────────────────────────
+# siraGPT — Backend (Express + Prisma)
+# Multi-stage build: deps → build → production runner
+# Also installs pandoc for document-conversion routes.
+# ──────────────────────────────────────────────────────────────
+
+# ─── Stage 1: Install dependencies ───────────────────────────
+FROM node:22-alpine AS deps
+WORKDIR /app
+
+# Install OS deps needed for native modules & pandoc (document gen)
+RUN apk add --no-cache pandoc
+
+# Install Node deps
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --prefer-offline --no-audit --no-fund
+
+# ─── Stage 2: Build Prisma client & test assets ──────────────
+FROM node:22-alpine AS build
+WORKDIR /app
+
+RUN apk add --no-cache pandoc
+
+# Copy prod node_modules from deps stage (avoids re-download)
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/package.json ./package.json
+
+# Copy source code
+COPY . .
+
+# Generate Prisma client (needed at runtime for queries)
+RUN npx prisma generate
+
+# ─── Stage 3: Production runner ─────────────────────────────
+FROM node:22-alpine AS runner
+WORKDIR /app
+
+# Install pandoc in the final image (needed at runtime)
+RUN apk add --no-cache pandoc
+
+# Create non-root user and group if they don't exist
+RUN addgroup -S appgroup 2>/dev/null || true; \
+    adduser -S appuser -G appgroup 2>/dev/null || true
+
+# Copy only runtime production assets
+COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules
+COPY --from=build --chown=appuser:appgroup /app/package.json ./package.json
+COPY --from=build --chown=appuser:appgroup /app/index.js ./index.js
+COPY --from=build --chown=appuser:appgroup /app/src ./src
+COPY --from=build --chown=appuser:appgroup /app/prisma ./prisma
+COPY --from=build --chown=appuser:appgroup /app/uploads ./uploads
+
+# Ensure uploads directory is writable
+RUN mkdir -p /app/uploads && chown -R appuser:appgroup /app/uploads
+
+# Switch to non-root user
+USER appuser
+
+# Environment
+ENV NODE_ENV=production
+ENV PORT=5000
+
+EXPOSE 5000
+
+# Healthcheck
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:5000/health/live || exit 1
+
+# Use node directly for proper SIGTERM forwarding
+CMD ["node", "index.js"]

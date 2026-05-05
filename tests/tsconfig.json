@@ -27,5 +27,8 @@
     "../lib/sse-client.ts",
     "../lib/sentry-config.ts",
     "../lib/retry-after-fetch.ts"
+  ],
+  "exclude": [
+    "../tests/lib"
   ]
 }

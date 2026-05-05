@@ -17,7 +17,7 @@ import { useEffect, useState, useCallback, type CSSProperties } from "react"
 // ========================= LLM LOGO MARKS =========================
 
 const ClaudeVisual = ({ color }: { color: string }) => (
-  <svg viewBox="0 0 1200 1200" xmlns="http://www.w3.org/2000/svg" className="h-[340px] w-[340px] md:h-[400px] md:w-[400px]">
+  <svg viewBox="0 0 1200 1200" xmlns="http://www.w3.org/2000/svg" className="h-[200px] w-[200px] md:h-[340px] md:w-[340px] lg:h-[400px] lg:w-[400px]">
     <motion.path
       fill={color}
       initial={{ pathLength: 0, opacity: 0 }}
@@ -29,7 +29,7 @@ const ClaudeVisual = ({ color }: { color: string }) => (
 )
 
 const ChatGPTVisual = ({ color }: { color: string }) => (
-  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" className="h-[300px] w-[300px] md:h-[340px] md:w-[340px]">
+  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" className="h-[180px] w-[180px] md:h-[300px] md:w-[300px] lg:h-[340px] lg:w-[340px]">
     <motion.path
       fill={color}
       initial={{ pathLength: 0, opacity: 0 }}
@@ -41,7 +41,7 @@ const ChatGPTVisual = ({ color }: { color: string }) => (
 )
 
 const GeminiVisual = () => (
-  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" className="h-[320px] w-[320px] md:h-[360px] md:w-[360px]">
+  <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" className="h-[190px] w-[190px] md:h-[320px] md:w-[320px] lg:h-[360px] lg:w-[360px]">
     <defs>
       <linearGradient id="geminiGradCycle" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0%" stopColor="#ef4444" />
@@ -62,7 +62,7 @@ const GeminiVisual = () => (
 )
 
 const GrokVisual = ({ color }: { color: string }) => (
-  <svg viewBox="0 0 2000 1920" xmlns="http://www.w3.org/2000/svg" className="h-[300px] w-[300px] md:h-[340px] md:w-[340px]">
+  <svg viewBox="0 0 2000 1920" xmlns="http://www.w3.org/2000/svg" className="h-[180px] w-[180px] md:h-[300px] md:w-[300px] lg:h-[340px] lg:w-[340px]">
     <motion.g
       fill={color}
       initial={{ opacity: 0, scale: 0.92 }}
@@ -80,7 +80,7 @@ const KimiVisual = () => (
   <motion.svg
     viewBox="0 0 100 100"
     xmlns="http://www.w3.org/2000/svg"
-    className="h-[320px] w-[320px] md:h-[360px] md:w-[360px]"
+    className="h-[190px] w-[190px] md:h-[320px] md:w-[320px] lg:h-[360px] lg:w-[360px]"
     initial={{ opacity: 0, scale: 0.9 }}
     animate={{ opacity: 1, scale: 1 }}
     transition={{ duration: 0.8, ease: "easeOut" }}
@@ -872,6 +872,14 @@ const AFTER_TYPING_HOLD = 300
 const DISPLAY_DURATION = 2400
 
 function BrandCard({ brand, onDone }: { brand: Brand; onDone: () => void }) {
+  const [isMobile, setIsMobile] = useState(false)
+  useEffect(() => {
+    const mql = window.matchMedia('(max-width: 767px)')
+    setIsMobile(mql.matches)
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
+    mql.addEventListener('change', handler)
+    return () => mql.removeEventListener('change', handler)
+  }, [])
   const [phase, setPhase] = useState<"bars" | "typing" | "display">("bars")
   const [typed, setTyped] = useState("")
 
@@ -904,7 +912,7 @@ function BrandCard({ brand, onDone }: { brand: Brand; onDone: () => void }) {
   const { Visual, accent } = brand
 
   return (
-    <div className="relative h-[540px] w-full">
+    <div className={`relative w-full ${isMobile ? 'h-[260px]' : 'h-[540px]'}`}>
       {/* Visual — absolutely centered, large */}
       <div className="absolute inset-0 flex items-center justify-center">
         <div className="relative">
@@ -952,7 +960,7 @@ function BrandCard({ brand, onDone }: { brand: Brand; onDone: () => void }) {
                 duration: phase === "display" ? 0.85 : 0.35,
                 ease: [0.22, 1, 0.36, 1],
               }}
-              className="rounded-lg border border-slate-200/80 bg-white/85 px-3 py-1.5 text-[18px] font-semibold uppercase tracking-[0.22em] shadow-[0_8px_30px_-12px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-black/40 dark:shadow-[0_8px_30px_-12px_rgba(0,0,0,0.5)] md:text-[21px]"
+              className="rounded-lg border border-slate-200/80 bg-white/85 px-2 py-1 text-[14px] font-semibold uppercase tracking-[0.18em] shadow-[0_8px_30px_-12px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-black/40 dark:shadow-[0_8px_30px_-12px_rgba(0,0,0,0.5)] md:text-[21px] md:px-3 md:py-1.5 md:tracking-[0.22em]"
             >
               <span className="dark:hidden" style={{ color: accent }}>
                 {typed}

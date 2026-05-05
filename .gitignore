@@ -35,6 +35,10 @@ backend/data/
 # misc
 .DS_Store
 *.pem
+*.jks
+*.keystore
+android/keystore.properties
+android/keystores/
 
 # debug
 npm-debug.log*

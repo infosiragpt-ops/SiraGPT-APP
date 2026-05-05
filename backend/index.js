@@ -1,4 +1,39 @@
 require('dotenv').config();
+
+// ── Startup validation ─────────────────────────────────────
+// Catches placeholder secrets, missing required env vars, and
+// dangerous configurations before the server accepts traffic.
+// Blocking issues call process.exit(1); warnings are logged.
+const { validateStartupEnvironment } = require('./src/utils/startup-validator');
+validateStartupEnvironment(process.env, { failOnBlocking: true });
+
+// ── Process-level error handlers ───────────────────────────
+// Prevent the process from silently crashing on unhandled
+// rejections or uncaught exceptions. In production, log and
+// exit gracefully; in development, dump the stack.
+process.on('unhandledRejection', (reason, promise) => {
+    const reasonStr =
+        reason instanceof Error
+            ? `${reason.name}: ${reason.message}${reason.stack ? '\n' + reason.stack : ''}`
+            : String(reason);
+    console.error('[FATAL] unhandledRejection:', reasonStr);
+    // In production, log and continue (let PM2/Docker restart if
+    // the process becomes unhealthy). In development, exit hard.
+    if (process.env.NODE_ENV !== 'production') {
+        process.exitCode = 1;
+    }
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('[FATAL] uncaughtException:', error);
+    // Always exit on uncaught exceptions — the process is in an
+    // unknown state. PM2 / Docker will restart automatically.
+    process.exitCode = 1;
+    // Let the process exit naturally (don't force-kill) so pending
+    // logs flush. Short timeout as a safety net.
+    setTimeout(() => process.exit(1), 2000).unref();
+});
+
 const {
     getOpenTelemetryStatus,
     shutdownOpenTelemetry,
@@ -23,6 +58,10 @@ const {
     startPostHog,
 } = require('./src/services/observability/posthog');
 startPostHog();
+
+// Patches Express 4.x to forward async rejections to the error
+// handler automatically. Must be required BEFORE the express import.
+require('express-async-errors');
 
 const express = require('express');
 const cors = require('cors');
@@ -338,6 +377,35 @@ const {
     reportToHttpStatus,
 } = require('./src/services/observability/health-check');
 
+// ── Health-check result cache ──────────────────────────────
+// Prevents /health and /health/ready from hammering the DB on
+// every request when monitoring systems poll aggressively.
+// Cache is TTL-based: stale entries trigger a fresh probe.
+// Liveness (/health/live) is NEVER cached — it must always
+// reflect the current process state.
+const healthCache = new Map();
+const HEALTH_CACHE_TTL_MS = parseInt(process.env.HEALTH_CACHE_TTL_MS || '5000', 10); // 5s default
+
+async function getCachedOrFresh(cacheKey, fetcher) {
+    const cached = healthCache.get(cacheKey);
+    if (cached && (Date.now() - cached.at) < HEALTH_CACHE_TTL_MS) {
+        return cached.report;
+    }
+    const report = await fetcher();
+    healthCache.set(cacheKey, { at: Date.now(), report });
+    // Prevent unbounded growth (should never exceed 2-3 entries in practice)
+    if (healthCache.size > 10) {
+        const now = Date.now();
+        for (const [key, entry] of healthCache) {
+            if ((now - entry.at) > HEALTH_CACHE_TTL_MS * 2) healthCache.delete(key);
+        }
+    }
+    return report;
+}
+
+// Health cache is only used for probes that touch I/O (readiness,
+// full health). Liveness is always fresh.
+
 let _healthRedisClient = null;
 function getHealthRedisClient() {
     if (!process.env.REDIS_URL) return null;
@@ -367,18 +435,16 @@ app.get('/health/live', (_req, res) => {
 });
 
 app.get('/health/ready', async (_req, res) => {
-    const report = await runReadinessCheck({
+    const report = await getCachedOrFresh('ready', () => runReadinessCheck({
         prisma,
         redis: getHealthRedisClient(),
-        // queue: pass `getAgentTaskQueue()` here once the platform wants
-        //        queue-depth signals on the readiness gate.
         queue: null,
-    });
+    }));
     res.status(reportToHttpStatus(report)).json(report);
 });
 
 app.get('/health', async (_req, res) => {
-    const report = await runFullHealthCheck({
+    const report = await getCachedOrFresh('full', () => runFullHealthCheck({
         prisma,
         redis: getHealthRedisClient(),
         queue: null,
@@ -386,7 +452,7 @@ app.get('/health', async (_req, res) => {
         sentry: getSentryStatus(),
         langfuse: getLangfuseStatus(),
         posthog: getPostHogStatus(),
-    });
+    }));
     res.status(reportToHttpStatus(report)).json(report);
 });
 
@@ -516,17 +582,31 @@ app.use('*', (req, res) => {
 function startServer() {
     prisma.connectDatabase();
     const server = app.listen(PORT, () => {
-        logger.info(
-            {
-                port: PORT,
-                env: process.env.NODE_ENV || 'development',
-                healthUrl: `http://localhost:${PORT}/health`,
-                allowedOrigins: ALLOWED_ORIGINS,
-                rateLimitStore: rateLimitStoreInfo.mode,
-                rateLimitStoreReason: rateLimitStoreInfo.reason,
-            },
-            'server_started',
-        );
+        const startInfo = {
+            port: PORT,
+            env: process.env.NODE_ENV || 'development',
+            node: process.version,
+            platform: process.platform,
+            arch: process.arch,
+            pid: process.pid,
+            uptimeBase: process.uptime(),
+            memoryRss: `${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB`,
+            healthUrl: `http://localhost:${PORT}/health`,
+            apiDocsUrl: `http://localhost:${PORT}/api-docs`,
+            metricsUrl: `http://localhost:${PORT}/metrics`,
+            allowedOrigins: ALLOWED_ORIGINS,
+            rateLimitStore: rateLimitStoreInfo.mode,
+            rateLimitStoreReason: rateLimitStoreInfo.reason,
+            redisConfigured: Boolean(process.env.REDIS_URL),
+            telemetryEnabled: process.env.OTEL_ENABLED === 'true',
+            sentryConfigured: Boolean(process.env.SENTRY_DSN),
+            langfuseConfigured: Boolean(process.env.LANGFUSE_PUBLIC_KEY && process.env.LANGFUSE_SECRET_KEY),
+            posthogConfigured: Boolean(process.env.POSTHOG_API_KEY),
+            idempotencyEnabled: process.env.IDEMPOTENCY_ENABLED === 'true',
+            planQuotasEnabled: process.env.PLAN_QUOTAS_ENFORCED !== 'false',
+            corsAllowedOriginsCount: ALLOWED_ORIGINS.length,
+        };
+        logger.info(startInfo, 'server_started');
         // Loud warning when production boots without an explicit CORS
         // allowlist. The fail-closed CORS callback will then reject
         // every browser request — surface this in the access log so

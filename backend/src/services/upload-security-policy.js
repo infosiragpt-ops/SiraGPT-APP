@@ -1,8 +1,22 @@
 const path = require('path');
+const crypto = require('crypto');
 
 const MB = 1024 * 1024;
 const DEFAULT_MAX_UPLOAD_MB = 100;
 const DEFAULT_MAX_UPLOAD_FILES = 10;
+
+const EXECUTABLE_EXTENSIONS = new Set([
+  'exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'pif',
+  'sh', 'bash', 'zsh', 'dash',
+  'ps1', 'psm1', 'psd1', 'vbs', 'vbe', 'js', 'jse',
+  'wsf', 'wsh', 'hta', 'py', 'pyc', 'pyo',
+  'pl', 'pm', 'rb', 'rbm', 'lua', 'php', 'php3', 'php4', 'phtml',
+  'app', 'elf', 'wasm',
+  'reg', 'inf',
+]);
+
+// Characters that are dangerous in filenames (path traversal, shell injection, etc.)
+const DANGEROUS_FILENAME_PATTERN = /[\0\r\n\x00-\x1f<>:"|?*\\]|(\.\.)/;
 
 const ALLOWED_MIMES = new Set([
   // Images
@@ -143,6 +157,17 @@ function isActiveContentMime(mime) {
   return ACTIVE_CONTENT_MIMES.has(normalizeMime(mime));
 }
 
+function sanitizeFilename(name) {
+  if (!name) return null;
+  // Reject path traversal ("/" "..") and control characters
+  if (DANGEROUS_FILENAME_PATTERN.test(name)) return null;
+  // Strip to basename (remove any directory components)
+  const base = path.basename(String(name));
+  // Reject empty after basename extraction
+  if (!base || base === '.' || base === '..') return null;
+  return base;
+}
+
 function validateUploadPolicy({
   originalName,
   declaredMime,
@@ -152,6 +177,19 @@ function validateUploadPolicy({
   env = process.env,
 } = {}) {
   const ext = extensionFromName(originalName);
+
+  // ── Sanitize filename ──
+  const safeName = sanitizeFilename(originalName);
+  if (!safeName) {
+    return {
+      ok: false,
+      code: 'invalid_filename',
+      message: 'El nombre del archivo contiene caracteres no permitidos o rutas.',
+      extension: ext,
+      declaredMime: null,
+      detectedMime: null,
+    };
+  }
   const declared = normalizeMime(declaredMime);
   const detected = normalizeMime(detectedMime);
   const limits = resolveUploadLimits(env);
@@ -161,6 +199,18 @@ function validateUploadPolicy({
       ok: false,
       code: 'file_too_large',
       message: `El archivo supera el limite configurado de ${Math.round(limits.fileSize / MB)} MB.`,
+      extension: ext,
+      declaredMime: declared || null,
+      detectedMime: detected || null,
+    };
+  }
+
+  // ── Reject executable extensions explicitly ──
+  if (ext && EXECUTABLE_EXTENSIONS.has(ext)) {
+    return {
+      ok: false,
+      code: 'executable_not_allowed',
+      message: `Archivos ejecutables (.${ext}) no estan permitidos por seguridad.`,
       extension: ext,
       declaredMime: declared || null,
       detectedMime: detected || null,
@@ -200,6 +250,37 @@ function validateUploadPolicy({
     };
   }
 
+  // ── Check for double extension tricks (e.g., file.pdf.exe) ──
+  if (originalName && ext) {
+    const base = path.basename(originalName, path.extname(originalName));
+    const innerExt = path.extname(base).replace(/^\./, '').toLowerCase();
+    if (innerExt && EXECUTABLE_EXTENSIONS.has(innerExt)) {
+      return {
+        ok: false,
+        code: 'double_extension_executable',
+        message: `El archivo parece tener una extension ejecutable oculta (.${innerExt}).`,
+        extension: ext,
+        declaredMime: declared || null,
+        detectedMime: detected || null,
+      };
+    }
+  }
+
+  // ── Reject misnamed executables (e.g., virus.exe renamed to virus.pdf) ──
+  if (detectionSource === 'magic-bytes' && detected) {
+    const detectedExt = extensionFromName(`x.${detected.split('/').pop()}`);
+    if (detectedExt && EXECUTABLE_EXTENSIONS.has(detectedExt)) {
+      return {
+        ok: false,
+        code: 'executable_disguised',
+        message: `El contenido del archivo corresponde a un ejecutable (${detected}) disfrazado como .${ext}.`,
+        extension: ext,
+        declaredMime: declared || null,
+        detectedMime: detected || null,
+      };
+    }
+  }
+
   const normalizedMime = detectionSource === 'magic-bytes' && detected ? detected : declared;
   return {
     ok: true,
@@ -219,6 +300,7 @@ module.exports = {
   ACTIVE_CONTENT_MIMES,
   DEFAULT_MAX_UPLOAD_FILES,
   DEFAULT_MAX_UPLOAD_MB,
+  EXECUTABLE_EXTENSIONS,
   EXTENSION_TO_MIMES,
   extensionFromName,
   isActiveContentMime,
@@ -226,5 +308,6 @@ module.exports = {
   mimeMatchesExtension,
   normalizeMime,
   resolveUploadLimits,
+  sanitizeFilename,
   validateUploadPolicy,
 };

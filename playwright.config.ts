@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test"
 
+const port = Number(process.env.PLAYWRIGHT_PORT || 3005)
+const baseURL = process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${port}`
+
 /**
  * Playwright config — minimal, CI-safe setup.
  *
@@ -24,7 +27,7 @@ export default defineConfig({
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
 
   use: {
-    baseURL: "http://localhost:3005",
+    baseURL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },
@@ -34,8 +37,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: "npm run dev -- --port 3005",
-    port: 3005,
+    command: `npm run dev -- --port ${port}`,
+    port,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     stdout: "ignore",
