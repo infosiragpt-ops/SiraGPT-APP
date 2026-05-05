@@ -17,7 +17,7 @@ RUN apk add --no-cache libc6-compat
 
 # Install deps separately for layer caching
 COPY package.json package-lock.json ./
-RUN npm ci --prefer-offline --no-audit --no-fund
+RUN npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund
 
 # ─── Stage 2: Build ─────────────────────────────────────────
 FROM node:22-alpine AS build
