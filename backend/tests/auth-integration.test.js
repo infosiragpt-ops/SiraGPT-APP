@@ -81,6 +81,17 @@ function mockPrisma() {
     if (idx !== -1) store.sessions.splice(idx, 1);
   };
 
+  prisma.session.deleteMany = async ({ where }) => {
+    const before = store.sessions.length;
+    for (let i = store.sessions.length - 1; i >= 0; i--) {
+      const session = store.sessions[i];
+      if (where.token && session.token !== where.token) continue;
+      if (where.userId && session.userId !== where.userId) continue;
+      store.sessions.splice(i, 1);
+    }
+    return { count: before - store.sessions.length };
+  };
+
   prisma.session.findFirst = async ({ where }) => {
     return store.sessions.find((s) => s.userId === where.userId) || null;
   };
