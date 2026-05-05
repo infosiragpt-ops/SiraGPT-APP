@@ -24,7 +24,6 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { CodeWorkspaceProvider, useCodeWorkspace } from "@/lib/code-workspace-context"
 import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { Button } from "@/components/ui/button"
 
 const CodeWorkspace = dynamic(
   () => import("@/components/code/code-workspace").then((mod) => mod.CodeWorkspace),
@@ -33,8 +32,6 @@ const CodeWorkspace = dynamic(
     loading: () => <CodeWorkspaceSkeleton />,
   },
 )
-
-const CODE_WORKSPACE_PLANS = ["PRO", "PRO_MAX", "ENTERPRISE"]
 
 export default function CodeWorkspacePage() {
   return (
@@ -47,6 +44,14 @@ export default function CodeWorkspacePage() {
   )
 }
 
+// CodeWorkspaceGate — login-only gate. The plan-tier check that
+// previously paywalled the workspace behind PRO / PRO_MAX /
+// ENTERPRISE has been removed: the workspace is open to every
+// authenticated user (FREE included). Backend usage is still
+// metered by the existing plan-quota middleware on /api/agent and
+// /api/document-ai, so a FREE account that exhausts its monthly
+// quota gets a 429 from the API rather than a hard plan gate at
+// the page level.
 function CodeWorkspaceGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth()
   const router = useRouter()
@@ -58,35 +63,7 @@ function CodeWorkspaceGate({ children }: { children: React.ReactNode }) {
     return <CodeWorkspaceSkeleton />
   }
 
-  if (!CODE_WORKSPACE_PLANS.includes(user.plan)) {
-    return <CodeWorkspaceUpsell currentPlan={user.plan} />
-  }
-
   return <>{children}</>
-}
-
-function CodeWorkspaceUpsell({ currentPlan }: { currentPlan: string }) {
-  return (
-    <div className="flex h-screen items-center justify-center bg-background px-6">
-      <div className="max-w-md space-y-5 text-center">
-        <div className="flex items-center justify-center gap-3">
-          <span className="text-xl font-semibold tracking-[-0.02em]">Cursor</span>
-        </div>
-        <h1 className="text-2xl font-semibold tracking-[-0.02em]">El workspace de código requiere un plan PRO</h1>
-        <p className="text-sm text-muted-foreground">
-          Tu plan actual es <strong>{currentPlan}</strong>. Mejora a PRO, PRO MAX o ENTERPRISE para usar el editor con IA, modelos premium y ejecución en tu propia estancia.
-        </p>
-        <div className="flex justify-center gap-2 pt-2">
-          <Button onClick={() => (window.location.href = "/billing")} className="rounded-full">
-            Mejorar plan
-          </Button>
-          <Button variant="outline" onClick={() => (window.location.href = "/chat")} className="rounded-full">
-            Volver al chat
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 /**

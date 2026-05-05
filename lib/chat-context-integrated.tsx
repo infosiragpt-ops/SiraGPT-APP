@@ -9,6 +9,7 @@ import { buildDocumentChatRequest } from "./document-chat-request"
 import { mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
+import { save as savePending, clear as clearPending, retryAll } from "./pending-messages"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -300,6 +301,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     chatsRef.current = chats
   }, [chats])
 
+  // Retry pending messages when the user logs back in
+  useEffect(() => {
+    if (!user || !token || !addMessage) return
+    // Try to send any messages that were saved while offline
+    retryAll(async (msg) => {
+      try {
+        await addMessage(msg.content, msg.fileIds, undefined, false, msg.intentOverride as any)
+        return true
+      } catch {
+        return false
+      }
+    })
+  }, [user, token])
 
   // Load user's chats
   useEffect(() => {
@@ -521,6 +535,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         ? collectRecentDocumentContextIds(conversationForRouting)
         : [];
       const requestFileIds = normalizedFileIds.length > 0 ? normalizedFileIds : historicalDocumentFileIds;
+
+      // Save to pending messages BEFORE sending — survive crashes/offline
+      savePending(content, activeChat.id, requestFileIds?.length ? requestFileIds : undefined, intentOverride);
 
       // STEP 1: User ka message UI mein dikhayein (agar already nahi dikhaya gaya)
       if (!skipUserMessage) {
@@ -1067,6 +1084,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             async () => {
               // onClose: Jab stream khatam ho jaye
+              clearPending(activeChat.id);
               bg.complete(activeChat.id);
               if (!controller.signal.aborted && !pendingStop) {
                 setIsLoading(false);
@@ -1148,6 +1166,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             controller.signal // Pass the abort signal
           );
         }
+        // Clear pending on successful completion (sync intents like chart/figma)
+        clearPending(activeChat.id);
       } catch (error: any) {
         console.error("Failed to start AI stream:", error);
 

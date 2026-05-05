@@ -32,6 +32,7 @@ import {
   CalendarDays,
   FolderKanban,
   Palette,
+  Code2,
   Loader2,
   PenSquare,
   Shield,
@@ -257,7 +258,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/library',
+      '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/code', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -776,6 +777,7 @@ export function AppSidebar() {
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   const isOnDesignPage = activePathname.startsWith('/design')
+  const isOnCodePage = activePathname.startsWith('/code')
 
   return (
     <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
@@ -982,6 +984,26 @@ export function AppSidebar() {
             iconClassName="text-fuchsia-500"
             active={isOnDesignPage}
             pending={pendingHref === '/design'}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
+
+          {/* Código — Cursor-style code workspace at /code (Monaco
+              editor + virtual file tree + AI chat panel). Sits
+              directly under Diseño so the two creative surfaces
+              (visual + textual) live next to each other. Code2
+              icon (with the angle brackets) is the lucide
+              convention for a code-editor entry. */}
+          <SidebarNavItem
+            href="/code"
+            label={t("code")}
+            tooltip={t("code")}
+            icon={Code2}
+            iconClassName="text-emerald-500"
+            active={isOnCodePage}
+            pending={pendingHref === '/code'}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}

@@ -438,7 +438,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@hono/node-server` | 1.19.14 | MIT | [link](https://github.com/honojs/node-server) |
 | `@hookform/resolvers` | 3.10.0 | MIT | [link](https://github.com/react-hook-form/resolvers) |
 | `@iconify/types` | 2.0.0 | MIT | [link](https://github.com/iconify/iconify) |
-| `@iconify/utils` | 3.1.0 | MIT | [link](https://github.com/iconify/iconify) |
+| `@iconify/utils` | 3.1.1 | MIT | [link](https://github.com/iconify/iconify) |
 | `@img/colour` | 1.0.0, 1.1.0 | MIT | [link](https://github.com/lovell/colour) |
 | `@ioredis/commands` | 1.5.1 | MIT | [link](https://github.com/ioredis/commands) |
 | `@jridgewell/gen-mapping` | 0.3.13 | MIT | [link](https://github.com/jridgewell/sourcemaps) |
@@ -450,7 +450,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@langchain/core` | 1.1.41, 1.1.42 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
 | `@langchain/langgraph` | 1.2.9 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-checkpoint` | 1.0.1 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
-| `@langchain/langgraph-sdk` | 1.8.10, 1.8.9 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
+| `@langchain/langgraph-sdk` | 1.8.10 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/openai` | 1.4.4 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
 | `@levischuck/tiny-cbor` | 0.2.11 | MIT | [link](https://github.com/levischuck/tiny-cbor) |
 | `@llamaindex/core` | 0.6.22, 0.6.23 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
@@ -775,7 +775,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `character-reference-invalid` | 2.0.1 | MIT | [link](https://github.com/wooorm/character-reference-invalid) |
 | `chart.js` | 4.5.1 | MIT | [link](https://github.com/chartjs/Chart.js) |
 | `cheerio` | 1.2.0 | MIT | [link](https://github.com/cheeriojs/cheerio) |
-| `chevrotain-allstar` | 0.4.1 | MIT | [link](https://github.com/langium/chevrotain-allstar) |
+| `chevrotain-allstar` | 0.4.3 | MIT | [link](https://github.com/langium/chevrotain-allstar) |
 | `chokidar` | 3.6.0, 4.0.3 | MIT | [link](https://github.com/paulmillr/chokidar) |
 | `citty` | 0.1.6, 0.2.2 | MIT | [link](https://github.com/unjs/citty) |
 | `cjs-module-lexer` | 2.2.0 | MIT | [link](https://github.com/nodejs/cjs-module-lexer) |
@@ -817,7 +817,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `crypto-js` | 4.2.0 | MIT | [link](https://github.com/brix/crypto-js) |
 | `cssesc` | 3.0.0 | MIT | [link](https://github.com/mathiasbynens/cssesc) |
 | `csstype` | 3.2.3 | MIT | [link](https://github.com/frenic/csstype) |
-| `cytoscape` | 3.33.2 | MIT | [link](https://github.com/cytoscape/cytoscape.js) |
+| `cytoscape` | 3.33.3 | MIT | [link](https://github.com/cytoscape/cytoscape.js) |
 | `cytoscape-cose-bilkent` | 4.1.0 | MIT | [link](https://github.com/cytoscape/cytoscape.js-cose-bilkent) |
 | `cytoscape-fcose` | 2.2.0 | MIT | [link](https://github.com/iVis-at-Bilkent/cytoscape.js-fcose) |
 | `dagre-d3-es` | 7.0.14 | MIT | [link](https://github.com/tbo47/dagre-es) |
@@ -1005,7 +1005,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `langchain` | 1.3.4 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
 | `langfuse` | 3.38.20 | MIT | [link](https://github.com/langfuse/langfuse-js) |
 | `langfuse-core` | 3.38.20 | MIT | [link](https://github.com/langfuse/langfuse-js) |
-| `langium` | 4.2.2 | MIT | [link](https://github.com/eclipse-langium/langium) |
+| `langium` | 4.2.3 | MIT | [link](https://github.com/eclipse-langium/langium) |
 | `langsmith` | 0.5.25 | MIT | [link](https://github.com/langchain-ai/langsmith-sdk) |
 | `layout-base` | 1.0.2, 2.0.1 | MIT | [link](https://github.com/iVis-at-Bilkent/layout-base) |
 | `lazystream` | 1.0.1 | MIT | [link](https://github.com/jpommerening/node-lazystream) |
@@ -1415,7 +1415,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `type-is` | 1.6.18, 2.0.1 | MIT | [link](https://github.com/jshttp/type-is) |
 | `typed-query-selector` | 2.12.0 | MIT | [link](https://github.com/g-plane/typed-query-selector) |
 | `typedarray` | 0.0.6 | MIT | [link](https://github.com/substack/typedarray) |
-| `ufo` | 1.6.3 | MIT | [link](https://github.com/unjs/ufo) |
+| `ufo` | 1.6.4 | MIT | [link](https://github.com/unjs/ufo) |
 | `uid-safe` | 2.1.5 | MIT | [link](https://github.com/crypto-utils/uid-safe) |
 | `uid2` | 0.0.4 | MIT | [link](https://github.com/coreh/uid2) |
 | `uint8array-extras` | 1.5.0 | MIT | [link](https://github.com/sindresorhus/uint8array-extras) |
@@ -1442,7 +1442,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `use-sync-external-store` | 1.6.0 | MIT | [link](https://github.com/facebook/react) |
 | `util-deprecate` | 1.0.2 | MIT | [link](https://github.com/TooTallNate/util-deprecate) |
 | `utils-merge` | 1.0.1 | MIT | [link](https://github.com/jaredhanson/utils-merge) |
-| `uuid` | 10.0.0, 11.1.0, 11.1.1, 13.0.0, 13.0.1, 8.3.2, 9.0.1 | MIT | [link](https://github.com/uuidjs/uuid) |
+| `uuid` | 10.0.0, 11.1.1, 13.0.1, 13.0.2, 8.3.2, 9.0.1 | MIT | [link](https://github.com/uuidjs/uuid) |
 | `validator` | 13.15.35 | MIT | [link](https://github.com/validatorjs/validator.js) |
 | `vary` | 1.1.2 | MIT | [link](https://github.com/jshttp/vary) |
 | `vaul` | 0.9.9 | MIT | [link](https://github.com/emilkowalski/vaul) |

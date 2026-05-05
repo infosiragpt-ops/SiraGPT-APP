@@ -52,6 +52,22 @@
   - Spanish UI labels
 - **`components/admin-sidebar.tsx`**: Added "Health" nav item with Heart icon
 
+### 💾 Pending Messages — Resilient Sends
+- **`lib/pending-messages.ts`**: Persists outgoing message payloads to localStorage before sending
+  - `save(content, chatId, fileIds?, intent?)` — stores draft before the first attempt
+  - `clear(chatId)` — removes on successful delivery
+  - `getAll()` / `getForChat(chatId)` — load pending messages for retry
+  - `retryAll(sendFn)` — replay all pending messages in order
+  - `subscribeOnlineRetry(sendFn)` — auto-retry when browser comes online
+  - Max 3 attempts per message, auto-cleanup after max
+  - Degrades gracefully if localStorage is unavailable
+- **`lib/chat-context-integrated.tsx`**: Integrated pending messages into `addMessage`
+  - Saves message to localStorage BEFORE any API call (survives page crash)
+  - Clears on successful delivery (sync intents + streaming completion)
+  - Stays in storage on error — retried later on reconnect
+  - `useEffect` in `ChatProvider` retries all pending on user login
+- **`tests/lib/pending-messages.test.ts`**: 10 tests covering save, clear, retry, max attempts, partial failures, localStorage unavailability
+
 ### 📝 Documentation
 - **`CONTRIBUTING.md`**: 3KB contribution guide — setup, structure, tests, conventions, Docker usage
 

@@ -3844,14 +3844,14 @@ But first, you need to connect your Spotify account securely using the button be
   const [shareUrl, setShareUrl] = React.useState<string | null>(null);
 
   // Helper function to check if error is related to monthly API limit
-  const isMonthlyLimitError = (errorMessage: string) => {
+  const isMonthlyLimitError = React.useCallback((errorMessage: string) => {
     const lowerMessage = errorMessage.toLowerCase();
     return lowerMessage.includes('monthly api limit exceeded') ||
       lowerMessage.includes('monthly limit exceeded') ||
       lowerMessage.includes('monthly video generation limit exceeded') ||
       lowerMessage.includes('free monthly queries exhausted') ||
       (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
-  };
+  }, []);
 
 
   // Search sources state - all enabled by default
@@ -4832,6 +4832,82 @@ But first, you need to connect your Spotify account securely using the button be
       handleAndUploadFiles(filesToFileList(accepted), 'drop');
     }
   };
+
+  // Window-level drag/drop fallback — without this, dropping an image
+  // OUTSIDE the chat-viewport (on the sidebar, top bar, or empty
+  // margins of the page) lets the browser's default behavior kick in
+  // and OPEN THE IMAGE in a new tab, which is the bug the user
+  // reported. The React-level onDrop on chat-viewport works fine, but
+  // requires the user to land precisely on that surface.
+  //
+  // The window handlers below run on the BUBBLE phase (no capture),
+  // so a drop inside chat-viewport — where handleDrop calls
+  // stopPropagation — never reaches them. Drops outside hit window
+  // and route through the same accepted/rejected pipeline. The
+  // shared `dragCounter` + `isDragging` state means the same overlay
+  // appears regardless of where the drag is hovering.
+  React.useEffect(() => {
+    const onDragEnter = (e: DragEvent) => {
+      if (!e.dataTransfer || !e.dataTransfer.types || !e.dataTransfer.types.includes('Files')) return;
+      e.preventDefault();
+      dragCounter.current++;
+      setIsDragging(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      // dragover MUST preventDefault for drop to fire on this target.
+      // Without this, the browser falls back to its default handler
+      // (open file in new tab) and our drop handler never runs.
+      if (!e.dataTransfer || !e.dataTransfer.types || !e.dataTransfer.types.includes('Files')) return;
+      e.preventDefault();
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!e.dataTransfer || !e.dataTransfer.types || !e.dataTransfer.types.includes('Files')) return;
+      e.preventDefault();
+      dragCounter.current = Math.max(0, dragCounter.current - 1);
+      if (dragCounter.current === 0) setIsDragging(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!e.dataTransfer) return;
+      e.preventDefault();
+      setIsDragging(false);
+      dragCounter.current = 0;
+      const all = extractFilesFromDataTransfer(e.dataTransfer);
+      if (all.length === 0) return;
+      const { accepted, rejected } = validateBatch(all, {
+        existingCount: uploadedFilesRef.current.length,
+      });
+      if (rejected.length > 0) {
+        const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
+          acc[r.reason] = (acc[r.reason] || 0) + 1;
+          return acc;
+        }, {});
+        Object.entries(grouped).forEach(([reason, n]) => {
+          toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
+        });
+      }
+      if (accepted.length > 0) {
+        logIngest({
+          source: 'drop',
+          count: accepted.length,
+          total_bytes: accepted.reduce((s, f) => s + f.size, 0),
+          rejected_count: rejected.length,
+          rejected_codes: rejected.map(r => r.code),
+        });
+        handleAndUploadFiles(filesToFileList(accepted), 'drop');
+      }
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * Clipboard paste handler — wired to BOTH the textarea (so it fires
