@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
+import { getNormalizedApiBaseUrl } from '@/lib/api'
 
 interface ReasoningStep {
   text: string
@@ -134,7 +135,9 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
   // Connect to WebSocket
   const connectWebSocket = useCallback((sessionId: string) => {
-    const backendUrl = (process.env.NEXT_PUBLIC_IMAGE_URL || 'http://localhost:5000')
+    const apiBaseUrl = getNormalizedApiBaseUrl()
+    const backendUrl = apiBaseUrl.replace(/\/api$/, '')
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null
 
     // const candidateWsUrls = [
     //   backendUrl.replace(/^http/, 'ws') + '/ws/computer-use',
@@ -169,7 +172,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
           (window as any).computerUseWebSocket = ws
         }
         console.log('Computer Use WebSocket connected to', url)
-        ws.send(JSON.stringify({ type: 'join-session', sessionId }))
+        ws.send(JSON.stringify({ type: 'join-session', sessionId, token }))
       }
 
       ws.onmessage = (event) => {
@@ -208,19 +211,30 @@ export const useComputerUse = (): ComputerUseHookReturn => {
       return
     }
 
+    const baseUrl = getNormalizedApiBaseUrl()
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null
+    if (!token) {
+      setStatus('error')
+      toast.error('Please sign in before starting Computer Use')
+      return
+    }
+
     setStatus('running')
     clearReasoning()
     setScreenshot(null)
 
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    }
 
     try {
       if (chatId) {
         // Chat-integrated session
         const resp = await fetch(`${baseUrl}/computer-use/chat-integration`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: task, chatId, userId })
+          headers,
+          body: JSON.stringify({ message: task, chatId })
         })
 
         const data = await resp.json()
@@ -238,7 +252,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
         const response = await fetch(`${baseUrl}/computer-use/start`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ task, sessionId: newSessionId })
         })
 
@@ -259,10 +273,14 @@ export const useComputerUse = (): ComputerUseHookReturn => {
     if (!sessionId) return
 
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
-      await fetch(`${baseUrl}/api/computer-use/stop`, {
+      const baseUrl = getNormalizedApiBaseUrl()
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null
+      await fetch(`${baseUrl}/computer-use/stop`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ sessionId })
       })
 

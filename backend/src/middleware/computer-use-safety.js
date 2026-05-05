@@ -113,8 +113,10 @@ const cleanupExpiredSessions = () => {
   }
 };
 
-// Clean up expired sessions every 5 minutes
-setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
+// Clean up expired sessions every 5 minutes. Do not keep node:test or
+// short-lived scripts alive solely because this module was required.
+const cleanupInterval = setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
+cleanupInterval.unref?.();
 
 module.exports = {
   computerUseSafetyCheck,

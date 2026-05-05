@@ -12,6 +12,8 @@
  */
 
 const express = require("express");
+const { authenticateToken } = require("../middleware/auth");
+const { optionalAuth } = require("../middleware/optionalAuth");
 const {
   runUniversalSearch,
   classifyIntent,
@@ -22,14 +24,14 @@ const {
 } = require("../services/searchBrain/universal");
 
 const router = express.Router();
+router.use(optionalAuth);
 
 const MAX_QUERY_LEN = 500;
 const MAX_RESULTS_CAP = 50;
 
 function userId(req) {
   if (req.user && req.user.id) return String(req.user.id);
-  const header = req.header("x-user-id");
-  return typeof header === "string" && header.length > 0 ? header : "anonymous";
+  return "anonymous";
 }
 
 function validateQuery(raw) {
@@ -73,13 +75,13 @@ router.get("/providers", (req, res) => {
   });
 });
 
-router.get("/settings", (req, res) => {
-  res.json(settings.publicView(userId(req)));
+router.get("/settings", authenticateToken, async (req, res) => {
+  res.json(await settings.publicView(userId(req)));
 });
 
-router.post("/settings", (req, res) => {
+router.post("/settings", authenticateToken, async (req, res) => {
   try {
-    const updated = settings.update(userId(req), req.body || {});
+    const updated = await settings.update(userId(req), req.body || {});
     res.json({
       region: updated.region,
       mode: updated.mode,

@@ -5,6 +5,7 @@ import { Download, ExternalLink, FileText, Code, Calendar } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { getNormalizedApiBaseUrl } from '@/lib/api'
 
 interface ExtractedDataDownloadProps {
   extractedData: {
@@ -30,10 +31,14 @@ const downloadAsHtml = async () => {
     
     try {
       // Try to get AI-generated HTML from backend
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
-      const response = await fetch(`${backendUrl}/api/computer-use/generate-html`, {
+      const backendUrl = getNormalizedApiBaseUrl();
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+      const response = await fetch(`${backendUrl}/computer-use/generate-html`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ 
           extractedData: {
             ...extractedData,

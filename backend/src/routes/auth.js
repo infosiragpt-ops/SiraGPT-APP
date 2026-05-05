@@ -7,6 +7,11 @@ const { authenticateToken } = require('../middleware/auth');
 const passport = require('../config/passport');
 const { OAuth2Client } = require('google-auth-library');
 const { serializeUser } = require('../utils/bigint-serializer');
+const {
+  popupResponseHtml,
+  signOAuthState,
+  verifyOAuthState,
+} = require('../services/oauth-state');
 
 const router = express.Router();
 const googleOAuthConfigured = Boolean(
@@ -117,9 +122,8 @@ router.get('/gmail',
         access_type: 'offline',
         scope: scopes,
         prompt: 'consent', // ✅ Force consent screen to ensure refresh token is always sent
-        state: req.user.id // Pass user ID for linking
+        state: signOAuthState({ userId: req.user.id, service: 'gmail' })
       });
-      console.log('Generated Gmail auth URL:', authUrl);
       res.json({ authUrl });
     } catch (error) {
       console.error('Gmail OAuth error:', error);
@@ -132,16 +136,17 @@ router.get('/gmail/callback', async (req, res) => {
   try {
     console.log('🔵 Gmail OAuth callback triggered');
     const { code, state } = req.query;
-    const userId = state;
+    let userId;
 
-    if (!code || !userId) {
-      // Handle error case where params are missing
-      return res.send(`
-        <script>
-          window.opener.postMessage({ status: 'error', service: 'gmail', error: 'auth_failed' }, '*');
-          window.close();
-        </script>
-      `);
+    if (!code || !state) {
+      return res.send(popupResponseHtml({ status: 'error', service: 'gmail', error: 'auth_failed' }));
+    }
+
+    try {
+      ({ userId } = verifyOAuthState(state, { service: 'gmail' }));
+    } catch (stateError) {
+      console.warn('Gmail OAuth state validation failed:', stateError.message);
+      return res.send(popupResponseHtml({ status: 'error', service: 'gmail', error: 'invalid_state' }));
     }
 
     // Exchange code for tokens
@@ -174,36 +179,12 @@ router.get('/gmail/callback', async (req, res) => {
 
     // ✅ Send a full HTML page with a script to ensure execution
     res.set('Content-Type', 'text/html');
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>Authentication Success</title></head>
-      <body>
-        <script>
-          window.opener.postMessage({ status: 'success', service: 'gmail' }, '*');
-          window.close();
-        </script>
-        <p>Authentication successful. This window will now close.</p>
-      </body>
-      </html>
-    `);
+    res.send(popupResponseHtml({ status: 'success', service: 'gmail' }));
   } catch (error) {
     console.error('Gmail OAuth callback error:', error);
     // ✅ Handle error case as well
     res.set('Content-Type', 'text/html');
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>Authentication Failed</title></head>
-      <body>
-        <script>
-          window.opener.postMessage({ status: 'error', service: 'gmail', error: 'auth_failed' }, '*');
-          window.close();
-        </script>
-        <p>Authentication failed. This window will now close.</p>
-      </body>
-      </html>
-    `);
+    res.send(popupResponseHtml({ status: 'error', service: 'gmail', error: 'auth_failed' }));
   }
 });
 
@@ -269,12 +250,8 @@ router.get('/gmail/status', authenticateToken, async (req, res) => {
 });
 
 // Force Gmail re-authentication with consent screen
-router.get('/gmail/reauth', authenticateToken, (req, res) => {
+router.get('/gmail/reauth', authenticateToken, requireGoogleIntegrations, (req, res) => {
   try {
-    // Store user ID in session for callback
-    req.session.userId = req.user.id;
-    req.session.forceConsent = true;
-
     // Generate OAuth URL with forced consent
     const { OAuth2Client } = require('google-auth-library');
     const oauth2Client = new OAuth2Client(
@@ -293,7 +270,7 @@ router.get('/gmail/reauth', authenticateToken, (req, res) => {
       access_type: 'offline',
       prompt: 'consent', // Force consent screen
       scope: scopes,
-      state: 'gmail_reauth'
+      state: signOAuthState({ userId: req.user.id, service: 'gmail' })
     });
 
     res.json({ authUrl });
@@ -322,10 +299,9 @@ router.get('/google-services',
         access_type: 'offline',
         scope: scopes,
         prompt: 'consent',
-        state: req.user.id
+        state: signOAuthState({ userId: req.user.id, service: 'google_services' })
       });
 
-      console.log('Generated Google Services auth URL:', authUrl);
       res.json({ authUrl });
     } catch (error) {
       console.error('Google Services OAuth error:', error);
@@ -337,15 +313,17 @@ router.get('/google-services',
 router.get('/google-services/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
-    const userId = state;
+    let userId;
 
-    if (!code || !userId) {
-      return res.send(`
-        <script>
-          window.opener.postMessage({ status: 'error', service: 'google_services', error: 'auth_failed' }, '*');
-          window.close();
-        </script>
-      `);
+    if (!code || !state) {
+      return res.send(popupResponseHtml({ status: 'error', service: 'google_services', error: 'auth_failed' }));
+    }
+
+    try {
+      ({ userId } = verifyOAuthState(state, { service: 'google_services' }));
+    } catch (stateError) {
+      console.warn('Google Services OAuth state validation failed:', stateError.message);
+      return res.send(popupResponseHtml({ status: 'error', service: 'google_services', error: 'invalid_state' }));
     }
 
     // Exchange code for tokens
@@ -377,35 +355,15 @@ router.get('/google-services/callback', async (req, res) => {
     });
 
     res.set('Content-Type', 'text/html');
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>Authentication Success</title></head>
-      <body>
-        <script>
-          window.opener.postMessage({ status: 'success', service: 'google_services' }, '*');
-          window.close();
-        </script>
-        <p>Google Calendar & Drive connected successfully! This window will now close.</p>
-      </body>
-      </html>
-    `);
+    res.send(popupResponseHtml({
+      status: 'success',
+      service: 'google_services',
+      message: 'Google Calendar & Drive connected successfully! This window will now close.',
+    }));
   } catch (error) {
     console.error('Google Services OAuth callback error:', error);
     res.set('Content-Type', 'text/html');
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head><title>Authentication Failed</title></head>
-      <body>
-        <script>
-          window.opener.postMessage({ status: 'error', service: 'google_services', error: 'auth_failed' }, '*');
-          window.close();
-        </script>
-        <p>Authentication failed. This window will now close.</p>
-      </body>
-      </html>
-    `);
+    res.send(popupResponseHtml({ status: 'error', service: 'google_services', error: 'auth_failed' }));
   }
 });
 

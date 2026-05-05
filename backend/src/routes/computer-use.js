@@ -2,7 +2,9 @@ const express = require('express');
 const { chromium } = require('playwright');
 const OpenAI = require('openai');
 const WebSocket = require('ws');
+const jwt = require('jsonwebtoken');
 const prisma = require('../config/database');
+const { authenticateToken } = require('../middleware/auth');
 const {
   computerUseSafetyCheck,
   computerUseRateLimiter
@@ -231,6 +233,13 @@ Task: ${task}`;
 // Store active sessions
 const activeSessions = new Map();
 
+function getSessionForUser(sessionId, userId) {
+  if (!sessionId || !userId) return null;
+  const session = activeSessions.get(sessionId);
+  if (!session || session.userId !== userId) return null;
+  return session;
+}
+
 // WebSocket server for real-time updates
 let wss = null;
 
@@ -244,7 +253,19 @@ const initializeWebSocketServer = (server) => {
       try {
         const data = JSON.parse(message);
         if (data.type === 'join-session') {
+          if (!data.token) {
+            ws.close(1008, 'Authentication required');
+            return;
+          }
+          let decoded;
+          try {
+            decoded = jwt.verify(data.token, process.env.JWT_SECRET);
+          } catch (_err) {
+            ws.close(1008, 'Invalid authentication');
+            return;
+          }
           ws.sessionId = data.sessionId;
+          ws.userId = decoded.userId || decoded.id;
           console.log(`Client joined session: ${data.sessionId}`);
         }
       } catch (error) {
@@ -262,13 +283,20 @@ const initializeWebSocketServer = (server) => {
 // Broadcast to specific session
 const broadcastToSession = (sessionId, data) => {
   if (!wss) return;
+  const session = activeSessions.get(sessionId);
 
   wss.clients.forEach((client) => {
     if (client.sessionId === sessionId && client.readyState === WebSocket.OPEN) {
+      if (session?.userId && client.userId !== session.userId) return;
       client.send(JSON.stringify(data));
     }
   });
 };
+
+// All HTTP Computer Use endpoints require an authenticated app user.
+// The feature can drive a remote browser and persist extracted data,
+// so every session is scoped to req.user.id below.
+router.use(authenticateToken);
 
 
 
@@ -1836,6 +1864,14 @@ router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req
       });
     }
 
+    const existingSession = activeSessions.get(sessionId);
+    if (existingSession?.userId && existingSession.userId !== req.user.id) {
+      return res.status(409).json({
+        success: false,
+        error: 'Session id is already in use'
+      });
+    }
+
     // Initialize custom agent
     const agent = new CustomComputerUseAgent();
 
@@ -1900,24 +1936,25 @@ router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req
     page.setDefaultNavigationTimeout(15000);
 
     // Store session - preserve existing chat context if available
-    const existingSession = activeSessions.get(sessionId) || {};
+    const preservedSession = existingSession || {};
     activeSessions.set(sessionId, {
-      ...existingSession, // Preserve chat context
+      ...preservedSession, // Preserve chat context
       browser,
       page,
       task,
       agent,
+      userId: req.user.id,
       status: 'running',
-      createdAt: existingSession.createdAt || Date.now(),
+      createdAt: preservedSession.createdAt || Date.now(),
       lastActivity: Date.now()
     });
 
     console.log('Session stored with context:', {
       sessionId,
-      hasChatId: !!existingSession.chatId,
-      hasUserId: !!existingSession.userId,
-      chatId: existingSession.chatId,
-      userId: existingSession.userId,
+      hasChatId: !!preservedSession.chatId,
+      hasUserId: true,
+      chatId: preservedSession.chatId,
+      userId: req.user.id,
       task
     });
 
@@ -2008,7 +2045,7 @@ router.post('/resume', async (req, res) => {
   try {
     const { sessionId } = req.body;
 
-    const session = activeSessions.get(sessionId);
+    const session = getSessionForUser(sessionId, req.user.id);
     if (!session) {
       return res.status(404).json({
         success: false,
@@ -2050,7 +2087,7 @@ router.post('/stop', async (req, res) => {
   try {
     const { sessionId } = req.body;
 
-    const session = activeSessions.get(sessionId);
+    const session = getSessionForUser(sessionId, req.user.id);
     if (!session) {
       return res.status(404).json({
         success: false,
@@ -2091,7 +2128,7 @@ router.get('/status/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
 
-    const session = activeSessions.get(sessionId);
+    const session = getSessionForUser(sessionId, req.user.id);
     if (!session) {
       return res.status(404).json({
         success: false,
@@ -2118,18 +2155,20 @@ router.get('/status/:sessionId', async (req, res) => {
 // Chat integration endpoint
 router.post('/chat-integration', async (req, res) => {
   try {
-    const { message, chatId, sessionId, userId } = req.body;
+    const { message, chatId, sessionId } = req.body;
+    const userId = req.user.id;
 
-    if (!message || !chatId || !userId) {
+    if (!message || !chatId) {
       return res.status(400).json({
         success: false,
-        error: 'Message, chatId, and userId are required'
+        error: 'Message and chatId are required'
       });
     }
 
-    // First, ensure the chat exists and save the user message
-    let chat = await prisma.chat.findUnique({
-      where: { id: chatId }
+    // First, ensure the chat exists for the authenticated user and
+    // never trust a client-provided userId for persistence.
+    let chat = await prisma.chat.findFirst({
+      where: { id: chatId, userId }
     });
 
     if (!chat) {
@@ -2179,7 +2218,10 @@ router.post('/chat-integration', async (req, res) => {
     console.log("USING THIS URL FOR FETCH:", baseUrl); // Yeh line bhi add karein
     const startResponse = await fetch(`${baseUrl}/api/computer-use/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${req.token}`,
+      },
       body: JSON.stringify({
         task: message,
         sessionId: computeSessionId
@@ -2226,7 +2268,13 @@ router.post('/acknowledge-safety', async (req, res) => {
     console.log(`Safety checks acknowledged for session ${sessionId}, call ${callId}`);
 
     // Update session state to indicate acknowledgment
-    const session = activeSessions.get(sessionId);
+    const session = getSessionForUser(sessionId, req.user.id);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found'
+      });
+    }
     if (session && session.captchaDetected) {
       session.captchaAcknowledged = true;
       console.log('CAPTCHA acknowledgment flag set for session:', sessionId);

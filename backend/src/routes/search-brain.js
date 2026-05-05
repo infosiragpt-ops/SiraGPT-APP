@@ -16,6 +16,8 @@
  */
 
 const express = require("express");
+const { authenticateToken } = require("../middleware/auth");
+const { optionalAuth } = require("../middleware/optionalAuth");
 const {
   searchAcademic,
   searchAcademicForChat,
@@ -31,6 +33,7 @@ const {
 } = require("../services/searchBrain/universal");
 
 const router = express.Router();
+router.use(optionalAuth);
 
 const MAX_QUERY_LEN = 500;
 const MAX_RESULTS_CAP = 50;
@@ -73,8 +76,7 @@ function extractMailto(req) {
 
 function userId(req) {
   if (req.user && req.user.id) return String(req.user.id);
-  const header = req.header("x-user-id");
-  return typeof header === "string" && header.length > 0 ? header : "anonymous";
+  return "anonymous";
 }
 
 function validateUniversalCategories(raw, forced) {
@@ -228,7 +230,7 @@ router.get("/universal/providers", (req, res) => {
     .catch((err) => res.status(500).json({ error: err instanceof Error ? err.message : "internal error" }));
 });
 
-router.get("/settings", async (req, res) => {
+router.get("/settings", authenticateToken, async (req, res) => {
   try {
     res.json(await universalSettings.publicView(userId(req)));
   } catch (err) {
@@ -246,7 +248,7 @@ router.post("/travel", (req, res) => runUniversalEndpoint(req, res, "travel"));
 router.post("/government", (req, res) => runUniversalEndpoint(req, res, "government"));
 router.post("/china", (req, res) => runUniversalEndpoint(req, res, "china"));
 
-router.post("/settings/keys", async (req, res) => {
+router.post("/settings/keys", authenticateToken, async (req, res) => {
   try {
     const body = req.body || {};
     await universalSettings.update(userId(req), {
@@ -259,7 +261,7 @@ router.post("/settings/keys", async (req, res) => {
   }
 });
 
-router.post("/settings/region", async (req, res) => {
+router.post("/settings/region", authenticateToken, async (req, res) => {
   try {
     const updated = await universalSettings.update(userId(req), { region: req.body?.region });
     res.json({ region: updated.region });
@@ -268,7 +270,7 @@ router.post("/settings/region", async (req, res) => {
   }
 });
 
-router.post("/settings/mode", async (req, res) => {
+router.post("/settings/mode", authenticateToken, async (req, res) => {
   try {
     const updated = await universalSettings.update(userId(req), { mode: req.body?.mode });
     res.json({ mode: updated.mode });
