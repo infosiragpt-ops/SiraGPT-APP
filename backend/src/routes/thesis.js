@@ -8,6 +8,7 @@ const { chromium } = require('playwright');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const path = require('path');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -134,12 +135,66 @@ function chunkResearchResults(allSearchResults, topics, maxResultsPerChunk = 10)
 // Store for thesis generation sessions
 const thesisSessions = new Map();
 
+function safeFileSegment(value) {
+  const segment = path.basename(String(value || ''));
+  if (!segment || segment !== value || !/^[a-zA-Z0-9_.-]+$/.test(segment)) {
+    return null;
+  }
+  return segment;
+}
+
+function contentTypeForDocument(filename) {
+  const fileExtension = path.extname(filename).toLowerCase();
+  if (fileExtension === '.docx' || fileExtension === '.doc') {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
+  if (fileExtension === '.pdf') return 'application/pdf';
+  return 'application/octet-stream';
+}
+
+async function resolveUserFromBearerOrPreviewToken(req) {
+  const authHeader = req.headers.authorization;
+  const headerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+  const queryToken = req.query.preview === 'true' && typeof req.query.token === 'string' ? req.query.token : null;
+  const token = headerToken || queryToken;
+
+  if (!token || !process.env.JWT_SECRET) return null;
+
+  try {
+    jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
+    return null;
+  }
+
+  const session = await prisma.session.findUnique({
+    where: { token },
+    include: { user: true },
+  });
+
+  if (!session || session.expiresAt < new Date()) return null;
+  return session.user || null;
+}
+
+function assertPathInside(baseDir, candidatePath) {
+  const relative = path.relative(baseDir, candidatePath);
+  return relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 // Endpoint to serve screenshots
 router.get('/screenshots/:sessionId/:filename', (req, res) => {
   const { sessionId, filename } = req.params;
+  const session = thesisSessions.get(sessionId);
+  const safeFilename = safeFileSegment(filename);
 
-  // Use absolute path resolution
-  const screenshotPath = path.resolve(__dirname, '../../uploads/screenshots', sessionId, filename);
+  if (!session || !safeFilename) {
+    return res.status(404).json({ error: 'Screenshot not found' });
+  }
+
+  const screenshotsDir = path.resolve(__dirname, '../../uploads/screenshots', sessionId);
+  const screenshotPath = path.resolve(screenshotsDir, safeFilename);
+  if (!assertPathInside(screenshotsDir, screenshotPath)) {
+    return res.status(404).json({ error: 'Screenshot not found' });
+  }
 
   console.log(`📷 Screenshot requested: ${screenshotPath}`);
   console.log(`📷 __dirname: ${__dirname}`);
@@ -2152,23 +2207,10 @@ router.get('/download/:sessionId', authenticateToken, async (req, res) => {
     const isPreview = req.query.preview === 'true';
     
     if (isPreview) {
-      // For preview, serve with inline content disposition and proper headers
-      const fileExtension = path.extname(session.documentFilename).toLowerCase();
-      let contentType = 'application/octet-stream';
-      
-      // Set appropriate content type
-      if (fileExtension === '.docx' || fileExtension === '.doc') {
-        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      } else if (fileExtension === '.pdf') {
-        contentType = 'application/pdf';
-      }
-      
       // Set headers for preview (inline viewing)
-      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Type', contentTypeForDocument(session.documentFilename));
       res.setHeader('Content-Disposition', `inline; filename="${session.documentFilename}"`);
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization');
+      res.setHeader('Referrer-Policy', 'no-referrer');
       
       // Send file for preview
       const fileStream = fsSync.createReadStream(session.documentPath);
@@ -2189,70 +2231,26 @@ router.get('/download/:sessionId', authenticateToken, async (req, res) => {
  */
 router.get('/files/:filename', async (req, res) => {
   try {
-    const { filename } = req.params;
-    let userId = null;
-
-    // Check authentication - either from header or query parameter
-    const authHeader = req.headers.authorization;
-    const tokenFromQuery = req.query.token;
-
-    let token = null;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7);
-    } else if (tokenFromQuery) {
-      token = tokenFromQuery;
+    const filename = safeFileSegment(req.params.filename);
+    if (!filename) {
+      return res.status(400).json({ error: 'Invalid filename' });
     }
 
-    if (!token) {
+    const user = await resolveUserFromBearerOrPreviewToken(req);
+    if (!user?.id) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    // Verify token (simplified - you may want to use your actual auth verification)
-    try {
-      const jwt = require('jsonwebtoken');
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-      userId = decoded.id;
-    } catch (error) {
-      return res.status(401).json({ error: 'Invalid token' });
+    const userDocumentsDir = path.resolve(__dirname, '../../uploads/documents', String(user.id).replace(/[^a-zA-Z0-9_.-]/g, '_'));
+    const filePath = path.resolve(userDocumentsDir, filename);
+    if (!assertPathInside(userDocumentsDir, filePath)) {
+      return res.status(404).json({ error: 'File not found', filename });
     }
 
-    // First, try to find the file in the user's documents directory
-    // We need to search through the user's chat directories
-    const uploadsDir = path.join(__dirname, '../../uploads/documents');
-
-    let filePath = null;
-
-    // Search through user's chat directories for the file
     try {
-      const chatDirs = await fs.readdir(uploadsDir);
-      for (const chatDir of chatDirs) {
-        const chatDirPath = path.join(uploadsDir, chatDir);
-        const stat = await fs.stat(chatDirPath);
-        if (stat.isDirectory()) {
-          const potentialFilePath = path.join(chatDirPath, filename);
-          try {
-            await fs.access(potentialFilePath);
-            filePath = potentialFilePath;
-            break;
-          } catch (err) {
-            // File not in this directory, continue searching
-            continue;
-          }
-        }
-      }
-    } catch (searchError) {
-      console.error('Error searching for file:', searchError);
-    }
-
-    // If not found in documents, try uploads root directory (fallback)
-    if (!filePath) {
-      const rootPath = path.join(__dirname, '../../uploads', filename);
-      try {
-        await fs.access(rootPath);
-        filePath = rootPath;
-      } catch (error) {
-        return res.status(404).json({ error: 'File not found', filename });
-      }
+      await fs.access(filePath);
+    } catch {
+      return res.status(404).json({ error: 'File not found', filename });
     }
 
     console.log(`📁 Serving thesis file: ${filename} from ${filePath}`);
@@ -2261,23 +2259,9 @@ router.get('/files/:filename', async (req, res) => {
     const isPreview = req.query.preview === 'true';
     
     if (isPreview) {
-      // For preview, serve with inline content disposition and proper headers
-      const fileExtension = path.extname(filename).toLowerCase();
-      let contentType = 'application/octet-stream';
-      
-      // Set appropriate content type
-      if (fileExtension === '.docx' || fileExtension === '.doc') {
-        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      } else if (fileExtension === '.pdf') {
-        contentType = 'application/pdf';
-      }
-      
-      // Set headers for preview (inline viewing)
-      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Type', contentTypeForDocument(filename));
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization');
+      res.setHeader('Referrer-Policy', 'no-referrer');
       
       // Send file for preview
       const fileStream = fsSync.createReadStream(filePath);
@@ -2294,4 +2278,3 @@ router.get('/files/:filename', async (req, res) => {
 });
 
 module.exports = router;
-
