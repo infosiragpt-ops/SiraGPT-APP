@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1420**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1424**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -312,7 +312,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@syncfusion/ej2-spreadsheet` | 32.2.9 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls.git#master) |
 | `@syncfusion/ej2-svg-base` | 32.2.3 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls) |
 
-## ISC (82)
+## ISC (83)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -356,6 +356,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `dezalgo` | 1.0.4 | ISC | [link](https://github.com/npm/dezalgo) |
 | `earcut` | 3.0.2 | ISC | [link](https://github.com/mapbox/earcut) |
 | `electron-to-chromium` | 1.5.343 | ISC | [link](https://github.com/Kilian/electron-to-chromium) |
+| `express-async-errors` | 3.1.1 | ISC | [link](https://github.com/davidbanham/express-async-errors) |
 | `fastq` | 1.20.1 | ISC | [link](https://github.com/mcollina/fastq) |
 | `foreground-child` | 3.3.1 | ISC | [link](https://github.com/tapjs/foreground-child) |
 | `fs.realpath` | 1.0.0 | ISC | [link](https://github.com/isaacs/fs.realpath) |
@@ -399,7 +400,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1072)
+## MIT (1075)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -414,6 +415,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@bull-board/api` | 6.12.0 | MIT | [link](https://github.com/felixmosh/bull-board) |
 | `@bull-board/express` | 6.12.0 | MIT | [link](https://github.com/felixmosh/bull-board) |
 | `@bull-board/ui` | 6.12.0 | MIT | [link](https://github.com/felixmosh/bull-board) |
+| `@capacitor/android` | 8.3.1 | MIT | [link](https://github.com/ionic-team/capacitor) |
+| `@capacitor/core` | 8.3.1 | MIT | [link](https://github.com/ionic-team/capacitor) |
+| `@capacitor/ios` | 8.3.1 | MIT | [link](https://github.com/ionic-team/capacitor) |
 | `@cfworker/json-schema` | 4.1.1 | MIT | [link](https://github.com/cfworker/cfworker) |
 | `@date-fns/tz` | 1.4.1 | MIT | [link](https://github.com/date-fns/tz) |
 | `@e2b/code-interpreter` | 1.5.1 | MIT | [link](https://github.com/e2b-dev/code-interpreter) |

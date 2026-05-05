@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Eye, EyeOff} from "lucide-react"
@@ -61,10 +62,12 @@ export default function LoginPage() {
         <CardHeader className="text-center">
           <div className="mb-4 flex justify-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-neutral-900 bg-neutral-900 dark:border-white dark:bg-white">
-              <img
+              <Image
                 src="/sira-gpt.png"
                 alt=""
-                className="h-10 w-10 brightness-0 invert dark:brightness-100 dark:invert-0"
+                width={40}
+                height={40}
+                className="brightness-0 invert dark:brightness-100 dark:invert-0"
               />
             </div>
           </div>

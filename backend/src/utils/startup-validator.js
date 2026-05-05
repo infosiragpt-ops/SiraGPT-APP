@@ -246,7 +246,7 @@ function validateStartupEnvironment(env = process.env, options = {}) {
 
   for (const issue of issues) {
     const fn = issue.severity === Severity.BLOCKING ? logger.error : issue.severity === Severity.WARNING ? logger.warn : logger.info;
-    fn(`[startup-validator] [${issue.severity}] ${issue.message}${issue.hint ? `\n  Hint: ${issue.hint}` : ''}`);
+    fn.call(logger, `[startup-validator] [${issue.severity}] ${issue.message}${issue.hint ? `\n  Hint: ${issue.hint}` : ''}`);
   }
 
   if (blocking.length > 0) {

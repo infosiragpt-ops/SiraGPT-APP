@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from "next/image"
 import {
   Activity,
   AlertTriangle,
@@ -256,16 +257,16 @@ function artifactFormat(artifact: AgentArtifact): string {
 function ArtifactFormatIcon({ artifact }: { artifact: AgentArtifact }) {
   const format = artifactFormat(artifact)
   if (format === "docx" || format === "doc") {
-    return <img src="/icons/Word.png" alt="Word" className="h-16 w-16 object-contain" />
+    return <Image src="/icons/Word.png" alt="Word" width={64} height={64} className="object-contain" />
   }
   if (format === "xlsx" || format === "xls" || format === "csv") {
-    return <img src="/icons/Excel.png" alt="Excel" className="h-16 w-16 object-contain" />
+    return <Image src="/icons/Excel.png" alt="Excel" width={64} height={64} className="object-contain" />
   }
   if (format === "pptx" || format === "ppt") {
-    return <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-16 w-16 object-contain" />
+    return <Image src="/icons/Bigger P powerpoint.png" alt="PowerPoint" width={64} height={64} className="object-contain" />
   }
   if (format === "pdf") {
-    return <img src="/icons/pdf.png" alt="PDF" className="h-16 w-16 object-contain" />
+    return <Image src="/icons/pdf.png" alt="PDF" width={64} height={64} className="object-contain" />
   }
   return <FileCheck2 className="h-14 w-14 text-slate-700" />
 }
