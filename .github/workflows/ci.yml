@@ -45,6 +45,13 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
+      # Root tests compile into .test-dist but several suites import
+      # backend/src modules directly. Install backend deps here too so
+      # Node can resolve packages from backend/node_modules in CI, matching
+      # local full-repo test runs.
+      - name: Install backend dependencies for root tests
+        run: npm ci --prefix backend --prefer-offline --no-audit --no-fund
+
       # Hard gate (with ratchet) — `eslint` errors fail the build.
       # `--max-warnings 97` pins the existing baseline so the warning
       # count can only shrink: any new warning lands on top of 97 and
