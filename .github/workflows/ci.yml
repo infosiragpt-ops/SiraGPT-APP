@@ -52,6 +52,9 @@ jobs:
       - name: Install backend dependencies for root tests
         run: npm ci --prefix backend --prefer-offline --no-audit --no-fund
 
+      - name: Generate backend Prisma client for root tests
+        run: npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma
+
       # Hard gate (with ratchet) — `eslint` errors fail the build.
       # `--max-warnings 97` pins the existing baseline so the warning
       # count can only shrink: any new warning lands on top of 97 and
