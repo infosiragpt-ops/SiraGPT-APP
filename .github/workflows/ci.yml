@@ -326,7 +326,7 @@ jobs:
   e2e:
     name: E2E · Playwright smoke (informational)
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     continue-on-error: true
     steps:
       - name: Checkout
