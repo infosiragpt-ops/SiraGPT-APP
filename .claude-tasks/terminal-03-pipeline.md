@@ -1,17 +1,17 @@
-# Task for Code Sandbox + Pipeline Terminal
+# Task for Pipeline Terminal
 
-## Priority: Medium
+## Build: EPUB generation capability
 
-Improve document pipeline with ODT and EPUB generators:
+Add EPUB generator support to `backend/src/services/sira/document-pipeline-registry.js`:
 
-1. Open `backend/src/services/sira/document-pipeline-registry.js`
-2. Add ODT generator entries to `GENERATORS`:
-   - `odf-weasy` (format: "odt", python, uses odfpy)
-   - `pandoc-odt` (format: "odt", python, uses pandoc)
-3. Add EPUB generator entries:
-   - `pandoc-epub` (format: "epub", python, uses pandoc)
-4. Add `odt` and `epub` to `MIME_TO_FORMAT` map
-5. Add ODT/EPUB to `inferFormat()` supported extensions
-6. Add 2 test cases to `backend/tests/document-pipeline-registry-formats.test.js`
-7. TEST: `npm test` in backend/
-8. PUSH: `git add -A && git commit -m "feat(document-pipeline): add ODT and EPUB format support" && git push sira-org main`
+1. Add pandoc-epub entry to GENERATORS (format: "epub")
+2. Add `epub` to MIME_TO_FORMAT map (application/epub+zip)
+3. Add `epub` to the format list in inferFormat()
+4. Create `backend/src/services/sira/generators/generate-epub.js`:
+   - Receives content (markdown), title, author
+   - Generates a valid EPUB3 file using basic OPF + XHTML + ZIP
+   - Fall back to simple HTML → rename to .epub if zip lib missing
+   - Returns { ok, buffer, filename, mime }
+5. Add 2 tests in document-pipeline-registry-formats.test.js
+
+Then: `npm test && git add -A && git commit -m "feat(document-pipeline): add EPUB format generator" && git push sira-org main`

@@ -1,17 +1,15 @@
 # Task for Visual Tools Terminal
 
-## Priority: High
+## Build: create_network_diagram SVG tool
 
-Add **create_gantt_chart** tool to visual-media-tools.js:
+Add a new tool `create_network_diagram` to `backend/src/services/agents/visual-media-tools.js`:
 
-1. Open `backend/src/services/agents/visual-media-tools.js`
-2. Add new tool: `createGanttChart` — generate a Gantt chart as SVG
-   - Parameters: title, tasks[] (label, startDay, durationDays, color, progress), showDependencies
-   - Render: horizontal bars with task labels, date headers, dependency arrows
-   - Color palette for task bars
-   - Legend for progress indicators
-3. Add it to `VISUAL_MEDIA_TOOLS` array at the bottom
-4. Add manifest entry to `tool-manifest.js` (copy pattern from other tools)
-5. Add 2 test cases to `backend/tests/visual-media-tools.test.js`
-6. TEST: `npm test` in backend/
-7. PUSH: `git add -A && git commit -m "feat(visual-media-tools): add create_gantt_chart tool" && git push sira-org main`
+- Generates an SVG network/topology diagram: nodes (server, database, firewall, cloud, user, api) connected by lines
+- Parameters: title, nodes[] (id, label, type, x?, y?), connections[] (from, to, label?, style?)
+- Auto-layout if x/y not specified (circle or layered)
+- Color-coded node types
+- Add to VISUAL_MEDIA_TOOLS array
+- Add manifest entry in tool-manifest.js
+- Add 2 test cases in visual-media-tools.test.js
+
+Then: `npm test && git add -A && git commit -m "feat(visual-media-tools): add create_network_diagram tool" && git push sira-org main`

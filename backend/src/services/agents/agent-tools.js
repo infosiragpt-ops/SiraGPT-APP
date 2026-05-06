@@ -716,6 +716,45 @@ const STATIC_CHECKS = [
     },
   },
   {
+    id: 'os_system_call',
+    description: 'Python os.system / os.popen — shell-execution sink, prefer subprocess with argv list',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        if (/\bos\s*\.\s*(system|popen)\s*\(/.test(line)) {
+          out.push({ severity: 'warn', line: i + 1, message: 'os.system / os.popen — prefer subprocess.run with argv list (no shell=True)' });
+        }
+      });
+      return out;
+    },
+  },
+  {
+    id: 'dynamic_require',
+    description: 'Node require() called with a non-literal argument — risk of arbitrary module loading',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        // Match require( ... ) where the inner argument is not a quoted
+        // literal. Conservative: we only flag when we can clearly see
+        // a non-string identifier or template/expression inside.
+        const m = line.match(/\brequire\s*\(\s*([^)]*)\)/);
+        if (!m) return;
+        const arg = m[1].trim();
+        if (!arg) return;
+        // Pure literal? skip.
+        if (/^["'][^"']*["']$/.test(arg)) return;
+        // Template literal with no interpolation?
+        if (/^`[^`$]*`$/.test(arg)) return;
+        out.push({ severity: 'warn', line: i + 1, message: 'dynamic require() — load a static module path or whitelist' });
+      });
+      return out;
+    },
+  },
+  {
     id: 'disabled_ssl_verification',
     description: 'TLS verification disabled — exposes the call to MITM',
     scan: (text, { lines, codeMask, language }) => {
@@ -752,11 +791,22 @@ const static_checks = {
     const src = args?.source;
     if (!src) return { error: 'missing "source"' };
 
+    // Hard cap on inspected content. Without this a caller could pass
+    // a 10 MB string and the checks (regex scans, comment-mask builder)
+    // would happily allocate hundreds of megabytes of intermediate
+    // state. 200_000 chars matches the default read_file ceiling.
+    const STATIC_CHECK_MAX_CHARS = 200000;
     let content = args?.content;
+    let inputTruncated = false;
     if (!content) {
-      const fileObs = await read_file.handler({ source: src, max_chars: 200000 }, ctx);
+      const fileObs = await read_file.handler({ source: src, max_chars: STATIC_CHECK_MAX_CHARS }, ctx);
       if (fileObs.error) return fileObs;
       content = fileObs.text;
+    } else if (typeof content !== 'string') {
+      return { error: '"content" must be a string when provided' };
+    } else if (content.length > STATIC_CHECK_MAX_CHARS) {
+      content = content.slice(0, STATIC_CHECK_MAX_CHARS);
+      inputTruncated = true;
     }
 
     const language = codeChunker.detectLanguage(src, content);
