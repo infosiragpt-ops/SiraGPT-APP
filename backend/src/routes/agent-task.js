@@ -96,6 +96,28 @@ const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
 })();
 
+// ── Utility: safe JSON serialization ──────────────────────────────
+// Never throws on circular refs, BigInt, Symbol, or undefined values.
+function safeJsonStringify(obj, maxLen = 32_768) {
+  const seen = new WeakSet();
+  try {
+    const str = JSON.stringify(obj, (key, value) => {
+      if (typeof value === 'bigint') return `BigInt(${value.toString()})`;
+      if (typeof value === 'symbol') return value.toString();
+      if (value instanceof Error) return { message: value.message, stack: value.stack };
+      if (value !== null && typeof value === 'object') {
+        if (seen.has(value)) return '[Circular]';
+        seen.add(value);
+      }
+      if (value === undefined) return null;
+      return value;
+    });
+    return str.length > maxLen ? str.slice(0, maxLen) : str;
+  } catch {
+    return JSON.stringify({ error: 'non-serializable', type: typeof obj });
+  }
+}
+
 const router = express.Router();
 
 // ── Rate limiting for agent task creation ──────────────────────
@@ -648,7 +670,8 @@ router.post(
     const send = (obj) => {
       if (!clientConnected || res.writableEnded) return false;
       try {
-        res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        const serialized = safeJsonStringify(obj);
+        res.write(`data: ${serialized}\n\n`);
         return true;
       } catch {
         safeCloseConnection();
@@ -1227,18 +1250,51 @@ function streamTaskEvents(req, res, taskId, userId) {
   res.setHeader('X-Accel-Buffering', 'no');
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
+  // ── SSE hardening (mirrors inline path) ────────────────────────────
   let clientConnected = true;
   let lastSeq = 0;
+  let pollTimer = null;
+  let heartbeatTimer = null;
+
+  /** Safe SSE write — never throws. */
   const send = (obj) => {
-    if (!clientConnected || res.writableEnded) return;
-    try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ }
+    if (!clientConnected || res.writableEnded || res.destroyed) return false;
+    try {
+      const serialized = safeJsonStringify(obj);
+      return res.write(`data: ${serialized}\n\n`) !== false;
+    } catch {
+      safeCloseQueuedConnection();
+      return false;
+    }
   };
 
+  function safeCloseQueuedConnection() {
+    clientConnected = false;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    if (!res.writableEnded && !res.destroyed) {
+      try { res.end(); } catch { /* already closed */ }
+    }
+  }
+
+  // Error / close handlers
+  res.on('error', () => { safeCloseQueuedConnection(); });
+  res.on('drain', () => { /* no-op, reserved for backpressure tracking */ });
+  req.on('close', () => { safeCloseQueuedConnection(); });
+
+  // Response timeout (5 min default, configurable via env)
+  const TIMEOUT = Math.max(30_000, Number.parseInt(process.env.AGENT_RESPONSE_TIMEOUT_MS || '300000', 10));
+  res.setTimeout(TIMEOUT, () => {
+    safeCloseQueuedConnection();
+    console.warn('[agent-task] queued SSE response timeout');
+  });
+
   const flush = () => {
+    if (!clientConnected) return;
     const snapshot = getTaskForUser(taskId, userId) || taskStore.getTaskSnapshotForUser(taskId, userId);
     if (!snapshot) {
       send({ type: 'error', message: 'Tarea no encontrada.' });
-      cleanup();
+      safeCloseQueuedConnection();
       return;
     }
     for (const event of snapshot.events || []) {
@@ -1248,28 +1304,20 @@ function streamTaskEvents(req, res, taskId, userId) {
       send(event);
     }
     if (['completed', 'cancelled', 'error'].includes(snapshot.status)) {
-      cleanup();
+      safeCloseQueuedConnection();
     }
   };
 
-  const cleanup = () => {
-    clientConnected = false;
-    clearInterval(poll);
-    clearInterval(heartbeat);
-    try { res.end(); } catch { /* already closed */ }
-  };
-
-  req.on('close', () => {
-    clientConnected = false;
-    clearInterval(poll);
-    clearInterval(heartbeat);
-  });
-
-  const poll = setInterval(flush, 450);
-  const heartbeat = setInterval(() => {
-    if (!clientConnected || res.writableEnded) return;
-    try { res.write(': keep-alive\n\n'); } catch { /* client gone */ }
+  pollTimer = setInterval(flush, 450);
+  heartbeatTimer = setInterval(() => {
+    if (!clientConnected || res.writableEnded || res.destroyed) return;
+    try { res.write(': keep-alive\n\n'); } catch { safeCloseQueuedConnection(); }
   }, 25000);
+
+  // Don't keep the process alive just for SSE polling
+  if (typeof pollTimer.unref === 'function') pollTimer.unref();
+  if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+
   flush();
 }
 
