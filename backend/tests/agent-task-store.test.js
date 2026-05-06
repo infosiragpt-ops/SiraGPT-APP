@@ -285,6 +285,64 @@ test('agent task store: findStaleRunningTasks + recoverStaleRunningTasks marks s
   assert.equal(taskStore.getTaskSnapshotForUser('t-fresh', 'u').status, 'running');
 });
 
+test('agent task store: compactSnapshotEvents drops verbose tool payloads on completed tasks', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-compact-'));
+
+  // Build 250 verbose tool_output events
+  const events = [];
+  for (let i = 0; i < 250; i++) {
+    events.push({
+      id: `t:${i + 1}`,
+      seq: i + 1,
+      ts: new Date(Date.now() - (250 - i) * 1000).toISOString(),
+      type: 'tool_output',
+      tool: 'python_exec',
+      ok: true,
+      stdout: 'x'.repeat(2000),
+      stderr: '',
+      preview: 'x'.repeat(400),
+    });
+  }
+  taskStore.writeTaskSnapshot({
+    taskId: 'compact-1',
+    userId: 'u',
+    status: 'completed',
+    displayGoal: 'long trace',
+    events,
+    lastEventSeq: 250,
+  });
+
+  const before = taskStore.getTaskSnapshotForUser('compact-1', 'u');
+  const beforeBytes = Buffer.byteLength(JSON.stringify(before));
+
+  const res = taskStore.compactSnapshotEvents('compact-1', 'u', { keepRecent: 50 });
+  assert.equal(res.compacted, 200);
+  assert.equal(res.eventCount, 250);
+
+  const after = taskStore.getTaskSnapshotForUser('compact-1', 'u');
+  const afterBytes = Buffer.byteLength(JSON.stringify(after));
+  assert.ok(afterBytes < beforeBytes, 'compaction should shrink the snapshot');
+
+  // The head events should be marked _compacted
+  assert.equal(after.events[0]._compacted, true);
+  assert.equal(after.events[0].stdout, undefined);
+  // The tail (recent) events should still have stdout
+  assert.equal(typeof after.events[after.events.length - 1].stdout, 'string');
+});
+
+test('agent task store: compactSnapshotEvents skips active tasks', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-compact-active-'));
+
+  taskStore.writeTaskSnapshot({
+    taskId: 'still-running',
+    userId: 'u',
+    status: 'running',
+    displayGoal: 'live',
+  });
+  const res = taskStore.compactSnapshotEvents('still-running', 'u', { keepRecent: 5 });
+  assert.equal(res.skipped, 'task_active');
+});
+
 test('agent task store: getLatestTaskForChat resolves the newest task for a chatId', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-chat-'));
 

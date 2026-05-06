@@ -567,6 +567,46 @@ function recoverStaleRunningTasks({
   return { recovered, count: recovered.length };
 }
 
+/**
+ * compactSnapshotEvents — drop the verbose body from old `tool_call`
+ * and `tool_output` events while keeping checkpoints + the most recent
+ * `keepRecent` events intact. Used post-completion to shrink long
+ * traces (≥500 events of `python_exec` stdout dumps) without losing
+ * the structural step timeline.
+ *
+ * Returns the new event count, or null if the task is missing.
+ */
+function compactSnapshotEvents(taskId, userId, { keepRecent = 200 } = {}) {
+  const snapshot = userId
+    ? getTaskSnapshotForUser(taskId, userId)
+    : readTaskSnapshot(taskId);
+  if (!snapshot) return null;
+  if (snapshot.status === 'running' || snapshot.status === 'queued') {
+    // Don't compact an active task — its event log is still being written.
+    return { skipped: 'task_active', eventCount: (snapshot.events || []).length };
+  }
+  const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+  if (events.length <= keepRecent) {
+    return { compacted: 0, eventCount: events.length };
+  }
+  const cutoff = events.length - keepRecent;
+  const head = events.slice(0, cutoff).map((evt) => {
+    if (evt.type === 'tool_call' || evt.type === 'tool_output') {
+      const { id, seq, ts, type, tool, ok } = evt;
+      return { id, seq, ts, type, tool: tool || null, ok: ok ?? null, _compacted: true };
+    }
+    return evt;
+  });
+  const next = sanitizeTaskRecord({
+    ...snapshot,
+    events: [...head, ...events.slice(cutoff)],
+    updatedAt: nowIso(),
+  });
+  atomicWriteJson(snapshotPathFor(snapshot.taskId), next);
+  try { updateIndexForSnapshot(next); } catch { /* index is best-effort */ }
+  return { compacted: cutoff, eventCount: next.events.length };
+}
+
 // ── Compression ─────────────────────────────────────────────────
 // When a snapshot JSON exceeds MAX_SNAPSHOT_BYTES (1 MB),
 // strip large arrays (events, checkpoints, artifacts) after retaining
@@ -617,6 +657,7 @@ module.exports = {
   INDEX_FILE,
   MAX_SNAPSHOT_BYTES,
   appendTaskEvent,
+  compactSnapshotEvents,
   compressSnapshotBytes,
   findStaleRunningTasks,
   getLatestTaskForChat,
