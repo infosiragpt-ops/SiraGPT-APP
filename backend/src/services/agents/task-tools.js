@@ -390,6 +390,7 @@ const webSearch = {
         citationCount: s.citationCount,
       })),
       stats,
+      _preview: `${selected.length} fuentes top${stats?.dedupedCount ? ` (${stats.dedupedCount} recopiladas)` : ''}`,
     };
     ctx.onEvent?.({
       type: 'tool_output',
@@ -1334,6 +1335,9 @@ function summarisePreview(s) {
   if (typeof s.slideCount === 'number') parts.push(`${s.slideCount} diapositivas`);
   if (typeof s.lineCount === 'number') parts.push(`${s.lineCount} líneas`);
   if (typeof s.pageCount === 'number') parts.push(`${s.pageCount} páginas`);
+  if (typeof s.charCount === 'number' && typeof s.lineCount !== 'number') parts.push(`${s.charCount} chars`);
+  if (typeof s.arrayLength === 'number') parts.push(`array[${s.arrayLength}]`);
+  if (Array.isArray(s.topLevelKeys)) parts.push(`${s.topLevelKeys.length} claves`);
   if (Array.isArray(s.columns)) parts.push(`${s.columns.length} columnas`);
   if (s.warning) parts.push(`⚠ ${s.warning}`);
   if (s.error) parts.push(`✗ ${s.error}`);
