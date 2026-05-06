@@ -1304,7 +1304,7 @@ const createInfographicSvg = {
           heading: { type: 'string', description: 'Section heading.' },
           content: { description: 'Section body. For text/quote/stat: a string. For list: array of strings. For progress: array of {label, percent}.' },
           subtext: { type: 'string', description: 'Optional supporting text shown below stat value.' },
-          icon: { type: 'string', enum: ['chart', 'bulb', 'star', 'target', 'gear', 'shield', 'globe', 'people', 'clock', 'rocket', 'check'], description: 'Optional icon type.' },
+          icon: { type: 'string', enum: ['chart', 'bulb', 'star', 'target', 'gear', 'shield', 'globe', 'people', 'clock', 'rocket', 'check', 'lock', 'mail', 'money', 'growth', 'warning'], description: 'Optional icon type.' },
           metrics: { type: 'array', items: { type: 'object', properties: {
             label: { type: 'string' },
             value: { type: 'string' },
@@ -1353,6 +1353,11 @@ const createInfographicSvg = {
         clock: '<circle cx="28" cy="28" r="22" fill="none" stroke="currentColor" stroke-width="2.5"/><line x1="28" y1="28" x2="28" y2="14" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><line x1="28" y1="28" x2="38" y2="32" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>',
         rocket: '<path d="M28 4 L40 16 C44 24 44 34 40 42 L28 48 L16 42 C12 34 12 24 16 16 Z" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M18 22 L28 28 L38 22" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M22 36 L28 32 L34 36" fill="none" stroke="currentColor" stroke-width="2"/>',
         check: '<circle cx="28" cy="28" r="22" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M18 28 L24 34 L38 20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
+        lock: '<rect x="14" y="26" width="28" height="22" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M20 26 V18 C20 12 24 8 28 8 C32 8 36 12 36 18 V26" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="28" cy="36" r="3" fill="currentColor"/>',
+        mail: '<rect x="8" y="14" width="40" height="28" rx="3" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M8 18 L28 32 L48 18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>',
+        money: '<circle cx="28" cy="28" r="22" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M28 14 V42 M22 20 C22 16 32 16 32 20 C32 24 22 24 22 28 C22 32 32 32 32 36" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>',
+        growth: '<path d="M8 44 L20 30 L28 36 L40 18 L48 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M40 12 L48 18 L42 26" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
+        warning: '<path d="M28 6 L50 46 L6 46 Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><line x1="28" y1="22" x2="28" y2="34" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><circle cx="28" cy="40" r="2" fill="currentColor"/>',
       };
 
       function inferSectionType(section) {
@@ -2559,7 +2564,7 @@ const createProcessFlow = {
           properties: {
             label: { type: 'string', description: 'Short step name.' },
             description: { type: 'string', description: 'Optional 1-2 sentence detail.' },
-            icon: { type: 'string', enum: ['chart', 'bulb', 'star', 'target', 'gear', 'shield', 'globe', 'people', 'clock', 'rocket', 'check'], description: 'Optional icon type.' },
+            icon: { type: 'string', enum: ['chart', 'bulb', 'star', 'target', 'gear', 'shield', 'globe', 'people', 'clock', 'rocket', 'check', 'lock', 'mail', 'money', 'growth', 'warning'], description: 'Optional icon type.' },
             color: { type: 'string', description: 'Optional hex color override.' },
           },
           required: ['label'],

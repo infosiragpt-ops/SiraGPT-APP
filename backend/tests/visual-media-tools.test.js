@@ -536,6 +536,20 @@ test('create_infographic_svg: empty sections', async () => {
   assert.equal(r.ok, true);
 });
 
+test('create_infographic_svg: new icons render', async () => {
+  const r = await tool('create_infographic_svg').execute({
+    title: 'Security & Growth',
+    sections: [
+      { type: 'text', heading: 'Security', content: 'End-to-end encrypted', icon: 'lock' },
+      { type: 'stat', heading: 'Revenue', content: '$5M', icon: 'money' },
+      { type: 'text', heading: 'Trend', content: 'Growing', icon: 'growth' },
+      { type: 'text', heading: 'Risk', content: 'Mitigated', icon: 'warning' },
+      { type: 'text', heading: 'Comms', content: 'Email integrated', icon: 'mail' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+});
+
 test('create_infographic_svg: rich section types (stat/list/quote/progress)', async () => {
   const r = await tool('create_infographic_svg').execute({
     title: 'Q4 Highlights',
