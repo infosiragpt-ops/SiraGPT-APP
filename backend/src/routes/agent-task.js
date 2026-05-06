@@ -36,6 +36,7 @@ const OpenAI = require('openai');
 
 const { authenticateToken } = require('../middleware/auth');
 const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
+const { resolveRateLimitConfig, makeJwtAwareKeyGenerator, extractBearerToken } = require('../middleware/rate-limit-policy');
 const reactAgent = require('../services/react-agent');
 const { buildTaskTools, ARTIFACT_DIR } = require('../services/agents/task-tools');
 const taskStore = require('../services/agents/task-store');
@@ -96,6 +97,54 @@ const prisma = (() => {
 })();
 
 const router = express.Router();
+
+// ── Rate limiting for agent task creation ──────────────────────
+// Blocks excessive POST requests per user (authed) or IP (anonymous).
+// Skip rate limiting entirely when the env asks for it (dev/test).
+const AGENT_RATE_DISABLED = process.env.AGENT_RATE_LIMIT_DISABLED === '1';
+const AGENT_RATE_MAX_DEFAULT = 30;
+const jwtSecret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || '';
+const agentKeyGen = makeJwtAwareKeyGenerator(jwtSecret);
+
+const agentRateBuckets = new Map(); // key → { hits, resetAt }
+const AGENT_RATE_WINDOW = parseInt(process.env.AGENT_RATE_LIMIT_WINDOW_MS, 10) || 60_000;
+const AGENT_RATE_MAX = parseInt(process.env.AGENT_RATE_LIMIT_MAX, 10) || AGENT_RATE_MAX_DEFAULT;
+
+function agentRateLimiter(req, res, next) {
+  if (AGENT_RATE_DISABLED) return next();
+  const key = agentKeyGen(req);
+  const now = Date.now();
+  let bucket = agentRateBuckets.get(key);
+  if (!bucket || now > bucket.resetAt) {
+    bucket = { hits: 0, resetAt: now + AGENT_RATE_WINDOW };
+    agentRateBuckets.set(key, bucket);
+  }
+  bucket.hits++;
+  const remaining = Math.max(0, AGENT_RATE_MAX - bucket.hits);
+  const resetSec = Math.ceil((bucket.resetAt - now) / 1000);
+  res.set('X-RateLimit-Limit', String(AGENT_RATE_MAX));
+  res.set('X-RateLimit-Remaining', String(remaining));
+  res.set('X-RateLimit-Reset', String(resetSec));
+  if (bucket.hits > AGENT_RATE_MAX) {
+    return res.status(429).json({
+      ok: false,
+      error: 'rate_limit_exceeded',
+      message: 'Demasiadas solicitudes. Intenta de nuevo más tarde.',
+      retryAfterMs: bucket.resetAt - now,
+    });
+  }
+  next();
+}
+
+// Periodic cleanup of stale buckets (every 5 min)
+if (!AGENT_RATE_DISABLED) {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, bucket] of agentRateBuckets) {
+      if (now > bucket.resetAt) agentRateBuckets.delete(key);
+    }
+  }, 300_000).unref();
+}
 const ACTIVE_AGENT_TASKS = new Map();
 const TASK_RETENTION_MS = 6 * 60 * 60 * 1000;
 const TASK_EVENT_LIMIT = 600;
@@ -195,6 +244,7 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
 
 router.post(
   '/task/:taskId/approval',
+  agentRateLimiter,
   [
     body('decision').isIn(['approve', 'reject', 'edit']).withMessage('decision must be approve, reject or edit'),
     body('payload').optional().isObject(),
@@ -354,6 +404,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
 
 router.post(
   '/task',
+  agentRateLimiter,
   [
     body('goal').isString().trim().isLength({ min: 3, max: 4000 }).withMessage('goal must be 3-4000 chars'),
     body('displayGoal').optional().isString().trim().isLength({ min: 3, max: 4000 }),
