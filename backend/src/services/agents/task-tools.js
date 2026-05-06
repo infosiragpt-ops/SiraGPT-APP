@@ -247,6 +247,10 @@ const pythonExec = {
     additionalProperties: false,
   },
   async execute({ source, timeoutMs, stdin }, ctx = {}) {
+    if (typeof source !== 'string' || !source.trim()) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'python_exec', ok: false, preview: 'empty source' });
+      return { ok: false, error: 'python_exec requires a non-empty "source" string' };
+    }
     ctx.onEvent?.({ type: 'tool_call', tool: 'python_exec', preview: previewText(source, 400), language: 'python' });
     const r = await sandbox.run({
       language: 'python',
@@ -295,6 +299,10 @@ const bashExec = {
     additionalProperties: false,
   },
   async execute({ source, timeoutMs }, ctx = {}) {
+    if (typeof source !== 'string' || !source.trim()) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'bash_exec', ok: false, preview: 'empty source' });
+      return { ok: false, error: 'bash_exec requires a non-empty "source" string' };
+    }
     ctx.onEvent?.({ type: 'tool_call', tool: 'bash_exec', preview: previewText(source, 400), language: 'javascript' });
     const r = await sandbox.run({
       language: 'javascript',
@@ -1348,6 +1356,17 @@ const runTests = {
     additionalProperties: false,
   },
   async execute({ language, source, testSource, timeoutMs }, ctx = {}) {
+    const allowedLangs = new Set(['python', 'javascript', 'node']);
+    if (!allowedLangs.has(language)) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'run_tests', ok: false, preview: 'unsupported language' });
+      return { ok: false, error: `run_tests "language" must be one of ${Array.from(allowedLangs).join(', ')}` };
+    }
+    if (typeof source !== 'string' || !source.trim()) {
+      return { ok: false, error: 'run_tests requires a non-empty "source"' };
+    }
+    if (typeof testSource !== 'string' || !testSource.trim()) {
+      return { ok: false, error: 'run_tests requires a non-empty "testSource"' };
+    }
     ctx.onEvent?.({
       type: 'tool_call',
       tool: 'run_tests',
