@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1424**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1432**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (172)
+## Apache-2.0 (180)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -147,6 +147,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@swc/helpers` | 0.5.17, 0.5.5 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
 | `@swc/types` | 0.1.26 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
 | `@vercel/oidc` | 3.2.0 | Apache-2.0 | [link](https://github.com/vercel/vercel) |
+| `adler-32` | 1.3.1 | Apache-2.0 | [link](https://github.com/SheetJS/js-adler32) |
 | `ai` | 6.0.168 | Apache-2.0 | [link](https://github.com/vercel/ai) |
 | `b4a` | 1.7.3 | Apache-2.0 | [link](https://github.com/holepunchto/b4a) |
 | `bare-events` | 2.8.1 | Apache-2.0 | [link](https://github.com/holepunchto/bare-events) |
@@ -157,10 +158,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `bare-url` | 2.3.2 | Apache-2.0 | [link](https://github.com/holepunchto/bare-url) |
 | `baseline-browser-mapping` | 2.10.21 | Apache-2.0 | [link](https://github.com/web-platform-dx/baseline-browser-mapping) |
 | `before-after-hook` | 4.0.0 | Apache-2.0 | [link](https://github.com/gr2m/before-after-hook) |
+| `cfb` | 1.2.2 | Apache-2.0 | [link](https://github.com/SheetJS/js-cfb) |
 | `chevrotain` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `chromium-bidi` | 10.5.1 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/chromium-bidi) |
 | `class-variance-authority` | 0.7.1 | Apache-2.0 | [link](https://github.com/joe-bell/cva) |
 | `cluster-key-slot` | 1.1.2 | Apache-2.0 | [link](https://github.com/Salakar/cluster-key-slot) |
+| `codepage` | 1.15.0 | Apache-2.0 | [link](https://github.com/SheetJS/js-codepage) |
 | `crc-32` | 1.2.2 | Apache-2.0 | [link](https://github.com/SheetJS/js-crc32) |
 | `denque` | 2.1.0 | Apache-2.0 | [link](https://github.com/invertase/denque) |
 | `detect-libc` | 2.1.2 | Apache-2.0 | [link](https://github.com/lovell/detect-libc) |
@@ -171,6 +174,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `ejs` | 3.1.10 | Apache-2.0 | [link](https://github.com/mde/ejs) |
 | `events-universal` | 1.0.1 | Apache-2.0 | [link](https://github.com/holepunchto/events-universal) |
 | `filelist` | 1.0.6 | Apache-2.0 | [link](https://github.com/mde/filelist) |
+| `frac` | 1.1.2 | Apache-2.0 | [link](https://github.com/SheetJS/frac) |
 | `gaxios` | 7.1.3 | Apache-2.0 | [link](https://github.com/googleapis/google-cloud-node-core) |
 | `gcp-metadata` | 8.1.2 | Apache-2.0 | [link](https://github.com/googleapis/google-cloud-node-core) |
 | `google-auth-library` | 10.5.0 | Apache-2.0 | [link](https://github.com/googleapis/google-auth-library-nodejs) |
@@ -191,6 +195,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `puppeteer-core` | 24.27.0 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `readdir-glob` | 1.1.3 | Apache-2.0 | [link](https://github.com/Yqnn/node-readdir-glob) |
 | `sharp` | 0.34.4, 0.34.5 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
+| `ssf` | 0.11.2 | Apache-2.0 | [link](https://github.com/SheetJS/ssf) |
 | `swagger-ui-dist` | 5.32.5 | Apache-2.0 | [link](https://github.com/swagger-api/swagger-ui) |
 | `tesseract.js` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js) |
 | `tesseract.js-core` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js-core) |
@@ -200,6 +205,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `wasm-feature-detect` | 1.8.0 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/wasm-feature-detect) |
 | `web-vitals` | 5.2.0 | Apache-2.0 | [link](https://github.com/GoogleChrome/web-vitals) |
 | `webdriver-bidi-protocol` | 0.3.8 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/webdriver-bidi-protocol) |
+| `wmf` | 1.0.2 | Apache-2.0 | [link](https://github.com/SheetJS/js-wmf) |
+| `word` | 0.3.0 | Apache-2.0 | [link](https://github.com/SheetJS/js-word) |
+| `xlsx` | 0.18.5 | Apache-2.0 | [link](https://github.com/SheetJS/sheetjs) |
 
 ## BSD (57)
 
