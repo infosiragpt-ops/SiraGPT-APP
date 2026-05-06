@@ -53,14 +53,14 @@ const LANGUAGE_CONFIG = {
   },
 };
 
-function stripEnv() {
+function stripEnv(memoryMb = DEFAULT_MEMORY_MB) {
   const env = {
     PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
     HOME: '/tmp',
     LANG: process.env.LANG || 'C.UTF-8',
     LC_ALL: 'C.UTF-8',
     PYTHONDONTWRITEBYTECODE: '1',
-    NODE_OPTIONS: `--max-old-space-size=${DEFAULT_MEMORY_MB}`,
+    NODE_OPTIONS: `--max-old-space-size=${memoryMb}`,
   };
   // Whitelist scientific-Python site-packages so SymPy / NumPy /
   // SciPy / Pandas resolve inside the sandbox. Without this, HOME is
@@ -96,6 +96,7 @@ function truncate(buf, max) {
  * @param {string}  opts.source         — the code body
  * @param {number} [opts.timeoutMs=10000]
  * @param {number} [opts.maxOutputBytes=65536]
+ * @param {number} [opts.memoryMb=512]      — heap cap for Node; informational for Python
  * @param {string} [opts.stdin]         — optional stdin content
  * @param {object<string,string>} [opts.files] — extra files to drop in the
  *                                               run dir (filename → content)
@@ -118,6 +119,7 @@ async function run({
   source,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
+  memoryMb = DEFAULT_MEMORY_MB,
   stdin = '',
   files = {},
   signal,
@@ -185,7 +187,7 @@ async function run({
   const start = Date.now();
   const child = spawn(cfg.interpreter, cfg.args(mainFile), {
     cwd: dir,
-    env: stripEnv(),
+    env: stripEnv(memoryMb),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -193,6 +195,8 @@ async function run({
   let stderrBuf = Buffer.alloc(0);
   let sizeLimitHit = false;
   let aborted = false;
+  let spawnError = null;
+  child.on('error', err => { spawnError = err; });
   const abortHandler = () => {
     aborted = true;
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
@@ -232,7 +236,7 @@ async function run({
 
   const { exitCode, childSignal } = await new Promise(resolve => {
     child.on('close', (code, sig) => resolve({ exitCode: code, childSignal: sig }));
-    child.on('error', err => resolve({ exitCode: null, childSignal: null, _err: err }));
+    child.on('error', () => resolve({ exitCode: null, childSignal: null }));
   });
   clearTimeout(timer);
   if (signal) signal.removeEventListener('abort', abortHandler);
@@ -246,12 +250,19 @@ async function run({
 
   const out = truncate(stdoutBuf, maxOutputBytes);
   const err = truncate(stderrBuf, maxOutputBytes);
+  let stderrText = aborted ? (err.text || 'aborted') : err.text;
+  if (spawnError && !aborted && !timedOut) {
+    const tag = spawnError.code === 'ENOENT'
+      ? `interpreter not found: ${cfg.interpreter} (set SANDBOX_PYTHON / SANDBOX_NODE to override)`
+      : `spawn error: ${spawnError.code || spawnError.message || String(spawnError)}`;
+    stderrText = stderrText ? `${tag}\n${stderrText}` : tag;
+  }
   return {
-    ok: !aborted && !timedOut && exitCode === 0 && !sizeLimitHit,
+    ok: !aborted && !timedOut && !spawnError && exitCode === 0 && !sizeLimitHit,
     exitCode,
     signal: childSignal,
     stdout: out.text,
-    stderr: aborted ? (err.text || 'aborted') : err.text,
+    stderr: stderrText,
     durationMs: Date.now() - start,
     timedOut,
     aborted,

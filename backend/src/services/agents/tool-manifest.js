@@ -544,8 +544,133 @@ function getVisualMediaManifests() {
   };
 }
 
+// ─── Manifests for the 4 Document Intelligence tools ────────────────────
+// These tools (docintel_*) are wired in task-tools.js and need manifests
+// for the enterprise registry / skill discovery surface.
+
+function getDocIntelManifests() {
+  return {
+    docintel_analyze: {
+      name: "docintel_analyze",
+      purpose: "Analyze uploaded documents (PDF/DOCX/XLSX/PPTX/CSV/IMG): MIME-aware text extraction, OCR evidence, structural chunks, table detection, coverage scoring.",
+      inputs: {
+        type: "object",
+        properties: {
+          fileIds: { type: "array", items: { type: "string" }, description: "File ids. Defaults to current task attachments." },
+          force: { type: "boolean", description: "Force fresh analysis even if cached." },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, analyses: { type: "array" } } },
+      allowed_formats: [],
+      forbidden_formats: ["docx", "xlsx", "pptx", "pdf"],
+      expected_errors: [
+        { code: "missing_auth", description: "Tool requires prisma + authenticated userId.", repair_hint: "Run inside an authenticated agent task." },
+        { code: "file_not_found", description: "fileId does not belong to user." },
+      ],
+      acceptance_tests: ["returns ok:true with analyses[] when given a valid fileId for the user"],
+      usage_limits: { timeout_ms_default: 60000, timeout_ms_max: 300000, max_calls_per_task: 10, requires_auth: true, requires_network: false },
+      examples_positive: [{ when: "user uploads a PDF and asks 'analiza esto'", call: { fileIds: ["file-abc"] } }],
+      examples_negative: [{ when: "user wants to compare two files", why: "use docintel_compare instead — analyze runs per-file." }],
+      recovery_policy: { on_timeout: "Return ok:false; agent should retry with fewer files.", on_error: "Surface the error verbatim.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["files.read", "rag.write"],
+      data_classes: ["internal", "confidential"],
+    },
+    docintel_retrieve: {
+      name: "docintel_retrieve",
+      purpose: "Retrieve grounded evidence chunks from analyzed documents with page/sheet/slide/section references. Use before answering factual questions about uploaded files.",
+      inputs: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string" },
+          fileIds: { type: "array", items: { type: "string" } },
+          limit: { type: "integer", minimum: 1, maximum: 20 },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, evidence: { type: "array" } } },
+      allowed_formats: [],
+      forbidden_formats: ["docx", "xlsx", "pptx", "pdf"],
+      expected_errors: [
+        { code: "missing_auth", description: "Requires prisma + authenticated userId." },
+        { code: "no_analysis", description: "Document has not been analyzed yet.", repair_hint: "Call docintel_analyze first." },
+      ],
+      acceptance_tests: ["returns ok:true with evidence[] (possibly empty) for a valid user+query"],
+      usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 20, requires_auth: true, requires_network: false },
+      examples_positive: [{ when: "user asks a factual question about uploaded docs", call: { query: "tasa de éxito reportada", limit: 8 } }],
+      examples_negative: [{ when: "user wants the full document", why: "this returns chunks; use docintel_analyze for full coverage." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["files.read", "rag.read"],
+      data_classes: ["internal", "confidential"],
+    },
+    docintel_extract_tables: {
+      name: "docintel_extract_tables",
+      purpose: "Return normalized tables detected in spreadsheets, CSV, Word/PDF markdown tables, and document extracts. Use for KPI / tabla / cálculo / dato queries.",
+      inputs: {
+        type: "object",
+        properties: {
+          fileIds: { type: "array", items: { type: "string" } },
+          limit: { type: "integer", minimum: 1, maximum: 20 },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, tables: { type: "array" } } },
+      allowed_formats: [],
+      forbidden_formats: ["docx", "xlsx", "pptx", "pdf"],
+      expected_errors: [
+        { code: "missing_auth", description: "Requires prisma + authenticated userId." },
+        { code: "no_tables", description: "Document has no detectable tables." },
+      ],
+      acceptance_tests: ["returns ok:true with tables[] when documents contain spreadsheet/markdown tables"],
+      usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 10, requires_auth: true, requires_network: false },
+      examples_positive: [{ when: "user uploads xlsx and asks for KPIs", call: { fileIds: ["file-xlsx"], limit: 5 } }],
+      examples_negative: [{ when: "user wants to render a chart", why: "use create_chart with the extracted data." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["files.read"],
+      data_classes: ["internal", "confidential"],
+    },
+    docintel_compare: {
+      name: "docintel_compare",
+      purpose: "Compare two or more uploaded documents using evidence, terms, counts, tables and warnings. Use when user asks comparar / diferencias / cambios / versiones / similitudes.",
+      inputs: {
+        type: "object",
+        properties: {
+          fileIds: { type: "array", items: { type: "string" }, description: "At least two file ids required." },
+          query: { type: "string", description: "Optional comparison focus." },
+          limit: { type: "integer", minimum: 1, maximum: 12 },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, documents: { type: "array" }, comparisons: { type: "array" } } },
+      allowed_formats: [],
+      forbidden_formats: ["docx", "xlsx", "pptx", "pdf"],
+      expected_errors: [
+        { code: "missing_auth", description: "Requires prisma + authenticated userId." },
+        { code: "insufficient_files", description: "Compare requires at least two file ids.", repair_hint: "Pass fileIds with length >= 2." },
+      ],
+      acceptance_tests: ["returns ok:true with documents[] and comparisons[] for two valid fileIds"],
+      usage_limits: { timeout_ms_default: 60000, timeout_ms_max: 300000, max_calls_per_task: 5, requires_auth: true, requires_network: false },
+      examples_positive: [{ when: "user uploads v1 and v2 of a contract", call: { fileIds: ["file-v1", "file-v2"], query: "cláusulas modificadas" } }],
+      examples_negative: [{ when: "user asks about a single file", why: "use docintel_analyze or docintel_retrieve instead." }],
+      recovery_policy: { on_timeout: "Return ok:false; agent should reduce limit.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["files.read", "rag.read"],
+      data_classes: ["internal", "confidential"],
+    },
+  };
+}
+
 // Add visual media manifests to the built-in collection at startup
 Object.assign(BUILTIN_MANIFESTS, getVisualMediaManifests());
+Object.assign(BUILTIN_MANIFESTS, getDocIntelManifests());
 
 module.exports = {
   toolManifestSchema,

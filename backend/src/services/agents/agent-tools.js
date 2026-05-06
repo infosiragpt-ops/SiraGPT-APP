@@ -495,14 +495,23 @@ const STATIC_CHECKS = [
       const patterns = [];
       if (language === 'javascript' || language === 'typescript' || language === 'unknown') {
         patterns.push([/\bconsole\.(log|debug)\s*\(/, 'console.log']);
-        patterns.push([/^\s*debugger\s*;?\s*$/, 'debugger']);
+        // Match `debugger;` anywhere on a code-position line, not just
+        // when it's alone — devs often stack it after another statement.
+        patterns.push([/\bdebugger\b\s*;?/, 'debugger']);
       }
-      if (language === 'python') patterns.push([/^\s*print\s*\(/, 'print()']);
+      if (language === 'python') {
+        patterns.push([/^\s*print\s*\(/, 'print()']);
+        patterns.push([/\bbreakpoint\s*\(/, 'breakpoint()']);
+        patterns.push([/\bpdb\s*\.\s*set_trace\s*\(/, 'pdb.set_trace()']);
+      }
 
       lines.forEach((line, i) => {
         if (!codeMask[i]) return;
+        // Strip string literals so a quoted "debugger;" or "print(" in
+        // code position doesn't trigger; only real call sites should fire.
+        const stripped = stripStringLiterals(line);
         for (const [re, label] of patterns) {
-          if (re.test(line)) {
+          if (re.test(stripped)) {
             out.push({ severity: 'info', line: i + 1, message: `${label} left in code` });
             break;
           }

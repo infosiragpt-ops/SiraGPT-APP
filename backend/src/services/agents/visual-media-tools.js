@@ -274,11 +274,11 @@ const generateImage = {
 
 const createChart = {
   name: 'create_chart',
-  description: 'Generate a data chart or graph (bar, line, pie, scatter, histogram, area, radar, donut, bubble) from structured data. The chart is rendered as an SVG file and saved as a downloadable artifact. For complex multi-series or interactive charts, describe the data in detail.',
+  description: 'Generate a data chart or graph (bar, line, pie, scatter, histogram, area, radar, donut, bubble, horizontal_bar, funnel, gauge, waterfall) from structured data. The chart is rendered as an SVG file and saved as a downloadable artifact. For complex multi-series or interactive charts, describe the data in detail.',
   parameters: {
     type: 'object',
     properties: {
-      chartType: { type: 'string', enum: ['bar', 'line', 'pie', 'scatter', 'histogram', 'area', 'radar', 'donut', 'bubble', 'horizontal_bar'], description: 'Type of chart to generate.' },
+      chartType: { type: 'string', enum: ['bar', 'line', 'pie', 'scatter', 'histogram', 'area', 'radar', 'donut', 'bubble', 'horizontal_bar', 'funnel', 'gauge', 'waterfall'], description: 'Type of chart to generate.' },
       title: { type: 'string', description: 'Chart title.' },
       labels: { type: 'array', items: { type: 'string' }, description: 'Category labels (x-axis for bar/line, segments for pie/donut).' },
       datasets: { type: 'array', items: { type: 'object', properties: {
@@ -312,8 +312,14 @@ const createChart = {
       const palette = palettes[theme] || palettes.professional;
 
       // Compute layout
-      const W = chartType === 'horizontal_bar' ? 1000 : 800;
-      const H = chartType === 'horizontal_bar' ? Math.max(400, labels.length * 50 + 120) : 500;
+      const W = chartType === 'horizontal_bar' ? 1000 : (chartType === 'gauge' ? 600 : 800);
+      const H = chartType === 'horizontal_bar'
+        ? Math.max(400, labels.length * 50 + 120)
+        : chartType === 'funnel'
+          ? Math.max(400, labels.length * 70 + 140)
+          : chartType === 'gauge'
+            ? 400
+            : 500;
       const M = { top: 60, right: 40, bottom: 80, left: 80 };
       const innerW = W - M.left - M.right;
       const innerH = H - M.top - M.bottom;
@@ -339,7 +345,139 @@ const createChart = {
         if (chartType === 'horizontal_bar') {
           return buildHBarBody();
         }
+        if (chartType === 'funnel') {
+          return buildFunnelBody();
+        }
+        if (chartType === 'gauge') {
+          return buildGaugeBody();
+        }
+        if (chartType === 'waterfall') {
+          return buildWaterfallBody();
+        }
         return buildCartesianBody();
+      }
+
+      function buildFunnelBody() {
+        const ds = datasets[0];
+        if (!ds || !ds.data.length) return '';
+        const values = ds.data;
+        const maxV = Math.max(...values, 1);
+        const stageH = Math.min(60, (innerH - 20) / values.length - 8);
+        const cx = W / 2;
+        const maxStageW = innerW * 0.8;
+        let body = '';
+        for (let i = 0; i < values.length; i++) {
+          const v = values[i];
+          const wTop = (v / maxV) * maxStageW;
+          const nextV = i < values.length - 1 ? values[i + 1] : v * 0.6;
+          const wBot = (nextV / maxV) * maxStageW;
+          const y = M.top + i * (stageH + 8);
+          const color = colors[0] || palette[i % palette.length];
+          const xTopL = cx - wTop / 2, xTopR = cx + wTop / 2;
+          const xBotL = cx - wBot / 2, xBotR = cx + wBot / 2;
+          body += `<path d="M ${xTopL} ${y} L ${xTopR} ${y} L ${xBotR} ${y + stageH} L ${xBotL} ${y + stageH} Z" fill="${palette[i % palette.length]}" opacity="0.88" stroke="#fff" stroke-width="2"/>`;
+          body += `<text x="${cx}" y="${y + stageH / 2 - 4}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="#fff">${safeLabels[i] || `Etapa ${i + 1}`}</text>`;
+          body += `<text x="${cx}" y="${y + stageH / 2 + 12}" text-anchor="middle" font-family="Arial" font-size="11" fill="#fff" opacity="0.9">${tickFormat(v)}</text>`;
+          if (i > 0) {
+            const prev = values[i - 1] || 1;
+            const pct = ((v / prev) * 100).toFixed(1);
+            body += `<text x="${xTopR + 12}" y="${y + 4}" font-family="Arial" font-size="10" fill="#666">${pct}%</text>`;
+          }
+        }
+        return body;
+      }
+
+      function buildGaugeBody() {
+        const ds = datasets[0];
+        if (!ds || !ds.data.length) return '';
+        const value = ds.data[0] || 0;
+        const max = ds.data[1] || Math.max(value * 1.25, 100);
+        const cx = W / 2, cy = H * 0.65;
+        const r = Math.min(W * 0.32, H * 0.42);
+        const startA = Math.PI;
+        const endA = 2 * Math.PI;
+        const ratio = Math.max(0, Math.min(1, value / (max || 1)));
+        const valueA = startA + ratio * (endA - startA);
+
+        const arcPath = (a0, a1, rad) => {
+          const x0 = cx + rad * Math.cos(a0), y0 = cy + rad * Math.sin(a0);
+          const x1 = cx + rad * Math.cos(a1), y1 = cy + rad * Math.sin(a1);
+          const large = (a1 - a0) > Math.PI ? 1 : 0;
+          return `M ${x0} ${y0} A ${rad} ${rad} 0 ${large} 1 ${x1} ${y1}`;
+        };
+
+        let body = '';
+        // Background arc
+        body += `<path d="${arcPath(startA, endA, r)}" fill="none" stroke="#E5E7EB" stroke-width="28" stroke-linecap="round"/>`;
+        // Value arc — color zones
+        const segments = 3;
+        const colors3 = ['#10B981', '#F59E0B', '#EF4444'];
+        for (let i = 0; i < segments; i++) {
+          const a0 = startA + (i / segments) * (endA - startA);
+          const a1 = startA + ((i + 1) / segments) * (endA - startA);
+          if (a0 < valueA) {
+            body += `<path d="${arcPath(a0, Math.min(a1, valueA), r)}" fill="none" stroke="${colors[0] || colors3[i]}" stroke-width="28" stroke-linecap="round" opacity="0.9"/>`;
+          }
+        }
+        // Needle
+        const nx = cx + (r - 18) * Math.cos(valueA);
+        const ny = cy + (r - 18) * Math.sin(valueA);
+        body += `<line x1="${cx}" y1="${cy}" x2="${nx}" y2="${ny}" stroke="#1E293B" stroke-width="4" stroke-linecap="round"/>`;
+        body += `<circle cx="${cx}" cy="${cy}" r="10" fill="#1E293B"/>`;
+        body += `<circle cx="${cx}" cy="${cy}" r="4" fill="#fff"/>`;
+        // Value text
+        body += `<text x="${cx}" y="${cy + 50}" text-anchor="middle" font-family="Arial" font-size="32" font-weight="bold" fill="#1E293B">${tickFormat(value)}</text>`;
+        body += `<text x="${cx}" y="${cy + 72}" text-anchor="middle" font-family="Arial" font-size="12" fill="#64748B">${safeLabels[0] || 'Valor'} / ${tickFormat(max)}</text>`;
+        // Min / Max ticks
+        body += `<text x="${cx - r}" y="${cy + 22}" text-anchor="middle" font-family="Arial" font-size="11" fill="#64748B">0</text>`;
+        body += `<text x="${cx + r}" y="${cy + 22}" text-anchor="middle" font-family="Arial" font-size="11" fill="#64748B">${tickFormat(max)}</text>`;
+        return body;
+      }
+
+      function buildWaterfallBody() {
+        const ds = datasets[0];
+        if (!ds || !ds.data.length) return '';
+        const values = ds.data;
+        // Compute running total at each step
+        const ends = [];
+        let cum = 0;
+        for (let i = 0; i < values.length; i++) {
+          ends.push({ start: cum, end: cum + values[i], val: values[i] });
+          cum += values[i];
+        }
+        const allCums = ends.flatMap(e => [e.start, e.end]).concat([0]);
+        const wMax = Math.max(...allCums);
+        const wMin = Math.min(...allCums, 0);
+        const wRange = (wMax - wMin) || 1;
+
+        const seriesWidth = innerW / values.length;
+        const barW = Math.max(20, seriesWidth * 0.6);
+        let body = '';
+
+        // Grid + zero line
+        for (let t = 0; t <= ticks; t++) {
+          const y = M.top + innerH - (t / ticks) * innerH;
+          const val = wMin + (t / ticks) * wRange;
+          body += `<line x1="${M.left}" y1="${y}" x2="${M.left + innerW}" y2="${y}" stroke="#e5e7eb" stroke-width="1"/>`;
+          body += `<text x="${M.left - 8}" y="${y + 4}" text-anchor="end" font-family="Arial" font-size="11" fill="#888">${tickFormat(val)}</text>`;
+        }
+
+        ends.forEach((e, i) => {
+          const cxBar = M.left + (i + 0.5) * seriesWidth;
+          const isTotal = i === 0 || i === ends.length - 1;
+          const yTop = M.top + innerH - ((Math.max(e.start, e.end) - wMin) / wRange) * innerH;
+          const yBot = M.top + innerH - ((Math.min(e.start, e.end) - wMin) / wRange) * innerH;
+          const fill = isTotal ? (palette[2] || '#64748B') : (e.val >= 0 ? '#10B981' : '#EF4444');
+          body += `<rect x="${cxBar - barW / 2}" y="${yTop}" width="${barW}" height="${Math.max(yBot - yTop, 1)}" fill="${fill}" rx="3" opacity="0.9"/>`;
+          body += `<text x="${cxBar}" y="${yTop - 6}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#1E293B">${e.val >= 0 && !isTotal ? '+' : ''}${tickFormat(e.val)}</text>`;
+          body += `<text x="${cxBar}" y="${H - M.bottom + 18}" text-anchor="middle" font-family="Arial" font-size="11" fill="#555">${safeLabels[i] || `Paso ${i + 1}`}</text>`;
+          // Connector line to next
+          if (i < ends.length - 1) {
+            const yEnd = M.top + innerH - ((e.end - wMin) / wRange) * innerH;
+            body += `<line x1="${cxBar + barW / 2}" y1="${yEnd}" x2="${cxBar + seriesWidth - barW / 2}" y2="${yEnd}" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3 3"/>`;
+          }
+        });
+        return body;
       }
 
       function buildPieBody() {
@@ -1540,29 +1678,54 @@ const generateVideo = {
         // Helper: split prompt into scenes for storyboard
         const scenes = generateScenesFromPrompt(enhancedPrompt, duration);
 
-        // Build SVG storyboard
-        const storyW = 800;
-        const sceneH = 240;
-        const headerH = 100;
+        // Build SVG storyboard with thumbnail previews per scene
+        const storyW = 880;
+        const sceneH = 200;
+        const headerH = 110;
         const pad = 24;
+        const thumbW = 220;
+        const thumbH = sceneH - 32;
         const totalH = headerH + scenes.length * sceneH + pad * 2;
 
         const sceneCards = scenes.map((scene, i) => {
           const sy = headerH + pad + i * sceneH;
-          const safeDesc = xmlEscape(scene.description || '').slice(0, 250);
-          const safeAction = xmlEscape(scene.action || '').slice(0, 150);
-          const safeVisual = xmlEscape(scene.visualStyle || '').slice(0, 150);
+          const safeDesc = xmlEscape(scene.description || '').slice(0, 230);
+          const safeAction = xmlEscape(scene.action || '').slice(0, 140);
+          const safeVisual = xmlEscape(scene.visualStyle || '').slice(0, 140);
           const safeAudio = xmlEscape(scene.audio || '').slice(0, 100);
+          const accent = scene.color || '#3B82F6';
+          const tx = pad + thumbW + 24;
+          // Build a stylized thumbnail using gradient + abstract shapes derived from scene index
+          const gradId = `grad-scene-${i}`;
+          const shapeKind = i % 4;
+          let shapes = '';
+          if (shapeKind === 0) {
+            shapes = `<circle cx="${pad + 60}" cy="${sy + 60}" r="36" fill="#fff" opacity="0.25"/><circle cx="${pad + 150}" cy="${sy + 110}" r="20" fill="#fff" opacity="0.18"/>`;
+          } else if (shapeKind === 1) {
+            shapes = `<polygon points="${pad + 30},${sy + 130} ${pad + 80},${sy + 50} ${pad + 130},${sy + 110} ${pad + 180},${sy + 80} ${pad + 200},${sy + 140}" fill="#fff" opacity="0.25"/>`;
+          } else if (shapeKind === 2) {
+            shapes = `<rect x="${pad + 30}" y="${sy + 90}" width="40" height="60" fill="#fff" opacity="0.22" rx="3"/><rect x="${pad + 80}" y="${sy + 60}" width="40" height="90" fill="#fff" opacity="0.28" rx="3"/><rect x="${pad + 130}" y="${sy + 80}" width="40" height="70" fill="#fff" opacity="0.20" rx="3"/>`;
+          } else {
+            shapes = `<path d="M ${pad + 20} ${sy + 130} Q ${pad + 70} ${sy + 50} ${pad + 120} ${sy + 110} T ${pad + 210} ${sy + 100}" fill="none" stroke="#fff" stroke-width="3" opacity="0.45"/>`;
+          }
           return `
   <!-- Scene ${i + 1} -->
-  <rect x="${pad}" y="${sy}" width="${storyW - 2 * pad}" height="${sceneH - 8}" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1" filter="url(#vis-shadow)"/>
-  <rect x="${pad + 4}" y="${sy + 4}" width="4" height="${sceneH - 16}" rx="2" fill="${scene.color || '#3B82F6'}"/>
-  <text x="${pad + 24}" y="${sy + 28}" font-family="Arial" font-size="13" font-weight="bold" fill="#1E293B">Escena ${i + 1} · ${xmlEscape(scene.timeRange || `${scene.duration}s`)}</text>
-  <text x="${pad + 24}" y="${sy + 50}" font-family="Arial" font-size="11" fill="#475569">${safeDesc}</text>
-  ${safeAction ? `<text x="${pad + 24}" y="${sy + 72}" font-family="Arial" font-size="11" fill="#64748B">🎬 ${safeAction}</text>` : ''}
-  ${safeVisual ? `<text x="${pad + 24}" y="${sy + 92}" font-family="Arial" font-size="10" fill="#94A3B8">🎨 ${safeVisual}</text>` : ''}
-  ${safeAudio ? `<text x="${pad + 24}" y="${sy + 110}" font-family="Arial" font-size="10" fill="#94A3B8">🔊 ${safeAudio}</text>` : ''}
-  <text x="${storyW - pad - 16}" y="${sy + 28}" text-anchor="end" font-family="Arial" font-size="20" font-weight="bold" fill="${scene.color || '#3B82F6'}" opacity="0.15">${String(i + 1).padStart(2, '0')}</text>`;
+  <defs>
+    <linearGradient id="${gradId}" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${accent}" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="${accent}" stop-opacity="0.55"/>
+    </linearGradient>
+  </defs>
+  <rect x="${pad}" y="${sy}" width="${storyW - 2 * pad}" height="${sceneH - 12}" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1" filter="url(#vis-shadow)"/>
+  <rect x="${pad + 12}" y="${sy + 16}" width="${thumbW}" height="${thumbH}" rx="6" fill="url(#${gradId})"/>
+  ${shapes}
+  <text x="${pad + 12 + thumbW / 2}" y="${sy + thumbH + 8}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#fff" opacity="0.9">SCENE ${String(i + 1).padStart(2, '0')}</text>
+  <text x="${tx}" y="${sy + 28}" font-family="Arial" font-size="13" font-weight="bold" fill="#1E293B">Escena ${i + 1} · ${xmlEscape(scene.timeRange || `${scene.duration}s`)}</text>
+  <text x="${tx}" y="${sy + 50}" font-family="Arial" font-size="11" fill="#475569">${safeDesc}</text>
+  ${safeAction ? `<text x="${tx}" y="${sy + 92}" font-family="Arial" font-size="11" fill="#64748B">▶ ${safeAction}</text>` : ''}
+  ${safeVisual ? `<text x="${tx}" y="${sy + 116}" font-family="Arial" font-size="10" fill="#94A3B8">◆ ${safeVisual}</text>` : ''}
+  ${safeAudio ? `<text x="${tx}" y="${sy + 138}" font-family="Arial" font-size="10" fill="#94A3B8">♪ ${safeAudio}</text>` : ''}
+  <text x="${storyW - pad - 16}" y="${sy + 28}" text-anchor="end" font-family="Arial" font-size="20" font-weight="bold" fill="${accent}" opacity="0.15">${String(i + 1).padStart(2, '0')}</text>`;
         }).join('\n');
 
         const storyboardSvg = [
@@ -1570,9 +1733,9 @@ const generateVideo = {
           `  <defs><filter id="vis-shadow"><feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.08"/></filter></defs>`,
           `  <rect width="${storyW}" height="${totalH}" fill="#F8FAFC" rx="12"/>`,
           `  <rect x="0" y="0" width="${storyW}" height="${headerH}" fill="#1E293B" rx="0"/>`,
-          `  <text x="${storyW / 2}" y="38" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#FFFFFF">${xmlEscape(String(title || enhancedPrompt).slice(0, 100))}</text>`,
-          `  <text x="${storyW / 2}" y="64" text-anchor="middle" font-family="Arial" font-size="12" fill="#94A3B8">Storyboard · ${scenes.length} escenas · ${duration}s · ${xmlEscape(style || '')}</text>`,
-          `  <text x="${storyW / 2}" y="80" text-anchor="middle" font-family="Arial" font-size="10" fill="#64748B">Generado como alternativa — conecta VIDEO_API_URL para generación real de video</text>`,
+          `  <text x="${storyW / 2}" y="40" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#FFFFFF">${xmlEscape(String(title || enhancedPrompt).slice(0, 100))}</text>`,
+          `  <text x="${storyW / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#94A3B8">Storyboard · ${scenes.length} escenas · ${duration}s · ${xmlEscape(style || '')}</text>`,
+          `  <text x="${storyW / 2}" y="84" text-anchor="middle" font-family="Arial" font-size="10" fill="#64748B">Generado como alternativa — conecta VIDEO_API_URL para generación real de video</text>`,
           sceneCards,
           `</svg>`,
         ].join('\n');
@@ -1624,6 +1787,200 @@ const generateVideo = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 8: create_timeline
+// ─────────────────────────────────────────────────────────────────────────
+
+const createTimeline = {
+  name: 'create_timeline',
+  description: 'Generate a horizontal chronological timeline as an SVG file. Use for project roadmaps, historical events, milestones, product launches, or any sequence of dated events. Each event has a date, title, optional description, and optional category color.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Timeline title (e.g. "Product Roadmap 2026").' },
+      events: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            date: { type: 'string', description: 'Date or label for the event (e.g. "Q1 2026", "Mar 15", "1969").' },
+            title: { type: 'string', description: 'Short event title.' },
+            description: { type: 'string', description: 'Optional 1-2 sentence description.' },
+            category: { type: 'string', description: 'Optional category for grouping/coloring (e.g. "milestone", "launch").' },
+            color: { type: 'string', description: 'Optional hex color override.' },
+          },
+          required: ['date', 'title'],
+        },
+        description: '2-12 chronological events.',
+      },
+      orientation: { type: 'string', enum: ['horizontal', 'vertical'], description: 'Timeline orientation. Default: "horizontal".' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'warm', 'cool', 'dark'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'events'],
+    additionalProperties: false,
+  },
+  async execute({ title, events = [], orientation = 'horizontal', theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_timeline', preview: title });
+
+    try {
+      if (!Array.isArray(events) || events.length === 0) {
+        emitEvent(ctx, 'tool_output', { tool: 'create_timeline', ok: false, preview: 'Se requiere al menos un evento.' });
+        return { ok: false, error: 'events array is empty' };
+      }
+
+      const themes = {
+        professional: { bg: '#FAFBFC', card: '#FFFFFF', line: '#94A3B8', accent: '#2563EB', text: '#1E293B', muted: '#64748B', border: '#E2E8F0' },
+        modern:       { bg: '#0B1121', card: '#1E293B', line: '#475569', accent: '#818CF8', text: '#F1F5F9', muted: '#94A3B8', border: '#334155' },
+        warm:         { bg: '#FFF7ED', card: '#FFFFFF', line: '#FB923C', accent: '#EA580C', text: '#7C2D12', muted: '#9A3412', border: '#FED7AA' },
+        cool:         { bg: '#ECFEFF', card: '#FFFFFF', line: '#06B6D4', accent: '#0891B2', text: '#164E63', muted: '#155E75', border: '#A5F3FC' },
+        dark:         { bg: '#0F172A', card: '#1E293B', line: '#475569', accent: '#F59E0B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155' },
+      };
+      const t = themes[theme] || themes.professional;
+      const palette = ['#2563EB', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const events12 = events.slice(0, 12);
+
+      let svgBody = '';
+      let W, H;
+
+      if (orientation === 'vertical') {
+        const eventH = 110;
+        const headerH = 90;
+        const pad = 30;
+        const lineX = 130;
+        H = headerH + events12.length * eventH + pad * 2;
+        W = 760;
+
+        svgBody += `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+        svgBody += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+        svgBody += `<text x="${W / 2}" y="38" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+        svgBody += `<text x="${W / 2}" y="62" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${events12.length} eventos · vertical</text>`;
+        // Vertical line
+        svgBody += `<line x1="${lineX}" y1="${headerH + pad}" x2="${lineX}" y2="${H - pad}" stroke="${t.line}" stroke-width="3"/>`;
+
+        events12.forEach((ev, i) => {
+          const cy = headerH + pad + i * eventH + eventH / 2;
+          const color = ev.color || palette[i % palette.length];
+          const date = xmlEscape(String(ev.date || '').slice(0, 24));
+          const tt = xmlEscape(String(ev.title || '').slice(0, 80));
+          const desc = xmlEscape(String(ev.description || '').slice(0, 180));
+          const cat = ev.category ? xmlEscape(String(ev.category).slice(0, 24)) : '';
+          // Date column
+          svgBody += `<text x="${lineX - 18}" y="${cy - 2}" text-anchor="end" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">${date}</text>`;
+          if (cat) svgBody += `<text x="${lineX - 18}" y="${cy + 14}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.muted}">${cat}</text>`;
+          // Marker
+          svgBody += `<circle cx="${lineX}" cy="${cy}" r="9" fill="${color}" stroke="${t.bg}" stroke-width="3"/>`;
+          // Card
+          const cardX = lineX + 22;
+          const cardW = W - cardX - pad;
+          svgBody += `<rect x="${cardX}" y="${cy - eventH / 2 + 12}" width="${cardW}" height="${eventH - 24}" rx="8" fill="${t.card}" stroke="${t.border}" stroke-width="1"/>`;
+          svgBody += `<rect x="${cardX}" y="${cy - eventH / 2 + 12}" width="4" height="${eventH - 24}" rx="2" fill="${color}"/>`;
+          svgBody += `<text x="${cardX + 16}" y="${cy - 8}" font-family="Arial" font-size="14" font-weight="bold" fill="${t.text}">${tt}</text>`;
+          if (desc) svgBody += `<text x="${cardX + 16}" y="${cy + 14}" font-family="Arial" font-size="11" fill="${t.muted}">${desc}</text>`;
+        });
+      } else {
+        const headerH = 90;
+        const pad = 40;
+        const minStep = 160;
+        const stepW = Math.max(minStep, Math.min(220, 1200 / events12.length));
+        W = Math.max(800, pad * 2 + events12.length * stepW);
+        const lineY = 220;
+        const cardH = 120;
+        H = headerH + 360;
+
+        svgBody += `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+        svgBody += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+        svgBody += `<text x="${W / 2}" y="38" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+        svgBody += `<text x="${W / 2}" y="62" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${events12.length} eventos</text>`;
+
+        // Main horizontal line
+        svgBody += `<line x1="${pad}" y1="${lineY}" x2="${W - pad}" y2="${lineY}" stroke="${t.line}" stroke-width="3" stroke-linecap="round"/>`;
+
+        events12.forEach((ev, i) => {
+          const cx = pad + (i + 0.5) * stepW;
+          const above = i % 2 === 0;
+          const color = ev.color || palette[i % palette.length];
+          const date = xmlEscape(String(ev.date || '').slice(0, 20));
+          const tt = xmlEscape(String(ev.title || '').slice(0, 50));
+          const desc = xmlEscape(String(ev.description || '').slice(0, 110));
+          const cat = ev.category ? xmlEscape(String(ev.category).slice(0, 20)) : '';
+
+          // Marker
+          svgBody += `<circle cx="${cx}" cy="${lineY}" r="11" fill="${color}" stroke="${t.bg}" stroke-width="3"/>`;
+          svgBody += `<circle cx="${cx}" cy="${lineY}" r="5" fill="#fff"/>`;
+
+          // Card position
+          const cy = above ? lineY - cardH - 30 : lineY + 30;
+          const cardW = stepW - 20;
+          const cardX = cx - cardW / 2;
+          // Connector
+          svgBody += `<line x1="${cx}" y1="${lineY}" x2="${cx}" y2="${above ? cy + cardH : cy}" stroke="${color}" stroke-width="2" opacity="0.6"/>`;
+          // Card
+          svgBody += `<rect x="${cardX}" y="${cy}" width="${cardW}" height="${cardH}" rx="8" fill="${t.card}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+          svgBody += `<rect x="${cardX}" y="${cy}" width="${cardW}" height="4" rx="2" fill="${color}"/>`;
+          svgBody += `<text x="${cardX + 12}" y="${cy + 26}" font-family="Arial" font-size="12" font-weight="bold" fill="${color}">${date}</text>`;
+          if (cat) svgBody += `<text x="${cardX + cardW - 12}" y="${cy + 26}" text-anchor="end" font-family="Arial" font-size="9" fill="${t.muted}" opacity="0.8">${cat.toUpperCase()}</text>`;
+          svgBody += `<text x="${cardX + 12}" y="${cy + 50}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">${tt}</text>`;
+          if (desc) {
+            // crude word-wrap into 2 lines
+            const words = desc.split(' ');
+            const halfIdx = Math.ceil(words.length / 2);
+            const line1 = words.slice(0, halfIdx).join(' ');
+            const line2 = words.slice(halfIdx).join(' ');
+            svgBody += `<text x="${cardX + 12}" y="${cy + 72}" font-family="Arial" font-size="10" fill="${t.muted}">${line1}</text>`;
+            if (line2) svgBody += `<text x="${cardX + 12}" y="${cy + 88}" font-family="Arial" font-size="10" fill="${t.muted}">${line2}</text>`;
+          }
+        });
+      }
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Timeline: ${safeTitle}`,
+        body: svgBody,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `timeline_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_timeline',
+        ok: true,
+        preview: `Línea de tiempo lista: ${artifact.filename} (${events12.length} eventos, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        events: events12.length,
+        orientation,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_timeline', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -1634,6 +1991,7 @@ const VISUAL_MEDIA_TOOLS = [
   createInfographicSvg,
   createDashboardHtml,
   generateVideo,
+  createTimeline,
 ];
 
 module.exports = { VISUAL_MEDIA_TOOLS };

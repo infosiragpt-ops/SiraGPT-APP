@@ -62,6 +62,22 @@ const EXTENSION_TO_MIME = {
   txt:  'text/plain',
   json: 'application/json',
   md:   'text/markdown',
+  html: 'text/html',
+  htm:  'text/html',
+  xml:  'application/xml',
+  yaml: 'application/yaml',
+  yml:  'application/yaml',
+  png:  'image/png',
+  jpg:  'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif:  'image/gif',
+  webp: 'image/webp',
+  ico:  'image/x-icon',
+  mp4:  'video/mp4',
+  webm: 'video/webm',
+  mp3:  'audio/mpeg',
+  wav:  'audio/wav',
+  zip:  'application/zip',
 };
 
 const ADVANCED_DOCUMENT_FORMATS = new Set(['docx', 'xlsx', 'pptx', 'pdf', 'csv', 'html', 'md']);
@@ -997,16 +1013,28 @@ const verifyArtifact = {
       ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'no artifacts dir' });
       return { ok: false, error: 'no artifacts directory yet' };
     }
-    const entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
-    if (!entry) {
-      ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact not found' });
-      return { ok: false, error: `artifact ${id} not found` };
-    }
+    // Fast path: derive the on-disk filename from the metadata file
+    // so we don't pay an O(N) directory scan when the artifact dir is
+    // large. Fall back to readdirSync only if metadata is missing
+    // (legacy artifacts written before metadata sidecars existed).
     let metadata = null;
     try {
       const metadataPath = metadataPathFor(id);
       if (fs.existsSync(metadataPath)) metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
     } catch { /* metadata is auxiliary */ }
+
+    let entry = null;
+    if (metadata?.filename) {
+      const candidate = `${id}-${metadata.filename}`;
+      if (fs.existsSync(path.join(ARTIFACT_DIR, candidate))) entry = candidate;
+    }
+    if (!entry) {
+      entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`)) || null;
+    }
+    if (!entry) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact not found' });
+      return { ok: false, error: `artifact ${id} not found` };
+    }
     const full = path.join(ARTIFACT_DIR, entry);
     const ext = path.extname(entry).slice(1).toLowerCase();
     const sizeBytes = fs.statSync(full).size;

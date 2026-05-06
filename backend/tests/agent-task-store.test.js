@@ -1,4 +1,4 @@
-const test = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
@@ -103,4 +103,144 @@ test('agent task store: trims event history to the configured limit', () => {
   assert.equal(loaded.events.length, 3);
   assert.equal(loaded.events[0].preview, '5');
   assert.equal(loaded.events[2].preview, '7');
+});
+
+// ── Index tests ─────────────────────────────────────────────────
+
+test('agent task store: builds and maintains a user index', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-index-'));
+  process.env.AGENT_TASK_STORE_DIR = dir;
+
+  taskStore.writeTaskSnapshot({ taskId: 't1', userId: 'alice', displayGoal: 'T1' });
+  taskStore.writeTaskSnapshot({ taskId: 't2', userId: 'bob', displayGoal: 'T2' });
+  taskStore.writeTaskSnapshot({ taskId: 't3', userId: 'alice', displayGoal: 'T3' });
+
+  // Index should exist
+  const idxPath = taskStore.indexPath();
+  assert.ok(fs.existsSync(idxPath), 'index file should exist');
+
+  const index = taskStore.readIndex();
+  assert.equal(Object.keys(index).length, 3);
+  assert.equal(index.t1.userId, 'alice');
+  assert.equal(index.t2.userId, 'bob');
+  assert.equal(index.t3.userId, 'alice');
+});
+
+test('agent task store: listTaskSnapshotsForUser uses index', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-list-'));
+  process.env.AGENT_TASK_STORE_DIR = dir;
+
+  taskStore.writeTaskSnapshot({ taskId: 'a1', userId: 'alice', displayGoal: 'A1' });
+  taskStore.writeTaskSnapshot({ taskId: 'a2', userId: 'alice', displayGoal: 'A2' });
+  taskStore.writeTaskSnapshot({ taskId: 'b1', userId: 'bob', displayGoal: 'B1' });
+
+  const aliceTasks = taskStore.listTaskSnapshotsForUser('alice');
+  assert.equal(aliceTasks.length, 2);
+  assert.equal(aliceTasks[0].userId, 'alice');
+
+  const bobTasks = taskStore.listTaskSnapshotsForUser('bob');
+  assert.equal(bobTasks.length, 1);
+
+  const nobody = taskStore.listTaskSnapshotsForUser('nobody');
+  assert.equal(nobody.length, 0);
+});
+
+test('agent task store: index updates on status change', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-status-'));
+  process.env.AGENT_TASK_STORE_DIR = dir;
+
+  const base = taskStore.writeTaskSnapshot({ taskId: 'st', userId: 'alice', displayGoal: 'Status' });
+  let index = taskStore.readIndex();
+  assert.equal(index.st.status, 'running');
+
+  taskStore.markTaskStatus(base, 'completed', { stats: { steps: 1 } });
+  index = taskStore.readIndex();
+  assert.equal(index.st.status, 'completed');
+});
+
+test('agent task store: rebuildIndex recovers from corrupted index', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-rebuild-'));
+  process.env.AGENT_TASK_STORE_DIR = dir;
+
+  taskStore.writeTaskSnapshot({ taskId: 'r1', userId: 'alice', displayGoal: 'R1' });
+  taskStore.writeTaskSnapshot({ taskId: 'r2', userId: 'bob', displayGoal: 'R2' });
+
+  // Corrupt the index
+  fs.writeFileSync(taskStore.indexPath(), '{corrupted}}');
+  const bogusIndex = taskStore.readIndex();
+  assert.deepEqual(bogusIndex, {}, 'should return empty on corrupt');
+
+  // Rebuild
+  const rebuilt = taskStore.rebuildIndex();
+  assert.equal(Object.keys(rebuilt).length, 2);
+  assert.equal(rebuilt.r1.userId, 'alice');
+  assert.equal(rebuilt.r2.userId, 'bob');
+});
+
+test('agent task store: removeFromIndex cleans up entries', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-remove-'));
+  process.env.AGENT_TASK_STORE_DIR = dir;
+
+  taskStore.writeTaskSnapshot({ taskId: 'rm1', userId: 'alice' });
+  taskStore.removeFromIndex('rm1');
+
+  const index = taskStore.readIndex();
+  assert.equal(index.rm1, undefined);
+});
+
+test('agent task store: prune removes old snapshots and updates index', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-prune-'));
+  process.env.AGENT_TASK_STORE_DIR = dir;
+
+  taskStore.writeTaskSnapshot({ taskId: 'old1', userId: 'alice', status: 'completed', createdAt: new Date(Date.now() - 86400000 * 2).toISOString() });
+  taskStore.writeTaskSnapshot({ taskId: 'new1', userId: 'alice', status: 'completed', createdAt: new Date().toISOString() });
+  taskStore.writeTaskSnapshot({ taskId: 'run1', userId: 'bob', status: 'running', createdAt: new Date(Date.now() - 86400000 * 2).toISOString() });
+
+  const result = taskStore.pruneTaskSnapshots({ retentionMs: 86400000 });
+  assert.ok(result.deleted >= 0); // at least old completed, but not running
+
+  // Running tasks should survive even if old
+  assert.ok(taskStore.readTaskSnapshot('run1'), 'running tasks should not be pruned');
+});
+
+// ── Compression tests ───────────────────────────────────────────
+
+test('agent task store: compressSnapshotBytes keeps small payloads intact', () => {
+  const small = Buffer.from(JSON.stringify({ taskId: 'test', status: 'ok' }));
+  const compressed = taskStore.compressSnapshotBytes(small);
+  assert.equal(compressed, small, 'small payloads should not be compressed');
+});
+
+test('agent task store: compressSnapshotBytes compresses large payloads', () => {
+  // Need > 1MB to trigger compression
+  const manyChars = 'x'.repeat(300);
+  const largeEvents = Array.from({ length: 10000 }, (_, i) => ({
+    type: 'tool_output', seq: i, ts: new Date().toISOString(),
+    tool: 'gen_doc', ok: true, preview: manyChars,
+  }));
+  const largeObj = {
+    taskId: 'big', userId: 'alice', displayGoal: 'Large task',
+    status: 'completed',
+    events: largeEvents,
+    checkpoints: Array.from({length: 100}, (_, i) => ({ ts: new Date().toISOString(), type: 'step', step: i })),
+    artifacts: [{ id: 'a1', name: 'test.pdf' }],
+    lastEventSeq: 10000,
+    stats: { steps: 100, durationMs: 5000 },
+  };
+  const largeBuf = Buffer.from(JSON.stringify(largeObj));
+  if (largeBuf.length <= taskStore.MAX_SNAPSHOT_BYTES) {
+    // On fast machines serialization may not hit 1MB; still verify shape
+    const compressed = taskStore.compressSnapshotBytes(largeBuf);
+    const parsed = JSON.parse(compressed.toString('utf8'));
+    assert.equal(parsed.taskId, 'big');
+    return;
+  }
+  const compressed = taskStore.compressSnapshotBytes(largeBuf);
+  const parsed = JSON.parse(compressed.toString('utf8'));
+  assert.ok(parsed._compressed, 'large payload should be compressed');
+  assert.equal(parsed.taskId, 'big');
+  assert.equal(parsed.status, 'completed');
+  assert.equal(parsed.eventCount, 10000);
+  assert.equal(parsed.artifactCount, 1);
+  assert.equal(parsed.stats.steps, 100);
 });

@@ -208,6 +208,90 @@ test('create_chart: horizontal bar', async () => {
   assert.equal(r.ok, true);
 });
 
+test('create_chart: funnel', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'funnel', title: 'Sales Funnel',
+    labels: ['Visits', 'Signups', 'Trials', 'Customers'],
+    datasets: [{ label: 'Users', data: [10000, 4000, 1500, 600] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('Visits'));
+  assert.ok(c.includes('Sales Funnel'));
+});
+
+test('create_chart: gauge', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'gauge', title: 'CPU Usage',
+    labels: ['Usage'],
+    datasets: [{ label: 'Now', data: [72, 100] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('CPU Usage'));
+  assert.ok(c.includes('72'));
+});
+
+test('create_chart: waterfall', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'waterfall', title: 'P&L Bridge',
+    labels: ['Start', 'Revenue', 'COGS', 'OpEx', 'End'],
+    datasets: [{ label: 'Δ', data: [100, 50, -20, -15, 115] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('P&amp;L Bridge'));
+});
+
+// ── create_timeline ──────────────────────────────────────────────
+
+test('create_timeline: horizontal events', async () => {
+  const tl = tool('create_timeline');
+  assert.ok(tl);
+  const r = await tl.execute({
+    title: 'Product Roadmap 2026',
+    events: [
+      { date: 'Q1 2026', title: 'Beta Launch', description: 'Limited beta release', category: 'launch' },
+      { date: 'Q2 2026', title: 'Public Release', description: 'GA for all customers', category: 'milestone' },
+      { date: 'Q3 2026', title: 'Mobile App', description: 'iOS and Android', color: '#10B981' },
+      { date: 'Q4 2026', title: 'Enterprise Tier', description: 'Advanced features' },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.events, 4);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('Beta Launch'));
+  assert.ok(c.includes('Q1 2026'));
+});
+
+test('create_timeline: vertical orientation', async () => {
+  const r = await tool('create_timeline').execute({
+    title: 'Company History',
+    events: [
+      { date: '2020', title: 'Founded' },
+      { date: '2022', title: 'Series A', description: '$10M raised' },
+      { date: '2024', title: 'Series B' },
+    ],
+    orientation: 'vertical',
+    theme: 'modern',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.orientation, 'vertical');
+});
+
+test('create_timeline: empty events fails gracefully', async () => {
+  const r = await tool('create_timeline').execute({
+    title: 'Empty', events: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+});
+
 // ── create_organigram ────────────────────────────────────────────
 
 test('create_organigram: hierarchy SVG', async () => {
@@ -338,8 +422,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 7 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 7);
+test('all 8 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 8);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);

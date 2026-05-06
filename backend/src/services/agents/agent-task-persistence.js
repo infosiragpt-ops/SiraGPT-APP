@@ -207,9 +207,60 @@ async function persistGeneratedArtifact({
   }
 }
 
+/**
+ * recoverOrphanedAgentTasks — find tasks left in non-terminal status
+ * (running/queued) whose updatedAt is older than `staleAfterMs`, and
+ * mark them as failed (or cancelled) with a recovery reason. Safe to
+ * call at process startup; no-ops cleanly when prisma is unavailable.
+ */
+async function recoverOrphanedAgentTasks({
+  staleAfterMs = 6 * 60 * 60 * 1000,
+  markAs = 'failed',
+  reason = 'recovered_after_restart',
+  limit = 200,
+} = {}) {
+  if (!hasModel('agentTask')) return { recovered: 0, scanned: 0 };
+  const cutoff = new Date(Date.now() - staleAfterMs);
+  try {
+    const stale = await prisma.agentTask.findMany({
+      where: {
+        status: { in: ['running', 'queued'] },
+        updatedAt: { lt: cutoff },
+      },
+      take: Math.max(1, Math.min(Number(limit) || 200, 1000)),
+      select: { id: true, userId: true, status: true, updatedAt: true, state: true },
+    });
+    if (!stale.length) return { recovered: 0, scanned: 0 };
+
+    const now = new Date();
+    const data = withTerminalTimestamps({
+      status: markAs,
+      updatedAt: now,
+    }, { failedAt: now, cancelledAt: now, completedAt: now });
+
+    const ids = stale.map((row) => row.id);
+    const result = await prisma.agentTask.updateMany({
+      where: { id: { in: ids }, status: { in: ['running', 'queued'] } },
+      data: { ...data, state: safeJson({ recovered: true, reason }) },
+    });
+    return {
+      recovered: result.count,
+      scanned: stale.length,
+      ids,
+      reason,
+    };
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[agent-task-persistence] orphan recovery skipped:', err?.message || err);
+    }
+    return { recovered: 0, scanned: 0, error: err?.message || String(err) };
+  }
+}
+
 module.exports = {
   appendAgentTaskEvent,
   persistGeneratedArtifact,
+  recoverOrphanedAgentTasks,
   upsertAgentTask,
   INTERNAL: {
     isTerminalStatus,

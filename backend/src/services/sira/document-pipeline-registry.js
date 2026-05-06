@@ -101,6 +101,21 @@ const GENERATORS = Object.freeze([
   { id: "pandoc",            format: "tex",   language: "binary", runtime: "binary",  template_support: false, mime: "application/x-tex", preference: 95 },
   { id: "tectonic",          format: "pdf",   language: "binary", runtime: "binary",  template_support: false, mime: "application/pdf", preference: 88 },
   { id: "quarto",            format: "pdf",   language: "binary", runtime: "binary",  template_support: true,  mime: "application/pdf", preference: 87 },
+
+  // ── Plain text / data ──────────────────────────────────────────
+  { id: "text-writer",       format: "txt",   language: "node",   runtime: "library", template_support: false, mime: "text/plain", preference: 95 },
+  { id: "json-writer",       format: "json",  language: "node",   runtime: "library", template_support: false, mime: "application/json", preference: 95 },
+  { id: "csv-writer",        format: "csv",   language: "node",   runtime: "library", template_support: false, mime: "text/csv", preference: 92 },
+  { id: "yaml-writer",       format: "yaml",  language: "node",   runtime: "library", template_support: false, mime: "application/yaml", preference: 90 },
+  { id: "xml-writer",        format: "xml",   language: "node",   runtime: "library", template_support: false, mime: "application/xml", preference: 88 },
+
+  // ── Office alternatives (RTF / ODT / EPUB) ─────────────────────
+  { id: "pandoc-rtf",        format: "rtf",   language: "binary", runtime: "binary",  template_support: false, mime: "application/rtf", preference: 90 },
+  { id: "rtf-writer",        format: "rtf",   language: "node",   runtime: "library", template_support: false, mime: "application/rtf", preference: 80 },
+  { id: "pandoc-odt",        format: "odt",   language: "binary", runtime: "binary",  template_support: false, mime: "application/vnd.oasis.opendocument.text", preference: 90 },
+  { id: "odfpy",             format: "odt",   language: "python", runtime: "library", template_support: false, mime: "application/vnd.oasis.opendocument.text", preference: 85 },
+  { id: "pandoc-epub",       format: "epub",  language: "binary", runtime: "binary",  template_support: false, mime: "application/epub+zip", preference: 92 },
+  { id: "epub-gen",          format: "epub",  language: "node",   runtime: "library", template_support: false, mime: "application/epub+zip", preference: 85 },
 ]);
 
 const MIME_TO_FORMAT = Object.freeze({
@@ -119,6 +134,17 @@ const MIME_TO_FORMAT = Object.freeze({
   "image/webp": "image",
   "image/gif": "image",
   "image/svg+xml": "svg",
+  "text/plain": "txt",
+  "application/json": "json",
+  "application/xml": "xml",
+  "text/xml": "xml",
+  "application/yaml": "yaml",
+  "text/yaml": "yaml",
+  "application/rtf": "rtf",
+  "text/rtf": "rtf",
+  "application/vnd.oasis.opendocument.text": "odt",
+  "application/epub+zip": "epub",
+  "application/x-tex": "tex",
 });
 
 /**
@@ -218,8 +244,11 @@ async function dispatchGenerate({ format, plan, requires = {}, providers = {}, r
 function inferFormat(mime, ext) {
   if (mime && MIME_TO_FORMAT[String(mime).toLowerCase()]) return MIME_TO_FORMAT[String(mime).toLowerCase()];
   const e = String(ext || "").replace(/^\./, "").toLowerCase();
-  if (["pdf", "docx", "doc", "xlsx", "pptx", "ppt", "csv", "html", "md", "svg"].includes(e)) {
-    return e === "doc" ? "doc" : e === "ppt" ? "ppt" : e;
+  if (["pdf", "docx", "doc", "xlsx", "pptx", "ppt", "csv", "html", "htm", "md",
+       "svg", "txt", "json", "xml", "yaml", "yml", "rtf", "odt", "epub", "tex"].includes(e)) {
+    if (e === "yml") return "yaml";
+    if (e === "htm") return "html";
+    return e;
   }
   if (["png", "jpg", "jpeg", "webp", "gif"].includes(e)) return "image";
   return null;

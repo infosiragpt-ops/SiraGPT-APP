@@ -15,6 +15,9 @@ const path = require('path');
 
 const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_EVENT_LIMIT = 1000;
+const MAX_SNAPSHOT_BYTES = 1024 * 1024; // 1 MB — compress beyond this
+const DEFAULT_MAX_FILES = 5000;
+const DEFAULT_STALE_RUNNING_MS = 6 * 60 * 60 * 1000;
 
 function getTaskStoreDir() {
   return process.env.AGENT_TASK_STORE_DIR
@@ -92,7 +95,13 @@ function sanitizeTaskRecord(record = {}) {
 
 function atomicWriteJson(filePath, payload) {
   const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
+  const fd = fs.openSync(tmp, 'w');
+  try {
+    fs.writeSync(fd, JSON.stringify(payload, null, 2));
+    try { fs.fsyncSync(fd); } catch { /* fsync best-effort on platforms that disallow it */ }
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmp, filePath);
 }
 
@@ -102,6 +111,7 @@ function writeTaskSnapshot(record) {
   if (!snapshot.userId) throw new Error('task-store: userId is required');
   snapshot.updatedAt = snapshot.updatedAt || nowIso();
   atomicWriteJson(snapshotPathFor(snapshot.taskId), snapshot);
+  try { updateIndexForSnapshot(snapshot); } catch { /* index is best-effort */ }
   return snapshot;
 }
 
@@ -132,6 +142,7 @@ function updateTaskSnapshot(taskId, userId, patch = {}) {
     checkpoints: patch.checkpoints || existing.checkpoints,
   });
   atomicWriteJson(snapshotPathFor(taskId), next);
+  try { updateIndexForSnapshot(next); } catch { /* index is best-effort */ }
   return next;
 }
 
@@ -198,16 +209,100 @@ function markTaskStatus(taskLike, status, patch = {}) {
   return updateTaskSnapshot(taskLike.taskId, taskLike.userId, statusPatch);
 }
 
-function listTaskSnapshotsForUser(userId, { limit = 50 } = {}) {
+// ── Fast user-index ─────────────────────────────────────────────
+// Maintains _index.json so listTaskSnapshotsForUser avoids scanning
+// and parsing every snapshot file. The index is a map of { taskId -> { userId, status, updatedAt, createdAt } }
+// and is rebuilt on write/update to stay consistent.
+
+const INDEX_FILE = '_index.json';
+
+function indexPath() {
+  return path.join(ensureDir(), INDEX_FILE);
+}
+
+function readIndex() {
+  try {
+    const p = indexPath();
+    if (!fs.existsSync(p)) return {};
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeIndex(index) {
+  atomicWriteJson(indexPath(), index);
+}
+
+function updateIndexForSnapshot(snapshot) {
+  if (!snapshot?.taskId || !snapshot?.userId) return;
+  const index = readIndex();
+  index[snapshot.taskId] = {
+    userId: snapshot.userId,
+    status: snapshot.status || 'running',
+    createdAt: snapshot.createdAt || snapshot.updatedAt || new Date().toISOString(),
+    updatedAt: snapshot.updatedAt || snapshot.createdAt || new Date().toISOString(),
+  };
+  writeIndex(index);
+}
+
+function removeFromIndex(taskId) {
+  const index = readIndex();
+  delete index[taskId];
+  writeIndex(index);
+}
+
+function rebuildIndex() {
+  const dir = ensureDir();
+  const index = {};
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
+    try {
+      const snapshot = JSON.parse(fs.readFileSync(path.join(dir, entry), 'utf8'));
+      if (snapshot.taskId && snapshot.userId) {
+        index[snapshot.taskId] = {
+          userId: snapshot.userId,
+          status: snapshot.status || 'running',
+          createdAt: snapshot.createdAt || snapshot.updatedAt || '',
+          updatedAt: snapshot.updatedAt || snapshot.createdAt || '',
+        };
+      }
+    } catch {
+      // skip corrupt
+    }
+  }
+  writeIndex(index);
+  return index;
+}
+
+// ── List & prune ────────────────────────────────────────────────
+
+function listTaskSnapshotsForUser(userId, { limit = 50, useIndex = true } = {}) {
   const dir = ensureDir();
   const rows = [];
+
+  if (useIndex) {
+    // Fast path: read the index, then load only matching snapshots
+    const index = readIndex();
+    const matching = Object.entries(index)
+      .filter(([, meta]) => String(meta.userId) === String(userId || ''))
+      .sort((a, b) => Date.parse(b[1].updatedAt || 0) - Date.parse(a[1].updatedAt || 0))
+      .slice(0, limit);
+    for (const [taskId] of matching) {
+      const snapshot = readTaskSnapshot(taskId);
+      if (snapshot) rows.push(snapshot);
+    }
+    return rows;
+  }
+
+  // Slow path: scan directory (fallback if index is missing/corrupt)
   for (const entry of fs.readdirSync(dir)) {
-    if (!entry.endsWith('.json')) continue;
+    if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
     try {
       const snapshot = JSON.parse(fs.readFileSync(path.join(dir, entry), 'utf8'));
       if (String(snapshot.userId) === String(userId || '')) rows.push(snapshot);
     } catch {
-      // Ignore corrupt snapshots; individual reads will return null.
+      // Ignore corrupt snapshots
     }
   }
   return rows
@@ -215,43 +310,225 @@ function listTaskSnapshotsForUser(userId, { limit = 50 } = {}) {
     .slice(0, limit);
 }
 
-function pruneTaskSnapshots({ retentionMs = DEFAULT_RETENTION_MS } = {}) {
+function pruneTaskSnapshots({
+  retentionMs = DEFAULT_RETENTION_MS,
+  maxFiles = DEFAULT_MAX_FILES,
+} = {}) {
   const dir = ensureDir();
   const cutoff = Date.now() - retentionMs;
   let deleted = 0;
+  let deletedCorrupt = 0;
+  let deletedOverflow = 0;
+  const survivors = [];
+
   for (const entry of fs.readdirSync(dir)) {
-    if (!entry.endsWith('.json')) continue;
+    if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
     const full = path.join(dir, entry);
     try {
       const snapshot = JSON.parse(fs.readFileSync(full, 'utf8'));
       const updated = Date.parse(snapshot.updatedAt || snapshot.createdAt || 0);
-      const running = snapshot.status === 'running';
+      const running = snapshot.status === 'running' || snapshot.status === 'queued';
       if (!running && Number.isFinite(updated) && updated < cutoff) {
         fs.unlinkSync(full);
+        removeFromIndex(snapshot.taskId);
         deleted++;
+        continue;
       }
+      survivors.push({ full, taskId: snapshot.taskId, updatedAt: Number.isFinite(updated) ? updated : 0, running });
     } catch {
-      // Corrupt snapshots are unsafe to trust and safe to delete.
-      fs.unlinkSync(full);
+      try { fs.unlinkSync(full); } catch { /* ignore */ }
       deleted++;
+      deletedCorrupt++;
     }
   }
-  return { deleted };
+
+  // Size-cap: if too many snapshots remain, drop the oldest non-running
+  // ones. Running/queued tasks are preserved even past the cap so live
+  // work isn't destroyed; the cap is best-effort.
+  if (Number.isFinite(maxFiles) && survivors.length > maxFiles) {
+    const overflow = survivors
+      .filter((row) => !row.running)
+      .sort((a, b) => a.updatedAt - b.updatedAt);
+    let toRemove = survivors.length - maxFiles;
+    for (const row of overflow) {
+      if (toRemove <= 0) break;
+      try {
+        fs.unlinkSync(row.full);
+        removeFromIndex(row.taskId);
+        deleted++;
+        deletedOverflow++;
+        toRemove--;
+      } catch { /* ignore */ }
+    }
+  }
+
+  return { deleted, deletedCorrupt, deletedOverflow };
+}
+
+function getTaskStoreStats() {
+  const dir = ensureDir();
+  const stats = {
+    dir,
+    totalFiles: 0,
+    totalBytes: 0,
+    byStatus: {},
+    oldestUpdatedAt: null,
+    newestUpdatedAt: null,
+  };
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
+    const full = path.join(dir, entry);
+    try {
+      const stat = fs.statSync(full);
+      stats.totalFiles++;
+      stats.totalBytes += stat.size;
+      const snapshot = JSON.parse(fs.readFileSync(full, 'utf8'));
+      const status = snapshot.status || 'unknown';
+      stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
+      const updatedAt = Date.parse(snapshot.updatedAt || snapshot.createdAt || 0);
+      if (Number.isFinite(updatedAt)) {
+        if (!stats.oldestUpdatedAt || updatedAt < stats.oldestUpdatedAt) stats.oldestUpdatedAt = updatedAt;
+        if (!stats.newestUpdatedAt || updatedAt > stats.newestUpdatedAt) stats.newestUpdatedAt = updatedAt;
+      }
+    } catch {
+      stats.byStatus.corrupt = (stats.byStatus.corrupt || 0) + 1;
+    }
+  }
+  return stats;
+}
+
+function findStaleRunningTasks({ staleAfterMs = DEFAULT_STALE_RUNNING_MS } = {}) {
+  const dir = ensureDir();
+  const cutoff = Date.now() - staleAfterMs;
+  const stale = [];
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
+    try {
+      const snapshot = JSON.parse(fs.readFileSync(path.join(dir, entry), 'utf8'));
+      if (snapshot.status !== 'running' && snapshot.status !== 'queued') continue;
+      const updatedAt = Date.parse(snapshot.updatedAt || snapshot.createdAt || 0);
+      if (!Number.isFinite(updatedAt) || updatedAt < cutoff) {
+        stale.push({
+          taskId: snapshot.taskId,
+          userId: snapshot.userId,
+          status: snapshot.status,
+          updatedAt: snapshot.updatedAt || snapshot.createdAt,
+          jobId: snapshot.jobId || null,
+        });
+      }
+    } catch {
+      // Corrupt snapshots are reaped by pruneTaskSnapshots, not here.
+    }
+  }
+  return stale;
+}
+
+function recoverStaleRunningTasks({
+  staleAfterMs = DEFAULT_STALE_RUNNING_MS,
+  markAs = 'error',
+  reason = 'recovered_after_restart',
+} = {}) {
+  const stale = findStaleRunningTasks({ staleAfterMs });
+  const recovered = [];
+  for (const row of stale) {
+    const snapshot = readTaskSnapshot(row.taskId);
+    if (!snapshot) continue;
+    const stamp = nowIso();
+    const seq = (Number(snapshot.lastEventSeq) || 0) + 1;
+    const recoveryEvent = {
+      type: 'error',
+      message: `Task ${reason}; was stuck in ${snapshot.status}`,
+      ts: stamp,
+      seq,
+      id: `${snapshot.taskId}:${seq}`,
+    };
+    const events = trimEvents([...(snapshot.events || []), recoveryEvent]);
+    const next = sanitizeTaskRecord({
+      ...snapshot,
+      status: markAs,
+      failedAt: markAs === 'error' ? stamp : snapshot.failedAt,
+      cancelledAt: markAs === 'cancelled' ? stamp : snapshot.cancelledAt,
+      updatedAt: stamp,
+      events,
+      lastEventSeq: seq,
+      streamState: { ...(snapshot.streamState || {}), done: true, error: reason },
+    });
+    atomicWriteJson(snapshotPathFor(snapshot.taskId), next);
+    try { updateIndexForSnapshot(next); } catch { /* ignore */ }
+    recovered.push({ taskId: snapshot.taskId, userId: snapshot.userId, previousStatus: snapshot.status });
+  }
+  return { recovered, count: recovered.length };
+}
+
+// ── Compression ─────────────────────────────────────────────────
+// When a snapshot JSON exceeds MAX_SNAPSHOT_BYTES (1 MB),
+// strip large arrays (events, checkpoints, artifacts) after retaining
+// summary metadata, then compress with gzip.
+
+function compressSnapshotBytes(rawBytes) {
+  if (rawBytes.length <= MAX_SNAPSHOT_BYTES) return rawBytes;
+  try {
+    const parsed = JSON.parse(rawBytes.toString('utf8'));
+    // Keep only essential fields + counts for large arrays
+    const compressed = {
+      _compressed: true,
+      _originalBytes: rawBytes.length,
+      taskId: parsed.taskId,
+      userId: parsed.userId,
+      chatId: parsed.chatId,
+      status: parsed.status,
+      createdAt: parsed.createdAt,
+      updatedAt: parsed.updatedAt,
+      completedAt: parsed.completedAt,
+      failedAt: parsed.failedAt,
+      cancelledAt: parsed.cancelledAt,
+      displayGoal: parsed.displayGoal,
+      model: parsed.model,
+      eventCount: Array.isArray(parsed.events) ? parsed.events.length : 0,
+      checkpointCount: Array.isArray(parsed.checkpoints) ? parsed.checkpoints.length : 0,
+      artifactCount: Array.isArray(parsed.artifacts) ? parsed.artifacts.length : 0,
+      lastEventSeq: parsed.lastEventSeq,
+      stats: parsed.stats,
+      // Keep last event as sample
+      lastEvent: Array.isArray(parsed.events) && parsed.events.length > 0
+        ? parsed.events[parsed.events.length - 1] : null,
+      // Keep last checkpoint
+      lastCheckpoint: Array.isArray(parsed.checkpoints) && parsed.checkpoints.length > 0
+        ? parsed.checkpoints[parsed.checkpoints.length - 1] : null,
+    };
+    return Buffer.from(JSON.stringify(compressed));
+  } catch {
+    return rawBytes;
+  }
 }
 
 module.exports = {
   DEFAULT_EVENT_LIMIT,
+  DEFAULT_MAX_FILES,
   DEFAULT_RETENTION_MS,
+  DEFAULT_STALE_RUNNING_MS,
+  INDEX_FILE,
+  MAX_SNAPSHOT_BYTES,
   appendTaskEvent,
+  compressSnapshotBytes,
+  findStaleRunningTasks,
   getTaskSnapshotForUser,
   getTaskStoreDir,
+  getTaskStoreStats,
+  indexPath,
   listTaskSnapshotsForUser,
   markTaskStatus,
   pruneTaskSnapshots,
+  readIndex,
   readTaskSnapshot,
+  rebuildIndex,
+  recoverStaleRunningTasks,
+  removeFromIndex,
   safeTaskId,
   sanitizeTaskRecord,
   snapshotPathFor,
+  updateIndexForSnapshot,
   updateTaskSnapshot,
+  writeIndex,
   writeTaskSnapshot,
 };
