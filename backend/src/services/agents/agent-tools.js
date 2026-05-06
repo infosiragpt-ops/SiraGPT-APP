@@ -843,9 +843,18 @@ const static_checks = {
     // each regex scan runs in O(lines) rather than re-tokenising.
     const { lines, codeMask } = buildCommentCodeMask(content, language);
     const findings = [];
+    const checkErrors = [];
     for (const check of STATIC_CHECKS) {
-      const hits = check.scan(content, { language, lines, codeMask });
-      for (const h of hits) findings.push({ rule: check.id, ...h });
+      // Run each check in isolation: a regex backtracking blow-up or
+      // an unexpected runtime error in one check shouldn't drop the
+      // findings from every other check. Failures are surfaced as
+      // checkErrors so the agent can flag the bad rule.
+      try {
+        const hits = check.scan(content, { language, lines, codeMask });
+        for (const h of hits) findings.push({ rule: check.id, ...h });
+      } catch (err) {
+        checkErrors.push({ rule: check.id, error: err?.message || String(err) });
+      }
     }
     // Sort by line, then severity — easier for downstream consumption.
     const severityOrder = { high: 0, warn: 1, info: 2 };
@@ -860,6 +869,7 @@ const static_checks = {
         info: findings.filter(f => f.severity === 'info').length,
       },
       ...(inputTruncated ? { inputTruncated: true, scannedChars: content.length } : {}),
+      ...(checkErrors.length ? { checkErrors } : {}),
     };
   },
 };
