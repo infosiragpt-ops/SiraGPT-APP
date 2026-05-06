@@ -567,10 +567,16 @@ const createOrganigram = {
     required: ['title', 'root'],
     additionalProperties: false,
   },
-  async execute({ title, root, colorScheme = 'corporate' }, ctx = {}) {
+  async execute({ title, root, structure, colorScheme = 'corporate' }, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'create_organigram', preview: title });
 
     try {
+      // Support both root and structure param names
+      root = root || structure;
+      if (!root || typeof root !== 'object') {
+        return { ok: false, error: 'Se requiere root/structure con la jerarquía organizacional.' };
+      }
+
       // Color schemes
       const schemes = {
         corporate: { root: '#1e3a5f', level1: '#2563EB', level2: '#3B82F6', level3: '#60A5FA', text: '#ffffff', accent: '#F59E0B' },
@@ -626,8 +632,10 @@ const createOrganigram = {
         n.absY = 50 + n.myY;
         n.cx = n.absX + n.nodeW / 2;
         n.cy = n.absY + BOX_H / 2;
-        for (const c of n.children) {
-          absLayout(c, n.absX, n.absY);
+        if (n.children) {
+          for (const c of n.children) {
+            absLayout(c, n.absX, n.absY);
+          }
         }
       }
       absLayout(tree);
@@ -1387,7 +1395,7 @@ const generateVideo = {
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, duration = 8, aspectRatio = '16:9', style }, ctx = {}) {
+  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style }, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'generate_video', preview: prompt });
 
     try {
