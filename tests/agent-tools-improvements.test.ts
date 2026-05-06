@@ -32,6 +32,7 @@ const agentTools = cjsRequire("../../backend/src/services/agents/agent-tools") a
   buildCommentCodeMask: (text: string, language: string) => { lines: string[]; codeMask: boolean[] }
   commentPrefixFor: (source: string) => string
   formatChunkSeparator: (prefix: string, title: string) => string
+  propose_patch: { handler: (args: unknown) => Promise<{ error?: string; proposed?: boolean; start_line?: number | null; end_line?: number | null }> }
 }
 
 describe("task-tools · EXTENSION_TO_MIME coverage", () => {
@@ -136,6 +137,41 @@ describe("task-tools · previewText resilience", () => {
   it("falls back to String() for bigint / undefined values", () => {
     assert.equal(taskTools.INTERNAL.previewText(BigInt(7)), "7")
     assert.equal(taskTools.INTERNAL.previewText(undefined), "undefined")
+  })
+})
+
+describe("agent-tools · propose_patch range validation", () => {
+  it("rejects an inverted line range with a structured error", async () => {
+    const out = await agentTools.propose_patch.handler({
+      source: "foo.js",
+      start_line: 50,
+      end_line: 10,
+      replacement: "// patched",
+    })
+    assert.equal(out.proposed, undefined)
+    assert.match(out.error || "", /invalid range/)
+  })
+
+  it("accepts a valid range and surfaces it back as numbers", async () => {
+    const out = await agentTools.propose_patch.handler({
+      source: "foo.js",
+      start_line: 10,
+      end_line: 20,
+      replacement: "// patched",
+    })
+    assert.equal(out.proposed, true)
+    assert.equal(out.start_line, 10)
+    assert.equal(out.end_line, 20)
+  })
+
+  it("treats missing line numbers as null without erroring", async () => {
+    const out = await agentTools.propose_patch.handler({
+      source: "foo.js",
+      replacement: "// patched",
+    })
+    assert.equal(out.proposed, true)
+    assert.equal(out.start_line, null)
+    assert.equal(out.end_line, null)
   })
 })
 

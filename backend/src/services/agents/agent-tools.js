@@ -272,11 +272,20 @@ const get_symbol = {
     // numbers — the essential fix over the previous implementation that
     // re-ran code-chunker on concatenated text (which silently reset
     // line counts per chunk boundary).
-    const fromMeta = chunks.filter(c => c.meta?.name === symbol);
+    let fromMeta = chunks.filter(c => c.meta?.name === symbol);
+    let matchKind = 'exact';
+    if (fromMeta.length === 0) {
+      // Case-insensitive fallback: agents sometimes mis-case symbol
+      // names (`getName` vs `GetName`). Try lowercase before paying
+      // the cost of re-chunking the concatenated text.
+      const lower = symbol.toLowerCase();
+      fromMeta = chunks.filter(c => typeof c.meta?.name === 'string' && c.meta.name.toLowerCase() === lower);
+      if (fromMeta.length > 0) matchKind = 'case_insensitive';
+    }
     if (fromMeta.length > 0) {
       return {
         source, symbol,
-        match: 'exact',
+        match: matchKind,
         chunks: fromMeta.map(c => ({
           title: c.title,
           text: c.text,
@@ -620,11 +629,21 @@ const propose_patch = {
   async handler(args /*, ctx */) {
     const { source, start_line, end_line, replacement, rationale } = args || {};
     if (!source || typeof replacement !== 'string') return { error: 'missing "source" or "replacement"' };
+    const startNum = Number(start_line);
+    const endNum = Number(end_line);
+    const startOk = Number.isFinite(startNum) && startNum > 0;
+    const endOk = Number.isFinite(endNum) && endNum > 0;
+    // If both lines are provided they must form a valid range. Inverted
+    // ranges silently produced no-op patches in the caller before; surface
+    // the error so the agent regenerates the proposal.
+    if (startOk && endOk && startNum > endNum) {
+      return { error: `invalid range: start_line (${startNum}) > end_line (${endNum})` };
+    }
     return {
       proposed: true,
       source,
-      start_line: Number(start_line) || null,
-      end_line: Number(end_line) || null,
+      start_line: startOk ? startNum : null,
+      end_line: endOk ? endNum : null,
       replacement,
       rationale: rationale || '(no rationale provided)',
     };

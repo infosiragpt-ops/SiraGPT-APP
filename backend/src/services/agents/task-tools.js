@@ -1027,7 +1027,10 @@ const verifyArtifact = {
   },
   async execute({ artifactId }, ctx = {}) {
     ctx.onEvent?.({ type: 'tool_call', tool: 'verify_artifact', preview: `verificando ${artifactId}` });
-    const id = String(artifactId || '').replace(/[^a-f0-9]/gi, '');
+    // Canonical artifact ids are lowercase hex (artifactIdFor uses
+    // digest('hex').slice). Lowercase before stripping so a caller who
+    // pastes the id back as uppercase still finds the metadata sidecar.
+    const id = String(artifactId || '').toLowerCase().replace(/[^a-f0-9]/g, '');
     if (!id) {
       ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'invalid artifact id' });
       return { ok: false, error: 'invalid artifact id' };
