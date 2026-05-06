@@ -329,6 +329,224 @@ function listManifests() {
   }));
 }
 
+// ─── Manifests for the 7 visual/media generation tools ──────────────────
+// These tools are defined in visual-media-tools.js and wired into
+// task-tools.js, but they need manifests for full discovery through
+// the enterprise tool-registry and skill-system.
+
+function getVisualMediaManifests() {
+  return {
+    generate_image: {
+      name: "generate_image",
+      purpose: "Generate an image from a text description using DALL-E or configured AI provider. Saves as downloadable PNG artifact.",
+      inputs: {
+        type: "object", required: ["prompt"],
+        properties: {
+          prompt: { type: "string" },
+          style: { type: "string", enum: ["realistic","vivid","natural","photographic","digital-art","anime","oil-painting","line-art"] },
+          aspectRatio: { type: "string", enum: ["square","wide","portrait"] },
+          quality: { type: "string", enum: ["standard","hd"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" } } },
+      allowed_formats: ["png"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_result", description: "AI image service returned no content.", repair_hint: "Simplify the prompt or try a different style." },
+        { code: "service_error", description: "AI image provider error." },
+      ],
+      acceptance_tests: ["returns ok:true with a non-empty downloadUrl for a simple prompt"],
+      usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 10, requires_auth: true, requires_network: true },
+      examples_positive: [{ when: "user asks for an illustration", call: { prompt: "A futuristic city at sunset with flying cars", style: "vivid", aspectRatio: "wide" } }],
+      examples_negative: [{ when: "user wants a PDF document", why: "use create_document instead — generate_image only returns PNG." }],
+      recovery_policy: { on_timeout: "Return ok:false. Agent may retry with a simpler prompt.", on_error: "Surface the error message. Do not fabricate an image.", max_retries: 1 },
+      side_effect_level: "remote-read",
+      scopes: ["ai.image"],
+      data_classes: ["public"],
+    },
+    create_chart: {
+      name: "create_chart",
+      purpose: "Generate a data chart (bar, line, pie, scatter, histogram, area, radar, donut, bubble, horizontal_bar) as an SVG file artifact.",
+      inputs: {
+        type: "object", required: ["chartType","title","labels","datasets"],
+        properties: {
+          chartType: { type: "string", enum: ["bar","line","pie","scatter","histogram","area","radar","donut","bubble","horizontal_bar"] },
+          title: { type: "string" },
+          labels: { type: "array", items: { type: "string" } },
+          datasets: { type: "array", items: { type: "object" } },
+          xLabel: { type: "string" }, yLabel: { type: "string" },
+          stacked: { type: "boolean" },
+          theme: { type: "string", enum: ["professional","vibrant","pastel","dark","minimal"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_data", description: "Datasets have no values.", repair_hint: "Provide at least one data point per series." },
+        { code: "mismatched_labels", description: "Labels and data lengths don't match." },
+      ],
+      acceptance_tests: ["returns ok:true with a valid SVG when datasets have values"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 10, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants a sales chart", call: { chartType: "bar", title: "Sales 2024", labels: ["Q1","Q2","Q3"], datasets: [{label:"Revenue", data:[120,180,240]}] } }],
+      examples_negative: [{ when: "user wants to chart live API data", why: "first fetch the data with web_search or python_exec, then call create_chart." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Return ok:false with the error. Agent should retry with simpler data.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
+    create_organigram: {
+      name: "create_organigram",
+      purpose: "Generate an organizational chart from a nested JSON hierarchy as an SVG artifact.",
+      inputs: {
+        type: "object", required: ["title","structure"],
+        properties: {
+          title: { type: "string" },
+          structure: { type: "object", description: "Nested JSON: { name, role, children: [...] }" },
+          scheme: { type: "string", enum: ["professional","warm","cool","modern"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "invalid_structure", description: "Structure is not a valid nested object." },
+        { code: "too_deep", description: "Org chart exceeds max depth." },
+      ],
+      acceptance_tests: ["returns ok:true for a simple 3-level hierarchy"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user needs a company org chart", call: { title: "Acme Corp", structure: { name:"CEO", role:"Chief Executive", children:[{name:"CTO",role:"Technology",children:[{name:"Dev Lead"}]}] } } }],
+      examples_negative: [{ when: "user wants a flowchart", why: "use create_mermaid_diagram or create_chart instead." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error. Agent should simplify the structure.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
+    create_mermaid_diagram: {
+      name: "create_mermaid_diagram",
+      purpose: "Generate a diagram from Mermaid syntax (flowchart, sequence, class, state, ER, Gantt, pie, timeline, gitgraph, requirementDiagram). Returns SVG or self-contained HTML.",
+      inputs: {
+        type: "object", required: ["diagramType","definition"],
+        properties: {
+          diagramType: { type: "string", enum: ["flowchart","sequenceDiagram","classDiagram","stateDiagram","erDiagram","gantt","pie","timeline","gitgraph","requirementDiagram"] },
+          title: { type: "string" },
+          definition: { type: "string" },
+          direction: { type: "string", enum: ["TB","BT","LR","RL"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" } } },
+      allowed_formats: ["svg","html"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "invalid_syntax", description: "Mermaid syntax error." },
+        { code: "render_failed", description: "Mermaid CLI or sandbox render failed." },
+      ],
+      acceptance_tests: ["returns ok:true for a valid flowchart definition"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 8, requires_auth: false, requires_network: true },
+      examples_positive: [{ when: "user needs a flowchart", call: { diagramType: "flowchart", title: "Login Flow", definition: "A[Start] --> B{Is valid?}\nB -->|Yes| C[Login]\nB -->|No| D[Error]" } }],
+      examples_negative: [{ when: "user wants a photo", why: "use generate_image — mermaid is for graph/flow diagrams only." }],
+      recovery_policy: { on_timeout: "Fall back to HTML CDN rendering.", on_error: "Surface the Mermaid error; agent should fix syntax.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public"],
+    },
+    create_infographic_svg: {
+      name: "create_infographic_svg",
+      purpose: "Generate a professional SVG infographic from structured sections. Supports headings, paragraphs, bullet lists, progress bars, stats, and quote blocks.",
+      inputs: {
+        type: "object", required: ["title","sections"],
+        properties: {
+          title: { type: "string" },
+          sections: { type: "array", items: { type: "object" }, description: "Array of section objects with type, heading, content fields." },
+          theme: { type: "string", enum: ["professional","vibrant","minimal","dark"] },
+          width: { type: "integer" },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "invalid_section", description: "A section is missing required fields." },
+        { code: "overflow", description: "Content exceeds canvas size." },
+      ],
+      acceptance_tests: ["returns ok:true for a 3-section infographic"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants a visual summary", call: { title: "Key Metrics 2024", sections: [{type:"stat",heading:"Revenue",content:"$2.4M"},{type:"list",heading:"Highlights",content:["Growth 40%","New markets"]}] } }],
+      examples_negative: [{ when: "user wants raw data", why: "use create_chart for data visualizations or create_document for tables." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Return ok:false; agent should simplify content.", max_retries: 0 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public"],
+    },
+    create_dashboard_html: {
+      name: "create_dashboard_html",
+      purpose: "Generate an interactive HTML dashboard with Chart.js visualizations, sortable tables, and metric cards. Useful for real-time data monitoring and reporting.",
+      inputs: {
+        type: "object", required: ["title","metrics","charts"],
+        properties: {
+          title: { type: "string" },
+          metrics: { type: "array", items: { type: "object" }, description: "Metric cards: { label, value, change?, icon? }" },
+          charts: { type: "array", items: { type: "object" }, description: "Charts: { type, title, labels, datasets }" },
+          theme: { type: "string", enum: ["light","dark","blue","green"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" } } },
+      allowed_formats: ["html"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_metrics", description: "No metrics provided." },
+        { code: "chart_render_error", description: "Chart data is malformed." },
+      ],
+      acceptance_tests: ["returns ok:true with valid HTML when metrics and charts are provided"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user needs a business dashboard", call: { title: "Sales Dashboard", metrics: [{label:"Revenue",value:"$1.2M",change:"+12%"}], charts: [{type:"bar",title:"Monthly",labels:["Jan","Feb"],datasets:[{label:"Sales",data:[200,300]}]}] } }],
+      examples_negative: [{ when: "user wants a single number", why: "just answer in chat — dashboards are for multi-metric views." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Return ok:false with details.", max_retries: 0 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
+    generate_video: {
+      name: "generate_video",
+      purpose: "Generate a short video from a text description. If VIDEO_API_URL is configured, generates via API; otherwise produces a storyboard SVG with scene-by-scene breakdown.",
+      inputs: {
+        type: "object", required: ["prompt"],
+        properties: {
+          prompt: { type: "string" },
+          title: { type: "string" },
+          style: { type: "string" },
+          duration: { type: "integer", minimum: 2, maximum: 60, default: 10 },
+          aspectRatio: { type: "string", enum: ["16:9","9:16","1:1","4:3"] },
+        },
+      },
+      outputs: { type: "object", properties: {
+        ok: { type: "boolean" },
+        downloadUrl: { type: "string" },
+        filename: { type: "string" },
+        storyboard: { type: "boolean" },
+        message: { type: "string" },
+      } },
+      allowed_formats: ["mp4","svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "no_api_configured", description: "VIDEO_API_URL not set.", repair_hint: "Generates storyboard instead." },
+        { code: "api_error", description: "Video API returned an error." },
+      ],
+      acceptance_tests: ["returns ok:true producing a storyboard SVG when VIDEO_API_URL is not set"],
+      usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 300000, max_calls_per_task: 3, requires_auth: true, requires_network: true },
+      examples_positive: [{ when: "user wants a product demo video", call: { prompt: "Product walkthrough showing key features", title: "Demo", duration: 15, aspectRatio: "16:9" } }],
+      examples_negative: [{ when: "user wants a real-time animation", why: "use create_dashboard_html or animate with CSS instead." }],
+      recovery_policy: { on_timeout: "Return ok:false or generate storyboard if API unavailable.", on_error: "Surface the error; fall back to storyboard.", max_retries: 1 },
+      side_effect_level: "remote-read",
+      scopes: ["ai.video","files.write"],
+      data_classes: ["public"],
+    },
+  };
+}
+
+// Add visual media manifests to the built-in collection at startup
+Object.assign(BUILTIN_MANIFESTS, getVisualMediaManifests());
+
 module.exports = {
   toolManifestSchema,
   BUILTIN_MANIFESTS,
