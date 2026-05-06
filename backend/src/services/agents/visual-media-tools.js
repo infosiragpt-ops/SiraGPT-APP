@@ -614,21 +614,31 @@ const createChart = {
         let legends = '';
 
         datasets[0]?.data.forEach((val, i) => {
+          if (!(val > 0)) {
+            legends += `<rect x="${W - 180}" y="${60 + i * 22}" width="12" height="12" fill="${palette[i % palette.length]}" rx="2"/><text x="${W - 162}" y="${71 + i * 22}" font-family="Arial" font-size="12" fill="#333">${safeLabels[i] || ''}</text>`;
+            return;
+          }
           const angle = (val / total) * 2 * Math.PI;
           const startAngle = cumulative;
           const endAngle = cumulative + angle;
-          const startX = cx + r * Math.cos(startAngle);
-          const startY = cy + r * Math.sin(startAngle);
-          const endX = cx + r * Math.cos(endAngle);
-          const endY = cy + r * Math.sin(endAngle);
-          const largeArc = angle > Math.PI ? 1 : 0;
           const color = colors[0] || palette[i % palette.length];
           const midAngle = startAngle + angle / 2;
           const labelR = r + 24;
           const lx = cx + labelR * Math.cos(midAngle);
           const ly = cy + labelR * Math.sin(midAngle);
 
-          slices += `<path d="M ${cx} ${cy} L ${startX} ${startY} A ${r} ${r} 0 ${largeArc} 1 ${endX} ${endY} Z" fill="${color}" stroke="#fff" stroke-width="2"/>`;
+          // A single slice covering the full circle would have start==end,
+          // which leaves the SVG arc undefined; emit a circle in that case.
+          if (angle >= 2 * Math.PI - 1e-6) {
+            slices += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}" stroke="#fff" stroke-width="2"/>`;
+          } else {
+            const startX = cx + r * Math.cos(startAngle);
+            const startY = cy + r * Math.sin(startAngle);
+            const endX = cx + r * Math.cos(endAngle);
+            const endY = cy + r * Math.sin(endAngle);
+            const largeArc = angle > Math.PI ? 1 : 0;
+            slices += `<path d="M ${cx} ${cy} L ${startX} ${startY} A ${r} ${r} 0 ${largeArc} 1 ${endX} ${endY} Z" fill="${color}" stroke="#fff" stroke-width="2"/>`;
+          }
           if (angle > 0.15) {
             const pct = ((val / total) * 100).toFixed(1);
             slices += `<text x="${lx}" y="${ly}" text-anchor="${lx > cx ? 'start' : 'end'}" dominant-baseline="middle" font-family="Arial" font-size="12" fill="#fff" font-weight="bold">${pct}%</text>`;

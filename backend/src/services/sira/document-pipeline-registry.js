@@ -126,25 +126,39 @@ const MIME_TO_FORMAT = Object.freeze({
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
   "application/vnd.ms-powerpoint": "ppt",
   "text/csv": "csv",
+  "application/csv": "csv",
   "text/html": "html",
+  "application/xhtml+xml": "html",
   "text/markdown": "md",
+  "text/x-markdown": "md",
+  "application/markdown": "md",
   "image/png": "image",
   "image/jpeg": "image",
   "image/jpg": "image",
   "image/webp": "image",
   "image/gif": "image",
+  "image/bmp": "image",
+  "image/tiff": "image",
   "image/svg+xml": "svg",
+  "image/svg": "svg",
   "text/plain": "txt",
   "application/json": "json",
+  "application/ld+json": "json",
+  "text/json": "json",
   "application/xml": "xml",
   "text/xml": "xml",
   "application/yaml": "yaml",
   "text/yaml": "yaml",
+  "application/x-yaml": "yaml",
+  "text/x-yaml": "yaml",
   "application/rtf": "rtf",
   "text/rtf": "rtf",
+  "text/x-rtf": "rtf",
   "application/vnd.oasis.opendocument.text": "odt",
   "application/epub+zip": "epub",
   "application/x-tex": "tex",
+  "application/x-latex": "tex",
+  "text/x-tex": "tex",
 });
 
 /**
@@ -242,15 +256,21 @@ async function dispatchGenerate({ format, plan, requires = {}, providers = {}, r
 }
 
 function inferFormat(mime, ext) {
-  if (mime && MIME_TO_FORMAT[String(mime).toLowerCase()]) return MIME_TO_FORMAT[String(mime).toLowerCase()];
+  if (mime) {
+    const m = String(mime).toLowerCase().split(";")[0].trim();
+    if (MIME_TO_FORMAT[m]) return MIME_TO_FORMAT[m];
+  }
   const e = String(ext || "").replace(/^\./, "").toLowerCase();
   if (["pdf", "docx", "doc", "xlsx", "pptx", "ppt", "csv", "html", "htm", "md",
-       "svg", "txt", "json", "xml", "yaml", "yml", "rtf", "odt", "epub", "tex"].includes(e)) {
+       "markdown", "mdown", "mkd", "svg", "txt", "json", "xml", "yaml", "yml",
+       "rtf", "odt", "epub", "tex", "latex", "ltx", "xhtml"].includes(e)) {
     if (e === "yml") return "yaml";
-    if (e === "htm") return "html";
+    if (e === "htm" || e === "xhtml") return "html";
+    if (e === "markdown" || e === "mdown" || e === "mkd") return "md";
+    if (e === "latex" || e === "ltx") return "tex";
     return e;
   }
-  if (["png", "jpg", "jpeg", "webp", "gif"].includes(e)) return "image";
+  if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"].includes(e)) return "image";
   return null;
 }
 

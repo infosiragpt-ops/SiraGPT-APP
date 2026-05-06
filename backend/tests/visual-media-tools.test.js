@@ -194,6 +194,31 @@ test('create_chart: zero values', async () => {
   assert.equal(r.ok, true);
 });
 
+test('create_chart: pie with single 100% slice renders a full circle', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'pie', title: 'Whole', labels: ['Only'],
+    datasets: [{ label: 'V', data: [42] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  // Must contain a real circle, not an empty arc that renders nothing.
+  assert.ok(/<circle\s[^>]*r="\d/.test(c), 'expected a <circle> for full-circle pie');
+});
+
+test('create_chart: pie skips zero-value slices', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'pie', title: 'WithZero', labels: ['A', 'B', 'C'],
+    datasets: [{ label: 'V', data: [50, 0, 50] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  // Two real slices (paths), zero slice does not render a wedge.
+  const paths = c.match(/<path d="M /g) || [];
+  assert.ok(paths.length === 2, `expected 2 wedges, got ${paths.length}`);
+});
+
 test('create_chart: donut', async () => {
   const r = await tool('create_chart').execute({
     chartType: 'donut', title: 'Donut', labels: ['A','B','C'], datasets: [{ label: 'V', data: [30,30,40] }],

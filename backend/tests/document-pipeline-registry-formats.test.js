@@ -66,6 +66,49 @@ test('registry: pure-node runtime can still produce txt/json', () => {
   }
 });
 
+test('registry: markdown mime variants resolve to md', () => {
+  for (const m of ['text/markdown', 'text/x-markdown', 'application/markdown']) {
+    assert.equal(inferFormat(m, null), 'md', `mime ${m} → md`);
+  }
+  for (const e of ['md', 'markdown', 'mdown', 'mkd']) {
+    assert.equal(inferFormat(null, e), 'md', `ext ${e} → md`);
+  }
+});
+
+test('registry: yaml mime variants resolve to yaml', () => {
+  for (const m of ['application/yaml', 'text/yaml', 'application/x-yaml', 'text/x-yaml']) {
+    assert.equal(inferFormat(m, null), 'yaml', `mime ${m} → yaml`);
+  }
+});
+
+test('registry: tex/latex aliases resolve to tex', () => {
+  for (const m of ['application/x-tex', 'application/x-latex', 'text/x-tex']) {
+    assert.equal(inferFormat(m, null), 'tex');
+  }
+  for (const e of ['tex', 'latex', 'ltx']) {
+    assert.equal(inferFormat(null, e), 'tex');
+  }
+});
+
+test('registry: xhtml normalises to html', () => {
+  assert.equal(inferFormat('application/xhtml+xml', null), 'html');
+  assert.equal(inferFormat(null, 'xhtml'), 'html');
+});
+
+test('registry: image mime/ext coverage', () => {
+  for (const m of ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp', 'image/tiff']) {
+    assert.equal(inferFormat(m, null), 'image');
+  }
+  for (const e of ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff']) {
+    assert.equal(inferFormat(null, e), 'image');
+  }
+});
+
+test('registry: mime with charset suffix still resolves', () => {
+  assert.equal(inferFormat('text/markdown; charset=utf-8', null), 'md');
+  assert.equal(inferFormat('application/json; charset=UTF-8', null), 'json');
+});
+
 test('registry: rtf falls back to node when binary unavailable', () => {
   const { generators } = chooseGenerators({
     format: 'rtf',
