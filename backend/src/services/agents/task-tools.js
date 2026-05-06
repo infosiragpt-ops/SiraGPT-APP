@@ -1016,6 +1016,7 @@ const docintelRetrieve = {
         text: previewText(item.text, 1800),
         score: item.score,
       })),
+      truncation: describeFileIdTruncation(fileIds, ctx),
       _preview: `${clipped.length} fragmentos recuperados`,
     };
   },
@@ -1064,7 +1065,13 @@ const docintelExtractTables = {
     const clipped = tables.slice(0, safeLimit);
     const previewSuffix = errors.length ? ` (${errors.length} fallaron)` : '';
     ctx.onEvent?.({ type: 'tool_output', tool: 'docintel_extract_tables', ok: errors.length === 0, preview: `${clipped.length} tabla(s)${previewSuffix}` });
-    return { ok: errors.length === 0, tables: clipped, errors, _preview: `${clipped.length} tabla(s) normalizadas${previewSuffix}` };
+    return {
+      ok: errors.length === 0,
+      tables: clipped,
+      errors,
+      truncation: describeFileIdTruncation(fileIds, ctx),
+      _preview: `${clipped.length} tabla(s) normalizadas${previewSuffix}`,
+    };
   },
 };
 
@@ -1119,6 +1126,7 @@ const docintelCompare = {
     return {
       ok: true,
       ...comparison,
+      truncation: describeFileIdTruncation(fileIds, ctx),
       _preview: `${comparison.documents?.length || 0} documentos comparados`,
     };
   },
