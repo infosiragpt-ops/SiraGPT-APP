@@ -7969,7 +7969,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                   {/* Input & Actions */}
 
-                  <div ref={chatComposerDockRef} className="chat-composer-dock absolute bottom-0 left-0 right-0 z-10">
+                  <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
                     <div className="max-w-3xl mx-auto space-y-2 bg-background">
                       {/* Input Area */}
 
