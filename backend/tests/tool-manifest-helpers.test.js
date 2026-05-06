@@ -13,6 +13,7 @@ const {
   checkOutputFormat,
   checkToolUsageBudget,
   getManifest,
+  getRegistryStats,
   listManifests,
   registerToolManifest,
   unregisterToolManifest,
@@ -99,6 +100,16 @@ test('authorizeToolCall enforces requires_confirmation when set', () => {
   const allowed = authorizeToolCall('confirmable_tool', { scopes: [], approvalGranted: true });
   assert.equal(allowed.ok, true);
   unregisterToolManifest('confirmable_tool');
+});
+
+test('getRegistryStats summarises the registry', () => {
+  const stats = getRegistryStats();
+  assert.ok(stats.totalTools > 0);
+  assert.ok(typeof stats.bySideEffect === 'object');
+  assert.ok(Array.isArray(stats.uniqueScopes));
+  assert.ok(Array.isArray(stats.uniqueDataClasses));
+  // Several tools require auth (web_search, create_document, docintel_*)
+  assert.ok(stats.requiresAuth >= 3);
 });
 
 test('checkToolUsageBudget reports remaining headroom and blocks at the cap', () => {

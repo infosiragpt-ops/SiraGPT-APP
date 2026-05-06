@@ -358,6 +358,44 @@ function unregisterToolManifest(name) {
 }
 
 /**
+ * Aggregate registry stats — counts by side_effect_level, by
+ * audit_policy, and total scopes/data_classes the agent could
+ * conceivably touch. Useful for the /api/agent/skills endpoint
+ * and for dashboards that want a "what can this agent do" view.
+ */
+function getRegistryStats() {
+  const stats = {
+    totalTools: 0,
+    bySideEffect: {},
+    byAuditPolicy: {},
+    requiresAuth: 0,
+    requiresNetwork: 0,
+    sandboxRequired: 0,
+    requiresConfirmation: 0,
+    uniqueScopes: new Set(),
+    uniqueDataClasses: new Set(),
+  };
+  for (const manifest of Object.values(BUILTIN_MANIFESTS)) {
+    stats.totalTools++;
+    const effect = manifest.side_effect_level || 'unspecified';
+    stats.bySideEffect[effect] = (stats.bySideEffect[effect] || 0) + 1;
+    const audit = manifest.audit_policy || 'unspecified';
+    stats.byAuditPolicy[audit] = (stats.byAuditPolicy[audit] || 0) + 1;
+    if (manifest.usage_limits?.requires_auth) stats.requiresAuth++;
+    if (manifest.usage_limits?.requires_network) stats.requiresNetwork++;
+    if (manifest.sandbox_required) stats.sandboxRequired++;
+    if (manifest.requires_confirmation) stats.requiresConfirmation++;
+    for (const scope of manifest.scopes || []) stats.uniqueScopes.add(scope);
+    for (const cls of manifest.data_classes || []) stats.uniqueDataClasses.add(cls);
+  }
+  return {
+    ...stats,
+    uniqueScopes: Array.from(stats.uniqueScopes).sort(),
+    uniqueDataClasses: Array.from(stats.uniqueDataClasses).sort(),
+  };
+}
+
+/**
  * Check whether one more call to `toolName` would exceed the
  * per-task max_calls_per_task budget. `usageMap` is a plain
  * { [toolName]: count } map the caller maintains across the task.
@@ -891,6 +929,7 @@ module.exports = {
   authorizeToolCall,
   checkOutputFormat,
   checkToolUsageBudget,
+  getRegistryStats,
   validateManifest,
   getManifest,
   listManifests,

@@ -295,9 +295,57 @@ async function archiveCompletedAgentTasks({
   }
 }
 
+/**
+ * purgeOrphanedArtifacts — remove generatedArtifact rows whose
+ * parent agentTask no longer exists. Catches the "task pruned but
+ * artifact rows lingered" leak that accumulates after months of
+ * archive runs. `dryRun` returns the would-purge ids without
+ * deleting; defaults to a non-destructive run so an operator can
+ * inspect first.
+ */
+async function purgeOrphanedArtifacts({
+  limit = 500,
+  dryRun = true,
+} = {}) {
+  if (!hasModel('generatedArtifact')) return { purged: 0, candidates: [] };
+  try {
+    const rows = await prisma.generatedArtifact.findMany({
+      where: { taskId: { not: null } },
+      take: Math.max(1, Math.min(Number(limit) || 500, 5000)),
+      select: { id: true, taskId: true },
+    });
+    if (!rows.length) return { purged: 0, candidates: [] };
+
+    const taskIds = Array.from(new Set(rows.map((row) => row.taskId).filter(Boolean)));
+    const livingTasks = hasModel('agentTask')
+      ? await prisma.agentTask.findMany({
+          where: { id: { in: taskIds } },
+          select: { id: true },
+        })
+      : [];
+    const livingIds = new Set(livingTasks.map((row) => row.id));
+    const orphans = rows.filter((row) => row.taskId && !livingIds.has(row.taskId));
+
+    if (dryRun || orphans.length === 0) {
+      return { purged: 0, dryRun, candidates: orphans.map((row) => row.id) };
+    }
+
+    const result = await prisma.generatedArtifact.deleteMany({
+      where: { id: { in: orphans.map((row) => row.id) } },
+    });
+    return { purged: result.count, dryRun: false, candidates: orphans.map((row) => row.id) };
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[agent-task-persistence] artifact purge skipped:', err?.message || err);
+    }
+    return { purged: 0, candidates: [], error: err?.message || String(err) };
+  }
+}
+
 module.exports = {
   appendAgentTaskEvent,
   archiveCompletedAgentTasks,
+  purgeOrphanedArtifacts,
   persistGeneratedArtifact,
   recoverOrphanedAgentTasks,
   upsertAgentTask,
