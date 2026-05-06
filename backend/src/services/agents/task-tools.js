@@ -339,6 +339,10 @@ const webSearch = {
     additionalProperties: false,
   },
   async execute({ query, topK, target }, ctx = {}) {
+    if (typeof query !== 'string' || !query.trim()) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'web_search', ok: false, preview: 'empty query' });
+      return { ok: false, error: 'web_search requires a non-empty "query"', sources: [] };
+    }
     ctx.onEvent?.({ type: 'tool_call', tool: 'web_search', preview: query });
     const { runAgenticBatch } = getAgenticBatch();
     // Defense-in-depth: clamp into the schema bounds so a caller
@@ -420,8 +424,16 @@ const createDocument = {
     additionalProperties: false,
   },
   async execute({ filename, python, description, timeoutMs }, ctx = {}) {
+    if (typeof filename !== 'string' || !filename.trim()) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'create_document', ok: false, preview: 'missing filename' });
+      return { ok: false, error: 'create_document requires a non-empty "filename"' };
+    }
+    if (typeof python !== 'string' || !python.trim()) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'create_document', ok: false, preview: 'missing python source' });
+      return { ok: false, error: 'create_document requires a non-empty "python" source string' };
+    }
     ensureArtifactDir();
-    const cleanName = sanitizeArtifactFilename(filename || 'artifact.bin');
+    const cleanName = sanitizeArtifactFilename(filename);
     // Date.now()+random suffix: two concurrent create_document calls on
     // the same ms timestamp would otherwise collide on tmpOut and one
     // would clobber the other's artifact mid-write.
