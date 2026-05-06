@@ -140,11 +140,50 @@ describe("task-tools · previewText resilience", () => {
     assert.equal(taskTools.INTERNAL.previewText(undefined), "undefined")
   })
 
+  it("does not split surrogate pairs when truncating", () => {
+    // 4-byte emoji '😀' is encoded as a surrogate pair (length 2 in
+    // UTF-16). A naive slice at an odd cut would return a dangling
+    // high surrogate which JSON.stringify would replace with U+FFFD.
+    const padded = "😀".repeat(400) // 800 UTF-16 code units
+    const out = taskTools.INTERNAL.previewText(padded, 401)
+    // Should NOT contain a lone surrogate; serialise round-trip must succeed
+    const stringified = JSON.stringify(out)
+    assert.ok(typeof stringified === "string")
+    // Truncation length should be 400 (even number) not 401
+    assert.ok(out.startsWith("😀"))
+  })
+
   it("falls back to a sane default when max is non-positive or NaN", () => {
     const long = "x".repeat(1000)
     // NaN max would otherwise produce empty output; guard restores 600
     assert.ok(taskTools.INTERNAL.previewText(long, Number.NaN).length > 0)
     assert.ok(taskTools.INTERNAL.previewText(long, -10).length > 0)
+  })
+})
+
+describe("agent-tools · static_checks insecure_random_secret", () => {
+  it("flags Math.random() near sensitive identifiers", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "insecure_random_secret")!
+    const samples = [
+      "const token = Math.random().toString(36);",
+      "const apiKey = Math.random();",
+      "const csrf = Math.random();",
+      "const reset_code = Math.random();",
+    ]
+    for (const text of samples) {
+      const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+      const findings = check.scan(text, { language: "javascript", lines, codeMask })
+      assert.ok(findings.length > 0, `expected high finding for: ${text}`)
+      assert.equal(findings[0].severity, "high")
+    }
+  })
+
+  it("does not flag Math.random for non-sensitive uses", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "insecure_random_secret")!
+    const text = "const x = Math.random() * 100; // jitter"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    const findings = check.scan(text, { language: "javascript", lines, codeMask })
+    assert.equal(findings.length, 0)
   })
 })
 

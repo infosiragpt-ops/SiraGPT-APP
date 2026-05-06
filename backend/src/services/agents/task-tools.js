@@ -213,7 +213,14 @@ function previewText(s, max = 600) {
     }
   }
   if (s.length <= max) return s;
-  return s.slice(0, max) + `…  (+${s.length - max} chars truncated)`;
+  // String#slice on UTF-16 code units can leave a high-surrogate
+  // dangling at the cut, producing an invalid string that crashes
+  // downstream JSON serialisers. Pull the cut back by one if the last
+  // kept code unit is a high surrogate.
+  let cut = max;
+  const code = s.charCodeAt(cut - 1);
+  if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+  return s.slice(0, cut) + `…  (+${s.length - cut} chars truncated)`;
 }
 
 // ─── Tool 1: python_exec ────────────────────────────────────────────────
@@ -1189,10 +1196,25 @@ print(json.dumps(result))
 `;
     const r = await sandbox.run({ language: 'python', source: py, timeoutMs: 12000, signal: ctx.signal });
     let summary;
-    try {
-      summary = JSON.parse((r.stdout || '').trim().split('\n').filter(Boolean).pop() || '{}');
-    } catch {
-      summary = { ok: false, error: 'verifier output was not valid JSON', stdout: previewText(r.stdout || '', 600), stderr: previewText(r.stderr || '', 600) };
+    const lastLine = (r.stdout || '').trim().split('\n').filter(Boolean).pop();
+    if (!lastLine) {
+      // No stdout at all — likely Python interpreter unavailable, or
+      // the sandbox aborted before the script ran. Surface the
+      // sandbox status so the caller can react instead of pretending
+      // the file passed verification.
+      summary = {
+        ok: false,
+        error: r.timedOut ? 'verifier timed out' : (r.aborted ? 'verifier aborted' : 'verifier produced no output'),
+        ext, sizeBytes,
+        stdout: previewText(r.stdout || '', 600),
+        stderr: previewText(r.stderr || '', 600),
+      };
+    } else {
+      try {
+        summary = JSON.parse(lastLine);
+      } catch {
+        summary = { ok: false, error: 'verifier output was not valid JSON', stdout: previewText(r.stdout || '', 600), stderr: previewText(r.stderr || '', 600) };
+      }
     }
     summary.sizeBytes = summary.sizeBytes || sizeBytes;
     summary.filename = entry.slice(id.length + 1);

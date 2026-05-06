@@ -568,6 +568,26 @@ const STATIC_CHECKS = [
     },
   },
   {
+    id: 'insecure_random_secret',
+    description: 'Math.random() used for tokens, secrets, ids, or keys — not cryptographically secure',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        if (!/Math\.random\s*\(/.test(stripped)) return;
+        // Same-line context heuristic: if the call sits next to a
+        // sensitive identifier, it's almost certainly being used as a
+        // secret source — Math.random is not cryptographically secure.
+        if (/\b(token|secret|password|passwd|api[_-]?key|nonce|salt|csrf|session[_-]?id|reset[_-]?code|verification)\b/i.test(stripped)) {
+          out.push({ severity: 'high', line: i + 1, message: 'Math.random() is not secure — use crypto.randomBytes / crypto.randomUUID' });
+        }
+      });
+      return out;
+    },
+  },
+  {
     id: 'unsafe_innerhtml',
     description: 'Direct innerHTML / outerHTML / document.write writes — common XSS vector',
     scan: (text, { lines, codeMask, language }) => {
