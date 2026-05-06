@@ -551,32 +551,15 @@ const STATIC_CHECKS = [
       const out = [];
       lines.forEach((line, i) => {
         if (!codeMask[i]) return;
-        const stripped = stripStringLiterals(line);
-        // crypto.createHash('md5'|'sha1') / hashlib.md5(/sha1( / new MD5()
+        // For createHash/hashlib the algorithm name lives INSIDE the
+        // string literal, so we must match the raw line; stripStringLiterals
+        // would erase the very token we're trying to detect. We still
+        // strip strings for the `new MD5()` form to avoid flagging
+        // doc-strings or example text.
         if (
-          /createHash\s*\(\s*["']?(md5|sha-?1)["']?\s*\)/i.test(stripped) ||
-          /hashlib\s*\.\s*(md5|sha1)\s*\(/i.test(stripped) ||
-          /\bnew\s+(MD5|SHA1)\b/.test(stripped)
-        ) {
-          out.push({ severity: 'warn', line: i + 1, message: 'broken hash (MD5/SHA-1) — use SHA-256 or stronger for security purposes' });
-        }
-      });
-      return out;
-    },
-  },
-  {
-    id: 'weak_crypto',
-    description: 'Use of broken hash algorithms (MD5, SHA-1) for security purposes',
-    scan: (text, { lines, codeMask, language }) => {
-      if (language !== 'javascript' && language !== 'typescript' && language !== 'python' && language !== 'unknown') return [];
-      const out = [];
-      lines.forEach((line, i) => {
-        if (!codeMask[i]) return;
-        const stripped = stripStringLiterals(line);
-        if (
-          /createHash\s*\(\s*["']?(md5|sha-?1)["']?\s*\)/i.test(stripped) ||
-          /hashlib\s*\.\s*(md5|sha1)\s*\(/i.test(stripped) ||
-          /\bnew\s+(MD5|SHA1)\b/.test(stripped)
+          /createHash\s*\(\s*["'](md5|sha-?1)["']\s*\)/i.test(line) ||
+          /hashlib\s*\.\s*(md5|sha1)\s*\(/i.test(line) ||
+          /\bnew\s+(MD5|SHA1)\b/.test(stripStringLiterals(line))
         ) {
           out.push({ severity: 'warn', line: i + 1, message: 'broken hash (MD5/SHA-1) — use SHA-256 or stronger for security purposes' });
         }
