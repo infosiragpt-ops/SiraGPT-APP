@@ -1163,7 +1163,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 }
               }
             },
-            controller.signal // Pass the abort signal
+            controller.signal, // Pass the abort signal
+            {
+              onReplace: (replacement) => {
+                if (controller.signal.aborted || pendingStop) {
+                  return;
+                }
+                setCurrentChat((prevChat) => {
+                  if (!prevChat) return prevChat;
+                  const newMessages = prevChat.messages.map((msg) => {
+                    if (msg.id === aiMessagePlaceholder.id) {
+                      return { ...msg, content: replacement };
+                    }
+                    return msg;
+                  });
+                  return { ...prevChat, messages: newMessages };
+                });
+              },
+            }
           );
         }
         // Clear pending on successful completion (sync intents like chart/figma)
@@ -1689,7 +1706,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             abortControllerRef.current = null;
           }
         },
-        controller.signal // Pass the abort signal
+        controller.signal, // Pass the abort signal
+        {
+          onReplace: (replacement) => {
+            if (controller.signal.aborted || pendingStop) {
+              return;
+            }
+            setCurrentChat((prevChat) => {
+              if (!prevChat) return prevChat;
+              const updatedMessages = prevChat.messages.map((msg) => {
+                if (msg.id === aiMessagePlaceholder.id) {
+                  return { ...msg, content: replacement };
+                }
+                return msg;
+              });
+              return { ...prevChat, messages: updatedMessages };
+            });
+          },
+        }
       );
 
     } catch (error) {
@@ -1841,7 +1875,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             abortControllerRef.current = null;
           }
         },
-        controller.signal // Pass the abort signal
+        controller.signal, // Pass the abort signal
+        {
+          onReplace: (replacement) => {
+            if (controller.signal.aborted || pendingStop) {
+              return;
+            }
+            setCurrentChat((prevChat) => {
+              if (!prevChat) return prevChat;
+              const updatedMessages = prevChat.messages.map((msg) => {
+                if (msg.id === aiMessagePlaceholder.id) {
+                  return { ...msg, content: replacement };
+                }
+                return msg;
+              });
+              return { ...prevChat, messages: updatedMessages };
+            });
+          },
+        }
       );
     } catch (error) {
       console.error("Failed to edit and regenerate:", error);

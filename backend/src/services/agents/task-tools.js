@@ -900,6 +900,61 @@ const docintelExtractTables = {
   },
 };
 
+const docintelCompare = {
+  name: 'docintel_compare',
+  description: 'Compare two or more uploaded documents or versions using Document Intelligence evidence, terms, counts, tables and warnings. Use when the user asks comparar, diferencias, cambios, versiones, similitudes, or cross-document analysis.',
+  parameters: {
+    type: 'object',
+    properties: {
+      fileIds: { type: 'array', items: { type: 'string' }, description: 'At least two file ids. Defaults to the current task attachments.' },
+      query: { type: 'string', description: 'Optional focus for the comparison.' },
+      limit: { type: 'integer', minimum: 1, maximum: 12, description: 'Evidence chunks per file.' },
+    },
+    additionalProperties: false,
+  },
+  async execute({ fileIds = [], query = '', limit = 6 } = {}, ctx = {}) {
+    const prisma = getPrismaForTool(ctx);
+    const ids = resolveToolFileIds(fileIds, ctx);
+    ctx.onEvent?.({ type: 'tool_call', tool: 'docintel_compare', preview: `${ids.length} documento(s)` });
+    if (!prisma || !ctx.userId) {
+      return { ok: false, error: 'docintel_compare requires prisma and authenticated userId' };
+    }
+    if (ids.length < 2) {
+      return { ok: false, error: 'docintel_compare requires at least two file ids' };
+    }
+
+    const comparison = await documentIntelligence.compareDocuments(prisma, {
+      userId: ctx.userId,
+      fileIds: ids,
+      query,
+      limit,
+    });
+    const analysisIds = (comparison.documents || []).map((item) => item.analysisId).filter(Boolean);
+    ctx.onEvent?.({
+      type: 'document_analysis',
+      analysisIds,
+      evidenceRefs: (comparison.documents || []).flatMap((doc) => (doc.evidence || []).slice(0, 3).map((item) => ({
+        analysisId: doc.analysisId,
+        chunkId: item.id,
+        fileId: doc.fileId,
+        sourceLabel: item.sourceLabel,
+      }))),
+      summary: `${comparison.comparisons?.length || 0} comparacion(es) documental(es)`,
+    });
+    ctx.onEvent?.({
+      type: 'tool_output',
+      tool: 'docintel_compare',
+      ok: true,
+      preview: `${comparison.documents?.length || 0} documentos, ${comparison.comparisons?.length || 0} cruces`,
+    });
+    return {
+      ok: true,
+      ...comparison,
+      _preview: `${comparison.documents?.length || 0} documentos comparados`,
+    };
+  },
+};
+
 // ─── Tool 6: verify_artifact (self-supervision) ─────────────────────────
 //
 // Reads an artifact the agent just created back from disk and returns
@@ -1168,6 +1223,7 @@ function buildTaskTools() {
     docintelAnalyze,
     docintelRetrieve,
     docintelExtractTables,
+    docintelCompare,
     verifyArtifact,
     runTests,
   ];
@@ -1188,6 +1244,7 @@ module.exports = {
     docintelAnalyze,
     docintelRetrieve,
     docintelExtractTables,
+    docintelCompare,
     verifyArtifact,
     runTests,
     previewText,

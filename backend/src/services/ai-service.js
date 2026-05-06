@@ -118,6 +118,12 @@ function currentThinkingLevel() {
     return process.env.SIRA_THINKING_LEVEL || process.env.DEEPSEEK_V4_THINKING || 'high';
 }
 
+function normalizeTemperature(value, fallback = 0.55) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return Math.min(2, Math.max(0, numeric));
+}
+
 /**
  * Localized, professional fallback message for when every retry fails
  * and no content has been streamed yet. Uses the resolved response
@@ -259,9 +265,10 @@ class AIService {
      * @param {Array<object>} options.files - Uploaded files ka array (optional)
      * @returns {Promise<string>} - Poora generate kiya hua content
      */
-    async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true }) {
+    async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55 }) {
         let fullResponseContent = '';
         let hasStreamedAnyContent = false;
+        const normalizedTemperature = normalizeTemperature(temperature);
 
         // Heartbeat: SSE comment line sent every 15s so intermediaries
         // (nginx, Cloudflare, load balancers) don't close the connection
@@ -367,6 +374,7 @@ class AIService {
                     messages: workingMessages,
                     stream: true,
                     thinkingLevel: currentThinkingLevel(),
+                    extra: { temperature: normalizedTemperature },
                 });
                 const payload = providerPayload.payload;
 
@@ -431,8 +439,9 @@ class AIService {
                         // looks weak (refusal template, too short for a
                         // non-yes/no question, punctuation-only), we kick
                         // off a corrective non-streaming pass and, if it
-                        // produced something richer, append it to the
-                        // stream the user is already reading.
+                        // produced something richer, replace the already
+                        // streamed text in the UI and persist that corrected
+                        // version as the final assistant message.
                         if (qualityGuard) {
                             const verdict = evaluateResponse({ response: fullResponseContent, userPrompt });
                             if (verdict.weak) {
@@ -444,11 +453,14 @@ class AIService {
                                     userPrompt,
                                     language,
                                     signal,
+                                    temperature: normalizedTemperature,
                                 });
-                                if (corrected && corrected.length > fullResponseContent.length) {
-                                    res.write(`data: ${JSON.stringify({ content: '\n\n' })}\n\n`);
-                                    res.write(`data: ${JSON.stringify({ content: corrected })}\n\n`);
-                                    fullResponseContent += '\n\n' + corrected;
+                                const cleanCorrected = (corrected || '').trim();
+                                const correctedVerdict = evaluateResponse({ response: cleanCorrected, userPrompt });
+                                const longEnoughToReplace = cleanCorrected.length >= Math.max(40, Math.floor(fullResponseContent.trim().length * 0.8));
+                                if (cleanCorrected && !correctedVerdict.weak && longEnoughToReplace) {
+                                    res.write(`data: ${JSON.stringify({ replace: true, content: cleanCorrected })}\n\n`);
+                                    fullResponseContent = cleanCorrected;
                                 }
                             }
                         }
@@ -534,7 +546,7 @@ class AIService {
      * committing it back to the user's chat stream. This is NOT streamed
      * to the UI — the caller streams the returned string itself.
      */
-    async _runCorrectivePass({ provider, model, baseMessages, userPrompt, language, signal }) {
+    async _runCorrectivePass({ provider, model, baseMessages, userPrompt, language, signal, temperature = 0.55 }) {
         try {
             const client = this.getClient(provider);
             const correctivePrompt = buildCorrectivePrompt(userPrompt || '', language);
@@ -548,6 +560,7 @@ class AIService {
                 messages,
                 stream: false,
                 thinkingLevel: currentThinkingLevel(),
+                extra: { temperature: normalizeTemperature(temperature) },
             });
             const resp = await client.chat.completions.create(
                 providerPayload.payload,

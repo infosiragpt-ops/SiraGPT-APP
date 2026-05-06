@@ -84,6 +84,11 @@ async function start(userId, chatId, { ttlMs = DEFAULT_TTL_MS, title = '' } = {}
       entry.updatedAt = Date.now();
       cache.set(k, entry); // refresh sliding TTL
     },
+    replace(content) {
+      entry.content = String(content || '');
+      entry.updatedAt = Date.now();
+      entry.expiresAt = entry.updatedAt + ttlMs;
+    },
     complete() {
       entry.status = 'done';
       entry.updatedAt = Date.now();

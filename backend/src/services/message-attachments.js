@@ -278,6 +278,12 @@ function analysisChunksToText(analysis, maxChars = 120000) {
   return compactString(text, maxChars);
 }
 
+function documentTextForRow(row, maxChars = 120000) {
+  const directText = hasUsefulExtractedText(row?.extractedText) ? safeText(row.extractedText, '') : '';
+  const analysisText = analysisChunksToText(row?.documentAnalysis, maxChars) || '';
+  return compactString(directText || analysisText, maxChars) || '';
+}
+
 async function resolveTranscriptionFileIds(prisma, {
   userId,
   chatId = null,
@@ -384,7 +390,9 @@ async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars
   const rows = await loadFileRows(prisma, userId, ids);
   const ocrRows = await mapWithLimit(rows, (row) => ensureImageOcr(prisma, row, userId));
   const enrichedRows = await mapWithLimit(ocrRows, (row) => ensureDocumentAnalysis(prisma, row, userId));
-  const withText = enrichedRows.filter((row) => hasUsefulExtractedText(row.extractedText));
+  const withText = enrichedRows
+    .map((row) => ({ ...row, documentText: documentTextForRow(row, maxChars) }))
+    .filter((row) => hasUsefulExtractedText(row.documentText));
   if (withText.length === 0) return '';
 
   const perFileBudget = Math.max(1500, Math.floor(maxChars / withText.length));
@@ -392,8 +400,8 @@ async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars
     const analysis = row.documentAnalysis || null;
     const chunks = Array.isArray(analysis?.chunks) ? analysis.chunks : [];
     const tables = Array.isArray(analysis?.tables) ? analysis.tables : [];
-    const text = safeText(row.extractedText, '').slice(0, perFileBudget);
-    const clipped = row.extractedText.length > text.length ? '\n[Extracto truncado; usa rag_retrieve si necesitas mas contexto.]' : '';
+    const text = safeText(row.documentText, '').slice(0, perFileBudget);
+    const clipped = row.documentText.length > text.length ? '\n[Extracto truncado; usa docintel_retrieve si necesitas mas contexto.]' : '';
     const evidence = chunks.length
       ? [
         '',
@@ -438,7 +446,7 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
     .map((row) => ({
       id: row.id,
       name: safeText(row.originalName || row.filename || row.id, 'Archivo'),
-      text: safeText(row.extractedText, '') || analysisChunksToText(row.documentAnalysis, maxChars),
+      text: documentTextForRow(row, maxChars),
     }))
     .filter((row) => hasUsefulExtractedText(row.text));
 

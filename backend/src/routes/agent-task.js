@@ -105,6 +105,8 @@ const TASK_SYSTEM_PROMPT = `You are siraGPT's task agent. You work like Claude C
 Rules:
 - When the user needs data, call web_search (Web of Science / Scopus / OpenAlex / SciELO / Semantic Scholar / Crossref / PubMed / DOAJ) instead of guessing. Do not fabricate citations.
 - When the user refers to uploaded/private documents, previous project knowledge, PDFs, or "según mis archivos":
+    · First call docintel_analyze/docintel_retrieve when the task is document understanding ("analiza", "resume", "extrae", "que dice", "segun el documento", "transcribe"). These tools expose OCR coverage, chunks, tables and evidence refs. Do not show raw JSON to the user.
+    · If the user asks to compare documents, versions, matrices, tables, or differences, call docintel_compare before finalizing.
     · If they want a CONCRETE ANSWER grounded on those docs (a question, a claim, a quote, a number) → call self_rag_answer. It runs the Self-RAG reflection-token loop (ISREL/ISSUP/ISUSE per segment, beam ranking) and returns a cited answer you can quote verbatim in finalize — do NOT rewrite supported segments, only compose around them.
     · If you only need RAW CHUNKS to combine with other data (build a table, cross-check with web_search, etc.) → call rag_retrieve instead.
 - When the user asks to transcribe ("transcribir", "transcribe", "transcripción") and there is uploaded or pasted content, return the readable content verbatim, preserving line breaks and headings when useful. Do NOT explain what transcription is, do NOT summarize, and do NOT create a Word/PDF/PPT/Excel unless the user explicitly asks for that output format. If no readable text is available, say that clearly and ask for a readable file/audio/image.
@@ -1528,6 +1530,8 @@ function initialAgentState() {
     frameworks: null,
     observability: null,
     approvals: [],
+    documentAnalysisIds: [],
+    evidenceRefs: [],
   };
 }
 
@@ -1537,6 +1541,18 @@ function reduceAgentState(state, evt) {
       return { ...state, queue: { status: evt.status, queue: evt.queue, jobId: evt.jobId, position: evt.position ?? null, estimatedWaitMs: evt.estimatedWaitMs ?? null, updatedAt: evt.ts || new Date().toISOString() } };
     case 'document_policy':
       return { ...state, documentPolicy: evt.policy || evt.documentPolicy || null };
+    case 'document_analysis':
+      return {
+        ...state,
+        documentAnalysisIds: Array.from(new Set([
+          ...(state.documentAnalysisIds || []),
+          ...((evt.analysisIds || []).map(String).filter(Boolean)),
+        ])).slice(-20),
+        evidenceRefs: [
+          ...(state.evidenceRefs || []),
+          ...((evt.evidenceRefs || []).filter(Boolean)),
+        ].slice(-40),
+      };
     case 'framework_status':
       return {
         ...state,
@@ -1750,6 +1766,8 @@ function toSerializableAgentState(state = {}) {
     })),
     queue: state.queue || undefined,
     documentPolicy: state.documentPolicy || undefined,
+    documentAnalysisIds: state.documentAnalysisIds || undefined,
+    evidenceRefs: state.evidenceRefs || undefined,
     meta: state.meta
       ? {
         taskId: state.meta.taskId,

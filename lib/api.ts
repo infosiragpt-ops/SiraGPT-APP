@@ -11,6 +11,10 @@ export function getNormalizedApiBaseUrl(): string {
 
 const API_BASE_URL = getNormalizedApiBaseUrl()
 
+type AIStreamOptions = {
+  onReplace?: (content: string) => void
+}
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -590,7 +594,8 @@ class ApiClient {
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options: AIStreamOptions = {}
   ) {
     const url = `${this.baseURL}/ai/generate`;
     const config: RequestInit = {
@@ -703,7 +708,16 @@ class ApiClient {
             }
             try {
               const jsonData = JSON.parse(payload);
-              if (jsonData.content) {
+              if (jsonData.replace && typeof jsonData.content === 'string') {
+                flushBatch();
+                if (options.onReplace) {
+                  options.onReplace(jsonData.content);
+                } else {
+                  onData(jsonData.content);
+                }
+                hasDeliveredAnyContent = true;
+                lastProcessTime = Date.now();
+              } else if (jsonData.content) {
                 batchBuffer += jsonData.content;
                 processedChunks++;
 

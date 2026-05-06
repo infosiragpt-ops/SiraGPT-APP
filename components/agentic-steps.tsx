@@ -130,57 +130,6 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function ThinkingBarsSvg({ className }: { className?: string }) {
-  return (
-    <svg
-      version="1.1"
-      id="L9"
-      xmlns="http://www.w3.org/2000/svg"
-      x="0px"
-      y="0px"
-      viewBox="10 40 45 50"
-      xmlSpace="preserve"
-      role="status"
-      aria-label="Pensando"
-      className={cn("h-12 w-12 text-orange-500", className)}
-    >
-      <rect x="20" y="50" width="4" height="10" fill="currentColor">
-        <animateTransform
-          attributeType="xml"
-          attributeName="transform"
-          type="translate"
-          values="0 0; 0 20; 0 0"
-          begin="0"
-          dur="0.6s"
-          repeatCount="indefinite"
-        />
-      </rect>
-      <rect x="30" y="50" width="4" height="10" fill="currentColor">
-        <animateTransform
-          attributeType="xml"
-          attributeName="transform"
-          type="translate"
-          values="0 0; 0 20; 0 0"
-          begin="0.2s"
-          dur="0.6s"
-          repeatCount="indefinite"
-        />
-      </rect>
-      <rect x="40" y="50" width="4" height="10" fill="currentColor">
-        <animateTransform
-          attributeType="xml"
-          attributeName="transform"
-          type="translate"
-          values="0 0; 0 20; 0 0"
-          begin="0.4s"
-          dur="0.6s"
-          repeatCount="indefinite"
-        />
-      </rect>
-    </svg>
-  )
-}
-
 function StatusPill({ status, label, phase }: { status: AgentActivityStatus; label: string; phase?: AgentStatusIconKind }) {
   return (
     <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLES[status])}>
@@ -470,9 +419,90 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
   }
 
   if (isLiveActivity) {
+    // Live state: a focused, minimal card. We surface only what the
+    // user actually needs while the agent is working — current stage
+    // label, step/tool counters and a single "cancel" affordance.
+    // Past steps are intentionally hidden (per UX decision) so the
+    // chat surface stays clean.
+    const stageLabel = runningTimelineStep
+      ? professionalStepLabel({
+          id: runningTimelineStep.id,
+          label: runningTimelineStep.label,
+          status: "running",
+        } as AgentTaskState["steps"][number])
+      : summary.label
+    const stageDetail = runningTimelineStep?.detail
+      ? sanitizeAgentText(runningTimelineStep.detail)
+      : summary.description
+
     return (
-      <div className={cn("my-2 flex w-full max-w-2xl items-center", className)}>
-        <ThinkingBarsSvg />
+      <div
+        role="status"
+        aria-live="polite"
+        className={cn(
+          "my-2 w-full max-w-2xl rounded-2xl border border-border/60 bg-background/80 p-3 shadow-sm backdrop-blur-sm",
+          className,
+        )}
+      >
+        <div className="flex items-start gap-3">
+          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted/50">
+            <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-primary/15" />
+            <span aria-hidden="true" className="absolute inset-0 rounded-full ring-1 ring-primary/40" />
+            <ThinkingIndicator size="sm" className="relative text-primary" />
+          </div>
+
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusPill status={summary.status} label={summary.label} phase={activePhase} />
+              {state.documentPolicy && state.documentPolicy.mode !== "chat_only" && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <FileText className="h-3 w-3" />
+                  {state.documentPolicy.format}
+                </span>
+              )}
+            </div>
+
+            <p className="truncate text-sm font-medium text-foreground">{stageLabel}</p>
+            {stageDetail && stageDetail !== stageLabel && (
+              <p className="line-clamp-1 text-xs text-muted-foreground">{stageDetail}</p>
+            )}
+
+            <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted/60" aria-hidden="true">
+              <div className="h-full w-1/3 animate-[liveAgentProgress_1.6s_ease-in-out_infinite] rounded-full bg-primary/70" />
+            </div>
+
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+              <span>{plural(summary.stepCount, "paso", "pasos")}</span>
+              {summary.toolCount > 0 && <span>{plural(summary.toolCount, "herramienta", "herramientas")}</span>}
+              {summary.validationTotal > 0 && (
+                <span>
+                  {summary.validationPassed}/{summary.validationTotal} validaciones
+                </span>
+              )}
+            </div>
+          </div>
+
+          {canCancel && (
+            <button
+              type="button"
+              onClick={cancelTask}
+              disabled={cancelling}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border/60 px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+              aria-label="Cancelar tarea agéntica"
+            >
+              {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
+              Cancelar
+            </button>
+          )}
+        </div>
+
+        <style jsx>{`
+          @keyframes liveAgentProgress {
+            0% { transform: translateX(-100%); }
+            50% { transform: translateX(120%); }
+            100% { transform: translateX(280%); }
+          }
+        `}</style>
       </div>
     )
   }

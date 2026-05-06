@@ -64,6 +64,62 @@ describe("message attachments · agent task persistence", () => {
     assert.match(context, /file-1/)
   })
 
+  it("uses document analysis chunks when direct extractedText is weak", async () => {
+    const prisma = {
+      file: {
+        async findMany() {
+          return [
+            {
+              id: "file-analysis",
+              filename: "scan.png",
+              originalName: "scan.png",
+              mimeType: "image/png",
+              size: 4096,
+              extractedText: "No text found in image",
+              openaiFileId: null,
+              documentAnalysis: {
+                id: "analysis-1",
+                status: "ready",
+                summary: "Texto OCR recuperado",
+                textCoverage: { status: "complete" },
+                ocr: { status: "vision_fallback", confidence: 95 },
+                warnings: [],
+                pageCount: null,
+                sheetCount: null,
+                slideCount: null,
+                chunkCount: 1,
+                tableCount: 0,
+                chunks: [
+                  {
+                    id: "chunk-1",
+                    ordinal: 1,
+                    sourceType: "page",
+                    sourceLabel: "Pagina 1",
+                    pageNumber: 1,
+                    sheetName: null,
+                    slideNumber: null,
+                    sectionTitle: null,
+                    text: "FACULTAD DE NEGOCIOS\nTitulo y matriz para transcribir.",
+                  },
+                ],
+                tables: [],
+              },
+            },
+          ]
+        },
+      },
+    }
+
+    const context = await buildUploadedFileContext(prisma, {
+      userId: "user-1",
+      fileIds: ["file-analysis"],
+      maxChars: 5000,
+    })
+
+    assert.match(context, /FACULTAD DE NEGOCIOS/)
+    assert.match(context, /analysis-1/)
+  })
+
   it("returns verbatim extracted text for plain transcription requests", async () => {
     const text = await buildTranscriptionTextFromFiles(prismaMock, {
       userId: "user-1",

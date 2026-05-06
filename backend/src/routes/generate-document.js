@@ -6,6 +6,7 @@ const prisma = require('../config/database');
 const aiService = require('../services/ai-service');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
+const { recordLLMUsage } = require("../services/observability/record-llm-usage");
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const googleMCPService = require('../services/google-mcp');
@@ -72,6 +73,21 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             });
         }
         await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
+
+        // Phase 8s — emit to PostHog + Langfuse with per-model
+        // pricing. Runs alongside the legacy flat-rate usageService
+        // call above (which writes to Prisma); this one is read-only
+        // observability and never blocks the request. Surface label
+        // identifies the entry point so the dashboard can filter
+        // "document generation spend" separately from chat or agent.
+        recordLLMUsage({
+            userId,
+            surface: 'document.generate',
+            model,
+            inputTokens: promptTokens,
+            outputTokens: responseTokens,
+            chatId: chatId || null,
+        });
 
         console.log("Background task: Database save complete.");
     } catch (dbError) {

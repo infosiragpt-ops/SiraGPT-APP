@@ -9,6 +9,7 @@ import { toast } from "sonner"
 import DOMPurify from "dompurify"
 import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 /**
  * Build the fetch init the preview uses against the backend asset
  * host. Includes the cookie AND the Bearer token most auth gates

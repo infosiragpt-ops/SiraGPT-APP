@@ -75,6 +75,7 @@ export type AgentTaskEvent =
   | { type: "quality_gate"; id?: string; gate?: string; label?: string; passed: boolean; score?: number | null; overallScore?: number | null; summary?: string; message?: string; payload?: Record<string, unknown> | null; ts?: string; seq?: number }
   | { type: "repair_attempt"; attempt?: number; status?: string; message?: string; ts?: string; seq?: number }
   | { type: "document_policy"; policy?: DocumentPolicy; documentPolicy?: DocumentPolicy; seq?: number }
+  | { type: "document_analysis"; analysisIds?: string[]; evidenceRefs?: Array<Record<string, unknown>>; summary?: string; ts?: string; seq?: number }
   | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
   | { type: "step_start"; id: string; label: string; icon?: AgenticIcon }
   | { type: "tool_call"; stepId: string; tool: string; preview?: string; language?: string; codePreview?: string }
@@ -222,6 +223,8 @@ export interface AgentTaskState {
   artifacts: AgentArtifact[]
   queue?: QueueStatus
   documentPolicy?: DocumentPolicy | null
+  documentAnalysisIds?: string[]
+  evidenceRefs?: Array<Record<string, unknown>>
   frameworks?: AgentFrameworkStatus | null
   observability?: Record<string, unknown> | null
   approvals: AgentApprovalState[]
@@ -250,6 +253,18 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
       }
     case "document_policy":
       return { ...state, documentPolicy: evt.policy || evt.documentPolicy || null }
+    case "document_analysis":
+      return {
+        ...state,
+        documentAnalysisIds: Array.from(new Set([
+          ...(state.documentAnalysisIds || []),
+          ...((evt.analysisIds || []).map(String).filter(Boolean)),
+        ])).slice(-20),
+        evidenceRefs: [
+          ...(state.evidenceRefs || []),
+          ...((evt.evidenceRefs || []).filter(Boolean)),
+        ].slice(-40),
+      }
     case "framework_status":
       return {
         ...state,
@@ -420,6 +435,8 @@ export const initialAgentState: AgentTaskState = {
   checkpoints: [],
   qualityGates: [],
   repairs: [],
+  documentAnalysisIds: [],
+  evidenceRefs: [],
   finalText: "",
   done: false,
 }

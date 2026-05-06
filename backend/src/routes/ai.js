@@ -852,7 +852,7 @@ router.post(
       let customGpt = null;
       let project = null;
       let actualModel = model;
-      let actualTemperature = 0.7;
+      let actualTemperature = 0.55;
 
       if (canPersist) {
         const chat = await prisma.chat.findUnique({
@@ -899,7 +899,7 @@ router.post(
         if (chat && chat.customGpt) {
           customGpt = chat.customGpt;
           actualModel = chat.model || customGpt.modelName || model;
-          actualTemperature = customGpt.temperature || 0.7;
+          actualTemperature = customGpt.temperature ?? actualTemperature;
 
           // ✅ Provider detection logic merged here
           if (isDirectDeepSeekModel(actualModel)) {
@@ -1346,7 +1346,11 @@ router.post(
               const raw = payload.slice(5).trim();
               if (raw && raw !== '[DONE]') {
                 const obj = JSON.parse(raw);
-                if (obj && typeof obj.content === 'string') cacheHandle.append(obj.content);
+                if (obj && obj.replace && typeof obj.content === 'string' && typeof cacheHandle.replace === 'function') {
+                  cacheHandle.replace(obj.content);
+                } else if (obj && typeof obj.content === 'string') {
+                  cacheHandle.append(obj.content);
+                }
                 if (obj && obj.error) cacheHandle.fail(obj.error);
               }
             } catch { /* non-JSON SSE frame — ignore */ }

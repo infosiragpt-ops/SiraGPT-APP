@@ -192,7 +192,7 @@ function fallbackChunks(text, file = {}) {
 
 function buildChunks(file = {}, extractedText = '') {
   const text = cleanText(extractedText);
-  if (!text) return [];
+  if (!hasUsefulText(text)) return [];
   const structured = [
     ...splitBySpreadsheetSheets(text),
     ...splitByMarkdownHeadings(text),
@@ -597,6 +597,26 @@ function tokenizeQuery(query) {
     .filter((term) => !['para', 'como', 'que', 'del', 'con', 'una', 'los', 'las', 'the', 'and', 'from', 'this'].includes(term));
 }
 
+function topTerms(text, limit = 20) {
+  const stop = new Set([
+    'para', 'como', 'que', 'del', 'con', 'una', 'uno', 'los', 'las', 'por', 'sobre', 'esta', 'este', 'esas', 'esos',
+    'the', 'and', 'from', 'this', 'that', 'with', 'into', 'document', 'archivo', 'documento',
+  ]);
+  const counts = new Map();
+  String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .match(/[a-z0-9]{4,}/g)
+    ?.forEach((term) => {
+      if (!stop.has(term)) counts.set(term, (counts.get(term) || 0) + 1);
+    });
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, Math.max(1, Math.min(Number(limit) || 20, 50)))
+    .map(([term, count]) => ({ term, count }));
+}
+
 function scoreChunk(chunk, terms) {
   if (!terms.length) return 1 / Math.max(1, chunk.ordinal || 1);
   const haystack = String(`${chunk.sectionTitle || ''} ${chunk.sourceLabel || ''} ${chunk.text || ''}`)
@@ -647,11 +667,102 @@ async function getTablesForFile(prisma, { userId, fileId } = {}) {
   });
 }
 
+async function compareDocuments(prisma, { userId, fileIds = [], query = '', limit = 6 } = {}) {
+  if (!prisma?.documentAnalysis || !userId) {
+    return { comparisons: [], documents: [], sharedTerms: [], warnings: [{ code: 'docintel_unavailable', message: 'Document Intelligence no esta disponible.' }] };
+  }
+
+  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 6);
+  if (ids.length < 2) {
+    return { comparisons: [], documents: [], sharedTerms: [], warnings: [{ code: 'insufficient_documents', message: 'Se requieren al menos dos documentos para comparar.' }] };
+  }
+
+  const documents = [];
+  for (const fileId of ids) {
+    const analysis = await analyzeFile(prisma, { userId, fileId });
+    const evidenceResult = await retrieveEvidence(prisma, {
+      userId,
+      fileId,
+      query: query || analysis?.summary || '',
+      limit,
+    });
+    const tables = await getTablesForFile(prisma, { userId, fileId });
+    const evidence = (evidenceResult.evidence || []).slice(0, Math.max(1, Math.min(Number(limit) || 6, 12)));
+    const termSource = [
+      analysis?.summary || '',
+      ...evidence.map((item) => item.text || ''),
+    ].join('\n');
+    documents.push({
+      fileId,
+      analysisId: analysis?.id || null,
+      status: analysis?.status || 'unknown',
+      summary: analysis?.summary || null,
+      charCount: analysis?.charCount || 0,
+      chunkCount: analysis?.chunkCount || 0,
+      tableCount: analysis?.tableCount || 0,
+      warnings: analysis?.warnings || [],
+      evidence: evidence.map((item) => ({
+        id: item.id,
+        sourceType: item.sourceType,
+        sourceLabel: item.sourceLabel,
+        pageNumber: item.pageNumber,
+        sheetName: item.sheetName,
+        slideNumber: item.slideNumber,
+        sectionTitle: item.sectionTitle,
+        text: compactString(item.text, 900),
+        score: item.score,
+      })),
+      tables: tables.slice(0, 5).map((table) => ({
+        id: table.id,
+        title: table.title,
+        sourceLabel: table.sourceLabel,
+        sheetName: table.sheetName,
+        columns: table.columns,
+        rowCount: table.rowCount,
+        preview: Array.isArray(table.preview) ? table.preview.slice(0, 5) : table.preview,
+      })),
+      terms: topTerms(termSource, 25),
+    });
+  }
+
+  const termSets = documents.map((doc) => new Set(doc.terms.map((item) => item.term)));
+  const sharedTerms = Array.from(termSets[0] || [])
+    .filter((term) => termSets.every((set) => set.has(term)))
+    .slice(0, 20);
+
+  const comparisons = [];
+  for (let i = 0; i < documents.length; i += 1) {
+    for (let j = i + 1; j < documents.length; j += 1) {
+      const a = documents[i];
+      const b = documents[j];
+      const aTerms = new Set(a.terms.map((item) => item.term));
+      const bTerms = new Set(b.terms.map((item) => item.term));
+      comparisons.push({
+        pair: [a.fileId, b.fileId],
+        sharedTerms: Array.from(aTerms).filter((term) => bTerms.has(term)).slice(0, 20),
+        onlyInFirst: Array.from(aTerms).filter((term) => !bTerms.has(term)).slice(0, 15),
+        onlyInSecond: Array.from(bTerms).filter((term) => !aTerms.has(term)).slice(0, 15),
+        charDelta: a.charCount - b.charCount,
+        tableDelta: a.tableCount - b.tableCount,
+        evidenceDelta: a.evidence.length - b.evidence.length,
+      });
+    }
+  }
+
+  return {
+    documents,
+    comparisons,
+    sharedTerms,
+    warnings: documents.flatMap((doc) => (doc.warnings || []).map((warning) => ({ fileId: doc.fileId, ...warning }))),
+  };
+}
+
 module.exports = {
   analyzeFile,
   buildChunks,
   buildSummary,
   buildTables,
+  compareDocuments,
   getAnalysisForFile,
   getTablesForFile,
   hasUsefulText,
@@ -664,5 +775,6 @@ module.exports = {
     extractSpreadsheetTables,
     inferCounts,
     tokenizeQuery,
+    topTerms,
   },
 };

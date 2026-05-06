@@ -4,7 +4,7 @@ import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Eye, EyeOff} from "lucide-react"
+import { ArrowLeft, Eye, EyeOff} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -25,6 +25,15 @@ export default function LoginPage() {
 
   const { login, user } = useAuth()
   const router = useRouter()
+
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      router.back()
+      return
+    }
+
+    router.push("/auth")
+  }
 
   // Redirect if already logged in
   React.useEffect(() => {
@@ -57,7 +66,17 @@ export default function LoginPage() {
     "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15 dark:border-white/20 dark:bg-black dark:text-white dark:placeholder:text-zinc-500 dark:focus-visible:border-white/45 dark:focus-visible:ring-white/20"
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-neutral-50 p-4 dark:bg-black">
+    <div className="relative flex min-h-screen items-center justify-center bg-neutral-50 p-4 dark:bg-black">
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={handleBack}
+        className="absolute left-4 top-4 h-10 gap-2 rounded-full border border-neutral-200 bg-white/90 px-4 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-neutral-950 dark:border-white/10 dark:bg-zinc-950/80 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-white sm:left-6 sm:top-6"
+        aria-label="Volver atras"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Volver
+      </Button>
       <Card className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] dark:border-white/15 dark:bg-zinc-950 dark:text-zinc-50 dark:shadow-[0_28px_70px_-18px_rgba(0,0,0,0.75)]">
         <CardHeader className="text-center">
           <div className="mb-4 flex justify-center">

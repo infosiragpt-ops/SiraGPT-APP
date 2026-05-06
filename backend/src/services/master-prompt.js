@@ -154,6 +154,15 @@ Hard requirements for an architectural artifact:
 
 Reference mental model for an architectural artifact: a top-bar with the project name and the scale ("Escala 1:100 · Planta Baja"), an SVG canvas that fills the viewport with a subtle grid, walls drawn as thick darker rectangles, rooms as lighter-filled polygons with a room label in the centre and an area figure below it, doors with proper swing arcs, windows with the double-line convention, at least 3 pieces of scaled furniture per major room, dimension lines along the outer perimeter with labels in metres, a north arrow in the top-right, a legend card in the bottom-right, and a small control panel in the top-right with Zoom + / − / Reset and layer toggles that actually hide/show the corresponding SVG groups. The whole thing must be readable and printable without losing geometry.`;
 
+const QUALITY_RESPONSE_CONTRACT = `## RESPONSE QUALITY CONTRACT
+
+- Decide the size of the answer from the user's request. Greetings, confirmations, and simple yes/no questions stay short and natural. Substantial requests get a complete answer.
+- For substantial requests, follow this order: direct answer first, then structured explanation, then concrete steps or examples, then a useful next action.
+- Prefer numbered steps, short sections, tables, or bullets when they improve scanability. Do not over-format tiny replies.
+- Avoid generic filler such as "claro, puedo ayudarte" as the whole answer. Do the work immediately.
+- Make professional assumptions when information is missing. State the assumption briefly and continue with the best useful answer.
+- Keep the language resolved by the language policy, with Spanish as the default for Spanish-speaking users.`;
+
 // ────────────────────────────────────────────────────────────────────
 // Intent taxonomy. Order matters: the first matching intent wins, so
 // highly specific intents (CODE_EXECUTION, GENERATE_DOCUMENT) are
@@ -283,7 +292,9 @@ const DEFAULT_INTENT = {
   intent: 'GENERAL_CHAT',
   context: `\n## TASK: GENERAL CHAT
 - Lead with a direct answer in the first sentence. Context and caveats go after, not before.
-- Keep it conversational but precise. Prefer concrete examples over abstract explanations.`,
+- Keep it conversational but precise. Prefer concrete examples over abstract explanations.
+- For "hola" or similar greetings, answer naturally in one short line.
+- For requests that ask how to do something, improve something, or explain a concept, include actionable steps and examples instead of a generic acknowledgement.`,
 };
 
 /**
@@ -409,7 +420,7 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
 
   const header = buildSystemRule(lang);
 
-  let body = ABSOLUTE_RULES;
+  let body = `${ABSOLUTE_RULES}\n\n${QUALITY_RESPONSE_CONTRACT}`;
 
   // User profile — per-user personalization loaded from the database at
   // request time. Lives above custom GPT persona so user preferences
@@ -469,5 +480,6 @@ module.exports = {
   buildUserIntentAlignmentProfile,
   buildUserIntentAlignmentPrompt,
   ABSOLUTE_RULES,
+  QUALITY_RESPONSE_CONTRACT,
   LANG_NAMES,
 };
