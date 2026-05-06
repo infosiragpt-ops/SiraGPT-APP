@@ -1554,6 +1554,8 @@ async function runAdvancedDocumentPipeline({
   maxRepairAttempts = 1,
   signal,
   referenceFiles = [],
+  userId,
+  chatId,
 } = {}) {
   assertNotAborted(signal);
   const startedAt = Date.now();
@@ -1695,8 +1697,8 @@ async function runAdvancedDocumentPipeline({
       filename: artifact.filename,
       base64: artifact.buffer.toString('base64'),
       mime: artifact.mime,
-      ownerUserId: opts.userId || null,
-      chatId: opts.chatId || null,
+      ownerUserId: userId || null,
+      chatId: chatId || null,
       validation,
     });
     url = persisted.downloadUrl;
@@ -1717,7 +1719,7 @@ async function runAdvancedDocumentPipeline({
       const { validatePdfRender } = require('../agents/pdf-render-validator');
       const pdfReport = await validatePdfRender({
         buffer: artifact.buffer,
-        prompt: opts.prompt || promptText,
+        prompt: promptText,
       });
       validation.checks = validation.checks || {};
       validation.checks.pdf_render = pdfReport.ok;
@@ -1765,7 +1767,7 @@ async function runAdvancedDocumentPipeline({
       const { validatePptxPackage } = require('../agents/pptx-package-validator');
       const pptxReport = await validatePptxPackage({
         buffer: artifact.buffer,
-        prompt: opts.prompt || promptText,
+        prompt: promptText,
       });
       validation.checks = validation.checks || {};
       validation.checks.pptx_package = pptxReport.ok;
@@ -1787,7 +1789,7 @@ async function runAdvancedDocumentPipeline({
       const { validateXlsxWorkbook } = require('../agents/xlsx-workbook-validator');
       const xlsxReport = await validateXlsxWorkbook({
         buffer: artifact.buffer,
-        prompt: opts.prompt || promptText,
+        prompt: promptText,
       });
       validation.checks = validation.checks || {};
       validation.checks.xlsx_workbook = xlsxReport.ok;

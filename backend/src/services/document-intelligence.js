@@ -229,6 +229,20 @@ function tableToMarkdown(columns, rows) {
 
 function extractSpreadsheetTables(file = {}, extractedText = '') {
   if (!isSpreadsheet(file)) return [];
+  // When the extracted text is empty but a file path exists, read the
+  // workbook directly so the function works both in the async analysis
+  // pipeline (where extractedText is pre-populated) and in direct
+  // calls with a file path (e.g. tests or synchronous contexts).
+  if (!extractedText && file.path && fs.existsSync(file.path)) {
+    try {
+      const workbookText = readXlsxToText(file.path);
+      if (workbookText) {
+        return extractSpreadsheetTables(file, workbookText);
+      }
+    } catch (_) {
+      // fall through to empty extracted text — same as no tables
+    }
+  }
   const sheets = splitBySpreadsheetSheets(extractedText);
   return sheets.map((sheet, index) => {
     const lines = String(sheet.text || '').split('\n').map((line) => line.trim()).filter(Boolean);
@@ -261,6 +275,34 @@ function extractSpreadsheetTables(file = {}, extractedText = '') {
       metadata: { workbookSheetIndex: index, source: 'extracted_text' },
     };
   }).filter((table) => table.columns.length > 0);
+}
+
+/**
+ * Read an XLSX workbook file and produce the same tab-delimited text
+ * format that the async extraction pipeline generates. This lets
+ * extractSpreadsheetTables work both with pre-extracted text (from
+ * the file processor) and directly from a file path.
+ */
+function readXlsxToText(filePath) {
+  const XLSX = require('xlsx');
+  const workbook = XLSX.readFile(filePath, { type: 'file', cellDates: false, raw: true });
+  const parts = [];
+  for (let i = 0; i < workbook.SheetNames.length; i++) {
+    const sheetName = workbook.SheetNames[i];
+    const sheet = workbook.Sheets[sheetName];
+    const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    const columns = json.length > 0 ? Object.keys(json[0]) : [];
+    const lines = [];
+    lines.push(`Sheet: ${sheetName}`);
+    lines.push(`Columns (${columns.length}): ${columns.join('|')}`);
+    lines.push(`Total data rows: ${json.length}`);
+    lines.push('---');
+    for (const row of json) {
+      lines.push(columns.map((col) => String(row[col] ?? '')).join('\t'));
+    }
+    parts.push(lines.join('\n'));
+  }
+  return parts.join('\n\n');
 }
 
 function extractMarkdownTables(text) {
