@@ -32,6 +32,8 @@ const crypto = require('crypto');
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_MEMORY_MB = 512;
+const DEFAULT_MAX_SOURCE_BYTES = 256 * 1024; // 256 KB source cap
+const DEFAULT_MAX_EXTRA_FILES = 20;           // max fixture files per run
 
 const LANGUAGE_CONFIG = {
   python: {
@@ -137,6 +139,19 @@ async function run({
       language,
     };
   }
+
+  // Enforce source size limit to prevent OOM or excessive memory use
+  const sourceBytes = Buffer.byteLength(source, 'utf8');
+  if (sourceBytes > (process.env.SANDBOX_MAX_SOURCE_BYTES
+    ? parseInt(process.env.SANDBOX_MAX_SOURCE_BYTES, 10) : DEFAULT_MAX_SOURCE_BYTES)) {
+    return {
+      ok: false, exitCode: null, signal: null,
+      stdout: '',
+      stderr: `source too large: ${(sourceBytes / 1024).toFixed(1)} KB (max ${(parseInt(process.env.SANDBOX_MAX_SOURCE_BYTES, 10) || DEFAULT_MAX_SOURCE_BYTES) / 1024} KB)`,
+      durationMs: 0, timedOut: false, truncated: false,
+      language,
+    };
+  }
   if (signal?.aborted) {
     return {
       ok: false, exitCode: null, signal: 'SIGABRT',
@@ -152,9 +167,16 @@ async function run({
   await fs.writeFile(mainFile, source, 'utf8');
 
   // Drop extra fixture files (e.g. tests, data) alongside main.
+  const maxFiles = process.env.SANDBOX_MAX_EXTRA_FILES
+    ? parseInt(process.env.SANDBOX_MAX_EXTRA_FILES, 10) : DEFAULT_MAX_EXTRA_FILES;
+  let fileCount = 0;
   for (const [name, body] of Object.entries(files || {})) {
     if (typeof name !== 'string' || typeof body !== 'string') continue;
     if (name.includes('..') || name.startsWith('/')) continue; // stay inside dir
+    if (++fileCount > maxFiles) {
+      console.warn(`[code-sandbox] max extra files (${maxFiles}) exceeded, dropping ${Object.keys(files || {}).length - maxFiles} files`);
+      break;
+    }
     const p = path.join(dir, name);
     await fs.mkdir(path.dirname(p), { recursive: true });
     await fs.writeFile(p, body, 'utf8');
