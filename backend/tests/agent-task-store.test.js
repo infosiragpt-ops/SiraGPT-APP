@@ -285,6 +285,42 @@ test('agent task store: findStaleRunningTasks + recoverStaleRunningTasks marks s
   assert.equal(taskStore.getTaskSnapshotForUser('t-fresh', 'u').status, 'running');
 });
 
+test('agent task store: getLatestTaskForChat resolves the newest task for a chatId', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-chat-'));
+
+  taskStore.writeTaskSnapshot({
+    taskId: 'c-1', userId: 'u', chatId: 'chat-A',
+    status: 'completed',
+    updatedAt: new Date(Date.now() - 60_000).toISOString(),
+  });
+  taskStore.writeTaskSnapshot({
+    taskId: 'c-2', userId: 'u', chatId: 'chat-A',
+    status: 'running',
+    updatedAt: new Date().toISOString(),
+  });
+  taskStore.writeTaskSnapshot({ taskId: 'c-3', userId: 'u', chatId: 'chat-B', status: 'running' });
+
+  const latest = taskStore.getLatestTaskForChat('chat-A', 'u');
+  assert.equal(latest.taskId, 'c-2');
+
+  // User scoping
+  const otherUser = taskStore.getLatestTaskForChat('chat-A', 'someone-else');
+  assert.equal(otherUser, null);
+});
+
+test('agent task store: getTaskByJobId resolves a queue handle to its snapshot', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-job-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 'j-1', userId: 'u', jobId: 'job-100', status: 'running' });
+  taskStore.writeTaskSnapshot({ taskId: 'j-2', userId: 'u', jobId: 'job-200', status: 'running' });
+
+  const found = taskStore.getTaskByJobId('job-200', 'u');
+  assert.equal(found.taskId, 'j-2');
+
+  assert.equal(taskStore.getTaskByJobId('job-200', 'wrong-user'), null);
+  assert.equal(taskStore.getTaskByJobId('job-nonexistent'), null);
+});
+
 test('agent task store: getUserTaskMetrics aggregates per-user counts and durations', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-metrics-'));
 

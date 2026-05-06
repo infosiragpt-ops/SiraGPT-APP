@@ -240,6 +240,8 @@ function updateIndexForSnapshot(snapshot) {
   index[snapshot.taskId] = {
     userId: snapshot.userId,
     status: snapshot.status || 'running',
+    chatId: snapshot.chatId || null,
+    jobId: snapshot.jobId || null,
     createdAt: snapshot.createdAt || snapshot.updatedAt || new Date().toISOString(),
     updatedAt: snapshot.updatedAt || snapshot.createdAt || new Date().toISOString(),
   };
@@ -263,6 +265,8 @@ function rebuildIndex() {
         index[snapshot.taskId] = {
           userId: snapshot.userId,
           status: snapshot.status || 'running',
+          chatId: snapshot.chatId || null,
+          jobId: snapshot.jobId || null,
           createdAt: snapshot.createdAt || snapshot.updatedAt || '',
           updatedAt: snapshot.updatedAt || snapshot.createdAt || '',
         };
@@ -395,6 +399,37 @@ function getTaskStoreStats() {
     }
   }
   return stats;
+}
+
+/**
+ * Find a task snapshot by chatId. Returns the most-recently-updated
+ * task for the chat (a chat can host multiple sequential agent tasks).
+ * Indexed lookup — no full directory scan.
+ */
+function getLatestTaskForChat(chatId, userId) {
+  if (!chatId) return null;
+  const index = readIndex();
+  const candidates = Object.entries(index)
+    .filter(([, meta]) => String(meta.chatId || '') === String(chatId))
+    .filter(([, meta]) => !userId || String(meta.userId) === String(userId))
+    .sort((a, b) => Date.parse(b[1].updatedAt || 0) - Date.parse(a[1].updatedAt || 0));
+  if (!candidates.length) return null;
+  return readTaskSnapshot(candidates[0][0]);
+}
+
+/**
+ * Find a task snapshot by jobId (BullMQ / queue worker handle).
+ * Used by queue retry logic to locate the durable trace after the
+ * in-memory ACTIVE_AGENT_TASKS map is gone.
+ */
+function getTaskByJobId(jobId, userId) {
+  if (!jobId) return null;
+  const index = readIndex();
+  const match = Object.entries(index)
+    .find(([, meta]) => String(meta.jobId || '') === String(jobId)
+      && (!userId || String(meta.userId) === String(userId)));
+  if (!match) return null;
+  return readTaskSnapshot(match[0]);
 }
 
 /**
@@ -584,7 +619,9 @@ module.exports = {
   appendTaskEvent,
   compressSnapshotBytes,
   findStaleRunningTasks,
+  getLatestTaskForChat,
   getRunningTasksForUser,
+  getTaskByJobId,
   getTaskSnapshotForUser,
   getTaskStoreDir,
   getTaskStoreStats,
