@@ -321,6 +321,33 @@ describe("agent-tools · static_checks empty_catch python except pass", () => {
   })
 })
 
+describe("agent-tools · static_checks os_system_call", () => {
+  it("flags os.system and os.popen", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "os_system_call")!
+    const text = "import os\nos.system('rm -rf /tmp/x')\nos.popen('cat /etc/hosts')"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
+    const out = check.scan(text, { language: "python", lines, codeMask })
+    assert.equal(out.length, 2)
+  })
+})
+
+describe("agent-tools · static_checks dynamic_require", () => {
+  it("flags require with non-literal argument", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "dynamic_require")!
+    const text = "const m = require(modulePath); const m2 = require(`./${kind}`);"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    const out = check.scan(text, { language: "javascript", lines, codeMask })
+    assert.ok(out.length >= 1)
+  })
+  it("does not flag a literal require", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "dynamic_require")!
+    const text = "const fs = require('fs');\nconst path = require(\"path\");"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    const out = check.scan(text, { language: "javascript", lines, codeMask })
+    assert.equal(out.length, 0)
+  })
+})
+
 describe("agent-tools · static_checks subprocess_shell_true", () => {
   it("flags subprocess.run / Popen / check_output with shell=True", () => {
     const check = agentTools.STATIC_CHECKS.find(c => c.id === "subprocess_shell_true")!

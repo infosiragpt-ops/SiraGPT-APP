@@ -830,6 +830,7 @@ const static_checks = {
         warn: findings.filter(f => f.severity === 'warn').length,
         info: findings.filter(f => f.severity === 'info').length,
       },
+      ...(inputTruncated ? { inputTruncated: true, scannedChars: content.length } : {}),
     };
   },
 };
