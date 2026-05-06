@@ -80,7 +80,18 @@ function summarizeForChat(text, policy) {
   const raw = String(text || '').replace(/\s+/g, ' ').trim();
   const intro = `Preparé el entregable profesional en formato ${String(policy?.format || 'documento').toUpperCase()} y lo validé antes de adjuntarlo.`;
   if (!raw) return intro;
-  const clipped = raw.length > 900 ? `${raw.slice(0, 900).trim()}...` : raw;
+  let clipped;
+  if (raw.length <= 900) {
+    clipped = raw;
+  } else {
+    // Surrogate-safe slice: pull the cut back if the last kept code
+    // unit is a high surrogate so we don't emit a dangling surrogate
+    // that JSON.stringify would replace with U+FFFD.
+    let cut = 900;
+    const code = raw.charCodeAt(cut - 1);
+    if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+    clipped = `${raw.slice(0, cut).trim()}...`;
+  }
   return `${intro}\n\nResumen conversacional:\n\n${clipped}`;
 }
 
