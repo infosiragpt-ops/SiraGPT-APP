@@ -151,11 +151,16 @@ function validateAgentArtifactBuffer(ext, buffer) {
 
   const text = buffer.toString('utf8');
   if (normalizedExt === 'svg') {
+    // Beyond <script>, the common SVG XSS vectors are inline event
+    // handlers (onload/onerror/etc) and javascript: hrefs. Flag those
+    // so a "valid SVG" with active content doesn't sneak past.
     const checks = {
       notEmpty: buffer.length > 60,
       svgOpen: /<svg[\s>]/i.test(text),
       svgClose: /<\/svg>/i.test(text),
       noScript: !/<script[\s>]/i.test(text),
+      noEventHandlers: !/\son(?:load|error|click|mouseover|mouseout|focus|blur|keydown|keyup)\s*=/i.test(text),
+      noJavascriptHref: !/(?:href|xlink:href)\s*=\s*["']?\s*javascript:/i.test(text),
     };
     const score = Math.round((Object.values(checks).filter(Boolean).length / Object.values(checks).length) * 100);
     return { format: 'svg', checks, technicalScore: score, qualityScore: score, integrityScore: Math.min(100, Math.round(buffer.length / 100)), overallScore: score, passed: score >= 90 };
