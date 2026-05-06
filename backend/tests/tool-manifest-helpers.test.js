@@ -10,6 +10,8 @@ const assert = require('node:assert/strict');
 
 const {
   authorizeToolCall,
+  checkOutputFormat,
+  checkToolUsageBudget,
   getManifest,
   listManifests,
   registerToolManifest,
@@ -97,6 +99,38 @@ test('authorizeToolCall enforces requires_confirmation when set', () => {
   const allowed = authorizeToolCall('confirmable_tool', { scopes: [], approvalGranted: true });
   assert.equal(allowed.ok, true);
   unregisterToolManifest('confirmable_tool');
+});
+
+test('checkToolUsageBudget reports remaining headroom and blocks at the cap', () => {
+  // python_exec has max_calls_per_task: 120
+  const fresh = checkToolUsageBudget('python_exec', {});
+  assert.equal(fresh.ok, true);
+  assert.equal(fresh.current, 0);
+  assert.equal(fresh.max, 120);
+
+  const exhausted = checkToolUsageBudget('python_exec', { python_exec: 120 });
+  assert.equal(exhausted.ok, false);
+  assert.equal(exhausted.reason, 'budget_exhausted');
+
+  const unknown = checkToolUsageBudget('not_a_real_tool', {});
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.reason, 'unknown_tool');
+});
+
+test('checkOutputFormat enforces forbidden_formats and allowed_formats', () => {
+  // web_search has forbidden_formats: ['docx','xlsx','pptx','pdf']
+  const denied = checkOutputFormat('web_search', 'report.docx');
+  assert.equal(denied.ok, false);
+  assert.equal(denied.reason, 'forbidden_format');
+  assert.equal(denied.extension, 'docx');
+
+  // create_chart only allows svg
+  const wrong = checkOutputFormat('create_chart', 'chart.png');
+  assert.equal(wrong.ok, false);
+  assert.equal(wrong.reason, 'format_not_allowed');
+
+  const allowed = checkOutputFormat('create_chart', 'chart.svg');
+  assert.equal(allowed.ok, true);
 });
 
 test('authorizeToolCall enforces destructive side-effects without approval', () => {

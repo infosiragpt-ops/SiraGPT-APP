@@ -2542,6 +2542,210 @@ const createComparisonTable = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 11: create_process_flow
+// ─────────────────────────────────────────────────────────────────────────
+
+const createProcessFlow = {
+  name: 'create_process_flow',
+  description: 'Generate a step-by-step process flow as an SVG file. Numbered steps connected by arrows, with optional descriptions per step. Use for onboarding flows, customer journeys, workflow documentation, or any sequential process explanation.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Flow title (e.g. "Customer Onboarding").' },
+      steps: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'Short step name.' },
+            description: { type: 'string', description: 'Optional 1-2 sentence detail.' },
+            icon: { type: 'string', enum: ['chart', 'bulb', 'star', 'target', 'gear', 'shield', 'globe', 'people', 'clock', 'rocket', 'check'], description: 'Optional icon type.' },
+            color: { type: 'string', description: 'Optional hex color override.' },
+          },
+          required: ['label'],
+        },
+        description: '2-8 sequential steps.',
+      },
+      orientation: { type: 'string', enum: ['horizontal', 'vertical'], description: 'Flow direction. Default: "horizontal".' },
+      style: { type: 'string', enum: ['arrows', 'chevrons', 'circles'], description: 'Connection style. Default: "arrows".' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'warm', 'minimal'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'steps'],
+    additionalProperties: false,
+  },
+  async execute({ title, steps = [], orientation = 'horizontal', style = 'arrows', theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_process_flow', preview: title });
+
+    try {
+      if (!Array.isArray(steps) || steps.length === 0) {
+        return { ok: false, error: 'steps array is empty' };
+      }
+
+      const themes = {
+        professional: { bg: '#FAFBFC', step: '#FFFFFF', accent: '#2563EB', text: '#1E293B', muted: '#64748B', border: '#E2E8F0' },
+        modern:       { bg: '#0B1121', step: '#1E293B', accent: '#818CF8', text: '#F1F5F9', muted: '#94A3B8', border: '#334155' },
+        warm:         { bg: '#FFF7ED', step: '#FFFFFF', accent: '#EA580C', text: '#7C2D12', muted: '#9A3412', border: '#FED7AA' },
+        minimal:      { bg: '#FFFFFF', step: '#F8FAFC', accent: '#0F172A', text: '#0F172A', muted: '#64748B', border: '#CBD5E1' },
+      };
+      const t = themes[theme] || themes.professional;
+      const palette = ['#2563EB', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
+      const stepList = steps.slice(0, 8);
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const headerH = 90;
+      const pad = 30;
+
+      let body = '';
+      let W, H;
+
+      if (orientation === 'horizontal') {
+        const stepW = 180;
+        const stepH = 130;
+        const gapW = 32;
+        W = pad * 2 + stepList.length * stepW + (stepList.length - 1) * gapW;
+        H = headerH + pad * 2 + stepH + 40;
+
+        body += `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+        body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+        body += `<text x="${W / 2}" y="40" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+        body += `<text x="${W / 2}" y="64" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${stepList.length} pasos · flujo ${style}</text>`;
+
+        stepList.forEach((step, i) => {
+          const sx = pad + i * (stepW + gapW);
+          const sy = headerH + pad;
+          const color = step.color || palette[i % palette.length];
+          const safeLabel = xmlEscape(String(step.label || '').slice(0, 30));
+          const safeDesc = xmlEscape(String(step.description || '').slice(0, 90));
+
+          if (style === 'chevrons') {
+            // Chevron arrow shape
+            const arrowW = 22;
+            body += `<path d="M ${sx} ${sy} L ${sx + stepW - arrowW} ${sy} L ${sx + stepW} ${sy + stepH / 2} L ${sx + stepW - arrowW} ${sy + stepH} L ${sx} ${sy + stepH} L ${sx + arrowW} ${sy + stepH / 2} Z" fill="${color}" opacity="0.85" stroke="#fff" stroke-width="1.5"/>`;
+            body += `<text x="${sx + stepW / 2}" y="${sy + stepH / 2 - 4}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="#fff">${i + 1}. ${safeLabel}</text>`;
+            if (safeDesc) body += `<text x="${sx + stepW / 2}" y="${sy + stepH / 2 + 16}" text-anchor="middle" font-family="Arial" font-size="10" fill="#fff" opacity="0.9">${safeDesc.slice(0, 35)}</text>`;
+          } else if (style === 'circles') {
+            const cx = sx + stepW / 2;
+            const cy = sy + 50;
+            body += `<circle cx="${cx}" cy="${cy}" r="36" fill="${color}" stroke="#fff" stroke-width="3" filter="url(#vis-shadow)"/>`;
+            body += `<text x="${cx}" y="${cy + 6}" text-anchor="middle" font-family="Arial" font-size="22" font-weight="bold" fill="#fff">${i + 1}</text>`;
+            body += `<text x="${cx}" y="${cy + 56}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">${safeLabel}</text>`;
+            if (safeDesc) body += `<text x="${cx}" y="${cy + 74}" text-anchor="middle" font-family="Arial" font-size="10" fill="${t.muted}">${safeDesc.slice(0, 38)}</text>`;
+            // Connector
+            if (i < stepList.length - 1) {
+              const x1 = cx + 38, x2 = sx + stepW + gapW + stepW / 2 - 38;
+              body += `<line x1="${x1}" y1="${cy}" x2="${x2 - 8}" y2="${cy}" stroke="${t.muted}" stroke-width="2" opacity="0.5"/>`;
+              body += `<polygon points="${x2 - 8},${cy - 5} ${x2},${cy} ${x2 - 8},${cy + 5}" fill="${t.muted}" opacity="0.5"/>`;
+            }
+          } else {
+            // arrows (default)
+            body += `<rect x="${sx}" y="${sy}" width="${stepW}" height="${stepH}" rx="10" fill="${t.step}" stroke="${color}" stroke-width="2" filter="url(#vis-shadow)"/>`;
+            body += `<rect x="${sx}" y="${sy}" width="${stepW}" height="6" rx="3" fill="${color}"/>`;
+            body += `<circle cx="${sx + 28}" cy="${sy + 36}" r="18" fill="${color}"/>`;
+            body += `<text x="${sx + 28}" y="${sy + 42}" text-anchor="middle" font-family="Arial" font-size="16" font-weight="bold" fill="#fff">${i + 1}</text>`;
+            body += `<text x="${sx + 56}" y="${sy + 42}" font-family="Arial" font-size="14" font-weight="bold" fill="${t.text}">${safeLabel}</text>`;
+            if (safeDesc) {
+              const halfIdx = Math.ceil(safeDesc.length / 2);
+              const cut = safeDesc.lastIndexOf(' ', halfIdx) > 0 ? safeDesc.lastIndexOf(' ', halfIdx) : halfIdx;
+              const l1 = safeDesc.slice(0, cut), l2 = safeDesc.slice(cut).trim();
+              body += `<text x="${sx + 16}" y="${sy + 80}" font-family="Arial" font-size="11" fill="${t.muted}">${l1}</text>`;
+              if (l2) body += `<text x="${sx + 16}" y="${sy + 96}" font-family="Arial" font-size="11" fill="${t.muted}">${l2}</text>`;
+            }
+            // Connector arrow
+            if (i < stepList.length - 1) {
+              const ax1 = sx + stepW + 4;
+              const ax2 = sx + stepW + gapW - 4;
+              const ay = sy + stepH / 2;
+              body += `<line x1="${ax1}" y1="${ay}" x2="${ax2 - 8}" y2="${ay}" stroke="${t.muted}" stroke-width="2.5" opacity="0.6"/>`;
+              body += `<polygon points="${ax2 - 8},${ay - 6} ${ax2},${ay} ${ax2 - 8},${ay + 6}" fill="${t.muted}" opacity="0.7"/>`;
+            }
+          }
+        });
+      } else {
+        // vertical
+        const stepW = 460;
+        const stepH = 90;
+        const gapH = 40;
+        W = stepW + pad * 2;
+        H = headerH + pad * 2 + stepList.length * stepH + (stepList.length - 1) * gapH + 20;
+
+        body += `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+        body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+        body += `<text x="${W / 2}" y="40" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+        body += `<text x="${W / 2}" y="64" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${stepList.length} pasos</text>`;
+
+        stepList.forEach((step, i) => {
+          const sy = headerH + pad + i * (stepH + gapH);
+          const sx = pad;
+          const color = step.color || palette[i % palette.length];
+          const safeLabel = xmlEscape(String(step.label || '').slice(0, 50));
+          const safeDesc = xmlEscape(String(step.description || '').slice(0, 140));
+
+          body += `<rect x="${sx}" y="${sy}" width="${stepW}" height="${stepH}" rx="10" fill="${t.step}" stroke="${color}" stroke-width="2" filter="url(#vis-shadow)"/>`;
+          body += `<rect x="${sx}" y="${sy}" width="6" height="${stepH}" rx="3" fill="${color}"/>`;
+          body += `<circle cx="${sx + 38}" cy="${sy + stepH / 2}" r="22" fill="${color}"/>`;
+          body += `<text x="${sx + 38}" y="${sy + stepH / 2 + 6}" text-anchor="middle" font-family="Arial" font-size="18" font-weight="bold" fill="#fff">${i + 1}</text>`;
+          body += `<text x="${sx + 76}" y="${sy + 32}" font-family="Arial" font-size="15" font-weight="bold" fill="${t.text}">${safeLabel}</text>`;
+          if (safeDesc) body += `<text x="${sx + 76}" y="${sy + 56}" font-family="Arial" font-size="11" fill="${t.muted}">${safeDesc}</text>`;
+
+          if (i < stepList.length - 1) {
+            const ay1 = sy + stepH + 4;
+            const ay2 = sy + stepH + gapH - 4;
+            const ax = sx + 38;
+            body += `<line x1="${ax}" y1="${ay1}" x2="${ax}" y2="${ay2 - 8}" stroke="${t.muted}" stroke-width="2.5" opacity="0.6"/>`;
+            body += `<polygon points="${ax - 6},${ay2 - 8} ${ax},${ay2} ${ax + 6},${ay2 - 8}" fill="${t.muted}" opacity="0.7"/>`;
+          }
+        });
+      }
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Process flow: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `processflow_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_process_flow',
+        ok: true,
+        preview: `Flujo listo: ${artifact.filename} (${stepList.length} pasos, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        steps: stepList.length,
+        orientation,
+        style,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_process_flow', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -2555,6 +2759,7 @@ const VISUAL_MEDIA_TOOLS = [
   createTimeline,
   createKanbanBoard,
   createComparisonTable,
+  createProcessFlow,
 ];
 
 module.exports = { VISUAL_MEDIA_TOOLS };

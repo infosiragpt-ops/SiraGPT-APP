@@ -358,6 +358,42 @@ function unregisterToolManifest(name) {
 }
 
 /**
+ * Check whether one more call to `toolName` would exceed the
+ * per-task max_calls_per_task budget. `usageMap` is a plain
+ * { [toolName]: count } map the caller maintains across the task.
+ * Returns { ok, current, max }. When the manifest has no limit,
+ * always allows.
+ */
+function checkToolUsageBudget(toolName, usageMap = {}) {
+  const manifest = getManifest(toolName);
+  if (!manifest) return { ok: false, reason: 'unknown_tool' };
+  const max = manifest.usage_limits?.max_calls_per_task;
+  const current = Number(usageMap[toolName]) || 0;
+  if (!Number.isFinite(max) || max <= 0) return { ok: true, current, max: null };
+  if (current >= max) return { ok: false, reason: 'budget_exhausted', current, max };
+  return { ok: true, current, max };
+}
+
+/**
+ * Enforce the manifest's `forbidden_formats` against the filename
+ * a tool is about to produce. Catches the `web_search → docx`
+ * class of bug at dispatch instead of after the artifact lands.
+ */
+function checkOutputFormat(toolName, filename) {
+  const manifest = getManifest(toolName);
+  if (!manifest) return { ok: false, reason: 'unknown_tool' };
+  const ext = String(filename || '').toLowerCase().split('.').pop();
+  if (!ext) return { ok: true };
+  const forbidden = Array.isArray(manifest.forbidden_formats) ? manifest.forbidden_formats : [];
+  if (forbidden.includes(ext)) return { ok: false, reason: 'forbidden_format', extension: ext };
+  const allowed = Array.isArray(manifest.allowed_formats) ? manifest.allowed_formats : [];
+  if (allowed.length > 0 && !allowed.includes(ext)) {
+    return { ok: false, reason: 'format_not_allowed', extension: ext, allowed };
+  }
+  return { ok: true };
+}
+
+/**
  * Authorize a tool call against the caller's clearance. Returns
  * { ok, reason? }. Reasons are stable strings so the caller can
  * branch on them. Missing fields default to "allow" so legacy
@@ -690,6 +726,34 @@ function getVisualMediaManifests() {
       scopes: ["files.write"],
       data_classes: ["public","internal"],
     },
+    create_process_flow: {
+      name: "create_process_flow",
+      purpose: "Generate a step-by-step process flow as an SVG artifact. Numbered steps with arrows/chevrons/circles. Use for onboarding flows, customer journeys, or workflow documentation.",
+      inputs: {
+        type: "object", required: ["title","steps"],
+        properties: {
+          title: { type: "string" },
+          steps: { type: "array", items: { type: "object" }, description: "Steps: { label, description?, icon?, color? }" },
+          orientation: { type: "string", enum: ["horizontal","vertical"] },
+          style: { type: "string", enum: ["arrows","chevrons","circles"] },
+          theme: { type: "string", enum: ["professional","modern","warm","minimal"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, steps: { type: "integer" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_steps", description: "steps array is empty.", repair_hint: "Provide at least one step with a label." },
+      ],
+      acceptance_tests: ["returns ok:true for a 4-step horizontal arrow flow"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants an onboarding flow", call: { title: "Onboarding", steps: [{label:"Sign Up"},{label:"Verify"},{label:"Activate"}], style: "arrows" } }],
+      examples_negative: [{ when: "user wants a parallel/branching flow with conditions", why: "use create_mermaid_diagram with diagramType:flowchart instead." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
   };
 }
 
@@ -825,6 +889,8 @@ module.exports = {
   toolManifestSchema,
   BUILTIN_MANIFESTS,
   authorizeToolCall,
+  checkOutputFormat,
+  checkToolUsageBudget,
   validateManifest,
   getManifest,
   listManifests,

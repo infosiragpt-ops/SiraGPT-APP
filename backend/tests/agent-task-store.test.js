@@ -285,6 +285,36 @@ test('agent task store: findStaleRunningTasks + recoverStaleRunningTasks marks s
   assert.equal(taskStore.getTaskSnapshotForUser('t-fresh', 'u').status, 'running');
 });
 
+test('agent task store: getUserTaskMetrics aggregates per-user counts and durations', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-metrics-'));
+
+  const created = new Date(Date.now() - 60_000).toISOString();
+  const ended = new Date().toISOString();
+
+  taskStore.writeTaskSnapshot({
+    taskId: 'm-1', userId: 'u', status: 'completed',
+    createdAt: created, completedAt: ended, updatedAt: ended,
+    artifacts: [{ id: 'a1' }, { id: 'a2' }],
+  });
+  taskStore.writeTaskSnapshot({
+    taskId: 'm-2', userId: 'u', status: 'failed',
+    createdAt: created, failedAt: ended, updatedAt: ended,
+  });
+  taskStore.writeTaskSnapshot({ taskId: 'm-3', userId: 'u', status: 'running' });
+  taskStore.writeTaskSnapshot({ taskId: 'm-other', userId: 'other', status: 'completed' });
+
+  const m = taskStore.getUserTaskMetrics('u');
+  assert.equal(m.totalTasks, 3);
+  assert.equal(m.byStatus.completed, 1);
+  assert.equal(m.byStatus.failed, 1);
+  assert.equal(m.byStatus.running, 1);
+  assert.equal(m.artifactCount, 2);
+  assert.ok(m.avgDurationMs >= 0);
+  assert.ok(m.lastTaskAt);
+  // recent counts only count statuses we track
+  assert.ok(m.recent.completed >= 1);
+});
+
 test('agent task store: getRunningTasksForUser returns only running/queued for the user', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-running-'));
 

@@ -138,6 +138,59 @@ describe("task-tools · previewText resilience", () => {
     assert.equal(taskTools.INTERNAL.previewText(BigInt(7)), "7")
     assert.equal(taskTools.INTERNAL.previewText(undefined), "undefined")
   })
+
+  it("falls back to a sane default when max is non-positive or NaN", () => {
+    const long = "x".repeat(1000)
+    // NaN max would otherwise produce empty output; guard restores 600
+    assert.ok(taskTools.INTERNAL.previewText(long, Number.NaN).length > 0)
+    assert.ok(taskTools.INTERNAL.previewText(long, -10).length > 0)
+  })
+})
+
+describe("agent-tools · static_checks weak_crypto", () => {
+  it("flags MD5 / SHA-1 use across JS, Node, and Python", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "weak_crypto")!
+    const sources = [
+      { lang: "javascript", text: 'const h = crypto.createHash("md5").update(x).digest("hex");' },
+      { lang: "javascript", text: 'const h = crypto.createHash("SHA-1");' },
+      { lang: "python", text: 'import hashlib\nh = hashlib.md5(b"x").hexdigest()' },
+      { lang: "python", text: 'h = hashlib.sha1(payload).hexdigest()' },
+    ]
+    for (const { lang, text } of sources) {
+      const { lines, codeMask } = agentTools.buildCommentCodeMask(text, lang)
+      const findings = check.scan(text, { language: lang, lines, codeMask })
+      assert.ok(findings.length > 0, `expected weak_crypto finding for ${lang}: ${text}`)
+    }
+  })
+
+  it("does not flag SHA-256 or other strong algorithms", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "weak_crypto")!
+    const text = 'const h = crypto.createHash("sha256");'
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    const findings = check.scan(text, { language: "javascript", lines, codeMask })
+    assert.equal(findings.length, 0)
+  })
+})
+
+describe("task-tools · saveArtifact atomicity", () => {
+  // We can't easily simulate a metadata write failure without mocking,
+  // but we can verify that on a normal write the artifact file AND the
+  // metadata sidecar both land together — closing the regression window.
+  it("writes artifact + metadata sidecar atomically on success", async () => {
+    const taskToolsInternal = cjsRequire("../../backend/src/services/agents/task-tools") as {
+      saveArtifact: (args: { filename: string; base64: string; ownerUserId: string; chatId?: string }) => { id: string; path: string }
+      INTERNAL: { metadataPathFor: (id: string) => string }
+    }
+    const buf = Buffer.from("hello atomic")
+    const out = taskToolsInternal.saveArtifact({
+      filename: "atomic.txt",
+      base64: buf.toString("base64"),
+      ownerUserId: "test-user",
+      chatId: "test-chat",
+    })
+    assert.ok(fs.existsSync(out.path), "artifact file missing")
+    assert.ok(fs.existsSync(taskToolsInternal.INTERNAL.metadataPathFor(out.id)), "metadata sidecar missing")
+  })
 })
 
 describe("agent-tools · propose_patch range validation", () => {

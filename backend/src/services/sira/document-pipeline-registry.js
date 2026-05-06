@@ -298,14 +298,144 @@ function mkErr(code, message) {
   return new ContextError({ code, message: `${code}: ${message}` });
 }
 
+// ── Content quality validator ────────────────────────────────────
+// Scores a generated document's content quality to help the agent
+// decide whether to re-generate or flag issues to the user.
+
+const QUALITY_INDICATORS = Object.freeze({
+  min_body_length: { min: 50, label: "body_length" },
+  min_sentences: { min: 3, label: "sentence_count" },
+  min_headings: { min: 1, label: "heading_count" },
+  min_paragraphs: { min: 2, label: "paragraph_count" },
+});
+
+/**
+ * Score generated content quality on a 0-100 scale.
+ * Returns { score, issues[], warnings[], passed }
+ *
+ * content — plain text or markdown
+ * format  — the target format (docx, pdf, xlsx, etc.)
+ * options.requiredSections — array of section names that must appear
+ */
+function contentQualityScore(content, format, options = {}) {
+  if (!content || typeof content !== 'string') {
+    return { score: 0, issues: ['no_content'], warnings: [], passed: false };
+  }
+
+  const text = content.trim();
+  const issues = [];
+  const warnings = [];
+  let score = 100;
+
+  // Basic length checks
+  const bodyLen = text.length;
+  const sentences = text.split(/[.!?]+/).filter(Boolean).length;
+  const headings = (text.match(/^#{1,6}\s/gm) || []).length;
+  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 10).length;
+
+  if (bodyLen < QUALITY_INDICATORS.min_body_length.min) {
+    issues.push('content_too_short');
+    score -= 30;
+  } else if (bodyLen < 200) {
+    warnings.push('content_brief');
+    score -= 5;
+  }
+
+  if (sentences < QUALITY_INDICATORS.min_sentences.min) {
+    issues.push('too_few_sentences');
+    score -= 20;
+  }
+
+  if (format !== 'xlsx' && format !== 'csv' && headings < QUALITY_INDICATORS.min_headings.min) {
+    warnings.push('no_headings');
+    score -= 10;
+  }
+
+  if (format !== 'xlsx' && format !== 'csv' && paragraphs < QUALITY_INDICATORS.min_paragraphs.min) {
+    warnings.push('few_paragraphs');
+    score -= 10;
+  }
+
+  // Required sections
+  if (Array.isArray(options.requiredSections)) {
+    for (const section of options.requiredSections) {
+      const pattern = new RegExp(section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      if (!pattern.test(text)) {
+        issues.push(`missing_section:${section}`);
+        score -= 25;
+      }
+    }
+  }
+
+  // Check for placeholders
+  const hasPlaceholders = /\b(lorem ipsum|todo|placeholder|insert .+ here|\[.*?\])\b/i.test(text);
+  if (hasPlaceholders) {
+    warnings.push('contains_placeholders');
+    score -= 15;
+  }
+
+  // Check for extremely long sentences (poor readability)
+  if (sentences > 0) {
+    const avgWords = text.split(/\s+/).length / sentences;
+    if (avgWords > 40) {
+      warnings.push('long_sentences');
+      score -= 10;
+    }
+  }
+
+  return {
+    score: Math.max(0, Math.round(score)),
+    issues,
+    warnings,
+    passed: score >= 60,
+    detail: { bodyLen, sentences, headings, paragraphs, avgWords: sentences > 0 ? Math.round(text.split(/\s+/).length / sentences) : 0 },
+  };
+}
+
+/**
+ * Suggest format improvements for an agent-generated document plan.
+ * Returns advisory hints about the chosen format for the given use-case.
+ */
+function formatAdvice(format, useCase = '') {
+  const lower = format ? format.toLowerCase() : '';
+  const uc = useCase.toLowerCase();
+
+  const advice = {
+    best: lower,
+    alternatives: [],
+    notes: [],
+  };
+
+  if ((uc.includes('report') || uc.includes('reporte') || uc.includes('informe')) && lower !== 'docx' && lower !== 'pdf') {
+    advice.alternatives.push('docx');
+    advice.notes.push('For formal reports, DOCX or PDF is recommended.');
+  }
+  if ((uc.includes('data') || uc.includes('dato') || uc.includes('tabla') || uc.includes('table')) && lower !== 'xlsx' && lower !== 'csv') {
+    advice.alternatives.push('xlsx');
+    advice.notes.push('Tabular data is best presented in XLSX or CSV format.');
+  }
+  if ((uc.includes('slide') || uc.includes('presentación') || uc.includes('diapositiva')) && lower !== 'pptx') {
+    advice.alternatives.push('pptx');
+    advice.notes.push('Presentation content is best in PPTX format.');
+  }
+  if ((uc.includes('chart') || uc.includes('gráfico') || uc.includes('graph')) && lower !== 'svg') {
+    advice.alternatives.push('svg');
+    advice.notes.push('Charts and graphs render well as SVG or PNG.');
+  }
+
+  return advice;
+}
+
 module.exports = {
   PARSERS,
   GENERATORS,
   MIME_TO_FORMAT,
   chooseParsers,
   chooseGenerators,
+  contentQualityScore,
   dispatchParse,
   dispatchGenerate,
+  formatAdvice,
   inferFormat,
   integrity,
 };

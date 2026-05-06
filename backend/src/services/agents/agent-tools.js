@@ -544,6 +544,47 @@ const STATIC_CHECKS = [
     },
   },
   {
+    id: 'weak_crypto',
+    description: 'Use of broken hash algorithms (MD5, SHA-1) for security purposes',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        // crypto.createHash('md5'|'sha1') / hashlib.md5(/sha1( / new MD5()
+        if (
+          /createHash\s*\(\s*["']?(md5|sha-?1)["']?\s*\)/i.test(stripped) ||
+          /hashlib\s*\.\s*(md5|sha1)\s*\(/i.test(stripped) ||
+          /\bnew\s+(MD5|SHA1)\b/.test(stripped)
+        ) {
+          out.push({ severity: 'warn', line: i + 1, message: 'broken hash (MD5/SHA-1) — use SHA-256 or stronger for security purposes' });
+        }
+      });
+      return out;
+    },
+  },
+  {
+    id: 'weak_crypto',
+    description: 'Use of broken hash algorithms (MD5, SHA-1) for security purposes',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        if (
+          /createHash\s*\(\s*["']?(md5|sha-?1)["']?\s*\)/i.test(stripped) ||
+          /hashlib\s*\.\s*(md5|sha1)\s*\(/i.test(stripped) ||
+          /\bnew\s+(MD5|SHA1)\b/.test(stripped)
+        ) {
+          out.push({ severity: 'warn', line: i + 1, message: 'broken hash (MD5/SHA-1) — use SHA-256 or stronger for security purposes' });
+        }
+      });
+      return out;
+    },
+  },
+  {
     id: 'unsafe_innerhtml',
     description: 'Direct innerHTML / outerHTML / document.write writes — common XSS vector',
     scan: (text, { lines, codeMask, language }) => {

@@ -416,6 +416,59 @@ function getRunningTasksForUser(userId, { limit = 50 } = {}) {
   return rows;
 }
 
+/**
+ * Per-user metrics: counts by status, total artifacts, recent activity.
+ * Reads only the user's snapshots via the index so a single user's
+ * dashboard call doesn't walk the entire store.
+ */
+function getUserTaskMetrics(userId, { lookbackMs = 7 * 24 * 60 * 60 * 1000 } = {}) {
+  const index = readIndex();
+  const userTaskIds = Object.entries(index)
+    .filter(([, meta]) => String(meta.userId) === String(userId || ''))
+    .map(([taskId]) => taskId);
+
+  const since = Date.now() - lookbackMs;
+  const metrics = {
+    userId: String(userId || ''),
+    totalTasks: 0,
+    byStatus: {},
+    artifactCount: 0,
+    recent: { running: 0, queued: 0, completed: 0, failed: 0, cancelled: 0, error: 0 },
+    avgDurationMs: null,
+    lastTaskAt: null,
+  };
+
+  let totalDuration = 0;
+  let durationSamples = 0;
+
+  for (const taskId of userTaskIds) {
+    const snapshot = readTaskSnapshot(taskId);
+    if (!snapshot) continue;
+    metrics.totalTasks++;
+    const status = snapshot.status || 'unknown';
+    metrics.byStatus[status] = (metrics.byStatus[status] || 0) + 1;
+    metrics.artifactCount += Array.isArray(snapshot.artifacts) ? snapshot.artifacts.length : 0;
+
+    const updated = Date.parse(snapshot.updatedAt || snapshot.createdAt || 0);
+    if (Number.isFinite(updated)) {
+      if (!metrics.lastTaskAt || updated > metrics.lastTaskAt) metrics.lastTaskAt = updated;
+      if (updated >= since && Object.prototype.hasOwnProperty.call(metrics.recent, status)) {
+        metrics.recent[status]++;
+      }
+    }
+
+    const created = Date.parse(snapshot.createdAt || 0);
+    const ended = Date.parse(snapshot.completedAt || snapshot.failedAt || snapshot.cancelledAt || 0);
+    if (Number.isFinite(created) && Number.isFinite(ended) && ended >= created) {
+      totalDuration += (ended - created);
+      durationSamples++;
+    }
+  }
+
+  if (durationSamples > 0) metrics.avgDurationMs = Math.round(totalDuration / durationSamples);
+  return metrics;
+}
+
 function findStaleRunningTasks({ staleAfterMs = DEFAULT_STALE_RUNNING_MS } = {}) {
   const dir = ensureDir();
   const cutoff = Date.now() - staleAfterMs;
@@ -535,6 +588,7 @@ module.exports = {
   getTaskSnapshotForUser,
   getTaskStoreDir,
   getTaskStoreStats,
+  getUserTaskMetrics,
   indexPath,
   listTaskSnapshotsForUser,
   markTaskStatus,

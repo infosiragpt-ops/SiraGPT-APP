@@ -109,17 +109,25 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation 
   const stored = `${id}-${clean}`;
   const full = path.join(ARTIFACT_DIR, stored);
   fs.writeFileSync(full, buf);
-  fs.writeFileSync(metadataPathFor(id), JSON.stringify({
-    id,
-    filename: clean,
-    format: ext,
-    ownerUserId: ownerUserId || null,
-    chatId: chatId || null,
-    mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
-    sizeBytes: buf.length,
-    validation: validation || null,
-    createdAt: new Date().toISOString(),
-  }, null, 2));
+  try {
+    fs.writeFileSync(metadataPathFor(id), JSON.stringify({
+      id,
+      filename: clean,
+      format: ext,
+      ownerUserId: ownerUserId || null,
+      chatId: chatId || null,
+      mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
+      sizeBytes: buf.length,
+      validation: validation || null,
+      createdAt: new Date().toISOString(),
+    }, null, 2));
+  } catch (err) {
+    // Remove the orphan artifact so subsequent listings don't show a
+    // file the system has no record of. Re-throw so the caller knows
+    // the save failed atomically.
+    try { fs.unlinkSync(full); } catch { /* best effort */ }
+    throw err;
+  }
   return {
     id,
     filename: clean,
@@ -178,6 +186,11 @@ function assertArtifactValidation(ext, buffer) {
 }
 
 function previewText(s, max = 600) {
+  // Guard against callers passing a non-positive or non-finite max
+  // (e.g., NaN from a failed Number() coercion). Without this, the
+  // slice below would either return an empty string or throw.
+  const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : 600;
+  max = limit;
   if (typeof s !== 'string') {
     // JSON.stringify throws on circular refs and returns undefined for
     // bigint/symbol/function values. Guard so a single malformed payload

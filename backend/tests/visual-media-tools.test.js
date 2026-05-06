@@ -383,6 +383,59 @@ test('create_comparison_table: plan comparison', async () => {
   assert.ok(c.includes('RECOMENDADO'));
 });
 
+// ── create_process_flow ──────────────────────────────────────────
+
+test('create_process_flow: horizontal arrows', async () => {
+  const pf = tool('create_process_flow');
+  assert.ok(pf);
+  const r = await pf.execute({
+    title: 'Customer Onboarding',
+    steps: [
+      { label: 'Sign Up', description: 'User creates account' },
+      { label: 'Verify', description: 'Email confirmation', icon: 'check' },
+      { label: 'Setup', description: 'Configure preferences' },
+      { label: 'Activate', description: 'First login complete', color: '#10B981' },
+    ],
+    style: 'arrows',
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.steps, 4);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('Customer Onboarding'));
+  assert.ok(c.includes('Sign Up'));
+});
+
+test('create_process_flow: chevron style', async () => {
+  const r = await tool('create_process_flow').execute({
+    title: 'Pipeline',
+    steps: [{ label: 'Build' }, { label: 'Test' }, { label: 'Deploy' }],
+    style: 'chevrons',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+});
+
+test('create_process_flow: vertical orientation', async () => {
+  const r = await tool('create_process_flow').execute({
+    title: 'Recipe',
+    steps: [
+      { label: 'Mix ingredients', description: 'Combine dry and wet' },
+      { label: 'Bake', description: '350°F for 30 min' },
+      { label: 'Cool', description: 'Let rest 10 min' },
+    ],
+    orientation: 'vertical',
+    theme: 'warm',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.orientation, 'vertical');
+});
+
+test('create_process_flow: empty steps fails', async () => {
+  const r = await tool('create_process_flow').execute({ title: 'X', steps: [] }, fakeCtx());
+  assert.equal(r.ok, false);
+});
+
 test('create_comparison_table: empty rows fails', async () => {
   const r = await tool('create_comparison_table').execute({
     title: 'X', columns: ['A'], rows: [],
@@ -561,8 +614,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 10 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 10);
+test('all 11 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 11);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
