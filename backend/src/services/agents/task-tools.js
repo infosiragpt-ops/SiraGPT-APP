@@ -185,6 +185,16 @@ function assertArtifactValidation(ext, buffer) {
   return validation;
 }
 
+// Clamp a numeric timeout into a [min, max] range with a default
+// fallback when the input is missing / non-finite. Enforced at the
+// tool boundary so the schema bounds are respected even when callers
+// bypass JSON-schema validation.
+function clampTimeoutMs(input, { min, max, defaultMs }) {
+  const n = Number(input);
+  if (!Number.isFinite(n) || n <= 0) return defaultMs;
+  return Math.max(min, Math.min(n, max));
+}
+
 function previewText(s, max = 600) {
   // Guard against callers passing a non-positive or non-finite max
   // (e.g., NaN from a failed Number() coercion). Without this, the
@@ -226,7 +236,7 @@ const pythonExec = {
     const r = await sandbox.run({
       language: 'python',
       source,
-      timeoutMs: timeoutMs || 10000,
+      timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 10000 }),
       stdin: stdin || '',
       signal: ctx.signal,
     });
@@ -267,7 +277,12 @@ const bashExec = {
   },
   async execute({ source, timeoutMs }, ctx = {}) {
     ctx.onEvent?.({ type: 'tool_call', tool: 'bash_exec', preview: previewText(source, 400), language: 'javascript' });
-    const r = await sandbox.run({ language: 'javascript', source, timeoutMs: timeoutMs || 8000, signal: ctx.signal });
+    const r = await sandbox.run({
+      language: 'javascript',
+      source,
+      timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 30000, defaultMs: 8000 }),
+      signal: ctx.signal,
+    });
     const payload = {
       ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, timedOut: r.timedOut, aborted: r.aborted,
       stdout: previewText(r.stdout || '', 4000), stderr: previewText(r.stderr || '', 2000),
@@ -415,7 +430,7 @@ const createDocument = {
     const r = await sandbox.run({
       language: 'python',
       source: wrapped,
-      timeoutMs: timeoutMs || 30000,
+      timeoutMs: clampTimeoutMs(timeoutMs, { min: 1000, max: 60000, defaultMs: 30000 }),
       signal: ctx.signal,
     });
 
@@ -1248,7 +1263,7 @@ const runTests = {
       language,
       source,
       testSource,
-      timeoutMs: timeoutMs || 10000,
+      timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 10000 }),
       signal: ctx.signal,
     });
     const summary = `${r.passed}✓ / ${r.failed}✗${r.timedOut ? ' (timeout)' : ''}`;
@@ -1352,6 +1367,7 @@ module.exports = {
     artifactIdFor,
     metadataPathFor,
     sanitizeArtifactFilename,
+    clampTimeoutMs,
     summarisePreview,
     validateAgentArtifactBuffer,
     assertArtifactValidation,

@@ -4,7 +4,7 @@ const {
   getQueueName,
   requireRedisUrl,
 } = require('./agent-task-queue');
-const { runAgentTaskJob } = require('./agent-task-runner');
+const { runAgentTaskJob, classifyTaskError } = require('./agent-task-runner');
 const { installProcessGuards, isTransientRedisError } = require('./redis-resilience');
 
 let worker;
@@ -40,6 +40,25 @@ function startAgentTaskWorker() {
   });
   worker.on('failed', (job, err) => {
     console.error(`[agent-task-worker] job failed ${job?.id || 'unknown'}:`, err?.message || err);
+    if (job && err) {
+      const classification = classifyTaskError(err);
+      if (classification.retryable) {
+        const maxRetries = Math.max(1, Number.parseInt(process.env.AGENT_TASK_MAX_RETRIES || '3', 10) || 3);
+        const attemptsMade = (job.attemptsMade || 0);
+        const remaining = maxRetries - attemptsMade;
+        if (remaining > 0) {
+          const delayMs = Math.min(classification.ttlMs || 5_000, 60_000);
+          console.warn(`[agent-task-worker] retrying job ${job.id} (attempt ${attemptsMade + 1}/${maxRetries}) in ${delayMs}ms — ${classification.reason}`);
+          job.retry(delayMs).catch((retryErr) => {
+            console.error(`[agent-task-worker] retry scheduling failed for ${job.id}:`, retryErr?.message || retryErr);
+          });
+          return;
+        }
+        console.warn(`[agent-task-worker] job ${job.id} exhausted ${maxRetries} retries, final failure`);
+      } else {
+        console.warn(`[agent-task-worker] job ${job.id} non-retryable (${classification.reason}), not retrying`);
+      }
+    }
   });
   // The connection itself already logs transient errors via
   // attachRedisListeners; this handler only surfaces worker-level

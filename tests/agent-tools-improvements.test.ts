@@ -21,6 +21,7 @@ const taskTools = cjsRequire("../../backend/src/services/agents/task-tools") as 
     metadataPathFor: (id: string) => string
     previewText: (s: unknown, max?: number) => string
     sanitizeArtifactFilename: (s: string) => string
+    clampTimeoutMs: (input: unknown, opts: { min: number; max: number; defaultMs: number }) => number
   }
 }
 

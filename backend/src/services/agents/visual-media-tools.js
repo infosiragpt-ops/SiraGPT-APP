@@ -939,7 +939,6 @@ const createOrganigram = {
         // Connection to parent (skip for root)
         if (n.depth > 0) {
           const px = n.absX + n.nodeW / 2;
-          const parentBottom = n.absY - LEVEL_GAP - h;
           html += `<line x1="${px}" y1="${y}" x2="${px}" y2="${y - LEVEL_GAP}" stroke="${scheme.level1}" stroke-width="2" opacity="0.4"/>`;
         }
 
