@@ -1335,6 +1335,7 @@ module.exports = {
     previewText,
     artifactIdFor,
     metadataPathFor,
+    sanitizeArtifactFilename,
     summarisePreview,
     validateAgentArtifactBuffer,
     assertArtifactValidation,
