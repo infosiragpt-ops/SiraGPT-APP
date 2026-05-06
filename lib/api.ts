@@ -16,10 +16,14 @@ class ApiClient {
   private token: string | null = null;
 
   // Retry config — transient network blips shouldn't fail the UI.
-  // Only retries on network errors / 5xx; 4xx passes through immediately.
+  // Only retries on network errors / 5xx; 4xx passes through immediately
+  // EXCEPT for 429 / 503 which are retryable (Retry-After honored).
   private readonly MAX_RETRIES = 2;
   private readonly BASE_RETRY_DELAY_MS = 500;
   private readonly DEFAULT_TIMEOUT_MS = 30000; // 30s
+  // Hard ceiling on any single Retry-After wait. Without this, a
+  // server returning Retry-After: 3600 would lock the UI for an hour.
+  private readonly RETRY_AFTER_MAX_MS = 30000; // 30s
 
   // Refresh-token state — when a 401 fires, we attempt /auth/refresh once
   // and queue concurrent requests until it resolves.
@@ -41,12 +45,31 @@ class ApiClient {
   /**
    * Core request method with timeout + retry.
    * Throws on final failure with status, statusCode, and errorData attached.
+   *
+   * Reliability primitives wired here (phase 8u):
+   *
+   *   - Auto Idempotency-Key on POST/PUT/PATCH. A v4 UUID is minted
+   *     ONCE per logical call and stays stable across retries, so the
+   *     backend's idempotency middleware (phase 8n) sees the same key
+   *     on the original + every retry and replays the cached 2xx
+   *     response instead of re-executing the operation. The key is
+   *     skipped on GET/HEAD/OPTIONS (idempotent by HTTP semantics) and
+   *     never overwritten if the caller passed one explicitly.
+   *
+   *   - Retry-After honor on 429 / 503. Previously the 4xx-immediate-
+   *     fail block treated 429 as a hard failure; now the wrapper
+   *     reads the Retry-After header (delta-seconds OR HTTP-date),
+   *     waits, and retries up to MAX_RETRIES. The cap is bounded by
+   *     RETRY_AFTER_MAX_MS so a misbehaving server with a 1-hour
+   *     Retry-After can't pin the UI for an hour.
    */
   private async request(endpoint: string, options: RequestInit & { timeoutMs?: number } = {}) {
     const url = `${this.baseURL}${endpoint}`;
     const timeoutMs = options.timeoutMs ?? this.DEFAULT_TIMEOUT_MS;
 
-    // Build headers once (they don't change between retries)
+    // Build headers once (they don't change between retries — and
+    // Idempotency-Key MUST stay stable across retries for the
+    // backend dedup to work).
     const headers = new Headers(options.headers);
 
     if (this.token) {
@@ -56,6 +79,19 @@ class ApiClient {
     // Only set Content-Type for non-FormData requests
     if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
+    }
+
+    // Idempotency-Key auto-injection. Only for mutating verbs and
+    // only when the caller didn't supply one. crypto.randomUUID is
+    // baseline in Node 18+ / Chrome 92+ / Safari 15.4+; the
+    // existence check covers older environments without crashing.
+    const method = String((options.method || 'GET')).toUpperCase();
+    const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH';
+    if (isMutating && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
+      const cryptoObj = (typeof globalThis !== 'undefined' ? (globalThis as any).crypto : null);
+      if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+        headers.set('Idempotency-Key', cryptoObj.randomUUID());
+      }
     }
 
     // Track last error for re-throw on final failure
@@ -82,6 +118,33 @@ class ApiClient {
           // Handle 204 No Content
           if (response.status === 204) return null;
           return await response.json();
+        }
+
+        // 429 — rate limited / quota exceeded. Honor Retry-After
+        // header per RFC 9110 and retry up to MAX_RETRIES. We
+        // intentionally branch on 429 BEFORE the generic 4xx block
+        // because 429 IS retryable (unlike 400, 403, 404, 409).
+        if (response.status === 429 || response.status === 503) {
+          clearTimeout(timeoutId);
+          if (attempt < this.MAX_RETRIES) {
+            const retryAfterMs = this._parseRetryAfter(response.headers.get('retry-after'));
+            const waitMs = retryAfterMs !== null
+              ? Math.min(retryAfterMs, this.RETRY_AFTER_MAX_MS)
+              // No header → fall back to exponential backoff so the
+              // server still gets relief if its rate limiter forgot
+              // to send Retry-After.
+              : this.BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
+            await new Promise(r => setTimeout(r, waitMs));
+            continue;
+          }
+          // Out of retries — fall through to the 4xx error path so
+          // the caller sees the structured response body.
+          const errorData = await response.json().catch(() => ({ error: 'Rate limited' }));
+          const error = new Error(errorData.error || `HTTP ${response.status}`);
+          (error as any).status = response.status;
+          (error as any).statusCode = response.status;
+          (error as any).errorData = errorData;
+          throw error;
         }
 
         // 4xx — client error, don't retry (except 401 with refresh)
@@ -164,6 +227,35 @@ class ApiClient {
   // Public getter for baseURL
   get apiBaseURL() {
     return this.baseURL;
+  }
+
+  /**
+   * _parseRetryAfter — turn an RFC 9110 Retry-After header value into
+   * a millisecond delay relative to "now". Returns null when the
+   * header is missing or unparseable so the caller falls back to
+   * exponential backoff.
+   *
+   * Two valid formats per spec:
+   *   - delta-seconds: `Retry-After: 30`
+   *   - HTTP-date:     `Retry-After: Fri, 31 Dec 2030 23:59:59 GMT`
+   *
+   * Negative deltas (server clock skew) are clamped to 0; the caller
+   * separately enforces the upper bound via RETRY_AFTER_MAX_MS.
+   */
+  private _parseRetryAfter(headerValue: string | null): number | null {
+    if (!headerValue) return null;
+    const trimmed = headerValue.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const seconds = Number.parseInt(trimmed, 10);
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        return seconds * 1000;
+      }
+    }
+    const epoch = Date.parse(trimmed);
+    if (!Number.isNaN(epoch)) {
+      return Math.max(0, epoch - Date.now());
+    }
+    return null;
   }
 
   /**
