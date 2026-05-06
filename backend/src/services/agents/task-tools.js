@@ -1368,13 +1368,16 @@ const runTests = {
         ? summary
         : `${summary} · primer fallo: ${previewText(r.failures[0].detail || r.failures[0].name, 300)}`,
     });
+    const allFailures = r.failures || [];
     return {
       ok: r.ok,
       passed: r.passed,
       failed: r.failed,
       timedOut: r.timedOut,
       durationMs: r.durationMs,
-      failures: (r.failures || []).slice(0, 10),
+      failures: allFailures.slice(0, 10),
+      failuresTruncated: allFailures.length > 10,
+      totalFailures: allFailures.length,
       stdout: previewText(r.stdout || '', 1200),
       stderr: previewText(r.stderr || '', 800),
     };

@@ -260,6 +260,22 @@ describe("task-tools · describeFileIdTruncation", () => {
   })
 })
 
+describe("agent-tools · static_checks unsafe_pickle", () => {
+  it("flags pickle.loads / pickle.load / cPickle.loads", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "unsafe_pickle")!
+    const text = [
+      "import pickle",
+      "obj = pickle.loads(blob)",
+      "obj2 = pickle.load(open('x.pkl','rb'))",
+      "obj3 = cPickle.loads(blob)",
+    ].join("\n")
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
+    const findings = check.scan(text, { language: "python", lines, codeMask })
+    assert.equal(findings.length, 3)
+    assert.ok(findings.every(f => f.severity === "high"))
+  })
+})
+
 describe("agent-tools · static_checks unsafe_yaml_load", () => {
   it("flags yaml.load without Loader=", () => {
     const check = agentTools.STATIC_CHECKS.find(c => c.id === "unsafe_yaml_load")!

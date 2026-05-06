@@ -305,11 +305,17 @@ const get_symbol = {
     // This is best-effort; line numbers may still be off by a constant.
     const joined = chunks.map(c => c.text).join('\n');
     const reChunked = codeChunker.chunkCode(source, joined);
-    const symChunks = reChunked.filter(c => c.name === symbol);
+    let symChunks = reChunked.filter(c => c.name === symbol);
+    let reparsedMatch = 'reparsed';
+    if (symChunks.length === 0) {
+      const lowerSym = symbol.toLowerCase();
+      symChunks = reChunked.filter(c => typeof c.name === 'string' && c.name.toLowerCase() === lowerSym);
+      if (symChunks.length > 0) reparsedMatch = 'reparsed_case_insensitive';
+    }
     if (symChunks.length === 0) return { error: `symbol "${symbol}" not found in ${source}` };
     return {
       source, symbol,
-      match: 'reparsed',
+      match: reparsedMatch,
       chunks: symChunks.map(c => ({
         title: `${source}:${c.startLine}-${c.endLine} (${c.nodeType} ${c.name})`,
         text: c.text,
@@ -562,6 +568,21 @@ const STATIC_CHECKS = [
           /\bnew\s+(MD5|SHA1)\b/.test(stripStringLiterals(line))
         ) {
           out.push({ severity: 'warn', line: i + 1, message: 'broken hash (MD5/SHA-1) — use SHA-256 or stronger for security purposes' });
+        }
+      });
+      return out;
+    },
+  },
+  {
+    id: 'unsafe_pickle',
+    description: 'Python pickle.load / pickle.loads can execute arbitrary code on untrusted input',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        if (/\bpickle\s*\.\s*loads?\s*\(/.test(line) || /\bcPickle\s*\.\s*loads?\s*\(/.test(line)) {
+          out.push({ severity: 'high', line: i + 1, message: 'pickle deserialisation is unsafe on untrusted input — use json or a typed format' });
         }
       });
       return out;
