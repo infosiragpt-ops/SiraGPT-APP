@@ -290,7 +290,18 @@ async function runAgentTaskJob(payload = {}, job = null) {
   task.runtimeModel = runtimeModelProfile.runtimeModel;
 
   const artifacts = [];
-  const persistProgress = (status = task.status) => {
+  // Throttle in-flight progress upserts. A long-running task emits
+  // hundreds of events; firing a Prisma upsert + BullMQ updateProgress
+  // on every single one wastes DB connections and Redis round-trips.
+  // The terminal persistProgress(status) call at the end always
+  // bypasses the throttle so the final state lands authoritatively.
+  const PROGRESS_THROTTLE_MS = 250;
+  let lastProgressAt = 0;
+  const persistProgress = (status = task.status, { force = false } = {}) => {
+    const now = Date.now();
+    const isTerminal = status !== 'running';
+    if (!force && !isTerminal && now - lastProgressAt < PROGRESS_THROTTLE_MS) return;
+    lastProgressAt = now;
     void persistence.upsertAgentTask({
       ...task,
       status,
