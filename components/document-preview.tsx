@@ -26,7 +26,6 @@ function buildAssetFetchInit(): RequestInit {
   }
 }
 
-import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 /**
  * DocumentPreview — right-pane viewer for generated documents.
  *
