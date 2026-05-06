@@ -173,6 +173,28 @@ describe("agent-tools · static_checks weak_crypto", () => {
   })
 })
 
+describe("task-tools · clampTimeoutMs", () => {
+  const opts = { min: 500, max: 60000, defaultMs: 10000 }
+
+  it("returns the default when input is missing or invalid", () => {
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs(undefined, opts), 10000)
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs(null, opts), 10000)
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs(Number.NaN, opts), 10000)
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs(-50, opts), 10000)
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs(0, opts), 10000)
+  })
+
+  it("clamps above the maximum and below the minimum without rejecting", () => {
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs(999999, opts), 60000)
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs(100, opts), 500)
+  })
+
+  it("passes valid inputs through unchanged", () => {
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs(15000, opts), 15000)
+    assert.equal(taskTools.INTERNAL.clampTimeoutMs("20000", opts), 20000)
+  })
+})
+
 describe("task-tools · saveArtifact atomicity", () => {
   // We can't easily simulate a metadata write failure without mocking,
   // but we can verify that on a normal write the artifact file AND the
