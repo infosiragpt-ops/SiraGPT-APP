@@ -1226,7 +1226,40 @@ function buildTaskTools() {
     docintelCompare,
     verifyArtifact,
     runTests,
+    // Visual & media generation tools
+    ...visualMediaTools,
   ];
+}
+
+// Lazy-load visual-media-tools to break circular dependency:
+// visual-media-tools.js requires this module (saveArtifact, INTERNAL),
+// so we cannot require() it at module scope.
+let _visualMediaTools = null;
+function getVisualMediaTools() {
+  if (!_visualMediaTools) {
+    _visualMediaTools = require('./visual-media-tools').VISUAL_MEDIA_TOOLS;
+  }
+  return _visualMediaTools;
+}
+
+// Proxy that resolves the visual tools array lazily at runtime
+const visualMediaTools = new Proxy([], {
+  get(_, prop) {
+    return getVisualMediaTools()[prop];
+  },
+  ownKeys() {
+    return Reflect.ownKeys(getVisualMediaTools());
+  },
+  getOwnPropertyDescriptor() {
+    return { configurable: true, enumerable: true };
+  },
+});
+
+// Resolve visual media module lazily in INTERNAL to break cycles
+let _vmtInternal = null;
+function getVisualMediaInternal() {
+  if (!_vmtInternal) _vmtInternal = require('./visual-media-tools');
+  return _vmtInternal;
 }
 
 module.exports = {
@@ -1234,6 +1267,7 @@ module.exports = {
   saveArtifact,
   ARTIFACT_DIR,
   EXTENSION_TO_MIME,
+  get VISUAL_MEDIA_TOOLS() { return getVisualMediaTools(); },
   INTERNAL: {
     pythonExec,
     bashExec,
