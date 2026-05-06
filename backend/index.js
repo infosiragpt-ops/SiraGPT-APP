@@ -108,6 +108,7 @@ const agentTaskRoutes = require('./src/routes/agent-task');
 const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
+const { createUploadStaticAccessGuard } = require('./src/middleware/upload-static-access');
 const searchAgenticRoutes = require('./src/routes/search-agentic');
 const artifactsRoutes = require('./src/routes/artifacts');
 const hooksRoutes = require('./src/routes/hooks');
@@ -349,6 +350,7 @@ app.get('/uploads/presentations/:filename/download', async (req, res) => {
     }
 });
 
+app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
 app.use('/uploads', express.static(uploadsDir, {
     setHeaders: (res, filePath) => {
         res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
