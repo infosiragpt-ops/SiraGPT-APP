@@ -103,11 +103,20 @@ const read_file = {
       })
       .join('\n\n');
 
+    // Surrogate-safe slice: pulling the cut back by one when the
+    // last kept code unit is a high surrogate avoids handing the LLM
+    // a string with a dangling lead surrogate (which JSON-serialisers
+    // replace with U+FFFD and which can corrupt diff tools).
+    let cut = maxChars;
+    if (joined.length > cut) {
+      const code = joined.charCodeAt(cut - 1);
+      if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+    }
     return {
       source: src,
       chunks: chunks.length,
-      text: joined.slice(0, maxChars),
-      truncated: joined.length > maxChars,
+      text: joined.length > cut ? joined.slice(0, cut) : joined,
+      truncated: joined.length > cut,
       total_chars: joined.length,
     };
   },
@@ -842,6 +851,13 @@ const propose_patch = {
   async handler(args /*, ctx */) {
     const { source, start_line, end_line, replacement, rationale } = args || {};
     if (!source || typeof replacement !== 'string') return { error: 'missing "source" or "replacement"' };
+    // Hard cap on the replacement payload. Without this an agent could
+    // emit a multi-MB blob that bloats every transcript and downstream
+    // serialiser; 200 KB matches the static_checks input ceiling.
+    const REPLACEMENT_MAX = 200000;
+    if (replacement.length > REPLACEMENT_MAX) {
+      return { error: `replacement exceeds ${REPLACEMENT_MAX} chars (got ${replacement.length}); split the patch into smaller proposals` };
+    }
     const startNum = Number(start_line);
     const endNum = Number(end_line);
     const startOk = Number.isFinite(startNum) && startNum > 0;

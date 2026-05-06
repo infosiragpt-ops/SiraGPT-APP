@@ -471,6 +471,15 @@ describe("agent-tools · propose_patch range validation", () => {
     assert.equal(out.end_line, 20)
   })
 
+  it("rejects replacements over 200_000 chars", async () => {
+    const out = await agentTools.propose_patch.handler({
+      source: "foo.js",
+      replacement: "a".repeat(200_001),
+    })
+    assert.equal(out.proposed, undefined)
+    assert.match(out.error || "", /exceeds 200000/)
+  })
+
   it("treats missing line numbers as null without erroring", async () => {
     const out = await agentTools.propose_patch.handler({
       source: "foo.js",
