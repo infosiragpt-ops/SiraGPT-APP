@@ -234,6 +234,35 @@ test('create_chart: gauge', async () => {
   assert.ok(c.includes('72'));
 });
 
+test('create_chart: heatmap', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'heatmap', title: 'Activity',
+    labels: ['Mon','Tue','Wed','Thu','Fri'],
+    datasets: [
+      { label: '9am', data: [1, 2, 3, 4, 5] },
+      { label: '12pm', data: [5, 4, 3, 2, 1] },
+      { label: '3pm', data: [2, 4, 6, 8, 10] },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('Activity'));
+  assert.ok(c.includes('9am'));
+});
+
+test('create_chart: treemap', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'treemap', title: 'Market Share',
+    labels: ['Apple','Google','MS','Amazon','Other'],
+    datasets: [{ label: '%', data: [35, 25, 20, 12, 8] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('Apple'));
+});
+
 test('create_chart: waterfall', async () => {
   const r = await tool('create_chart').execute({
     chartType: 'waterfall', title: 'P&L Bridge',

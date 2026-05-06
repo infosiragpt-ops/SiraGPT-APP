@@ -366,11 +366,11 @@ function getVisualMediaManifests() {
     },
     create_chart: {
       name: "create_chart",
-      purpose: "Generate a data chart (bar, line, pie, scatter, histogram, area, radar, donut, bubble, horizontal_bar) as an SVG file artifact.",
+      purpose: "Generate a data chart (bar, line, pie, scatter, histogram, area, radar, donut, bubble, horizontal_bar, funnel, gauge, waterfall) as an SVG file artifact.",
       inputs: {
         type: "object", required: ["chartType","title","labels","datasets"],
         properties: {
-          chartType: { type: "string", enum: ["bar","line","pie","scatter","histogram","area","radar","donut","bubble","horizontal_bar"] },
+          chartType: { type: "string", enum: ["bar","line","pie","scatter","histogram","area","radar","donut","bubble","horizontal_bar","funnel","gauge","waterfall","heatmap","treemap"] },
           title: { type: "string" },
           labels: { type: "array", items: { type: "string" } },
           datasets: { type: "array", items: { type: "object" } },
@@ -540,6 +540,33 @@ function getVisualMediaManifests() {
       side_effect_level: "remote-read",
       scopes: ["ai.video","files.write"],
       data_classes: ["public"],
+    },
+    create_timeline: {
+      name: "create_timeline",
+      purpose: "Generate a horizontal or vertical timeline of dated events as an SVG artifact. Use for project roadmaps, historical events, milestones, or any chronological sequence.",
+      inputs: {
+        type: "object", required: ["title","events"],
+        properties: {
+          title: { type: "string" },
+          events: { type: "array", items: { type: "object" }, description: "Events: { date, title, description?, category?, color? }" },
+          orientation: { type: "string", enum: ["horizontal","vertical"] },
+          theme: { type: "string", enum: ["professional","modern","warm","cool","dark"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, events: { type: "integer" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_events", description: "events array is empty.", repair_hint: "Provide at least one event with date and title." },
+      ],
+      acceptance_tests: ["returns ok:true for a 4-event horizontal timeline"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants a project roadmap", call: { title: "Roadmap 2026", events: [{date:"Q1",title:"Beta"},{date:"Q2",title:"GA"}] } }],
+      examples_negative: [{ when: "user wants a Gantt chart with dependencies", why: "use create_mermaid_diagram with diagramType:gantt instead." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error; agent should simplify events.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
     },
   };
 }

@@ -274,11 +274,11 @@ const generateImage = {
 
 const createChart = {
   name: 'create_chart',
-  description: 'Generate a data chart or graph (bar, line, pie, scatter, histogram, area, radar, donut, bubble, horizontal_bar, funnel, gauge, waterfall) from structured data. The chart is rendered as an SVG file and saved as a downloadable artifact. For complex multi-series or interactive charts, describe the data in detail.',
+  description: 'Generate a data chart or graph (bar, line, pie, scatter, histogram, area, radar, donut, bubble, horizontal_bar, funnel, gauge, waterfall, heatmap, treemap) from structured data. The chart is rendered as an SVG file and saved as a downloadable artifact. For complex multi-series or interactive charts, describe the data in detail.',
   parameters: {
     type: 'object',
     properties: {
-      chartType: { type: 'string', enum: ['bar', 'line', 'pie', 'scatter', 'histogram', 'area', 'radar', 'donut', 'bubble', 'horizontal_bar', 'funnel', 'gauge', 'waterfall'], description: 'Type of chart to generate.' },
+      chartType: { type: 'string', enum: ['bar', 'line', 'pie', 'scatter', 'histogram', 'area', 'radar', 'donut', 'bubble', 'horizontal_bar', 'funnel', 'gauge', 'waterfall', 'heatmap', 'treemap'], description: 'Type of chart to generate.' },
       title: { type: 'string', description: 'Chart title.' },
       labels: { type: 'array', items: { type: 'string' }, description: 'Category labels (x-axis for bar/line, segments for pie/donut).' },
       datasets: { type: 'array', items: { type: 'object', properties: {
@@ -354,7 +354,131 @@ const createChart = {
         if (chartType === 'waterfall') {
           return buildWaterfallBody();
         }
+        if (chartType === 'heatmap') {
+          return buildHeatmapBody();
+        }
+        if (chartType === 'treemap') {
+          return buildTreemapBody();
+        }
         return buildCartesianBody();
+      }
+
+      function buildHeatmapBody() {
+        // Heatmap: rows = datasets (each dataset.label is a row label),
+        // columns = labels. Values are mapped to color intensity.
+        if (!datasets.length) return '';
+        const rows = datasets.length;
+        const cols = labels.length || 1;
+        const cellW = innerW / cols;
+        const cellH = Math.min(50, innerH / rows);
+        const allVals = datasets.flatMap(d => d.data);
+        const vMin = Math.min(...allVals, 0);
+        const vMax = Math.max(...allVals, 1);
+        const vRange = vMax - vMin || 1;
+
+        function lerpColor(t) {
+          // Cool→warm: light blue → dark blue → red
+          t = Math.max(0, Math.min(1, t));
+          const stops = [
+            [241, 245, 249], // slate-100
+            [147, 197, 253], // blue-300
+            [59, 130, 246],  // blue-500
+            [220, 38, 38],   // red-600
+          ];
+          const idx = Math.min(Math.floor(t * (stops.length - 1)), stops.length - 2);
+          const local = (t * (stops.length - 1)) - idx;
+          const a = stops[idx], b = stops[idx + 1];
+          const r = Math.round(a[0] + (b[0] - a[0]) * local);
+          const g = Math.round(a[1] + (b[1] - a[1]) * local);
+          const bl = Math.round(a[2] + (b[2] - a[2]) * local);
+          return `rgb(${r},${g},${bl})`;
+        }
+
+        let body = '';
+        // Column labels
+        safeLabels.forEach((lbl, ci) => {
+          const cx = M.left + (ci + 0.5) * cellW;
+          body += `<text x="${cx}" y="${M.top - 12}" text-anchor="middle" font-family="Arial" font-size="11" fill="#555">${lbl}</text>`;
+        });
+        // Row labels + cells
+        datasets.forEach((ds, ri) => {
+          const ry = M.top + ri * cellH;
+          const safeRow = xmlEscape(String(ds.label || `Fila ${ri + 1}`).slice(0, 30));
+          body += `<text x="${M.left - 8}" y="${ry + cellH / 2 + 4}" text-anchor="end" font-family="Arial" font-size="11" fill="#555">${safeRow}</text>`;
+          for (let ci = 0; ci < cols; ci++) {
+            const v = ds.data[ci];
+            if (v === undefined || v === null) continue;
+            const t = (v - vMin) / vRange;
+            const fill = lerpColor(t);
+            const x = M.left + ci * cellW;
+            body += `<rect x="${x + 1}" y="${ry + 1}" width="${cellW - 2}" height="${cellH - 2}" fill="${fill}" rx="2"/>`;
+            body += `<text x="${x + cellW / 2}" y="${ry + cellH / 2 + 4}" text-anchor="middle" font-family="Arial" font-size="10" fill="${t > 0.55 ? '#fff' : '#1E293B'}" font-weight="bold">${tickFormat(v)}</text>`;
+          }
+        });
+        // Legend (gradient bar)
+        const legX = M.left + innerW - 220;
+        const legY = M.top + datasets.length * cellH + 24;
+        body += `<text x="${legX}" y="${legY - 6}" font-family="Arial" font-size="10" fill="#666">${tickFormat(vMin)}</text>`;
+        body += `<text x="${legX + 200}" y="${legY - 6}" text-anchor="end" font-family="Arial" font-size="10" fill="#666">${tickFormat(vMax)}</text>`;
+        for (let i = 0; i < 40; i++) {
+          body += `<rect x="${legX + i * 5}" y="${legY}" width="5" height="10" fill="${lerpColor(i / 40)}"/>`;
+        }
+        return body;
+      }
+
+      function buildTreemapBody() {
+        // Treemap: squarified-ish layout for datasets[0].data values, labelled by safeLabels
+        const ds = datasets[0];
+        if (!ds || !ds.data.length) return '';
+        const items = ds.data.map((v, i) => ({ v: Math.max(0, v), label: safeLabels[i] || `Item ${i + 1}` }))
+          .filter(it => it.v > 0);
+        if (!items.length) return '';
+        items.sort((a, b) => b.v - a.v);
+        const total = items.reduce((s, it) => s + it.v, 0);
+
+        // Simple slice-and-dice: alternate horizontal/vertical splits
+        function layout(items, x, y, w, h, horizontal = true) {
+          if (!items.length) return [];
+          if (items.length === 1) return [{ ...items[0], x, y, w, h }];
+          const tot = items.reduce((s, it) => s + it.v, 0);
+          // Find split that's ~half
+          let acc = 0, splitIdx = 0;
+          for (let i = 0; i < items.length; i++) {
+            acc += items[i].v;
+            if (acc >= tot / 2) { splitIdx = Math.max(1, i); break; }
+          }
+          const left = items.slice(0, splitIdx);
+          const right = items.slice(splitIdx);
+          const leftSum = left.reduce((s, it) => s + it.v, 0);
+          const ratio = leftSum / tot;
+          if (horizontal) {
+            const wL = w * ratio;
+            return [
+              ...layout(left, x, y, wL, h, !horizontal),
+              ...layout(right, x + wL, y, w - wL, h, !horizontal),
+            ];
+          } else {
+            const hL = h * ratio;
+            return [
+              ...layout(left, x, y, w, hL, !horizontal),
+              ...layout(right, x, y + hL, w, h - hL, !horizontal),
+            ];
+          }
+        }
+
+        const cells = layout(items, M.left, M.top, innerW, innerH, innerW > innerH);
+        let body = '';
+        cells.forEach((c, i) => {
+          const color = palette[i % palette.length];
+          body += `<rect x="${c.x + 1}" y="${c.y + 1}" width="${Math.max(c.w - 2, 0)}" height="${Math.max(c.h - 2, 0)}" fill="${color}" stroke="#fff" stroke-width="2" opacity="0.92" rx="2"/>`;
+          if (c.w > 50 && c.h > 30) {
+            body += `<text x="${c.x + 8}" y="${c.y + 18}" font-family="Arial" font-size="12" font-weight="bold" fill="#fff">${c.label}</text>`;
+            body += `<text x="${c.x + 8}" y="${c.y + 34}" font-family="Arial" font-size="11" fill="#fff" opacity="0.85">${tickFormat(c.v)} (${((c.v / total) * 100).toFixed(1)}%)</text>`;
+          } else if (c.w > 30 && c.h > 16) {
+            body += `<text x="${c.x + 4}" y="${c.y + 14}" font-family="Arial" font-size="10" fill="#fff">${c.label.slice(0, 8)}</text>`;
+          }
+        });
+        return body;
       }
 
       function buildFunnelBody() {
