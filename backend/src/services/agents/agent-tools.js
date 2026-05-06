@@ -490,6 +490,8 @@ const HARDCODED_SECRET_PATTERNS = [
   { re: /\bghp_[A-Za-z0-9]{36}\b/g, msg: 'GitHub personal access token' },
   { re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g, msg: 'GitHub fine-grained token' },
   { re: /\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{16,}\b/g, msg: 'Stripe API key' },
+  { re: /\bAIza[A-Za-z0-9_\-]{35}\b/g, msg: 'Google API key' },
+  { re: /\bsq0(?:atp|csp)-[A-Za-z0-9_\-]{22,}\b/g, msg: 'Square access token' },
   { re: /-----BEGIN (?:OPENSSH|RSA|EC|DSA|PGP) PRIVATE KEY-----/g, msg: 'embedded private key block' },
   { re: /\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b/g, msg: 'JWT-shaped token' },
 ];

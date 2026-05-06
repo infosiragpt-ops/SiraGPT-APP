@@ -290,6 +290,11 @@ describe("agent-tools · static_checks hardcoded_secret extended formats", () =>
     assert.ok(out.length > 0)
   })
 
+  it("flags a Google API key", () => {
+    const out = findingsFor('const k = "AIza' + 'A'.repeat(35) + '";')
+    assert.ok(out.length > 0)
+  })
+
   it("flags an embedded SSH private key block", () => {
     const out = findingsFor("// -----BEGIN OPENSSH PRIVATE KEY-----")
     assert.ok(out.length > 0)
