@@ -102,6 +102,83 @@ function pick(obj, keys) {
   return out;
 }
 
+/**
+ * Generate a structured scene breakdown from a video prompt and duration.
+ * Splits the prompt into logical scenes with descriptions, actions, visual
+ * style notes, and audio cues — used as storyboard fallback when no real
+ * video generation API is configured.
+ */
+function generateScenesFromPrompt(prompt, totalDuration) {
+  const safePrompt = String(prompt || '');
+  const words = safePrompt.split(/\s+/).filter(Boolean);
+  const sceneCount = Math.min(Math.max(Math.ceil(words.length / 20), 3), 8);
+  const durationPerScene = Math.max(2, Math.floor(totalDuration / sceneCount));
+  const remainingDuration = totalDuration - (durationPerScene * (sceneCount - 1));
+
+  const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
+  const visualStyles = [
+    'Cámara lenta, plano general, iluminación natural',
+    'Primer plano, profundidad de campo reducida, colores cálidos',
+    'Travelling lateral, enfoque suave, paleta de colores fríos',
+    'Plano cenital, simetría, contraste alto',
+    'Cámara en mano, estilo documental, grano de película',
+    'Plano secuencia, movimiento fluido, iluminación de estudio',
+    'Contrapicado, dramático, sombras marcadas',
+    'Plano detalle, macro, texturas visibles',
+  ];
+  const audioCues = [
+    'Música ambiental suave',
+    'Silencio, solo sonidos ambiente',
+    'Música épica cresciendo',
+    'Efectos de sonido sincronizados',
+    'Narración en off',
+    'Transición musical',
+    'Silencio dramático',
+    'Crescendo musical',
+  ];
+
+  // Split words into scenes
+  const wordSets = [];
+  for (let i = 0; i < sceneCount; i++) {
+    const start = Math.floor((i / sceneCount) * words.length);
+    const end = Math.floor(((i + 1) / sceneCount) * words.length);
+    wordSets.push(words.slice(start, end));
+  }
+
+  return wordSets.map((wset, i) => {
+    const sceneWords = wset.join(' ');
+    const duration = i === sceneCount - 1 ? remainingDuration : durationPerScene;
+    const timeStart = i * durationPerScene;
+    const timeEnd = timeStart + duration;
+
+    // Build a natural description from the words for this scene
+    let description = sceneWords || `Continuación de la escena anterior.`;
+    if (description.length < 15) {
+      description = `Escena ${i + 1}: ${safePrompt.slice(0, 40)} — secuencia ${i + 1} de ${sceneCount}.`;
+    }
+
+    // Infer action from scene position
+    const actions = [
+      'Apertura: establecer el contexto visual y la atmósfera.',
+      'Desarrollo: presentar los elementos clave de la narrativa.',
+      'Transición: cambio de perspectiva o ubicación.',
+      'Clímax visual: el momento más impactante de la secuencia.',
+      'Resolución: cerrar la secuencia visual.',
+    ];
+
+    return {
+      scene: i + 1,
+      description: description.slice(0, 250),
+      action: (actions[i] || actions[actions.length - 1]).slice(0, 150),
+      visualStyle: (visualStyles[i % visualStyles.length]).slice(0, 150),
+      audio: (audioCues[i % audioCues.length]).slice(0, 100),
+      duration,
+      timeRange: `${timeStart}s - ${timeEnd}s`,
+      color: colors[i % colors.length],
+    };
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Tool 1: generate_image
 // ─────────────────────────────────────────────────────────────────────────
@@ -754,14 +831,127 @@ const createMermaidDiagram = {
       } catch { /* fall through */ }
 
       if (!svg) {
-        // Fallback: create a clean SVG with the Mermaid source embedded
-        const lines = mermaidSource.split('\n');
-        const yOffset = 60;
-        const lineH = 18;
-        const svgH = Math.max(400, lines.length * lineH + yOffset + 40);
-        const maxLineW = Math.max(...lines.map(l => l.length)) * 9;
-        const svgW = Math.max(500, maxLineW + 40);
+        // Fallback: generate a self-contained HTML file with client-side
+        // Mermaid rendering via CDN. Much more useful than raw source SVG.
+        const safeMermaidSource = String(mermaidSource)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
+        const mermaidHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${xmlEscape(safeTitle || 'Mermaid Diagram')}</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f8fafc;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+  .header {
+    text-align: center;
+    margin-bottom: 32px;
+    max-width: 800px;
+    width: 100%;
+  }
+  .header h1 { font-size: 20px; color: #1e293b; margin-bottom: 8px; }
+  .header p { font-size: 13px; color: #64748b; }
+  .diagram-container {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 40px;
+    max-width: 1000px;
+    width: 100%;
+    overflow-x: auto;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .diagram-container pre {
+    display: none;
+  }
+  .footer {
+    margin-top: 24px;
+    font-size: 11px;
+    color: #94a3b8;
+    text-align: center;
+  }
+  .loading {
+    text-align: center;
+    padding: 60px 20px;
+    color: #64748b;
+    font-size: 14px;
+  }
+  .loading::after {
+    content: '';
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    margin-left: 8px;
+    border: 2px solid #e2e8f0;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error {
+    color: #ef4444;
+    text-align: center;
+    padding: 20px;
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>${xmlEscape(safeTitle || 'Mermaid Diagram')}</h1>
+  <p>Type: ${xmlEscape(diagramType)} · Rendered client-side via Mermaid.js CDN</p>
+</div>
+<div class="diagram-container">
+  <pre class="mermaid">
+${safeMermaidSource}
+  </pre>
+  <div class="loading">Renderizando diagrama…</div>
+</div>
+<div class="footer">
+  Generado por SiraGPT · Abre este archivo en un navegador para ver el diagrama interactivo
+</div>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    themeVariables: {
+      primaryColor: '#3b82f6',
+      primaryTextColor: '#fff',
+      primaryBorderColor: '#2563eb',
+      lineColor: '#64748b',
+      secondaryColor: '#f1f5f9',
+      tertiaryColor: '#f8fafc',
+    },
+    securityLevel: 'loose',
+  });
+  document.querySelector('.loading').style.display = 'none';
+</script>
+</body>
+</html>`;
+
+        const htmlBuf = Buffer.from(mermaidHtml, 'utf8');
+        const htmlArtifact = finalizeArtifact({
+          filename: `diagram_${crypto.randomBytes(4).toString('hex')}.html`,
+          buffer: htmlBuf,
+          mime: 'text/html',
+          ctx,
+        });
+
+        // Also save the SVG placeholder for preview
+        const lines = mermaidSource.split('\n');
+        const svgH = Math.max(400, lines.length * 18 + 100);
+        const svgW = Math.max(500, Math.max(...lines.map(l => l.length)) * 9 + 40);
         svg = svgDocument({
           width: svgW,
           height: svgH,
@@ -771,10 +961,20 @@ const createMermaidDiagram = {
   <rect width="${svgW}" height="${svgH}" fill="#FAFBFC" rx="12"/>
   <rect x="10" y="10" width="${svgW - 20}" height="36" rx="6" fill="#E8F0FE"/>
   <text x="${svgW / 2}" y="34" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="#1a1a2e">Mermaid ${diagramType}: ${xmlEscape(safeTitle)}</text>
-  <rect x="20" y="56" width="${svgW - 40}" height="${svgH - 76}" rx="8" fill="#F0F4F8"/>
-  ${lines.map((line, i) => `<text x="36" y="${yOffset + i * lineH + 14}" font-family="monospace" font-size="12" fill="#333">${xmlEscape(line.slice(0, 90))}</text>`).join('\n')}
-  <text x="${svgW / 2}" y="${svgH - 12}" text-anchor="middle" font-family="Arial" font-size="11" fill="#888">Diagrama puede renderizarse en mermaid.live o en un visor Mermaid</text>
+  <text x="${svgW / 2}" y="${svgH - 16}" text-anchor="middle" font-family="Arial" font-size="11" fill="#10B981">✅ Abre el archivo .html adjunto para ver el diagrama interactivo</text>
   `,
+        });
+
+        // Emit both artifacts
+        emitEvent(ctx, 'file_artifact', {
+          artifact: {
+            id: htmlArtifact.id,
+            filename: htmlArtifact.filename,
+            format: 'html',
+            mime: 'text/html',
+            sizeBytes: htmlArtifact.sizeBytes,
+            downloadUrl: htmlArtifact.downloadUrl,
+          },
         });
       }
 
@@ -1319,19 +1519,95 @@ const generateVideo = {
         };
       }
 
-      // Fallback: no video API configured — provide guidance
+      // Fallback: no video API configured — generate a storyboard document
+      // instead of returning an error. The agent can present this as an
+      // artifact with scene-by-scene descriptions, visual direction, etc.
       emitEvent(ctx, 'tool_output', {
         tool: 'generate_video',
-        ok: false,
-        preview: 'Servicio de video no configurado. Puedes describir el video en texto y lo generaré como storyboard o guion.',
+        preview: 'Servicio de video no configurado. Generando storyboard detallado como alternativa…',
+        partial: true,
       });
 
-      return {
-        ok: false,
-        error: 'Video generation service not configured. Set VIDEO_API_URL environment variable.',
-        guidance: 'Describe el video en texto y puedo crear un storyboard detallado o guion mientras se configura el servicio.',
-        prompt: enhancedPrompt,
-      };
+      try {
+        // Helper: split prompt into scenes for storyboard
+        const scenes = generateScenesFromPrompt(enhancedPrompt, duration);
+
+        // Build SVG storyboard
+        const storyW = 800;
+        const sceneH = 240;
+        const headerH = 100;
+        const pad = 24;
+        const totalH = headerH + scenes.length * sceneH + pad * 2;
+
+        const sceneCards = scenes.map((scene, i) => {
+          const sy = headerH + pad + i * sceneH;
+          const safeDesc = xmlEscape(scene.description || '').slice(0, 250);
+          const safeAction = xmlEscape(scene.action || '').slice(0, 150);
+          const safeVisual = xmlEscape(scene.visualStyle || '').slice(0, 150);
+          const safeAudio = xmlEscape(scene.audio || '').slice(0, 100);
+          return `
+  <!-- Scene ${i + 1} -->
+  <rect x="${pad}" y="${sy}" width="${storyW - 2 * pad}" height="${sceneH - 8}" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1" filter="url(#vis-shadow)"/>
+  <rect x="${pad + 4}" y="${sy + 4}" width="4" height="${sceneH - 16}" rx="2" fill="${scene.color || '#3B82F6'}"/>
+  <text x="${pad + 24}" y="${sy + 28}" font-family="Arial" font-size="13" font-weight="bold" fill="#1E293B">Escena ${i + 1} · ${xmlEscape(scene.timeRange || `${scene.duration}s`)}</text>
+  <text x="${pad + 24}" y="${sy + 50}" font-family="Arial" font-size="11" fill="#475569">${safeDesc}</text>
+  ${safeAction ? `<text x="${pad + 24}" y="${sy + 72}" font-family="Arial" font-size="11" fill="#64748B">🎬 ${safeAction}</text>` : ''}
+  ${safeVisual ? `<text x="${pad + 24}" y="${sy + 92}" font-family="Arial" font-size="10" fill="#94A3B8">🎨 ${safeVisual}</text>` : ''}
+  ${safeAudio ? `<text x="${pad + 24}" y="${sy + 110}" font-family="Arial" font-size="10" fill="#94A3B8">🔊 ${safeAudio}</text>` : ''}
+  <text x="${storyW - pad - 16}" y="${sy + 28}" text-anchor="end" font-family="Arial" font-size="20" font-weight="bold" fill="${scene.color || '#3B82F6'}" opacity="0.15">${String(i + 1).padStart(2, '0')}</text>`;
+        }).join('\n');
+
+        const storyboardSvg = [
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${storyW} ${totalH}">`,
+          `  <defs><filter id="vis-shadow"><feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.08"/></filter></defs>`,
+          `  <rect width="${storyW}" height="${totalH}" fill="#F8FAFC" rx="12"/>`,
+          `  <rect x="0" y="0" width="${storyW}" height="${headerH}" fill="#1E293B" rx="0"/>`,
+          `  <text x="${storyW / 2}" y="38" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#FFFFFF">${xmlEscape(String(title || enhancedPrompt).slice(0, 100))}</text>`,
+          `  <text x="${storyW / 2}" y="64" text-anchor="middle" font-family="Arial" font-size="12" fill="#94A3B8">Storyboard · ${scenes.length} escenas · ${duration}s · ${xmlEscape(style || '')}</text>`,
+          `  <text x="${storyW / 2}" y="80" text-anchor="middle" font-family="Arial" font-size="10" fill="#64748B">Generado como alternativa — conecta VIDEO_API_URL para generación real de video</text>`,
+          sceneCards,
+          `</svg>`,
+        ].join('\n');
+
+        const buffer = Buffer.from(storyboardSvg, 'utf8');
+        const filename = `storyboard_${crypto.randomBytes(4).toString('hex')}.svg`;
+        const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+        emitEvent(ctx, 'file_artifact', {
+          artifact: {
+            id: artifact.id,
+            filename: artifact.filename,
+            format: 'svg',
+            mime: 'image/svg+xml',
+            sizeBytes: artifact.sizeBytes,
+            downloadUrl: artifact.downloadUrl,
+          },
+        });
+
+        emitEvent(ctx, 'tool_output', {
+          tool: 'generate_video',
+          ok: true,
+          preview: `Storyboard listo: ${artifact.filename} (${scenes.length} escenas, ${Math.round(artifact.sizeBytes / 1024)} KB). Configura VIDEO_API_URL para generación real de video.`,
+        });
+
+        return {
+          ok: true,
+          id: artifact.id,
+          filename: artifact.filename,
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+          storyboard: true,
+          scenes: scenes.length,
+          prompt: enhancedPrompt,
+          duration,
+          aspectRatio,
+          message: 'No se configuró VIDEO_API_URL. Se generó un storyboard como alternativa.',
+        };
+      } catch (storyErr) {
+        const msg = storyErr?.message || String(storyErr);
+        emitEvent(ctx, 'tool_output', { tool: 'generate_video', ok: false, preview: `Error generando storyboard: ${msg}` });
+        return { ok: false, error: msg, prompt: enhancedPrompt };
+      }
     } catch (err) {
       const msg = err?.message || String(err);
       emitEvent(ctx, 'tool_output', { tool: 'generate_video', ok: false, preview: `Error: ${msg}` });
