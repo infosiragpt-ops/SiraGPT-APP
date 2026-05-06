@@ -568,6 +568,28 @@ const STATIC_CHECKS = [
     },
   },
   {
+    id: 'unsafe_yaml_load',
+    description: 'PyYAML yaml.load without an explicit Loader allows arbitrary object construction',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        // yaml.load(...) without `Loader=` argument is unsafe. yaml.safe_load
+        // is fine. Match the function call and inspect what's inside the
+        // parens on the SAME line — multi-line calls slip through, but
+        // they're rare in practice and a static linter is a hint, not a
+        // guarantee.
+        const m = line.match(/\byaml\s*\.\s*load\s*\(([^)]*)\)/);
+        if (!m) return;
+        if (!/Loader\s*=/.test(m[1])) {
+          out.push({ severity: 'high', line: i + 1, message: 'yaml.load without Loader= is unsafe — use yaml.safe_load or pass Loader=yaml.SafeLoader' });
+        }
+      });
+      return out;
+    },
+  },
+  {
     id: 'insecure_random_secret',
     description: 'Math.random() used for tokens, secrets, ids, or keys — not cryptographically secure',
     scan: (text, { lines, codeMask, language }) => {

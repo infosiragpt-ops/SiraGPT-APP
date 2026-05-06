@@ -22,6 +22,8 @@ const taskTools = cjsRequire("../../backend/src/services/agents/task-tools") as 
     previewText: (s: unknown, max?: number) => string
     sanitizeArtifactFilename: (s: string) => string
     clampTimeoutMs: (input: unknown, opts: { min: number; max: number; defaultMs: number }) => number
+    describeFileIdTruncation: (ids: unknown[], ctx?: { fileIds?: unknown[] }) => { truncated: boolean; requested: number; used: number }
+    TOOL_FILE_ID_CAP: number
   }
 }
 
@@ -231,6 +233,52 @@ describe("task-tools · clampTimeoutMs", () => {
   it("passes valid inputs through unchanged", () => {
     assert.equal(taskTools.INTERNAL.clampTimeoutMs(15000, opts), 15000)
     assert.equal(taskTools.INTERNAL.clampTimeoutMs("20000", opts), 20000)
+  })
+})
+
+describe("task-tools · describeFileIdTruncation", () => {
+  it("flags truncation when more than the cap is requested", () => {
+    const cap = taskTools.INTERNAL.TOOL_FILE_ID_CAP
+    const tooMany = Array.from({ length: cap + 5 }, (_, i) => `file-${i}`)
+    const out = taskTools.INTERNAL.describeFileIdTruncation(tooMany)
+    assert.equal(out.truncated, true)
+    assert.equal(out.requested, cap + 5)
+    assert.equal(out.used, cap)
+  })
+
+  it("does not flag truncation when within the cap", () => {
+    const out = taskTools.INTERNAL.describeFileIdTruncation(["a", "b", "c"])
+    assert.equal(out.truncated, false)
+    assert.equal(out.used, 3)
+  })
+
+  it("falls back to ctx.fileIds when no explicit list is provided", () => {
+    const out = taskTools.INTERNAL.describeFileIdTruncation([], { fileIds: ["x", "y"] })
+    assert.equal(out.requested, 2)
+    assert.equal(out.used, 2)
+  })
+})
+
+describe("agent-tools · static_checks unsafe_yaml_load", () => {
+  it("flags yaml.load without Loader=", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "unsafe_yaml_load")!
+    const text = "import yaml\ndata = yaml.load(open('config.yaml').read())"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
+    const findings = check.scan(text, { language: "python", lines, codeMask })
+    assert.equal(findings.length, 1)
+    assert.equal(findings[0].severity, "high")
+  })
+
+  it("does not flag yaml.safe_load or yaml.load with explicit Loader", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "unsafe_yaml_load")!
+    const text = [
+      "import yaml",
+      "a = yaml.safe_load(s)",
+      "b = yaml.load(s, Loader=yaml.SafeLoader)",
+    ].join("\n")
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
+    const findings = check.scan(text, { language: "python", lines, codeMask })
+    assert.equal(findings.length, 0)
   })
 })
 

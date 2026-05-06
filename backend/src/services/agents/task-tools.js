@@ -805,11 +805,25 @@ const selfRagAnswer = {
 
 // ─── Tool 5c: Document Intelligence ────────────────────────────────────
 
+const TOOL_FILE_ID_CAP = 12;
+
 function resolveToolFileIds(inputFileIds, ctx = {}) {
   const ids = Array.isArray(inputFileIds) && inputFileIds.length
     ? inputFileIds
     : (Array.isArray(ctx.fileIds) ? ctx.fileIds : []);
-  return Array.from(new Set(ids.map(String).filter(Boolean))).slice(0, 12);
+  return Array.from(new Set(ids.map(String).filter(Boolean))).slice(0, TOOL_FILE_ID_CAP);
+}
+
+function describeFileIdTruncation(inputFileIds, ctx = {}) {
+  const raw = Array.isArray(inputFileIds) && inputFileIds.length
+    ? inputFileIds
+    : (Array.isArray(ctx.fileIds) ? ctx.fileIds : []);
+  const unique = Array.from(new Set(raw.map(String).filter(Boolean)));
+  return {
+    truncated: unique.length > TOOL_FILE_ID_CAP,
+    requested: unique.length,
+    used: Math.min(unique.length, TOOL_FILE_ID_CAP),
+  };
 }
 
 function getPrismaForTool(ctx = {}) {
@@ -836,32 +850,48 @@ const docintelAnalyze = {
       return { ok: false, error: 'docintel_analyze requires prisma and authenticated userId' };
     }
     const analyses = [];
+    const errors = [];
     for (const fileId of ids) {
-      const analysis = await documentIntelligence.analyzeFile(prisma, {
-        userId: ctx.userId,
-        fileId,
-        force,
-      });
-      analyses.push({
-        id: analysis.id,
-        fileId: analysis.fileId,
-        status: analysis.status,
-        summary: analysis.summary,
-        charCount: analysis.charCount,
-        chunkCount: analysis.chunkCount,
-        tableCount: analysis.tableCount,
-        textCoverage: analysis.textCoverage,
-        warnings: analysis.warnings || [],
-      });
+      try {
+        const analysis = await documentIntelligence.analyzeFile(prisma, {
+          userId: ctx.userId,
+          fileId,
+          force,
+        });
+        analyses.push({
+          id: analysis.id,
+          fileId: analysis.fileId,
+          status: analysis.status,
+          summary: analysis.summary,
+          charCount: analysis.charCount,
+          chunkCount: analysis.chunkCount,
+          tableCount: analysis.tableCount,
+          textCoverage: analysis.textCoverage,
+          warnings: analysis.warnings || [],
+        });
+      } catch (err) {
+        // Per-file failures shouldn't poison the entire tool call —
+        // surface them in the result so the agent can decide whether
+        // to retry with `force: true` or skip the bad file.
+        errors.push({ fileId, error: err?.message || String(err) });
+      }
     }
+    const truncation = describeFileIdTruncation(fileIds, ctx);
     ctx.onEvent?.({
       type: 'document_analysis',
       analysisIds: analyses.map((item) => item.id).filter(Boolean),
       evidenceRefs: analyses.map((item) => ({ analysisId: item.id, fileId: item.fileId, status: item.status })),
       summary: `${analyses.length} analisis documental(es)`,
     });
-    ctx.onEvent?.({ type: 'tool_output', tool: 'docintel_analyze', ok: true, preview: `${analyses.length} analisis listo(s)` });
-    return { ok: true, analyses, _preview: `${analyses.length} documento(s) analizados` };
+    const previewSuffix = errors.length ? ` (${errors.length} fallaron)` : '';
+    ctx.onEvent?.({ type: 'tool_output', tool: 'docintel_analyze', ok: errors.length === 0, preview: `${analyses.length} analisis listo(s)${previewSuffix}` });
+    return {
+      ok: errors.length === 0,
+      analyses,
+      errors,
+      truncation,
+      _preview: `${analyses.length} documento(s) analizados${previewSuffix}`,
+    };
   },
 };
 
@@ -1390,6 +1420,8 @@ module.exports = {
     metadataPathFor,
     sanitizeArtifactFilename,
     clampTimeoutMs,
+    describeFileIdTruncation,
+    TOOL_FILE_ID_CAP,
     summarisePreview,
     validateAgentArtifactBuffer,
     assertArtifactValidation,
