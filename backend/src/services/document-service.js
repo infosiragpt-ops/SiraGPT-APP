@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const mime = require('mime-types');
-const { exec, execSync } = require('child_process');
+const { execFile, execSync } = require('child_process');
 const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, AlignmentType, BorderStyle, WidthType } = require('docx');
 const puppeteer = require('puppeteer');
 const PizZip = require('pizzip');
@@ -330,8 +330,19 @@ async function createDocx(filePath, content) {
     // For DOCX, Pandoc converts LaTeX math to native Word OMML.
     // Do not pass --mathjax here: that option targets HTML output and
     // makes the intent ambiguous for Word documents.
-    const pandocCommand = `pandoc "${tempMarkdownPath}" -f markdown+pipe_tables+grid_tables+tex_math_dollars+tex_math_single_backslash -t docx --standalone --extract-media="${tempDir}" --reference-doc="${referenceDocPath}" -o "${filePath}"`;
-    console.log(`Executing Pandoc command: ${pandocCommand}`);
+    const pandocArgs = [
+        tempMarkdownPath,
+        '-f',
+        'markdown+pipe_tables+grid_tables+tex_math_dollars+tex_math_single_backslash',
+        '-t',
+        'docx',
+        '--standalone',
+        `--extract-media=${tempDir}`,
+        `--reference-doc=${referenceDocPath}`,
+        '-o',
+        filePath,
+    ];
+    console.log(`Executing Pandoc with ${pandocArgs.length} arguments`);
 
     // Image-handling was commented out above (see Step 2), so there are
     // no saved image files to unlink here. `imageFiles` stayed as a
@@ -343,7 +354,7 @@ async function createDocx(filePath, content) {
     const imageFiles = [];
 
     await new Promise((resolve, reject) => {
-        exec(pandocCommand, { maxBuffer: 15 * 1024 * 1024 }, async (error, stdout, stderr) => {
+        execFile('pandoc', pandocArgs, { maxBuffer: 15 * 1024 * 1024 }, async (error, stdout, stderr) => {
             // Clean up temporary files
             try {
                 await fs.unlink(tempMarkdownPath);
@@ -746,7 +757,11 @@ async function createPptx(filePath, content, filename) {
 }
 
 async function createDocument(userId, filename, content) {
-    const uploadsDir = path.join(__dirname, '../../uploads/documents', userId);
+    const safeUserId = String(userId || '').replace(/[^a-zA-Z0-9_.-]/g, '_');
+    if (!safeUserId) {
+        throw new Error('createDocument: userId required');
+    }
+    const uploadsDir = path.join(__dirname, '../../uploads/documents', safeUserId);
     await fs.mkdir(uploadsDir, { recursive: true });
     const safeFilename = filename.replace(/[^a-zA-Z0-9_.-]/g, '_');
     const filePath = path.join(uploadsDir, safeFilename);

@@ -117,6 +117,10 @@ function fail(res, status, error) {
   res.status(status).json({ ok: false, error });
 }
 
+function authenticatedUserId(req) {
+  return req.user?.id || req.user?.userId || null;
+}
+
 // ─── Component registry ────────────────────────────────────────────────
 
 router.get("/components", authenticateToken, (_req, res) => {
@@ -727,7 +731,7 @@ router.post(
   "/product-os/memory/turn",
   authenticateToken,
   [
-    body("userId").isString().isLength({ min: 1, max: 200 }),
+    body("userId").optional().isString().isLength({ min: 1, max: 200 }),
     body("role").isString().isIn(["user", "assistant", "system", "tool"]),
     body("content").isString().isLength({ min: 1, max: 50000 }),
   ],
@@ -735,8 +739,10 @@ router.post(
     const errs = validationResult(req);
     if (!errs.isEmpty()) return fail(res, 400, errs.array());
     try {
-      await sharedMemory.pushTurn(req.body.userId, { role: req.body.role, content: req.body.content });
-      const recent = await sharedMemory.recentTurns(req.body.userId, 12);
+      const userId = authenticatedUserId(req);
+      if (!userId) return fail(res, 401, "authenticated user required");
+      await sharedMemory.pushTurn(userId, { role: req.body.role, content: req.body.content });
+      const recent = await sharedMemory.recentTurns(userId, 12);
       ok(res, { recent });
     } catch (err) {
       fail(res, 500, err.message || "memory.turn failed");
@@ -748,15 +754,17 @@ router.post(
   "/product-os/memory/recall",
   authenticateToken,
   [
-    body("userId").isString().isLength({ min: 1, max: 200 }),
+    body("userId").optional().isString().isLength({ min: 1, max: 200 }),
     body("query").isString().isLength({ min: 1, max: 4000 }),
     body("topK").optional().isInt({ min: 1, max: 20 }),
   ],
   async (req, res) => {
     const errs = validationResult(req);
     if (!errs.isEmpty()) return fail(res, 400, errs.array());
+    const userId = authenticatedUserId(req);
+    if (!userId) return fail(res, 401, "authenticated user required");
     const ctx = await sharedMemory.buildContextForTurn({
-      userId: req.body.userId,
+      userId,
       query: req.body.query,
       topK: req.body.topK || 5,
     });

@@ -9,6 +9,7 @@ import {
   localeForCountry,
 } from './lib/i18n/locales'
 import { countryCodeFromHeaders } from './lib/i18n/locale-resolution'
+import { applyNextApiCorsHeaders, buildNextApiPreflightResponse } from './lib/next-api-cors'
 
 const LOCALE_COOKIE = 'NEXT_LOCALE'
 const ONE_YEAR = 60 * 60 * 24 * 365
@@ -18,11 +19,11 @@ export async function middleware(request: NextRequest) {
 
   // API + Next internals skip locale handling but keep CORS for /api.
   if (pathname.startsWith('/api/')) {
+    if (request.method === 'OPTIONS') {
+      return buildNextApiPreflightResponse(request)
+    }
     const res = NextResponse.next()
-    res.headers.set('Access-Control-Allow-Origin', '*')
-    res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-    res.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-    return res
+    return applyNextApiCorsHeaders(request, res)
   }
 
   // If the user already has a supported locale cookie, do nothing.
