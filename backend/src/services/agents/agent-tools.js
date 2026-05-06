@@ -54,16 +54,24 @@ function commentPrefixFor(source) {
   switch (ext) {
     case 'py': case 'rb': case 'sh': case 'bash': case 'zsh':
     case 'yaml': case 'yml': case 'toml': case 'conf':
-    case 'r': case 'jl':
+    case 'r': case 'jl': case 'pl': case 'pm':
+    case 'dockerfile': case 'gitignore': case 'gitconfig':
       return '#';
     case 'html': case 'htm': case 'xml': case 'svg':
+    case 'md': case 'markdown':
       return '<!--';
     case 'css': case 'scss': case 'less':
       return '/*';
     case 'sql':
+    case 'hs': case 'lua': case 'ada':
       return '--';
-    case 'lisp': case 'clj': case 'scm':
+    case 'lisp': case 'clj': case 'scm': case 'el':
       return ';;';
+    case 'tex': case 'latex': case 'matlab':
+      // intentionally NOT 'm' — collides with Objective-C which uses //
+      return '%';
+    case 'bat': case 'cmd':
+      return 'REM';
     case 'json': case 'jsonc':
       // JSON has no comment syntax. Returning a special marker so
       // formatChunkSeparator can drop the title entirely instead of

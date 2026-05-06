@@ -127,6 +127,19 @@ describe("agent-tools · commentPrefixFor JSON handling", () => {
   it("uses # for python", () => {
     assert.equal(agentTools.commentPrefixFor("script.py"), "#")
   })
+
+  it("uses <!-- for markdown / html / svg / xml", () => {
+    assert.equal(agentTools.commentPrefixFor("readme.md"), "<!--")
+    assert.equal(agentTools.commentPrefixFor("page.html"), "<!--")
+    assert.equal(agentTools.commentPrefixFor("graphic.svg"), "<!--")
+  })
+
+  it("uses % for LaTeX, ;; for Lisp, -- for SQL/Haskell/Lua", () => {
+    assert.equal(agentTools.commentPrefixFor("paper.tex"), "%")
+    assert.equal(agentTools.commentPrefixFor("core.clj"), ";;")
+    assert.equal(agentTools.commentPrefixFor("query.sql"), "--")
+    assert.equal(agentTools.commentPrefixFor("Main.hs"), "--")
+  })
 })
 
 describe("task-tools · previewText resilience", () => {
