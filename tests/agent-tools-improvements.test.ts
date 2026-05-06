@@ -334,6 +334,37 @@ describe("agent-tools · static_checks empty_catch python except pass", () => {
   })
 })
 
+describe("agent-tools · static_checks eval_usage extended", () => {
+  it("flags setTimeout / setInterval with a string argument", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "eval_usage")!
+    const text = [
+      "setTimeout('alert(1)', 100);",
+      "setInterval(\"x++\", 200);",
+    ].join("\n")
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    const out = check.scan(text, { language: "javascript", lines, codeMask })
+    assert.equal(out.length, 2)
+    assert.ok(out.every(f => f.severity === "high"))
+  })
+
+  it("flags Function() constructor without 'new'", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "eval_usage")!
+    const text = "const f = Function('return x + 1')();"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    const out = check.scan(text, { language: "javascript", lines, codeMask })
+    assert.equal(out.length, 1)
+    assert.ok(out[0].message.includes("Function()"))
+  })
+
+  it("does not flag setTimeout with a function argument", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "eval_usage")!
+    const text = "setTimeout(() => doX(), 100);"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    const out = check.scan(text, { language: "javascript", lines, codeMask })
+    assert.equal(out.length, 0)
+  })
+})
+
 describe("agent-tools · static_checks os_system_call", () => {
   it("flags os.system and os.popen", () => {
     const check = agentTools.STATIC_CHECKS.find(c => c.id === "os_system_call")!

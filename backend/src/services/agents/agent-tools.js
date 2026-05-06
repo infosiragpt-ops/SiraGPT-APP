@@ -524,7 +524,7 @@ const STATIC_CHECKS = [
   },
   {
     id: 'eval_usage',
-    description: 'Use of eval() or new Function() — dynamic code execution',
+    description: 'Use of eval() / Function() / setTimeout-with-string — dynamic code execution',
     scan: (text, { lines, codeMask }) => {
       const out = [];
       lines.forEach((line, i) => {
@@ -532,8 +532,20 @@ const STATIC_CHECKS = [
         // Strip string literals so `"eval(x)"` inside a string doesn't
         // trigger; only real code-position matches should fire.
         const stripped = stripStringLiterals(line);
-        if (/\beval\s*\(/.test(stripped) || /\bnew\s+Function\s*\(/.test(stripped)) {
-          out.push({ severity: 'high', line: i + 1, message: 'dynamic code execution — audit carefully' });
+        if (/\beval\s*\(/.test(stripped)) {
+          out.push({ severity: 'high', line: i + 1, message: 'eval() — dynamic code execution, audit carefully' });
+          return;
+        }
+        if (/\b(?:new\s+)?Function\s*\(/.test(stripped)) {
+          out.push({ severity: 'high', line: i + 1, message: 'Function() constructor — equivalent to eval(), audit carefully' });
+          return;
+        }
+        // setTimeout/setInterval with a string first arg: detect by
+        // looking at the ORIGINAL line. The first arg is a string literal
+        // when the call site begins with `setTimeout("` or `setTimeout('`
+        // (allowing whitespace).
+        if (/\bset(?:Timeout|Interval|Immediate)\s*\(\s*['"`]/.test(line)) {
+          out.push({ severity: 'high', line: i + 1, message: 'setTimeout/setInterval called with a string — implicit eval(), pass a function instead' });
         }
       });
       return out;
