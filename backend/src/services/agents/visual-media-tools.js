@@ -1301,8 +1301,10 @@ const createInfographicSvg = {
       sections: { type: 'array', items: {
         type: 'object',
         properties: {
+          type: { type: 'string', enum: ['text', 'stat', 'list', 'quote', 'progress'], description: 'Section render style. Default: "text". stat = big number, list = bullet items, quote = pulled quote, progress = progress bars.' },
           heading: { type: 'string', description: 'Section heading.' },
-          content: { type: 'string', description: 'Section content text (1-3 sentences).' },
+          content: { description: 'Section body. For text/quote/stat: a string. For list: array of strings. For progress: array of {label, percent}.' },
+          subtext: { type: 'string', description: 'Optional supporting text shown below stat value.' },
           icon: { type: 'string', enum: ['chart', 'bulb', 'star', 'target', 'gear', 'shield', 'globe', 'people', 'clock', 'rocket', 'check'], description: 'Optional icon type.' },
           metrics: { type: 'array', items: { type: 'object', properties: {
             label: { type: 'string' },
@@ -1311,7 +1313,7 @@ const createInfographicSvg = {
           } }, description: 'Optional numeric metrics to display.' },
           color: { type: 'string', description: 'Optional accent hex color.' },
         },
-        required: ['heading', 'content'],
+        required: ['heading'],
       }, description: '2-6 content sections to display.' },
       theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'bold'], description: 'Visual theme. Default: "professional".' },
       backgroundColor: { type: 'string', description: 'Background hex color. Default depends on theme.' },
@@ -1354,21 +1356,89 @@ const createInfographicSvg = {
         check: '<circle cx="28" cy="28" r="22" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M18 28 L24 34 L38 20" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
       };
 
+      function inferSectionType(section) {
+        if (section.type) return section.type;
+        if (Array.isArray(section.content)) {
+          if (section.content[0] && typeof section.content[0] === 'object' && 'percent' in section.content[0]) return 'progress';
+          return 'list';
+        }
+        return 'text';
+      }
+
+      function renderSectionContent(section, sy, contentX) {
+        const accent = section.color || t.accent;
+        const stype = inferSectionType(section);
+        const safeContent = section.content;
+
+        if (stype === 'stat') {
+          const val = xmlEscape(String(safeContent || '').slice(0, 24));
+          const sub = section.subtext ? xmlEscape(String(section.subtext).slice(0, 80)) : '';
+          let html = `<text x="${contentX}" y="${sy + 88}" font-family="Arial" font-size="40" font-weight="bold" fill="${accent}">${val}</text>`;
+          if (sub) html += `<text x="${contentX}" y="${sy + 116}" font-family="Arial" font-size="12" fill="${t.muted}">${sub}</text>`;
+          return html;
+        }
+        if (stype === 'list') {
+          const items = Array.isArray(safeContent) ? safeContent : String(safeContent || '').split('\n').filter(Boolean);
+          return items.slice(0, 5).map((item, idx) => {
+            const safeItem = xmlEscape(String(item).slice(0, 90));
+            const ly = sy + 60 + idx * 22;
+            return `<circle cx="${contentX + 6}" cy="${ly - 4}" r="3" fill="${accent}"/><text x="${contentX + 18}" y="${ly}" font-family="Arial" font-size="12" fill="${t.text}">${safeItem}</text>`;
+          }).join('\n');
+        }
+        if (stype === 'quote') {
+          const q = xmlEscape(String(safeContent || '').slice(0, 220));
+          return [
+            `<text x="${contentX}" y="${sy + 70}" font-family="Georgia, serif" font-size="42" fill="${accent}" opacity="0.55">"</text>`,
+            `<text x="${contentX + 30}" y="${sy + 80}" font-family="Georgia, serif" font-size="14" font-style="italic" fill="${t.text}">${q}</text>`,
+          ].join('\n');
+        }
+        if (stype === 'progress') {
+          const items = Array.isArray(safeContent) ? safeContent : [];
+          const barW = W - 2 * PAD - contentX - 16;
+          return items.slice(0, 4).map((it, idx) => {
+            const pct = Math.max(0, Math.min(100, Number(it.percent) || 0));
+            const safeLbl = xmlEscape(String(it.label || `Item ${idx + 1}`).slice(0, 30));
+            const py = sy + 60 + idx * 30;
+            return [
+              `<text x="${contentX}" y="${py - 4}" font-family="Arial" font-size="11" fill="${t.text}">${safeLbl}</text>`,
+              `<text x="${contentX + barW}" y="${py - 4}" text-anchor="end" font-family="Arial" font-size="11" font-weight="bold" fill="${accent}">${pct}%</text>`,
+              `<rect x="${contentX}" y="${py + 2}" width="${barW}" height="8" rx="4" fill="${t.border}"/>`,
+              `<rect x="${contentX}" y="${py + 2}" width="${(barW * pct) / 100}" height="8" rx="4" fill="${accent}"/>`,
+            ].join('');
+          }).join('\n');
+        }
+        // text (default)
+        const txt = xmlEscape(String(safeContent || '').slice(0, 300));
+        // Simple word-wrap to ~3 lines
+        const charsPerLine = Math.floor((W - contentX - PAD - 16) / 7);
+        const lines = [];
+        let remaining = txt;
+        while (remaining.length > 0 && lines.length < 4) {
+          if (remaining.length <= charsPerLine) { lines.push(remaining); break; }
+          let cut = remaining.lastIndexOf(' ', charsPerLine);
+          if (cut <= 0) cut = charsPerLine;
+          lines.push(remaining.slice(0, cut));
+          remaining = remaining.slice(cut + 1);
+        }
+        return lines.map((line, idx) => `<text x="${contentX}" y="${sy + 60 + idx * 18}" font-family="Arial" font-size="12" fill="${t.muted}">${line}</text>`).join('\n');
+      }
+
       let sectionsSvg = '';
       sections.slice(0, maxSections).forEach((section, i) => {
         const sy = HEADER_H + PAD + i * SECTION_H;
         const accent = section.color || t.accent;
         const safeHeading = xmlEscape(String(section.heading).slice(0, 80));
-        const safeContent = xmlEscape(String(section.content).slice(0, 300));
         const hasMetrics = Array.isArray(section.metrics) && section.metrics.length > 0;
         const iconHtml = iconSvg[section.icon] ? `<g transform="translate(${PAD + 8}, ${sy + 14})" color="${accent}" stroke-width="auto">${iconSvg[section.icon]}</g>` : '';
+        const contentX = iconHtml ? 80 : PAD + 16;
 
         sectionsSvg += `
-  <!-- Section ${i + 1} -->
+  <!-- Section ${i + 1} (${inferSectionType(section)}) -->
   <rect x="${PAD}" y="${sy}" width="${W - 2 * PAD}" height="${SECTION_H - 8}" rx="10" fill="${t.card}" stroke="${t.border}" stroke-width="1"/>
+  <rect x="${PAD}" y="${sy}" width="4" height="${SECTION_H - 8}" rx="2" fill="${accent}"/>
   ${iconHtml}
-  <text x="${iconHtml ? 80 : PAD + 16}" y="${sy + 28}" font-family="Arial" font-size="15" font-weight="bold" fill="${t.text}">${safeHeading}</text>
-  <text x="${iconHtml ? 80 : PAD + 16}" y="${sy + 50}" font-family="Arial" font-size="12" fill="${t.muted}">${safeContent}</text>
+  <text x="${contentX}" y="${sy + 28}" font-family="Arial" font-size="15" font-weight="bold" fill="${t.text}">${safeHeading}</text>
+  ${renderSectionContent(section, sy, contentX)}
   ${hasMetrics ? section.metrics.map((m, mi) => {
     const mx = PAD + 16 + mi * 150;
     const my = sy + SECTION_H - 40;

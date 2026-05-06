@@ -483,6 +483,38 @@ test('create_infographic_svg: empty sections', async () => {
   assert.equal(r.ok, true);
 });
 
+test('create_infographic_svg: rich section types (stat/list/quote/progress)', async () => {
+  const r = await tool('create_infographic_svg').execute({
+    title: 'Q4 Highlights',
+    sections: [
+      { type: 'stat', heading: 'Revenue', content: '$2.4M', subtext: 'Up 18% YoY', icon: 'chart' },
+      { type: 'list', heading: 'Wins', content: ['Launched in EU', 'Doubled team', 'Closed Series B'] },
+      { type: 'quote', heading: 'Customer Voice', content: 'Best product in its category — saved us hundreds of hours.' },
+      { type: 'progress', heading: 'Goals', content: [
+        { label: 'Revenue', percent: 95 },
+        { label: 'Hiring', percent: 70 },
+        { label: 'Retention', percent: 88 },
+      ] },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('Q4 Highlights'));
+  assert.ok(c.includes('$2.4M'));
+  assert.ok(c.includes('Launched in EU'));
+  assert.ok(c.includes('95%'));
+});
+
+test('create_infographic_svg: heading without content still renders', async () => {
+  const r = await tool('create_infographic_svg').execute({
+    title: 'Headings only',
+    sections: [{ heading: 'Just a heading' }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+});
+
 // ── create_dashboard_html ────────────────────────────────────────
 
 test('create_dashboard_html: interactive HTML', async () => {
