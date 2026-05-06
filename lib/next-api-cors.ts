@@ -31,7 +31,7 @@ export function applyNextApiCorsHeaders(
 ): NextResponse {
   const origin = request.headers.get('origin')
   response.headers.set('Vary', appendVary(response.headers.get('Vary'), 'Origin'))
-  response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
+  response.headers.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS')
   response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   response.headers.set('Access-Control-Max-Age', '86400')
 

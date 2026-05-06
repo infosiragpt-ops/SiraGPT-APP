@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
 
-test.describe.configure({ timeout: 120_000 })
+test.describe.configure({ timeout: 240_000 })
 
 const models = [
   {
@@ -106,6 +106,17 @@ async function mockChatApi(page: Page, options: { visualViewportHeight?: number 
     const path = url.pathname.replace(/^\/api(?=\/|$)/, "")
 
     if (path === "/auth/me") return fulfillJson(route, { user })
+    if (path === "/health" && request.method() === "HEAD") {
+      return route.fulfill({ status: 204 })
+    }
+    if (path === "/health") {
+      return fulfillJson(route, {
+        status: "healthy",
+        timestamp: new Date("2026-05-04T00:00:00.000Z").toISOString(),
+        uptime_s: 1,
+        checks: [{ name: "frontend", status: "healthy", critical: true, latency_ms: 0 }],
+      })
+    }
     if (path === "/ai/models") return fulfillJson(route, { models })
     if (path === "/payments/subscription") {
       return fulfillJson(route, {
@@ -132,6 +143,11 @@ async function mockChatApi(page: Page, options: { visualViewportHeight?: number 
   await page.route("http://localhost:5000/**", handleApiRoute)
 }
 
+async function waitForMobileChatShell(page: Page, timeout: number) {
+  await page.waitForSelector(".chat-viewport", { timeout })
+  await page.waitForSelector(".chat-composer-dock textarea", { timeout })
+}
+
 async function openMobileChat(
   page: Page,
   width: number,
@@ -140,9 +156,29 @@ async function openMobileChat(
 ) {
   await page.setViewportSize({ width, height })
   await mockChatApi(page, options)
-  await page.goto("/chat?id=mobile-chat", { waitUntil: "commit", timeout: 120_000 })
-  await page.waitForSelector(".chat-viewport", { timeout: 60_000 })
-  await page.waitForSelector(".chat-composer-dock textarea", { timeout: 60_000 })
+  let sawChunkParseError = false
+  const onPageError = (error: Error) => {
+    if (/Invalid or unexpected token/i.test(error.message)) sawChunkParseError = true
+  }
+
+  page.on("pageerror", onPageError)
+  try {
+    await page.goto("/chat?id=mobile-chat", { waitUntil: "commit", timeout: 120_000 })
+    try {
+      await waitForMobileChatShell(page, 60_000)
+    } catch (error) {
+      if (!sawChunkParseError) throw error
+
+      // Next dev can occasionally serve a stale/partial first client chunk while
+      // cold-compiling this large route. A single reload validates the real UI
+      // after the dev server has completed that initial compilation.
+      sawChunkParseError = false
+      await page.reload({ waitUntil: "domcontentloaded", timeout: 120_000 })
+      await waitForMobileChatShell(page, 120_000)
+    }
+  } finally {
+    page.off("pageerror", onPageError)
+  }
   await page.waitForTimeout(250)
 }
 
