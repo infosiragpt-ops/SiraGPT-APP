@@ -470,6 +470,36 @@ describe("task-tools · clampInt", () => {
   })
 })
 
+describe("task-tools · validateAgentArtifactBuffer magic-byte detection", () => {
+  const tt = cjsRequire("../../backend/src/services/agents/task-tools") as {
+    INTERNAL: {
+      validateAgentArtifactBuffer: (ext: string, buf: Buffer) => { passed: boolean; checks: Record<string, boolean> }
+      bufferHasMagic: (buf: Buffer, ext: string) => boolean | null
+    }
+  }
+
+  it("passes a real PNG header but fails fake bytes", () => {
+    const realPng = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(64, 0),
+    ])
+    assert.equal(tt.INTERNAL.bufferHasMagic(realPng, "png"), true)
+    assert.equal(tt.INTERNAL.validateAgentArtifactBuffer("png", realPng).passed, true)
+
+    const fake = Buffer.from("just text pretending to be a png").toString("utf8")
+    const fakeBuf = Buffer.from(fake, "utf8")
+    assert.equal(tt.INTERNAL.bufferHasMagic(fakeBuf, "png"), false)
+    assert.equal(tt.INTERNAL.validateAgentArtifactBuffer("png", fakeBuf).passed, false)
+  })
+
+  it("validates JPEG and GIF headers", () => {
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(40, 0)])
+    assert.equal(tt.INTERNAL.bufferHasMagic(jpeg, "jpeg"), true)
+    const gif = Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(40, 0)])
+    assert.equal(tt.INTERNAL.bufferHasMagic(gif, "gif"), true)
+  })
+})
+
 describe("task-tools · saveArtifact atomicity", () => {
   // We can't easily simulate a metadata write failure without mocking,
   // but we can verify that on a normal write the artifact file AND the

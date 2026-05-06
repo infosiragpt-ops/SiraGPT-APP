@@ -139,6 +139,38 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation 
   };
 }
 
+// Magic-byte signatures for binary formats. The default text validator
+// would otherwise report a 100% pass for any non-empty image just
+// because /\S/ matches gibberish bytes. Each entry is [extension, [bytes
+// matching at offset 0]]. PDF "%" + "PDF-" we anchor at offset 0.
+const BINARY_MAGIC_SIGNATURES = {
+  png:  [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
+  jpg:  [[0xff, 0xd8, 0xff]],
+  jpeg: [[0xff, 0xd8, 0xff]],
+  gif:  [[0x47, 0x49, 0x46, 0x38, 0x37, 0x61], [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]],
+  webp: [[0x52, 0x49, 0x46, 0x46]], // RIFF; full check requires WEBP at offset 8
+};
+
+function bufferHasMagic(buffer, ext) {
+  const sigs = BINARY_MAGIC_SIGNATURES[ext];
+  if (!sigs) return null;
+  for (const sig of sigs) {
+    if (buffer.length < sig.length) continue;
+    let ok = true;
+    for (let i = 0; i < sig.length; i++) {
+      if (buffer[i] !== sig[i]) { ok = false; break; }
+    }
+    if (ok) {
+      // Extra check for webp: bytes 8-11 must equal "WEBP".
+      if (ext === 'webp') {
+        if (buffer.length < 12 || buffer[8] !== 0x57 || buffer[9] !== 0x45 || buffer[10] !== 0x42 || buffer[11] !== 0x50) continue;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 function validateAgentArtifactBuffer(ext, buffer) {
   const normalizedExt = ext === 'markdown' ? 'md' : String(ext || '').toLowerCase();
   if (ADVANCED_DOCUMENT_FORMATS.has(normalizedExt)) {
@@ -147,6 +179,25 @@ function validateAgentArtifactBuffer(ext, buffer) {
       buffer,
       expected: normalizedExt === 'csv' ? { minRows: 2, minColumns: 2, minChars: 20 } : {},
     });
+  }
+
+  // Binary formats: validate the file-magic header, not utf-8 substance.
+  if (BINARY_MAGIC_SIGNATURES[normalizedExt]) {
+    const magicOk = bufferHasMagic(buffer, normalizedExt);
+    const checks = {
+      notEmpty: buffer.length > 32,
+      validMagic: Boolean(magicOk),
+    };
+    const score = Math.round((Object.values(checks).filter(Boolean).length / Object.values(checks).length) * 100);
+    return {
+      format: normalizedExt,
+      checks,
+      technicalScore: score,
+      qualityScore: score,
+      integrityScore: Math.min(100, Math.round(buffer.length / 1024)),
+      overallScore: score,
+      passed: score === 100,
+    };
   }
 
   const text = buffer.toString('utf8');
@@ -1521,5 +1572,7 @@ module.exports = {
     summarisePreview,
     validateAgentArtifactBuffer,
     assertArtifactValidation,
+    bufferHasMagic,
+    BINARY_MAGIC_SIGNATURES,
   },
 };
