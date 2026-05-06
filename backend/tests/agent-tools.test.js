@@ -103,6 +103,44 @@ test('static_checks: counts severity buckets', async () => {
   assert.ok(out.counts.info >= 1);
 });
 
+test('static_checks: flags SQL built via concatenation/template', async () => {
+  const js = "const q = `SELECT * FROM users WHERE id = ${userId}`;\n";
+  const py = "q = 'SELECT * FROM users WHERE name = ' + name\n";
+  const fstr = "q = f\"SELECT * FROM t WHERE id = {uid}\"\n";
+  const a = await tools.static_checks.handler({ source: 'q.js', content: js }, { userId: 'u', collection: 'c' });
+  const b = await tools.static_checks.handler({ source: 'q.py', content: py }, { userId: 'u', collection: 'c' });
+  const c = await tools.static_checks.handler({ source: 'q.py', content: fstr }, { userId: 'u', collection: 'c' });
+  assert.ok(a.findings.some(f => f.rule === 'sql_injection_concat'), 'JS template not flagged');
+  assert.ok(b.findings.some(f => f.rule === 'sql_injection_concat'), 'Py concat not flagged');
+  assert.ok(c.findings.some(f => f.rule === 'sql_injection_concat'), 'f-string not flagged');
+});
+
+test('static_checks: parameterised queries are NOT flagged', async () => {
+  const safe = 'const r = await db.query("SELECT * FROM users WHERE id = $1", [userId]);\n';
+  const out = await tools.static_checks.handler({ source: 'safe.js', content: safe }, { userId: 'u', collection: 'c' });
+  assert.equal(out.findings.filter(f => f.rule === 'sql_injection_concat').length, 0);
+});
+
+test('static_checks: flags path traversal patterns', async () => {
+  const a = "const data = fs.readFileSync('../../etc/passwd');\n";
+  const b = "const p = path.join(__dirname, req.params.name);\n";
+  const ra = await tools.static_checks.handler({ source: 'a.js', content: a }, { userId: 'u', collection: 'c' });
+  const rb = await tools.static_checks.handler({ source: 'b.js', content: b }, { userId: 'u', collection: 'c' });
+  assert.ok(ra.findings.some(f => f.rule === 'path_traversal'), 'literal ../ not flagged');
+  assert.ok(rb.findings.some(f => f.rule === 'path_traversal'), 'req-input join not flagged');
+});
+
+test('static_checks: flags CORS wildcard origins', async () => {
+  const samples = [
+    "app.use(cors({ origin: '*' }));\n",
+    "res.header('Access-Control-Allow-Origin', '*');\n",
+  ];
+  for (const content of samples) {
+    const out = await tools.static_checks.handler({ source: 's.js', content }, { userId: 'u', collection: 'c' });
+    assert.ok(out.findings.some(f => f.rule === 'cors_wildcard'), `not flagged: ${content}`);
+  }
+});
+
 test('static_checks: returns error when source missing', async () => {
   const out = await tools.static_checks.handler({}, { userId: 'u', collection: 'c' });
   assert.ok(out.error);

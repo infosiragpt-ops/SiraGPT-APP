@@ -1091,6 +1091,15 @@ async function runAgentTaskJob(payload = {}, job = null) {
 // ── Error introspection & recovery helpers ─────────────────────
 // Used externally by the job scheduler to decide retry strategy.
 
+// Add ±20% jitter so concurrent retries from the same upstream incident
+// don't all hit at the exact same wall clock — flattens the recovery
+// thundering herd without changing the average backoff.
+function withJitter(baseMs) {
+  if (!baseMs || baseMs <= 0) return baseMs;
+  const spread = baseMs * 0.2;
+  return Math.max(100, Math.round(baseMs + (Math.random() * 2 - 1) * spread));
+}
+
 /**
  * Classify an error thrown by runAgentTaskJob to determine retry eligibility.
  * Returns { retryable, reason, ttlMs } where ttlMs is how long before retry
@@ -1100,8 +1109,32 @@ function classifyTaskError(err) {
   if (!err) return { retryable: false, reason: 'no-error' };
   const msg = String(err.message || err).toLowerCase();
   const code = String(err.code || err.statusCode || '').toLowerCase();
+  const errName = String(err.name || '').toLowerCase();
 
-  // Non-retryable: auth / permission issues checked FIRST
+  // Non-retryable: explicit user/system abort. Retrying a cancelled job
+  // would resurrect work the operator just stopped.
+  if (errName === 'aborterror' || msg.includes('aborted') || msg.includes('operation was canceled') || code === 'abort_err')
+    return { retryable: false, reason: 'aborted' };
+
+  // Non-retryable: quota / billing — retry won't fix a depleted account.
+  if (msg.includes('insufficient_quota') || msg.includes('insufficient quota') ||
+      msg.includes('quota exceeded') || msg.includes('billing') ||
+      msg.includes('payment required') || code === '402')
+    return { retryable: false, reason: 'quota-exhausted' };
+
+  // Non-retryable: token/context length — same prompt will fail again.
+  if (msg.includes('context_length_exceeded') || msg.includes('context length') ||
+      msg.includes('maximum context') || msg.includes('too many tokens') ||
+      msg.includes('reduce the length'))
+    return { retryable: false, reason: 'context-length' };
+
+  // Non-retryable: model or content policy refusals.
+  if (msg.includes('content_policy') || msg.includes('content policy') ||
+      msg.includes('safety filter') || msg.includes('flagged by') ||
+      msg.includes('moderation'))
+    return { retryable: false, reason: 'content-policy' };
+
+  // Non-retryable: auth / permission issues
   if (msg.includes('api_key') || msg.includes('api key') || msg.includes('authentication') || msg.includes('unauthorized') || code === '401' || code === '403')
     return { retryable: false, reason: 'auth-failure' };
   if (msg.includes('missing') && (msg.includes('taskid') || msg.includes('required')))
@@ -1109,22 +1142,31 @@ function classifyTaskError(err) {
 
   // Retryable: rate limits (any rate / 429 / too many)
   if (code.includes('rate_limit') || msg.includes('rate limit') || msg.includes('rate_limit') || msg.includes('too many requests') || code.startsWith('429'))
-    return { retryable: true, reason: 'rate-limited', ttlMs: 15_000 };
+    return { retryable: true, reason: 'rate-limited', ttlMs: withJitter(15_000) };
 
-  // Retryable: network / timeout / connection errors
-  if (code.includes('timeout') || msg.includes('timeout') || msg.includes('etimedout') || msg.includes('econnreset') || msg.includes('econnrefused') || msg.includes('hang up') || msg.includes('socket'))
-    return { retryable: true, reason: 'network-timeout', ttlMs: 5_000 };
+  // Retryable: DNS resolution failures — usually transient at our edge.
+  if (msg.includes('enotfound') || msg.includes('eai_again') || msg.includes('getaddrinfo'))
+    return { retryable: true, reason: 'dns-failure', ttlMs: withJitter(5_000) };
+
+  // Retryable: network / timeout / connection errors. Includes 408
+  // (Request Timeout) and 504 (Gateway Timeout) explicitly so they
+  // don't fall into the generic 5xx bucket with a longer backoff.
+  if (code.includes('timeout') || msg.includes('timeout') || msg.includes('etimedout') ||
+      msg.includes('econnreset') || msg.includes('econnrefused') || msg.includes('econnaborted') ||
+      msg.includes('epipe') || msg.includes('hang up') || msg.includes('socket') ||
+      code === '408' || code === '504' || code.startsWith('408') || code.startsWith('504'))
+    return { retryable: true, reason: 'network-timeout', ttlMs: withJitter(5_000) };
 
   // Retryable: server errors (5xx)
   if (code.startsWith('5') || msg.includes('internal server') || msg.includes('service unavailable') || msg.includes('bad gateway'))
-    return { retryable: true, reason: 'server-error', ttlMs: 10_000 };
+    return { retryable: true, reason: 'server-error', ttlMs: withJitter(10_000) };
 
   // Non-retryable: validation / config
   if (msg.includes('missing') || msg.includes('invalid') || msg.includes('required') || msg.includes('not configured'))
     return { retryable: false, reason: 'validation-error' };
 
   // Default: safe to retry once
-  return { retryable: true, reason: 'unknown', ttlMs: 3_000 };
+  return { retryable: true, reason: 'unknown', ttlMs: withJitter(3_000) };
 }
 
 module.exports = {

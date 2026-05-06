@@ -64,6 +64,77 @@ test('classifyTaskError: unknown errors are retryable', () => {
   assert.ok(result.ttlMs > 0);
 });
 
+test('classifyTaskError: aborted/cancelled errors are NOT retryable', () => {
+  for (const msg of ['Tarea aborted by user', 'The operation was canceled']) {
+    const result = classifyTaskError(new Error(msg));
+    assert.equal(result.retryable, false, `should NOT be retryable: ${msg}`);
+    assert.equal(result.reason, 'aborted', `reason should be aborted: ${msg}`);
+  }
+  const abortErr = new Error('boom');
+  abortErr.name = 'AbortError';
+  const result = classifyTaskError(abortErr);
+  assert.equal(result.retryable, false);
+  assert.equal(result.reason, 'aborted');
+});
+
+test('classifyTaskError: quota / billing errors are NOT retryable', () => {
+  for (const msg of [
+    'You exceeded your current quota — insufficient_quota',
+    'Quota exceeded for this organization',
+    'Billing not enabled for this account',
+  ]) {
+    const result = classifyTaskError(new Error(msg));
+    assert.equal(result.retryable, false, `should NOT be retryable: ${msg}`);
+    assert.equal(result.reason, 'quota-exhausted', `reason should be quota-exhausted: ${msg}`);
+  }
+  const err402 = new Error('payment'); err402.statusCode = 402;
+  assert.equal(classifyTaskError(err402).reason, 'quota-exhausted');
+});
+
+test('classifyTaskError: context length errors are NOT retryable', () => {
+  for (const msg of [
+    'context_length_exceeded: prompt is 130000 tokens',
+    'This model maximum context length is 128000',
+    'Please reduce the length of the messages',
+  ]) {
+    const result = classifyTaskError(new Error(msg));
+    assert.equal(result.retryable, false, `should NOT be retryable: ${msg}`);
+    assert.equal(result.reason, 'context-length', `reason should be context-length: ${msg}`);
+  }
+});
+
+test('classifyTaskError: content policy refusals are NOT retryable', () => {
+  for (const msg of ['flagged by content_policy filter', 'Response was flagged by safety filter']) {
+    const result = classifyTaskError(new Error(msg));
+    assert.equal(result.retryable, false, `should NOT be retryable: ${msg}`);
+    assert.equal(result.reason, 'content-policy');
+  }
+});
+
+test('classifyTaskError: DNS errors are retryable', () => {
+  for (const msg of ['getaddrinfo ENOTFOUND api.openai.com', 'EAI_AGAIN dns lookup failed']) {
+    const result = classifyTaskError(new Error(msg));
+    assert.equal(result.retryable, true, `should be retryable: ${msg}`);
+    assert.equal(result.reason, 'dns-failure');
+    assert.ok(result.ttlMs > 0);
+  }
+});
+
+test('classifyTaskError: 408 / 504 gateway timeouts route to network-timeout', () => {
+  const err = new Error('Gateway Timeout'); err.statusCode = 504;
+  const r = classifyTaskError(err);
+  assert.equal(r.retryable, true);
+  assert.equal(r.reason, 'network-timeout');
+});
+
+test('classifyTaskError: ttlMs jitter stays within ±25% of base', () => {
+  // Sample many results — average should be near base, all within band.
+  const samples = Array.from({ length: 50 }, () => classifyTaskError(new Error('rate limit hit')).ttlMs);
+  for (const t of samples) {
+    assert.ok(t >= 11_000 && t <= 19_000, `jittered ttl out of band: ${t}`);
+  }
+});
+
 test('classifyTaskError: null/undefined returns non-retryable', () => {
   assert.equal(classifyTaskError(null).retryable, false);
   assert.equal(classifyTaskError(undefined).retryable, false);

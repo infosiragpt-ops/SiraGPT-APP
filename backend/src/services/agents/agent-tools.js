@@ -790,6 +790,80 @@ const STATIC_CHECKS = [
     },
   },
   {
+    id: 'sql_injection_concat',
+    description: 'SQL string built via concatenation / template interpolation — use parameterised queries',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        // Look for SQL verbs adjacent to concatenation/interpolation. We
+        // intentionally keep this conservative — the goal is to flag the
+        // obvious `"SELECT ... " + userInput` shape, not every templated
+        // query. Parameterised drivers (`$1`, `?`) won't match because
+        // the placeholder sits inside the string literal, not after a `+`.
+        const sqlVerb = /\b(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|DROP\s+TABLE|UNION\s+SELECT)\b/i;
+        if (!sqlVerb.test(line)) return;
+        // JS/TS: template literal with `${...}` interpolation containing a SQL verb.
+        if (/`[^`]*\$\{[^}]+\}[^`]*\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION)\b/i.test(line) ||
+            /`[^`]*\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION)\b[^`]*\$\{[^}]+\}/i.test(line)) {
+          out.push({ severity: 'high', line: i + 1, message: 'SQL built with template-literal interpolation — use parameterised queries' });
+          return;
+        }
+        // JS/TS/Python: classic `"...SELECT..." + var` or `f"...{var}..."` shape.
+        if (/["'][^"']*\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION)\b[^"']*["']\s*\+/i.test(line) ||
+            /\+\s*["'][^"']*\b(WHERE|FROM|VALUES|SET)\b/i.test(line) ||
+            /\bf["'][^"']*\{[^}]+\}[^"']*\b(SELECT|WHERE|FROM)\b/i.test(line) ||
+            /\bf["'][^"']*\b(SELECT|WHERE|FROM)\b[^"']*\{[^}]+\}/i.test(line)) {
+          out.push({ severity: 'high', line: i + 1, message: 'SQL built via string concatenation/f-string — use parameterised queries' });
+        }
+      });
+      return out;
+    },
+  },
+  {
+    id: 'path_traversal',
+    description: 'Filesystem path joined with unchecked user input — possible traversal (..)',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        // Pattern A: explicit "../" segment in a path string passed to fs/open.
+        if (/(?:fs\.|require\(|open\(|readFile|writeFile|createReadStream|createWriteStream)/.test(stripped) &&
+            /\.\.\//.test(line)) {
+          out.push({ severity: 'warn', line: i + 1, message: 'literal "../" in filesystem path — possible traversal' });
+          return;
+        }
+        // Pattern B: path.join / os.path.join concatenated with a parameter
+        // named req|input|user|param — common shape of unchecked input.
+        if (/\b(?:path\.join|os\.path\.join|path\.resolve)\s*\([^)]*\b(req|request|input|user|params|body|query)\b[^)]*\)/.test(stripped)) {
+          out.push({ severity: 'warn', line: i + 1, message: 'path joined with request/user input — validate or normalise to prevent traversal' });
+        }
+      });
+      return out;
+    },
+  },
+  {
+    id: 'cors_wildcard',
+    description: 'CORS Access-Control-Allow-Origin set to "*" — disables origin protection',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        // Express/Node: cors({ origin: '*' }) or res.header('Access-Control-Allow-Origin', '*')
+        if (/\borigin\s*:\s*['"`]\*['"`]/.test(line) ||
+            /access-control-allow-origin['"`]?\s*[,)]\s*['"`]\*/i.test(line) ||
+            /set_header\s*\(\s*['"]access-control-allow-origin['"]\s*,\s*['"]\*/i.test(line)) {
+          out.push({ severity: 'warn', line: i + 1, message: 'CORS wildcard "*" — restrict to known origins for credentialed endpoints' });
+        }
+      });
+      return out;
+    },
+  },
+  {
     id: 'disabled_ssl_verification',
     description: 'TLS verification disabled — exposes the call to MITM',
     scan: (text, { lines, codeMask, language }) => {
