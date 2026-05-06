@@ -2292,6 +2292,186 @@ const createKanbanBoard = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 10: create_comparison_table
+// ─────────────────────────────────────────────────────────────────────────
+
+const createComparisonTable = {
+  name: 'create_comparison_table',
+  description: 'Generate a side-by-side comparison table as an SVG file. Use for product/plan comparisons, feature matrices, vendor analysis, or any tabular comparison with categories and check/cross/value cells. Cells can contain text, numeric values, or boolean (✓/✗) indicators.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Comparison title (e.g. "Plan Comparison").' },
+      columns: { type: 'array', items: { type: 'string' }, description: 'Column headers (e.g. ["Free", "Pro", "Enterprise"]).' },
+      rows: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            feature: { type: 'string', description: 'Row label / feature name.' },
+            values: { type: 'array', items: { type: ['string', 'number', 'boolean'] }, description: 'One value per column. Booleans render as check/cross icons.' },
+            highlight: { type: 'boolean', description: 'Mark this row as a highlighted/important row.' },
+          },
+          required: ['feature', 'values'],
+        },
+        description: 'Rows of comparison data.',
+      },
+      highlightColumn: { type: 'integer', minimum: 0, description: 'Index of the recommended column to highlight (0-based).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'dark'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'columns', 'rows'],
+    additionalProperties: false,
+  },
+  async execute({ title, columns = [], rows = [], highlightColumn = -1, theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_comparison_table', preview: title });
+
+    try {
+      if (!Array.isArray(columns) || columns.length === 0) {
+        return { ok: false, error: 'columns array is empty' };
+      }
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return { ok: false, error: 'rows array is empty' };
+      }
+
+      const themes = {
+        professional: { bg: '#FAFBFC', card: '#FFFFFF', accent: '#2563EB', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', alt: '#F8FAFC', highlightBg: '#EFF6FF', highlightAccent: '#2563EB', check: '#10B981', cross: '#EF4444' },
+        modern:       { bg: '#0B1121', card: '#1E293B', accent: '#818CF8', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', alt: '#162033', highlightBg: '#312E81', highlightAccent: '#A78BFA', check: '#34D399', cross: '#F87171' },
+        minimal:      { bg: '#FFFFFF', card: '#FFFFFF', accent: '#0F172A', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', alt: '#F8FAFC', highlightBg: '#F1F5F9', highlightAccent: '#0F172A', check: '#10B981', cross: '#EF4444' },
+        dark:         { bg: '#0F172A', card: '#1E293B', accent: '#F59E0B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', alt: '#0F172A', highlightBg: '#451A03', highlightAccent: '#F59E0B', check: '#10B981', cross: '#EF4444' },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const cols = columns.slice(0, 6).map(c => xmlEscape(String(c).slice(0, 30)));
+      const rowList = rows.slice(0, 30);
+
+      const featureColW = 240;
+      const colW = Math.min(220, Math.max(140, 740 / cols.length));
+      const rowH = 48;
+      const headerH = 90;
+      const colHeaderH = 64;
+      const pad = 24;
+      const W = featureColW + cols.length * colW + pad * 2;
+      const H = headerH + colHeaderH + rowList.length * rowH + pad * 2 + 30;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="40" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="64" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${cols.length} columnas · ${rowList.length} filas</text>`;
+
+      // Column headers
+      const tableY = headerH + pad;
+      const tableX = pad;
+      // Feature column header
+      body += `<rect x="${tableX}" y="${tableY}" width="${featureColW}" height="${colHeaderH}" fill="${t.alt}" stroke="${t.border}" stroke-width="1" rx="8"/>`;
+      body += `<text x="${tableX + 16}" y="${tableY + colHeaderH / 2 + 6}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.muted}">CARACTERÍSTICA</text>`;
+
+      cols.forEach((col, ci) => {
+        const cx = tableX + featureColW + ci * colW;
+        const isHl = ci === highlightColumn;
+        const fill = isHl ? t.highlightBg : t.card;
+        const stroke = isHl ? t.highlightAccent : t.border;
+        body += `<rect x="${cx}" y="${tableY}" width="${colW}" height="${colHeaderH}" fill="${fill}" stroke="${stroke}" stroke-width="${isHl ? 2 : 1}" rx="8"/>`;
+        if (isHl) {
+          body += `<rect x="${cx + colW / 2 - 30}" y="${tableY - 12}" width="60" height="20" fill="${t.highlightAccent}" rx="10"/>`;
+          body += `<text x="${cx + colW / 2}" y="${tableY + 2}" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="#fff">RECOMENDADO</text>`;
+        }
+        body += `<text x="${cx + colW / 2}" y="${tableY + colHeaderH / 2 + 6}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${isHl ? t.highlightAccent : t.text}">${col}</text>`;
+      });
+
+      // Rows
+      rowList.forEach((row, ri) => {
+        const ry = tableY + colHeaderH + ri * rowH;
+        const isAlt = ri % 2 === 1;
+        const isHlRow = !!row.highlight;
+        const rowBg = isHlRow ? t.highlightBg : (isAlt ? t.alt : t.card);
+        // Feature cell
+        body += `<rect x="${tableX}" y="${ry}" width="${featureColW}" height="${rowH}" fill="${rowBg}" stroke="${t.border}" stroke-width="0.5"/>`;
+        const featureName = xmlEscape(String(row.feature || '').slice(0, 60));
+        body += `<text x="${tableX + 16}" y="${ry + rowH / 2 + 5}" font-family="Arial" font-size="13" font-weight="${isHlRow ? 'bold' : '600'}" fill="${t.text}">${featureName}</text>`;
+
+        // Value cells
+        const vals = Array.isArray(row.values) ? row.values : [];
+        cols.forEach((_, ci) => {
+          const cx = tableX + featureColW + ci * colW;
+          const isHlCol = ci === highlightColumn;
+          const cellBg = isHlCol ? t.highlightBg : rowBg;
+          body += `<rect x="${cx}" y="${ry}" width="${colW}" height="${rowH}" fill="${cellBg}" stroke="${t.border}" stroke-width="0.5"/>`;
+          const v = vals[ci];
+          if (v === true) {
+            // Check
+            const ix = cx + colW / 2;
+            const iy = ry + rowH / 2;
+            body += `<circle cx="${ix}" cy="${iy}" r="11" fill="${t.check}" opacity="0.18"/>`;
+            body += `<path d="M ${ix - 6} ${iy + 1} L ${ix - 1} ${iy + 5} L ${ix + 7} ${iy - 4}" stroke="${t.check}" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+          } else if (v === false) {
+            // Cross
+            const ix = cx + colW / 2;
+            const iy = ry + rowH / 2;
+            body += `<circle cx="${ix}" cy="${iy}" r="11" fill="${t.cross}" opacity="0.15"/>`;
+            body += `<path d="M ${ix - 5} ${iy - 5} L ${ix + 5} ${iy + 5} M ${ix + 5} ${iy - 5} L ${ix - 5} ${iy + 5}" stroke="${t.cross}" stroke-width="2.5" stroke-linecap="round"/>`;
+          } else if (v !== undefined && v !== null) {
+            const safeVal = xmlEscape(String(v).slice(0, 28));
+            body += `<text x="${cx + colW / 2}" y="${ry + rowH / 2 + 5}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="${isHlCol ? 'bold' : 'normal'}" fill="${isHlCol ? t.highlightAccent : t.text}">${safeVal}</text>`;
+          } else {
+            body += `<text x="${cx + colW / 2}" y="${ry + rowH / 2 + 5}" text-anchor="middle" font-family="Arial" font-size="13" fill="${t.muted}">—</text>`;
+          }
+        });
+      });
+
+      // Bottom rounding
+      const lastY = tableY + colHeaderH + rowList.length * rowH;
+      body += `<rect x="${tableX}" y="${tableY}" width="${featureColW + cols.length * colW}" height="${lastY - tableY}" fill="none" stroke="${t.border}" stroke-width="1" rx="8"/>`;
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Comparison table: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `comparison_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_comparison_table',
+        ok: true,
+        preview: `Comparativa lista: ${artifact.filename} (${cols.length}×${rowList.length}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        columns: cols.length,
+        rows: rowList.length,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_comparison_table', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -2304,6 +2484,7 @@ const VISUAL_MEDIA_TOOLS = [
   generateVideo,
   createTimeline,
   createKanbanBoard,
+  createComparisonTable,
 ];
 
 module.exports = { VISUAL_MEDIA_TOOLS };

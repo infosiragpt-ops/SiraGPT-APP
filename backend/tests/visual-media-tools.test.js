@@ -358,6 +358,38 @@ test('create_kanban_board: empty columns fails', async () => {
   assert.equal(r.ok, false);
 });
 
+test('create_comparison_table: plan comparison', async () => {
+  const ct = tool('create_comparison_table');
+  assert.ok(ct);
+  const r = await ct.execute({
+    title: 'Plan Comparison',
+    columns: ['Free', 'Pro', 'Enterprise'],
+    rows: [
+      { feature: 'Users', values: ['1', '10', 'Unlimited'] },
+      { feature: 'API Access', values: [false, true, true] },
+      { feature: 'Priority Support', values: [false, false, true], highlight: true },
+      { feature: 'Storage', values: ['1GB', '50GB', '500GB'] },
+    ],
+    highlightColumn: 1,
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.columns, 3);
+  assert.equal(r.rows, 4);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('Plan Comparison'));
+  assert.ok(c.includes('Free'));
+  assert.ok(c.includes('RECOMENDADO'));
+});
+
+test('create_comparison_table: empty rows fails', async () => {
+  const r = await tool('create_comparison_table').execute({
+    title: 'X', columns: ['A'], rows: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+});
+
 test('create_kanban_board: dark theme, single column', async () => {
   const r = await tool('create_kanban_board').execute({
     title: 'Backlog',
@@ -497,8 +529,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 9 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 9);
+test('all 10 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 10);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);

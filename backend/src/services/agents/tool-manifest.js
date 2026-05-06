@@ -329,6 +329,73 @@ function listManifests() {
   }));
 }
 
+/**
+ * Register a tool manifest at runtime. The file's docstring promises
+ * this hook so plugins / experimental tools can join the catalogue
+ * without editing this file. Validates the manifest against the
+ * schema first; rejects on duplicate name unless `overwrite: true`.
+ */
+function registerToolManifest(manifest, { overwrite = false } = {}) {
+  if (!manifest || typeof manifest !== 'object') {
+    throw new Error('registerToolManifest: manifest must be an object');
+  }
+  const validation = validateManifest(manifest);
+  if (!validation.ok) {
+    const detail = validation.errors.map((e) => `${e.instancePath || '/'} ${e.message}`).join('; ');
+    throw new Error(`registerToolManifest: invalid manifest — ${detail}`);
+  }
+  if (BUILTIN_MANIFESTS[manifest.name] && !overwrite) {
+    throw new Error(`registerToolManifest: duplicate manifest name '${manifest.name}' (pass overwrite:true to replace)`);
+  }
+  BUILTIN_MANIFESTS[manifest.name] = manifest;
+  return manifest;
+}
+
+function unregisterToolManifest(name) {
+  if (!BUILTIN_MANIFESTS[name]) return false;
+  delete BUILTIN_MANIFESTS[name];
+  return true;
+}
+
+/**
+ * Authorize a tool call against the caller's clearance. Returns
+ * { ok, reason? }. Reasons are stable strings so the caller can
+ * branch on them. Missing fields default to "allow" so legacy
+ * manifests don't break the agent.
+ */
+function authorizeToolCall(toolName, {
+  scopes = [],
+  dataClearance = ['public', 'internal', 'confidential', 'pii', 'phi', 'financial', 'secret'],
+  approvalGranted = false,
+} = {}) {
+  const manifest = getManifest(toolName);
+  if (!manifest) return { ok: false, reason: 'unknown_tool' };
+
+  const requiredScopes = Array.isArray(manifest.scopes) ? manifest.scopes : [];
+  const heldScopes = new Set(Array.isArray(scopes) ? scopes : []);
+  const missingScopes = requiredScopes.filter((scope) => !heldScopes.has(scope));
+  if (missingScopes.length) {
+    return { ok: false, reason: 'missing_scopes', missingScopes };
+  }
+
+  const requiredClasses = Array.isArray(manifest.data_classes) ? manifest.data_classes : [];
+  const allowedClasses = new Set(Array.isArray(dataClearance) ? dataClearance : []);
+  const blockedClasses = requiredClasses.filter((cls) => !allowedClasses.has(cls));
+  if (blockedClasses.length) {
+    return { ok: false, reason: 'data_class_denied', blockedClasses };
+  }
+
+  if (manifest.requires_confirmation && !approvalGranted) {
+    return { ok: false, reason: 'requires_confirmation' };
+  }
+
+  if (manifest.side_effect_level === 'destructive' && !approvalGranted) {
+    return { ok: false, reason: 'destructive_requires_approval' };
+  }
+
+  return { ok: true };
+}
+
 // ─── Manifests for the 7 visual/media generation tools ──────────────────
 // These tools are defined in visual-media-tools.js and wired into
 // task-tools.js, but they need manifests for full discovery through
@@ -594,6 +661,35 @@ function getVisualMediaManifests() {
       scopes: ["files.write"],
       data_classes: ["public","internal"],
     },
+    create_comparison_table: {
+      name: "create_comparison_table",
+      purpose: "Generate a side-by-side comparison table as an SVG artifact with check/cross indicators, highlighted recommended column, and theme variants. Use for plan/feature/vendor comparisons.",
+      inputs: {
+        type: "object", required: ["title","columns","rows"],
+        properties: {
+          title: { type: "string" },
+          columns: { type: "array", items: { type: "string" } },
+          rows: { type: "array", items: { type: "object" }, description: "Rows: { feature, values:[...], highlight? }. Boolean values render as ✓/✗." },
+          highlightColumn: { type: "integer", minimum: 0 },
+          theme: { type: "string", enum: ["professional","modern","minimal","dark"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, columns: { type: "integer" }, rows: { type: "integer" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_columns", description: "columns array is empty.", repair_hint: "Provide at least one column header." },
+        { code: "empty_rows", description: "rows array is empty.", repair_hint: "Provide at least one row." },
+      ],
+      acceptance_tests: ["returns ok:true for a 3-column × 4-row plan comparison"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants to compare pricing plans", call: { title: "Plans", columns: ["Free","Pro"], rows: [{feature:"API",values:[false,true]}], highlightColumn: 1 } }],
+      examples_negative: [{ when: "user wants a freeform table inside a document", why: "use create_document with markdown table syntax." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
   };
 }
 
@@ -728,7 +824,10 @@ Object.assign(BUILTIN_MANIFESTS, getDocIntelManifests());
 module.exports = {
   toolManifestSchema,
   BUILTIN_MANIFESTS,
+  authorizeToolCall,
   validateManifest,
   getManifest,
   listManifests,
+  registerToolManifest,
+  unregisterToolManifest,
 };
