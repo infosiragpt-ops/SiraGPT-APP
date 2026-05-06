@@ -283,6 +283,44 @@ describe("agent-tools · static_checks hardcoded_secret extended formats", () =>
   })
 })
 
+describe("agent-tools · static_checks disabled_ssl_verification", () => {
+  const check = () => agentTools.STATIC_CHECKS.find(c => c.id === "disabled_ssl_verification")!
+  it("flags rejectUnauthorized:false in Node", () => {
+    const text = "const opts = { rejectUnauthorized: false, host: 'x' };"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    const out = check().scan(text, { language: "javascript", lines, codeMask })
+    assert.equal(out.length, 1)
+    assert.equal(out[0].severity, "high")
+  })
+  it("flags verify=False in Python requests", () => {
+    const text = "requests.get('https://x', verify=False)"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
+    const out = check().scan(text, { language: "python", lines, codeMask })
+    assert.equal(out.length, 1)
+    assert.equal(out[0].severity, "high")
+  })
+})
+
+describe("agent-tools · static_checks empty_catch python except pass", () => {
+  it("flags Python 'except: pass' and 'except E: pass'", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "empty_catch")!
+    const text = [
+      "try:",
+      "    do()",
+      "except Exception:",
+      "    pass",
+      "",
+      "try:",
+      "    other()",
+      "except:",
+      "    pass",
+    ].join("\n")
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
+    const out = check.scan(text, { language: "python", lines, codeMask })
+    assert.equal(out.length, 2)
+  })
+})
+
 describe("agent-tools · static_checks subprocess_shell_true", () => {
   it("flags subprocess.run / Popen / check_output with shell=True", () => {
     const check = agentTools.STATIC_CHECKS.find(c => c.id === "subprocess_shell_true")!

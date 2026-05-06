@@ -443,6 +443,24 @@ function buildCommentCodeMask(text, language) {
   return { lines, codeMask };
 }
 
+// Module-scope language → [regex, label] map so we don't re-build the
+// pattern list on every console_log scan invocation.
+const CONSOLE_LOG_PATTERNS = {
+  javascript: [
+    [/\bconsole\.(log|debug)\s*\(/, 'console.log'],
+    // Match `debugger;` anywhere on a code-position line, not just
+    // when it's alone — devs often stack it after another statement.
+    [/\bdebugger\b\s*;?/, 'debugger'],
+  ],
+  python: [
+    [/^\s*print\s*\(/, 'print()'],
+    [/\bbreakpoint\s*\(/, 'breakpoint()'],
+    [/\bpdb\s*\.\s*set_trace\s*\(/, 'pdb.set_trace()'],
+  ],
+};
+CONSOLE_LOG_PATTERNS.typescript = CONSOLE_LOG_PATTERNS.javascript;
+CONSOLE_LOG_PATTERNS.unknown = CONSOLE_LOG_PATTERNS.javascript;
+
 // Module-scope so the array isn't re-allocated on every scan call.
 // Patterns are tuned to common real-world secret formats; the matcher
 // uses `.test()` and resets `lastIndex` between lines so the `g` flag
@@ -531,18 +549,8 @@ const STATIC_CHECKS = [
     description: 'Leftover console.log / print / debugger statements',
     scan: (text, { lines, codeMask, language }) => {
       const out = [];
-      const patterns = [];
-      if (language === 'javascript' || language === 'typescript' || language === 'unknown') {
-        patterns.push([/\bconsole\.(log|debug)\s*\(/, 'console.log']);
-        // Match `debugger;` anywhere on a code-position line, not just
-        // when it's alone — devs often stack it after another statement.
-        patterns.push([/\bdebugger\b\s*;?/, 'debugger']);
-      }
-      if (language === 'python') {
-        patterns.push([/^\s*print\s*\(/, 'print()']);
-        patterns.push([/\bbreakpoint\s*\(/, 'breakpoint()']);
-        patterns.push([/\bpdb\s*\.\s*set_trace\s*\(/, 'pdb.set_trace()']);
-      }
+      const patterns = CONSOLE_LOG_PATTERNS[language] || [];
+      if (patterns.length === 0) return out;
 
       lines.forEach((line, i) => {
         if (!codeMask[i]) return;
@@ -677,19 +685,59 @@ const STATIC_CHECKS = [
   },
   {
     id: 'empty_catch',
-    description: 'Empty catch block — errors are silently swallowed',
-    scan: (text, { codeMask, language }) => {
-      if (language !== 'javascript' && language !== 'typescript' && language !== 'java') return [];
-      // catch (e) { } or catch { } with nothing inside.
+    description: 'Empty catch / except block — errors are silently swallowed',
+    scan: (text, { codeMask, lines, language }) => {
       const out = [];
-      const re = /\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/g;
-      let m;
-      while ((m = re.exec(text)) !== null) {
-        const upto = text.slice(0, m.index);
-        const line = upto.split('\n').length;
-        if (!codeMask[line - 1]) continue;
-        out.push({ severity: 'warn', line, message: 'empty catch block — handle or rethrow' });
+      if (language === 'javascript' || language === 'typescript' || language === 'java') {
+        const re = /\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          const upto = text.slice(0, m.index);
+          const line = upto.split('\n').length;
+          if (!codeMask[line - 1]) continue;
+          out.push({ severity: 'warn', line, message: 'empty catch block — handle or rethrow' });
+        }
+      } else if (language === 'python') {
+        // Python `except: pass` and `except SomeError: pass`. We
+        // approximate by matching a line ending in a `:` after `except`
+        // and the next non-empty line being just `pass`.
+        for (let i = 0; i < lines.length; i++) {
+          if (!codeMask[i]) continue;
+          if (!/^\s*except\b[^:]*:\s*(?:#.*)?$/.test(lines[i])) continue;
+          // Find next non-empty line
+          let j = i + 1;
+          while (j < lines.length && lines[j].trim() === '') j++;
+          if (j < lines.length && /^\s*pass\s*(?:#.*)?$/.test(lines[j])) {
+            out.push({ severity: 'warn', line: i + 1, message: 'empty except block — log or rethrow the error' });
+          }
+        }
       }
+      return out;
+    },
+  },
+  {
+    id: 'disabled_ssl_verification',
+    description: 'TLS verification disabled — exposes the call to MITM',
+    scan: (text, { lines, codeMask, language }) => {
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        if (language === 'javascript' || language === 'typescript' || language === 'unknown') {
+          if (/\brejectUnauthorized\s*:\s*false\b/.test(stripped) ||
+              /\bNODE_TLS_REJECT_UNAUTHORIZED\b\s*=\s*['"]?0['"]?/.test(stripped)) {
+            out.push({ severity: 'high', line: i + 1, message: 'TLS verification disabled (rejectUnauthorized:false / NODE_TLS_REJECT_UNAUTHORIZED=0)' });
+            return;
+          }
+        }
+        if (language === 'python' || language === 'unknown') {
+          if (/\bverify\s*=\s*False\b/.test(stripped) ||
+              /\bssl\._create_unverified_context\s*\(/.test(stripped) ||
+              /\bcheck_hostname\s*=\s*False\b/.test(stripped)) {
+            out.push({ severity: 'high', line: i + 1, message: 'TLS verification disabled (verify=False / unverified_context)' });
+          }
+        }
+      });
       return out;
     },
   },
