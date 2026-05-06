@@ -635,23 +635,68 @@ router.post(
     res.setHeader('X-Accel-Buffering', 'no');
     if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
+    // ── SSE hardening: never drop a client without sending done ──
     let clientConnected = true;
+    let heartbeatTimer = null;
+    let responseTimeoutTimer = null;
+
+    const RESPONSE_TIMEOUT_MS = Number.isFinite(process.env.AGENT_RESPONSE_TIMEOUT_MS)
+      ? Number(process.env.AGENT_RESPONSE_TIMEOUT_MS)
+      : 3 * 60 * 60 * 1000; // 3h default
+
+    /** Safe SSE write. Returns true if written, false if client gone. */
     const send = (obj) => {
-      if (!clientConnected || res.writableEnded) return;
-      try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* client gone */ }
+      if (!clientConnected || res.writableEnded) return false;
+      try {
+        res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        return true;
+      } catch {
+        safeCloseConnection();
+        return false;
+      }
     };
+
+    function safeCloseConnection() {
+      clientConnected = false;
+      clearTimers();
+      if (!res.writableEnded && !res.destroyed) {
+        try { res.end(); } catch { /* already closed */ }
+      }
+    }
+
+    function clearTimers() {
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+      if (responseTimeoutTimer) { clearTimeout(responseTimeoutTimer); responseTimeoutTimer = null; }
+    }
+
     res.on('close', () => {
       clientConnected = false;
+      clearTimers();
       // If the task belongs to a chat, keep it running and persist the
       // final trace. This is the practical "continue while I leave the
       // browser" path. Orphaned requests are aborted to avoid leaks.
       if (!chatId) controller.abort();
     });
+    res.on('error', () => {
+      clientConnected = false;
+      clearTimers();
+      if (!chatId) controller.abort();
+    });
 
-    const heartbeat = setInterval(() => {
-      if (!clientConnected || res.writableEnded) return;
-      try { res.write(': keep-alive\n\n'); } catch { /* client gone */ }
+    // Heartbeat keeps proxies (nginx, Cloudflare) from closing the stream
+    heartbeatTimer = setInterval(() => {
+      if (!clientConnected || res.writableEnded) { clearTimers(); return; }
+      try { res.write(': keep-alive\n\n'); } catch { safeCloseConnection(); }
     }, 25000);
+    if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+
+    // Response timeout ensures we never leave a socket hanging
+    responseTimeoutTimer = setTimeout(() => {
+      if (!clientConnected || res.writableEnded) return;
+      console.warn('[agent-task] response timeout reached, aborting');
+      controller.abort();
+    }, RESPONSE_TIMEOUT_MS);
+    if (typeof responseTimeoutTimer.unref === 'function') responseTimeoutTimer.unref();
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const tools = buildTaskTools();
@@ -1008,9 +1053,8 @@ router.post(
       });
       send(outboundDoneEvent);
       clearTimeout(runtimeTimer);
-      clearInterval(heartbeat);
+      safeCloseConnection();
       if (persistTimer) clearTimeout(persistTimer);
-      try { res.end(); } catch { /* already closed */ }
     } catch (err) {
       console.error('[agent-task] fatal:', err);
       const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
@@ -1042,9 +1086,8 @@ router.post(
       });
       await persistTaskState(task.status);
       clearTimeout(runtimeTimer);
-      clearInterval(heartbeat);
+      safeCloseConnection();
       if (persistTimer) clearTimeout(persistTimer);
-      try { res.end(); } catch { /* already closed */ }
     }
   }
 );

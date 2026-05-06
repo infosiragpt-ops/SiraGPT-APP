@@ -144,6 +144,11 @@ async function run(openai, opts) {
   let stoppedReason = 'max_steps';
   const startedAt = Date.now();
 
+  // Prevent infinite loops when tools fail silently and the model
+  // keeps making the same call. Track tool error frequency per step.
+  const toolErrorBudget = new Map();
+  const MAX_TOOL_ERRORS = 5; // consecutive errors → abort
+
   for (let step = 0; step < maxSteps; step++) {
     if (ctx?.signal?.aborted) {
       stoppedReason = 'aborted';
@@ -227,6 +232,20 @@ async function run(openai, opts) {
         ? { error: dispatch.error }
         : dispatch.result;
 
+      // Track consecutive tool errors per tool to prevent infinite loops
+      if (dispatch.error) {
+        const errCount = (toolErrorBudget.get(toolName) || 0) + 1;
+        toolErrorBudget.set(toolName, errCount);
+        if (errCount >= MAX_TOOL_ERRORS) {
+          stoppedReason = `tool_error_limit:${toolName}`;
+          finalAnswer = `No se pudo completar la tarea: la herramienta ${toolName} falló ${errCount} veces consecutivas.`;
+          finalized = true;
+          break;
+        }
+      } else {
+        toolErrorBudget.delete(toolName);
+      }
+
       if (toolName === 'finalize' && !dispatch.error && typeof finalizeGuard === 'function') {
         const proposedAction = { tool: toolName, args: call.function?.arguments || '', observation };
         const proposedSteps = steps.concat([{ ...stepRecord, actions: stepRecord.actions.concat([proposedAction]) }]);
@@ -258,10 +277,16 @@ async function run(openai, opts) {
       // Feed the observation back as a tool message so the next model
       // call sees what happened. OpenAI requires tool messages to
       // reference the originating tool_call_id.
+      let obsStr;
+      try {
+        obsStr = JSON.stringify(observation);
+      } catch {
+        obsStr = JSON.stringify({ error: 'non_serializable_tool_output', type: typeof observation });
+      }
       messages.push({
         role: 'tool',
         tool_call_id: call.id,
-        content: JSON.stringify(observation).slice(0, 8000), // cap to avoid blowing context
+        content: obsStr.slice(0, 8000), // cap to avoid blowing context
       });
 
       if (toolName === 'finalize' && !dispatch.error && !observation.error) {
