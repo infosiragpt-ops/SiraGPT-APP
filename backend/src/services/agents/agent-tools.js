@@ -443,6 +443,22 @@ function buildCommentCodeMask(text, language) {
   return { lines, codeMask };
 }
 
+// Module-scope so the array isn't re-allocated on every scan call.
+// Patterns are tuned to common real-world secret formats; the matcher
+// uses `.test()` and resets `lastIndex` between lines so the `g` flag
+// stays harmless.
+const HARDCODED_SECRET_PATTERNS = [
+  { re: /(?:api[_-]?key|secret|passwd|password|token|bearer)\s*[:=]\s*["']([A-Za-z0-9_\-./+=]{16,})["']/gi, msg: 'possible hard-coded credential' },
+  { re: /\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, msg: 'AWS access key id' },
+  { re: /\bsk-[A-Za-z0-9]{20,}\b/g, msg: 'OpenAI-style secret key' },
+  { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, msg: 'Slack token' },
+  { re: /\bghp_[A-Za-z0-9]{36}\b/g, msg: 'GitHub personal access token' },
+  { re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g, msg: 'GitHub fine-grained token' },
+  { re: /\b(?:sk|pk|rk)_(?:test|live)_[A-Za-z0-9]{16,}\b/g, msg: 'Stripe API key' },
+  { re: /-----BEGIN (?:OPENSSH|RSA|EC|DSA|PGP) PRIVATE KEY-----/g, msg: 'embedded private key block' },
+  { re: /\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b/g, msg: 'JWT-shaped token' },
+];
+
 const STATIC_CHECKS = [
   {
     // Renamed from 'long_function' — the check is applied to whole files,
@@ -494,16 +510,10 @@ const STATIC_CHECKS = [
     scan: (text, { lines }) => {
       // For secrets we INTENTIONALLY scan strings (that's where they
       // hide) but skip lines that are entirely inside a block comment.
-      // The patterns below are tuned to common real formats.
+      // Patterns live at module scope (HARDCODED_SECRET_PATTERNS) so
+      // we don't reallocate them on every scan call.
       const out = [];
-      const patterns = [
-        { re: /(?:api[_-]?key|secret|passwd|password|token|bearer)\s*[:=]\s*["']([A-Za-z0-9_\-./+=]{16,})["']/gi, msg: 'possible hard-coded credential' },
-        { re: /\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, msg: 'AWS access key id' },
-        { re: /\bsk-[A-Za-z0-9]{20,}\b/g, msg: 'OpenAI-style secret key' },
-        { re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, msg: 'Slack token' },
-        { re: /\bghp_[A-Za-z0-9]{36}\b/g, msg: 'GitHub personal access token' },
-        { re: /\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b/g, msg: 'JWT-shaped token' },
-      ];
+      const patterns = HARDCODED_SECRET_PATTERNS;
       lines.forEach((line, i) => {
         for (const { re, msg } of patterns) {
           re.lastIndex = 0;

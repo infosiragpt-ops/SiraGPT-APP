@@ -260,6 +260,29 @@ describe("task-tools · describeFileIdTruncation", () => {
   })
 })
 
+describe("agent-tools · static_checks hardcoded_secret extended formats", () => {
+  const check = () => agentTools.STATIC_CHECKS.find(c => c.id === "hardcoded_secret")!
+  function findingsFor(text: string) {
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "javascript")
+    return check().scan(text, { language: "javascript", lines, codeMask })
+  }
+
+  it("flags a Stripe live secret key", () => {
+    const out = findingsFor('const k = "sk_live_abcdef0123456789ABCDEF";')
+    assert.ok(out.length > 0)
+  })
+
+  it("flags a GitHub fine-grained PAT", () => {
+    const out = findingsFor('const t = "github_pat_11ABCDEFG0' + 'A'.repeat(50) + '";')
+    assert.ok(out.length > 0)
+  })
+
+  it("flags an embedded SSH private key block", () => {
+    const out = findingsFor("// -----BEGIN OPENSSH PRIVATE KEY-----")
+    assert.ok(out.length > 0)
+  })
+})
+
 describe("agent-tools · static_checks subprocess_shell_true", () => {
   it("flags subprocess.run / Popen / check_output with shell=True", () => {
     const check = agentTools.STATIC_CHECKS.find(c => c.id === "subprocess_shell_true")!
