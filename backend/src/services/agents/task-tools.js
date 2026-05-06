@@ -662,14 +662,18 @@ const ragRetrieve = {
     required: ['query'],
     additionalProperties: false,
   },
-  async execute({ query, k = 4, collection }, ctx = {}) {
+  async execute({ query, k, collection }, ctx = {}) {
     if (!ctx.userId) {
       return { ok: false, error: 'rag_retrieve requires an authenticated userId in ctx' };
     }
+    if (typeof query !== 'string' || !query.trim()) {
+      return { ok: false, error: 'rag_retrieve requires a non-empty "query"' };
+    }
+    const safeK = clampInt(k, { min: 1, max: 20, defaultValue: 4 });
     ctx.onEvent?.({ type: 'tool_call', tool: 'rag_retrieve', preview: query });
     try {
       const rag = require('../rag-service');
-      const hits = await rag.retrieve(ctx.userId, collection || ctx.collection || 'default', query, k, {
+      const hits = await rag.retrieve(ctx.userId, collection || ctx.collection || 'default', query, safeK, {
         useExpansion: true,
         useHybrid: true,
         useMMR: true,
@@ -715,8 +719,14 @@ const selfRagAnswer = {
     required: ['question'],
     additionalProperties: false,
   },
-  async execute({ question, k = 4, maxSegments = 4, retrieveMode = 'adaptive', hardConstraints = false, beamSize = 1, collection }, ctx = {}) {
+  async execute({ question, k, maxSegments, retrieveMode = 'adaptive', hardConstraints = false, beamSize, collection }, ctx = {}) {
     if (!ctx.userId) return { ok: false, error: 'self_rag_answer requires an authenticated userId in ctx' };
+    if (typeof question !== 'string' || !question.trim()) {
+      return { ok: false, error: 'self_rag_answer requires a non-empty "question"' };
+    }
+    const safeK = clampInt(k, { min: 1, max: 12, defaultValue: 4 });
+    const safeMaxSegments = clampInt(maxSegments, { min: 1, max: 10, defaultValue: 4 });
+    const safeBeamSize = clampInt(beamSize, { min: 1, max: 4, defaultValue: 1 });
     if (!ctx.openai) return { ok: false, error: 'self_rag_answer requires ctx.openai' };
 
     ctx.onEvent?.({ type: 'tool_call', tool: 'self_rag_answer', preview: previewText(question, 240) });
@@ -758,17 +768,17 @@ const selfRagAnswer = {
     };
 
     try {
-      const runner = beamSize > 1 ? engine.inferBeam : engine.infer;
+      const runner = safeBeamSize > 1 ? engine.inferBeam : engine.infer;
       const out = await runner({
         openai: ctx.openai,
         input: question,
         retrieve: retrieveFn,
-        k,
+        k: safeK,
         model: 'gpt-4o-mini',
         retrieveMode,
         hardConstraints,
-        maxSegments,
-        beamSize,
+        maxSegments: safeMaxSegments,
+        beamSize: safeBeamSize,
       });
 
       // Build the user-visible text from the engine's segments.
@@ -927,8 +937,12 @@ const docintelRetrieve = {
     required: ['query'],
     additionalProperties: false,
   },
-  async execute({ query, fileIds = [], limit = 8 }, ctx = {}) {
+  async execute({ query, fileIds = [], limit }, ctx = {}) {
     const prisma = getPrismaForTool(ctx);
+    if (typeof query !== 'string' || !query.trim()) {
+      return { ok: false, error: 'docintel_retrieve requires a non-empty "query"' };
+    }
+    const safeLimit = clampInt(limit, { min: 1, max: 20, defaultValue: 8 });
     const ids = resolveToolFileIds(fileIds, ctx);
     ctx.onEvent?.({ type: 'tool_call', tool: 'docintel_retrieve', preview: previewText(query, 240) });
     if (!prisma || !ctx.userId) {
@@ -946,11 +960,11 @@ const docintelRetrieve = {
         userId: ctx.userId,
         fileId,
         query,
-        limit,
+        limit: safeLimit,
       });
       evidence.push(...(result.evidence || []));
     }
-    const clipped = evidence.slice(0, Math.max(1, Math.min(Number(limit) || 8, 20)));
+    const clipped = evidence.slice(0, safeLimit);
     ctx.onEvent?.({
       type: 'document_analysis',
       analysisIds,
