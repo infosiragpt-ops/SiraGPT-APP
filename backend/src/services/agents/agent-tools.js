@@ -64,6 +64,11 @@ function commentPrefixFor(source) {
       return '--';
     case 'lisp': case 'clj': case 'scm':
       return ';;';
+    case 'json': case 'jsonc':
+      // JSON has no comment syntax. Returning a special marker so
+      // formatChunkSeparator can drop the title entirely instead of
+      // injecting `// title` into a payload that may later be parsed.
+      return '';
     default:
       return '//'; // JS/TS/Go/Rust/Java/C/C++/Swift/Kotlin/etc.
   }
@@ -72,6 +77,7 @@ function commentPrefixFor(source) {
 function formatChunkSeparator(prefix, title) {
   if (prefix === '<!--') return `<!-- ${title} -->`;
   if (prefix === '/*')   return `/* ${title} */`;
+  if (!prefix)           return ''; // languages with no comment syntax (JSON)
   return `${prefix} ${title}`;
 }
 
@@ -90,7 +96,11 @@ const read_file = {
 
     const prefix = commentPrefixFor(src);
     const joined = chunks
-      .map(c => c.title ? `${formatChunkSeparator(prefix, c.title)}\n${c.text}` : c.text)
+      .map(c => {
+        if (!c.title) return c.text;
+        const sep = formatChunkSeparator(prefix, c.title);
+        return sep ? `${sep}\n${c.text}` : c.text;
+      })
       .join('\n\n');
 
     return {
@@ -112,9 +122,13 @@ const list_files = {
     let sources = await rag.listSources(ctx.userId, ctx.collection);
     const needle = typeof args?.contains === 'string' ? args.contains.trim().toLowerCase() : '';
     if (needle) sources = sources.filter(s => String(s.source).toLowerCase().includes(needle));
+    const HARD_CAP = 100;
+    const truncated = sources.length > HARD_CAP;
     return {
       count: sources.length,
-      files: sources.slice(0, 100), // hard cap so observations stay manageable
+      truncated,
+      files: sources.slice(0, HARD_CAP), // hard cap so observations stay manageable
+      ...(truncated ? { hint: `Showing first ${HARD_CAP} of ${sources.length}; refine with "contains".` } : {}),
     };
   },
 };

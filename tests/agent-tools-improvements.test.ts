@@ -20,6 +20,7 @@ const taskTools = cjsRequire("../../backend/src/services/agents/task-tools") as 
     verifyArtifact: { execute: (args: { artifactId: string }, ctx?: unknown) => Promise<{ ok: boolean; error?: string; sizeBytes?: number; filename?: string }> }
     metadataPathFor: (id: string) => string
     previewText: (s: unknown, max?: number) => string
+    sanitizeArtifactFilename: (s: string) => string
   }
 }
 
@@ -29,6 +30,8 @@ const agentTools = cjsRequire("../../backend/src/services/agents/agent-tools") a
     scan: (text: string, ctx: { language: string; lines: string[]; codeMask: boolean[] }) => Array<{ severity: string; line: number; message: string }>
   }>
   buildCommentCodeMask: (text: string, language: string) => { lines: string[]; codeMask: boolean[] }
+  commentPrefixFor: (source: string) => string
+  formatChunkSeparator: (prefix: string, title: string) => string
 }
 
 describe("task-tools · EXTENSION_TO_MIME coverage", () => {
@@ -88,6 +91,36 @@ describe("task-tools · verify_artifact lookup", () => {
     // from the JS-side fallbacks.
     assert.equal(result.filename, filename)
     assert.ok((result.sizeBytes ?? 0) > 0)
+  })
+})
+
+describe("task-tools · sanitizeArtifactFilename", () => {
+  it("preserves the extension when truncating very long filenames", () => {
+    const long = "a".repeat(200) + ".xlsx"
+    const out = taskTools.INTERNAL.sanitizeArtifactFilename(long)
+    assert.ok(out.endsWith(".xlsx"), `expected .xlsx preserved, got ${out}`)
+    assert.ok(out.length <= 120)
+  })
+
+  it("replaces unsafe characters and falls back to 'artifact'", () => {
+    assert.equal(taskTools.INTERNAL.sanitizeArtifactFilename(""), "artifact")
+    assert.equal(taskTools.INTERNAL.sanitizeArtifactFilename("hi there/../etc.docx"), "hi_there_.._etc.docx")
+  })
+})
+
+describe("agent-tools · commentPrefixFor JSON handling", () => {
+  it("returns an empty prefix for JSON files so chunk separators don't break JSON", () => {
+    assert.equal(agentTools.commentPrefixFor("data.json"), "")
+    assert.equal(agentTools.formatChunkSeparator("", "chunk-1"), "")
+  })
+
+  it("still uses // for unknown extensions", () => {
+    assert.equal(agentTools.commentPrefixFor("foo.go"), "//")
+    assert.equal(agentTools.commentPrefixFor("foo"), "//")
+  })
+
+  it("uses # for python", () => {
+    assert.equal(agentTools.commentPrefixFor("script.py"), "#")
   })
 })
 
