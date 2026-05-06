@@ -397,6 +397,25 @@ function getTaskStoreStats() {
   return stats;
 }
 
+/**
+ * Return only the running/queued tasks for a user, sorted newest-first.
+ * Uses the index for an O(N_user) scan instead of reading every snapshot.
+ */
+function getRunningTasksForUser(userId, { limit = 50 } = {}) {
+  const index = readIndex();
+  const matches = Object.entries(index)
+    .filter(([, meta]) => String(meta.userId) === String(userId || ''))
+    .filter(([, meta]) => meta.status === 'running' || meta.status === 'queued')
+    .sort((a, b) => Date.parse(b[1].updatedAt || 0) - Date.parse(a[1].updatedAt || 0))
+    .slice(0, limit);
+  const rows = [];
+  for (const [taskId] of matches) {
+    const snapshot = readTaskSnapshot(taskId);
+    if (snapshot) rows.push(snapshot);
+  }
+  return rows;
+}
+
 function findStaleRunningTasks({ staleAfterMs = DEFAULT_STALE_RUNNING_MS } = {}) {
   const dir = ensureDir();
   const cutoff = Date.now() - staleAfterMs;
@@ -512,6 +531,7 @@ module.exports = {
   appendTaskEvent,
   compressSnapshotBytes,
   findStaleRunningTasks,
+  getRunningTasksForUser,
   getTaskSnapshotForUser,
   getTaskStoreDir,
   getTaskStoreStats,

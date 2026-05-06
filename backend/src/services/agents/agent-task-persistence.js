@@ -257,8 +257,47 @@ async function recoverOrphanedAgentTasks({
   }
 }
 
+/**
+ * archiveCompletedAgentTasks — strip the verbose `state` blob from
+ * tasks completed/failed/cancelled longer than `olderThanMs` ago.
+ * Keeps the row (status, timestamps, goal, traceId) for audit while
+ * reclaiming the JSON column. No-ops cleanly when prisma is missing.
+ */
+async function archiveCompletedAgentTasks({
+  olderThanMs = 7 * 24 * 60 * 60 * 1000,
+  limit = 500,
+} = {}) {
+  if (!hasModel('agentTask')) return { archived: 0, scanned: 0 };
+  const cutoff = new Date(Date.now() - olderThanMs);
+  try {
+    const stale = await prisma.agentTask.findMany({
+      where: {
+        status: { in: Array.from(TERMINAL_STATUSES) },
+        updatedAt: { lt: cutoff },
+        NOT: { state: { equals: null } },
+      },
+      take: Math.max(1, Math.min(Number(limit) || 500, 5000)),
+      select: { id: true },
+    });
+    if (!stale.length) return { archived: 0, scanned: 0 };
+
+    const ids = stale.map((row) => row.id);
+    const result = await prisma.agentTask.updateMany({
+      where: { id: { in: ids } },
+      data: { state: safeJson({ archived: true, archivedAt: new Date().toISOString() }) },
+    });
+    return { archived: result.count, scanned: stale.length };
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[agent-task-persistence] archive skipped:', err?.message || err);
+    }
+    return { archived: 0, scanned: 0, error: err?.message || String(err) };
+  }
+}
+
 module.exports = {
   appendAgentTaskEvent,
+  archiveCompletedAgentTasks,
   persistGeneratedArtifact,
   recoverOrphanedAgentTasks,
   upsertAgentTask,

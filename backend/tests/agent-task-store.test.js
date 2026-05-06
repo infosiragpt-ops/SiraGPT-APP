@@ -285,6 +285,19 @@ test('agent task store: findStaleRunningTasks + recoverStaleRunningTasks marks s
   assert.equal(taskStore.getTaskSnapshotForUser('t-fresh', 'u').status, 'running');
 });
 
+test('agent task store: getRunningTasksForUser returns only running/queued for the user', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-running-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 'r-1', userId: 'u', status: 'running', displayGoal: 'a' });
+  taskStore.writeTaskSnapshot({ taskId: 'r-2', userId: 'u', status: 'queued', displayGoal: 'b' });
+  taskStore.writeTaskSnapshot({ taskId: 'r-3', userId: 'u', status: 'completed', displayGoal: 'c' });
+  taskStore.writeTaskSnapshot({ taskId: 'r-4', userId: 'other', status: 'running', displayGoal: 'd' });
+
+  const rows = taskStore.getRunningTasksForUser('u');
+  const ids = rows.map((row) => row.taskId).sort();
+  assert.deepEqual(ids, ['r-1', 'r-2']);
+});
+
 test('agent task store: pruneTaskSnapshots enforces a maxFiles size cap and preserves running tasks', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-cap-'));
 
