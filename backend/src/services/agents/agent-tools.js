@@ -137,7 +137,11 @@ const list_files = {
   async handler(args, ctx) {
     ensureCollection(ctx);
     let sources = await rag.listSources(ctx.userId, ctx.collection);
-    const needle = typeof args?.contains === 'string' ? args.contains.trim().toLowerCase() : '';
+    let needle = typeof args?.contains === 'string' ? args.contains.trim().toLowerCase() : '';
+    // Guard against pathological needle sizes. A reasonable filter is
+    // a fragment of a path (under 200 chars); anything bigger is almost
+    // certainly the agent confusing list_files with read_file.
+    if (needle.length > 200) needle = needle.slice(0, 200);
     if (needle) sources = sources.filter(s => String(s.source).toLowerCase().includes(needle));
     const HARD_CAP = 100;
     const truncated = sources.length > HARD_CAP;
