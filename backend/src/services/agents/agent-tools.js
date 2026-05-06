@@ -574,6 +574,23 @@ const STATIC_CHECKS = [
     },
   },
   {
+    id: 'subprocess_shell_true',
+    description: 'Python subprocess.run/Popen with shell=True is vulnerable to shell injection',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        // Match subprocess.run(... shell=True) / subprocess.Popen(... shell=True)
+        // where shell=True appears anywhere on the same line.
+        if (/\bsubprocess\s*\.\s*(run|Popen|call|check_call|check_output)\b/.test(line) && /\bshell\s*=\s*True\b/.test(line)) {
+          out.push({ severity: 'high', line: i + 1, message: 'subprocess shell=True is vulnerable to injection — pass argv list and shell=False (or omit shell)' });
+        }
+      });
+      return out;
+    },
+  },
+  {
     id: 'unsafe_pickle',
     description: 'Python pickle.load / pickle.loads can execute arbitrary code on untrusted input',
     scan: (text, { lines, codeMask, language }) => {

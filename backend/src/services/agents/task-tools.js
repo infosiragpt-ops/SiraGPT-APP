@@ -414,7 +414,10 @@ const createDocument = {
   async execute({ filename, python, description, timeoutMs }, ctx = {}) {
     ensureArtifactDir();
     const cleanName = sanitizeArtifactFilename(filename || 'artifact.bin');
-    const tmpOut = path.join(ARTIFACT_DIR, `pending-${Date.now()}-${cleanName}`);
+    // Date.now()+random suffix: two concurrent create_document calls on
+    // the same ms timestamp would otherwise collide on tmpOut and one
+    // would clobber the other's artifact mid-write.
+    const tmpOut = path.join(ARTIFACT_DIR, `pending-${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${cleanName}`);
     const ext = path.extname(cleanName).slice(1).toLowerCase();
 
     ctx.onEvent?.({

@@ -260,6 +260,31 @@ describe("task-tools · describeFileIdTruncation", () => {
   })
 })
 
+describe("agent-tools · static_checks subprocess_shell_true", () => {
+  it("flags subprocess.run / Popen / check_output with shell=True", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "subprocess_shell_true")!
+    const samples = [
+      "subprocess.run(cmd, shell=True)",
+      "subprocess.Popen(args, shell=True, stdout=PIPE)",
+      "subprocess.check_output('ls -la', shell=True)",
+    ]
+    for (const text of samples) {
+      const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
+      const findings = check.scan(text, { language: "python", lines, codeMask })
+      assert.equal(findings.length, 1, `expected one finding for: ${text}`)
+      assert.equal(findings[0].severity, "high")
+    }
+  })
+
+  it("does not flag subprocess without shell=True", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "subprocess_shell_true")!
+    const text = "subprocess.run(['ls','-la'])"
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
+    const findings = check.scan(text, { language: "python", lines, codeMask })
+    assert.equal(findings.length, 0)
+  })
+})
+
 describe("agent-tools · static_checks unsafe_pickle", () => {
   it("flags pickle.loads / pickle.load / cPickle.loads", () => {
     const check = agentTools.STATIC_CHECKS.find(c => c.id === "unsafe_pickle")!
