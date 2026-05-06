@@ -1008,32 +1008,39 @@ const docintelExtractTables = {
     },
     additionalProperties: false,
   },
-  async execute({ fileIds = [], limit = 10 } = {}, ctx = {}) {
+  async execute({ fileIds = [], limit } = {}, ctx = {}) {
     const prisma = getPrismaForTool(ctx);
     const ids = resolveToolFileIds(fileIds, ctx);
+    const safeLimit = clampInt(limit, { min: 1, max: 20, defaultValue: 10 });
     ctx.onEvent?.({ type: 'tool_call', tool: 'docintel_extract_tables', preview: `${ids.length} archivo(s)` });
     if (!prisma || !ctx.userId) {
       return { ok: false, error: 'docintel_extract_tables requires prisma and authenticated userId' };
     }
     const tables = [];
+    const errors = [];
     for (const fileId of ids) {
-      await documentIntelligence.analyzeFile(prisma, { userId: ctx.userId, fileId });
-      const fileTables = await documentIntelligence.getTablesForFile(prisma, { userId: ctx.userId, fileId });
-      tables.push(...fileTables.map((table) => ({
-        id: table.id,
-        fileId: table.fileId,
-        sourceType: table.sourceType,
-        sourceLabel: table.sourceLabel,
-        sheetName: table.sheetName,
-        title: table.title,
-        columns: table.columns,
-        rowCount: table.rowCount,
-        preview: table.preview,
-      })));
+      try {
+        await documentIntelligence.analyzeFile(prisma, { userId: ctx.userId, fileId });
+        const fileTables = await documentIntelligence.getTablesForFile(prisma, { userId: ctx.userId, fileId });
+        tables.push(...fileTables.map((table) => ({
+          id: table.id,
+          fileId: table.fileId,
+          sourceType: table.sourceType,
+          sourceLabel: table.sourceLabel,
+          sheetName: table.sheetName,
+          title: table.title,
+          columns: table.columns,
+          rowCount: table.rowCount,
+          preview: table.preview,
+        })));
+      } catch (err) {
+        errors.push({ fileId, error: err?.message || String(err) });
+      }
     }
-    const clipped = tables.slice(0, Math.max(1, Math.min(Number(limit) || 10, 20)));
-    ctx.onEvent?.({ type: 'tool_output', tool: 'docintel_extract_tables', ok: true, preview: `${clipped.length} tabla(s)` });
-    return { ok: true, tables: clipped, _preview: `${clipped.length} tabla(s) normalizadas` };
+    const clipped = tables.slice(0, safeLimit);
+    const previewSuffix = errors.length ? ` (${errors.length} fallaron)` : '';
+    ctx.onEvent?.({ type: 'tool_output', tool: 'docintel_extract_tables', ok: errors.length === 0, preview: `${clipped.length} tabla(s)${previewSuffix}` });
+    return { ok: errors.length === 0, tables: clipped, errors, _preview: `${clipped.length} tabla(s) normalizadas${previewSuffix}` };
   },
 };
 
@@ -1049,9 +1056,10 @@ const docintelCompare = {
     },
     additionalProperties: false,
   },
-  async execute({ fileIds = [], query = '', limit = 6 } = {}, ctx = {}) {
+  async execute({ fileIds = [], query = '', limit } = {}, ctx = {}) {
     const prisma = getPrismaForTool(ctx);
     const ids = resolveToolFileIds(fileIds, ctx);
+    const safeLimit = clampInt(limit, { min: 1, max: 12, defaultValue: 6 });
     ctx.onEvent?.({ type: 'tool_call', tool: 'docintel_compare', preview: `${ids.length} documento(s)` });
     if (!prisma || !ctx.userId) {
       return { ok: false, error: 'docintel_compare requires prisma and authenticated userId' };
@@ -1064,7 +1072,7 @@ const docintelCompare = {
       userId: ctx.userId,
       fileIds: ids,
       query,
-      limit,
+      limit: safeLimit,
     });
     const analysisIds = (comparison.documents || []).map((item) => item.analysisId).filter(Boolean);
     ctx.onEvent?.({
