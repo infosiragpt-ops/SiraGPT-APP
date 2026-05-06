@@ -67,6 +67,13 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
         'docintel_compare',
         'python_exec',
         'run_tests',
+        'generate_image',
+        'create_chart',
+        'create_organigram',
+        'create_mermaid_diagram',
+        'create_infographic_svg',
+        'create_dashboard_html',
+        'generate_video',
       ].includes(tool))
   );
   return {
