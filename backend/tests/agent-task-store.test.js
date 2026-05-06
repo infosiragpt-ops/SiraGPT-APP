@@ -422,6 +422,101 @@ test('agent task store: getRunningTasksForUser returns only running/queued for t
   assert.deepEqual(ids, ['r-1', 'r-2']);
 });
 
+test('agent task store: cleanupOrphanedArtifacts removes artifacts not referenced by any snapshot', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-'));
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-art-'));
+
+  // Snapshot referencing artifact "aaaaaaaaaaaaaaaa"
+  taskStore.writeTaskSnapshot({
+    taskId: 'orph-1',
+    userId: 'u',
+    artifacts: [{ id: 'aaaaaaaaaaaaaaaa', filename: 'kept.svg' }],
+  });
+
+  // Plant referenced + orphan files in the artifact dir.
+  // Make their createdAt old enough so the grace period is past.
+  const oldIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  fs.writeFileSync(path.join(artifactDir, 'aaaaaaaaaaaaaaaa-kept.svg'), '<svg/>');
+  fs.writeFileSync(path.join(artifactDir, 'aaaaaaaaaaaaaaaa.json'), JSON.stringify({ id: 'aaaaaaaaaaaaaaaa', createdAt: oldIso }));
+  fs.writeFileSync(path.join(artifactDir, 'bbbbbbbbbbbbbbbb-orphan.svg'), '<svg/>');
+  fs.writeFileSync(path.join(artifactDir, 'bbbbbbbbbbbbbbbb.json'), JSON.stringify({ id: 'bbbbbbbbbbbbbbbb', createdAt: oldIso }));
+
+  const result = taskStore.cleanupOrphanedArtifacts({ artifactDir, graceMs: 60_000 });
+  assert.equal(result.scanned, 2);
+  assert.equal(result.removed, 2); // 2 files for the orphan id
+  assert.ok(fs.existsSync(path.join(artifactDir, 'aaaaaaaaaaaaaaaa-kept.svg')));
+  assert.ok(!fs.existsSync(path.join(artifactDir, 'bbbbbbbbbbbbbbbb-orphan.svg')));
+});
+
+test('agent task store: cleanupOrphanedArtifacts honors the grace period', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-grace-'));
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-grace-art-'));
+
+  const freshIso = new Date().toISOString();
+  fs.writeFileSync(path.join(artifactDir, 'cccccccccccccccc-fresh.svg'), '<svg/>');
+  fs.writeFileSync(path.join(artifactDir, 'cccccccccccccccc.json'), JSON.stringify({ id: 'cccccccccccccccc', createdAt: freshIso }));
+
+  // No snapshots reference it, but it's within the grace period.
+  const result = taskStore.cleanupOrphanedArtifacts({ artifactDir, graceMs: 60 * 60 * 1000 });
+  assert.equal(result.removed, 0);
+  assert.ok(fs.existsSync(path.join(artifactDir, 'cccccccccccccccc-fresh.svg')));
+});
+
+test('agent task store: collectReferencedArtifactIds includes file_artifact event ids', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-refs-'));
+
+  const base = taskStore.writeTaskSnapshot({ taskId: 'ref-1', userId: 'u' });
+  taskStore.appendTaskEvent(base, {
+    type: 'file_artifact',
+    artifact: { id: 'eeeeeeeeeeeeeeee', filename: 'evt.svg' },
+  }, base.streamState);
+
+  const ids = taskStore.collectReferencedArtifactIds();
+  assert.ok(ids.has('eeeeeeeeeeeeeeee'));
+});
+
+test('agent task store: markTaskStatus auto-compacts long traces on terminal status', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-autocompact-'));
+
+  const events = [];
+  for (let i = 0; i < 500; i++) {
+    events.push({
+      id: `t:${i + 1}`, seq: i + 1,
+      ts: new Date(Date.now() - (500 - i) * 1000).toISOString(),
+      type: 'tool_output',
+      tool: 'python_exec', ok: true,
+      stdout: 'x'.repeat(500),
+    });
+  }
+  const base = taskStore.writeTaskSnapshot({
+    taskId: 'auto-1', userId: 'u', status: 'running',
+    events, lastEventSeq: 500, eventLimit: 1000,
+  });
+
+  taskStore.markTaskStatus(base, 'completed', { stats: { steps: 1 } });
+
+  const after = taskStore.getTaskSnapshotForUser('auto-1', 'u');
+  assert.equal(after.status, 'completed');
+  // Old events should be compacted (head events lose stdout)
+  assert.equal(after.events[0]._compacted, true);
+  assert.equal(after.events[0].stdout, undefined);
+  // Recent events still hold their bodies
+  assert.equal(typeof after.events[after.events.length - 1].stdout, 'string');
+});
+
+test('agent task store: getTaskStoreStats works via index fast path', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-stats-idx-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 'idx-1', userId: 'u', status: 'running' });
+  taskStore.writeTaskSnapshot({ taskId: 'idx-2', userId: 'u', status: 'completed' });
+
+  const fast = taskStore.getTaskStoreStats({ useIndex: true });
+  const slow = taskStore.getTaskStoreStats({ useIndex: false });
+  assert.equal(fast.totalFiles, slow.totalFiles);
+  assert.equal(fast.byStatus.running, slow.byStatus.running);
+  assert.equal(fast.byStatus.completed, slow.byStatus.completed);
+});
+
 test('agent task store: pruneTaskSnapshots enforces a maxFiles size cap and preserves running tasks', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-cap-'));
 

@@ -197,6 +197,10 @@ function shouldCheckpoint(event) {
   return ['meta', 'queue_status', 'document_policy', 'framework_status', 'human_approval_required', 'human_approval_resolved', 'checkpoint', 'quality_gate', 'repair_attempt', 'step_start', 'step_done', 'file_artifact', 'final_text', 'done', 'error'].includes(event.type);
 }
 
+const TERMINAL_STATUSES = new Set(['completed', 'cancelled', 'error', 'failed']);
+const AUTO_COMPACT_EVENT_THRESHOLD = 400;
+const AUTO_COMPACT_KEEP_RECENT = 150;
+
 function markTaskStatus(taskLike, status, patch = {}) {
   if (!taskLike?.taskId || !taskLike?.userId) return null;
   const stamp = nowIso();
@@ -205,8 +209,22 @@ function markTaskStatus(taskLike, status, patch = {}) {
   if (status === 'cancelled') statusPatch.cancelledAt = patch.cancelledAt || stamp;
   if (status === 'error') statusPatch.failedAt = patch.failedAt || stamp;
   const existing = getTaskSnapshotForUser(taskLike.taskId, taskLike.userId);
-  if (!existing) return writeTaskSnapshot({ ...taskLike, ...statusPatch });
-  return updateTaskSnapshot(taskLike.taskId, taskLike.userId, statusPatch);
+  let result;
+  if (!existing) result = writeTaskSnapshot({ ...taskLike, ...statusPatch });
+  else result = updateTaskSnapshot(taskLike.taskId, taskLike.userId, statusPatch);
+
+  // Auto-compact long traces when the task reaches a terminal state.
+  // The compaction runs after the status write so a crash mid-compact
+  // can't lose the terminal status itself; the compaction is best-effort.
+  if (result && TERMINAL_STATUSES.has(status)) {
+    const eventCount = Array.isArray(result.events) ? result.events.length : 0;
+    if (eventCount > AUTO_COMPACT_EVENT_THRESHOLD) {
+      try {
+        compactSnapshotEvents(result.taskId, result.userId, { keepRecent: AUTO_COMPACT_KEEP_RECENT });
+      } catch { /* best-effort compaction */ }
+    }
+  }
+  return result;
 }
 
 // ── Fast user-index ─────────────────────────────────────────────
@@ -369,7 +387,7 @@ function pruneTaskSnapshots({
   return { deleted, deletedCorrupt, deletedOverflow };
 }
 
-function getTaskStoreStats() {
+function getTaskStoreStats({ useIndex = true } = {}) {
   const dir = ensureDir();
   const stats = {
     dir,
@@ -379,6 +397,37 @@ function getTaskStoreStats() {
     oldestUpdatedAt: null,
     newestUpdatedAt: null,
   };
+
+  // Fast path: pull status + updatedAt from the index, sizes from stat().
+  // Avoids parsing every snapshot JSON, which can be large after a long
+  // task run. Falls back to the slow path if the index is missing.
+  if (useIndex) {
+    const index = readIndex();
+    const indexedIds = Object.keys(index);
+    if (indexedIds.length > 0) {
+      for (const taskId of indexedIds) {
+        const meta = index[taskId];
+        const full = path.join(dir, `${safeTaskId(taskId)}.json`);
+        try {
+          const stat = fs.statSync(full);
+          stats.totalFiles++;
+          stats.totalBytes += stat.size;
+        } catch {
+          // Index references a snapshot that's gone — skip; rebuildIndex fixes this.
+          continue;
+        }
+        const status = meta.status || 'unknown';
+        stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
+        const updatedAt = Date.parse(meta.updatedAt || meta.createdAt || 0);
+        if (Number.isFinite(updatedAt)) {
+          if (!stats.oldestUpdatedAt || updatedAt < stats.oldestUpdatedAt) stats.oldestUpdatedAt = updatedAt;
+          if (!stats.newestUpdatedAt || updatedAt > stats.newestUpdatedAt) stats.newestUpdatedAt = updatedAt;
+        }
+      }
+      return stats;
+    }
+  }
+
   for (const entry of fs.readdirSync(dir)) {
     if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
     const full = path.join(dir, entry);
@@ -607,6 +656,111 @@ function compactSnapshotEvents(taskId, userId, { keepRecent = 200 } = {}) {
   return { compacted: cutoff, eventCount: next.events.length };
 }
 
+// ── Orphan artifact cleanup ─────────────────────────────────────
+// Artifacts saved by saveArtifact() (in task-tools.js) live in
+// AGENT_ARTIFACT_DIR (uploads/agent-artifacts by default) as
+// `{id}-{filename}` plus `{id}.json` metadata. When their owning
+// task snapshot is pruned, those files become orphans on disk.
+// This helper finds and removes them, but only after a grace
+// period so an artifact that was just uploaded — and not yet
+// linked into a snapshot — is not yanked from under the agent.
+
+function getDefaultArtifactDir() {
+  return process.env.AGENT_ARTIFACT_DIR
+    || path.join(process.cwd(), 'uploads', 'agent-artifacts');
+}
+
+function collectReferencedArtifactIds() {
+  const dir = ensureDir();
+  const referenced = new Set();
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
+    try {
+      const snapshot = JSON.parse(fs.readFileSync(path.join(dir, entry), 'utf8'));
+      const artifacts = Array.isArray(snapshot.artifacts) ? snapshot.artifacts : [];
+      for (const artifact of artifacts) {
+        if (artifact && typeof artifact.id === 'string') referenced.add(artifact.id);
+      }
+      // file_artifact events also carry an artifact id; sweep those too.
+      const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+      for (const evt of events) {
+        if (evt?.type === 'file_artifact' && evt?.artifact?.id) referenced.add(evt.artifact.id);
+      }
+    } catch {
+      // skip corrupt — pruneTaskSnapshots will reap it
+    }
+  }
+  return referenced;
+}
+
+/**
+ * Remove artifact files whose id is not referenced by any snapshot
+ * and whose metadata createdAt is older than `graceMs`. Returns
+ * { scanned, removed, freedBytes }. Best-effort: filesystem errors
+ * on individual entries are swallowed so a bad permission on one
+ * artifact does not abort the whole sweep.
+ */
+function cleanupOrphanedArtifacts({
+  artifactDir = getDefaultArtifactDir(),
+  graceMs = 60 * 60 * 1000,
+} = {}) {
+  const result = { scanned: 0, removed: 0, freedBytes: 0, missingDir: false };
+  if (!fs.existsSync(artifactDir)) {
+    result.missingDir = true;
+    return result;
+  }
+  const referenced = collectReferencedArtifactIds();
+  const cutoff = Date.now() - graceMs;
+  const entries = fs.readdirSync(artifactDir);
+  // Build id → [files] map so we can remove the metadata + payload together.
+  const byId = new Map();
+  for (const entry of entries) {
+    // Two shapes: `{id}.json` metadata, and `{id}-{originalFilename}` payload.
+    let id = null;
+    if (entry.endsWith('.json') && /^[a-f0-9]{16}\.json$/.test(entry)) {
+      id = entry.slice(0, 16);
+    } else if (/^[a-f0-9]{16}-/.test(entry)) {
+      id = entry.slice(0, 16);
+    }
+    if (!id) continue;
+    if (!byId.has(id)) byId.set(id, []);
+    byId.get(id).push(entry);
+  }
+  for (const [id, files] of byId) {
+    result.scanned++;
+    if (referenced.has(id)) continue;
+    // Read metadata createdAt to honor the grace period.
+    const metaName = files.find((f) => f === `${id}.json`);
+    let createdAt = 0;
+    if (metaName) {
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(artifactDir, metaName), 'utf8'));
+        createdAt = Date.parse(meta.createdAt || 0) || 0;
+      } catch { /* fall through, treat as unknown age */ }
+    }
+    // No metadata: fall back to the payload mtime so we still respect a grace window.
+    if (!createdAt) {
+      for (const file of files) {
+        try {
+          const stat = fs.statSync(path.join(artifactDir, file));
+          createdAt = Math.max(createdAt, stat.mtimeMs || 0);
+        } catch { /* ignore */ }
+      }
+    }
+    if (createdAt && createdAt > cutoff) continue;
+    for (const file of files) {
+      const full = path.join(artifactDir, file);
+      try {
+        const stat = fs.statSync(full);
+        fs.unlinkSync(full);
+        result.removed++;
+        result.freedBytes += stat.size || 0;
+      } catch { /* best effort */ }
+    }
+  }
+  return result;
+}
+
 // ── Compression ─────────────────────────────────────────────────
 // When a snapshot JSON exceeds MAX_SNAPSHOT_BYTES (1 MB),
 // strip large arrays (events, checkpoints, artifacts) after retaining
@@ -657,6 +811,8 @@ module.exports = {
   INDEX_FILE,
   MAX_SNAPSHOT_BYTES,
   appendTaskEvent,
+  cleanupOrphanedArtifacts,
+  collectReferencedArtifactIds,
   compactSnapshotEvents,
   compressSnapshotBytes,
   findStaleRunningTasks,

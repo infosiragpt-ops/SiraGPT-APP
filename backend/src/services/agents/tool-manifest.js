@@ -432,6 +432,60 @@ function checkOutputFormat(toolName, filename) {
 }
 
 /**
+ * Validate a requested timeout against the manifest's
+ * usage_limits.timeout_ms_max. Returns a clamped value the caller
+ * should actually use, plus a flag indicating whether it was
+ * adjusted. When the manifest declares no max, the request passes
+ * through unchanged. Used by the dispatcher to keep callers from
+ * exhausting the sandbox with a 10-minute python_exec.
+ */
+function checkTimeoutBudget(toolName, requestedMs) {
+  const manifest = getManifest(toolName);
+  if (!manifest) return { ok: false, reason: 'unknown_tool' };
+  const max = manifest.usage_limits?.timeout_ms_max;
+  const def = manifest.usage_limits?.timeout_ms_default;
+  const requested = Number(requestedMs);
+  if (!Number.isFinite(requested) || requested <= 0) {
+    return { ok: true, effectiveMs: Number.isFinite(def) ? def : null, clamped: false };
+  }
+  if (Number.isFinite(max) && requested > max) {
+    return { ok: false, reason: 'timeout_exceeds_max', requestedMs: requested, max, effectiveMs: max, clamped: true };
+  }
+  return { ok: true, effectiveMs: requested, clamped: false };
+}
+
+/**
+ * Discovery helpers — return the names of manifests matching a
+ * given attribute. Useful for the /api/agent/skills endpoint when
+ * the UI wants to render "tools that need approval" or "tools that
+ * touch confidential data" without re-implementing the filter.
+ */
+function findToolsByScope(scope) {
+  return Object.values(BUILTIN_MANIFESTS)
+    .filter((m) => Array.isArray(m.scopes) && m.scopes.includes(scope))
+    .map((m) => m.name);
+}
+
+function findToolsByDataClass(cls) {
+  return Object.values(BUILTIN_MANIFESTS)
+    .filter((m) => Array.isArray(m.data_classes) && m.data_classes.includes(cls))
+    .map((m) => m.name);
+}
+
+function findToolsBySideEffect(level) {
+  return Object.values(BUILTIN_MANIFESTS)
+    .filter((m) => m.side_effect_level === level)
+    .map((m) => m.name);
+}
+
+function findToolsByOutputFormat(format) {
+  const ext = String(format || '').toLowerCase();
+  return Object.values(BUILTIN_MANIFESTS)
+    .filter((m) => Array.isArray(m.allowed_formats) && m.allowed_formats.includes(ext))
+    .map((m) => m.name);
+}
+
+/**
  * Authorize a tool call against the caller's clearance. Returns
  * { ok, reason? }. Reasons are stable strings so the caller can
  * branch on them. Missing fields default to "allow" so legacy
@@ -923,13 +977,44 @@ function getDocIntelManifests() {
 Object.assign(BUILTIN_MANIFESTS, getVisualMediaManifests());
 Object.assign(BUILTIN_MANIFESTS, getDocIntelManifests());
 
+/**
+ * Validate every built-in manifest against the schema. Runs once
+ * at module load and again on demand. The schema is strict, so a
+ * typo in a built-in (e.g. an extra property) will surface here
+ * instead of silently passing acceptance tests with an invalid
+ * declaration. Returns { ok, invalid: [{ name, errors }...] }.
+ */
+function validateAllBuiltinManifests() {
+  const invalid = [];
+  for (const [name, manifest] of Object.entries(BUILTIN_MANIFESTS)) {
+    const result = validateManifest(manifest);
+    if (!result.ok) invalid.push({ name, errors: result.errors });
+  }
+  return { ok: invalid.length === 0, invalid };
+}
+
+if (process.env.SIRAGPT_VALIDATE_MANIFESTS_AT_LOAD === '1') {
+  const result = validateAllBuiltinManifests();
+  if (!result.ok) {
+    const summary = result.invalid.map((e) => `${e.name}: ${e.errors.length} error(s)`).join(', ');
+    // eslint-disable-next-line no-console
+    console.warn(`[tool-manifest] built-in validation failed → ${summary}`);
+  }
+}
+
 module.exports = {
   toolManifestSchema,
   BUILTIN_MANIFESTS,
   authorizeToolCall,
   checkOutputFormat,
+  checkTimeoutBudget,
   checkToolUsageBudget,
+  findToolsByDataClass,
+  findToolsByOutputFormat,
+  findToolsByScope,
+  findToolsBySideEffect,
   getRegistryStats,
+  validateAllBuiltinManifests,
   validateManifest,
   getManifest,
   listManifests,

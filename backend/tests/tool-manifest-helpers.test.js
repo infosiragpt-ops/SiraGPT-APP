@@ -11,12 +11,18 @@ const assert = require('node:assert/strict');
 const {
   authorizeToolCall,
   checkOutputFormat,
+  checkTimeoutBudget,
   checkToolUsageBudget,
+  findToolsByDataClass,
+  findToolsByOutputFormat,
+  findToolsByScope,
+  findToolsBySideEffect,
   getManifest,
   getRegistryStats,
   listManifests,
   registerToolManifest,
   unregisterToolManifest,
+  validateAllBuiltinManifests,
 } = require('../src/services/agents/tool-manifest');
 
 const VALID_MANIFEST = {
@@ -142,6 +148,49 @@ test('checkOutputFormat enforces forbidden_formats and allowed_formats', () => {
 
   const allowed = checkOutputFormat('create_chart', 'chart.svg');
   assert.equal(allowed.ok, true);
+});
+
+test('checkTimeoutBudget clamps timeouts that exceed the manifest max', () => {
+  // python_exec has timeout_ms_max: 60000
+  const within = checkTimeoutBudget('python_exec', 30000);
+  assert.equal(within.ok, true);
+  assert.equal(within.effectiveMs, 30000);
+
+  const tooLong = checkTimeoutBudget('python_exec', 600000);
+  assert.equal(tooLong.ok, false);
+  assert.equal(tooLong.reason, 'timeout_exceeds_max');
+  assert.equal(tooLong.effectiveMs, 60000);
+
+  const noRequest = checkTimeoutBudget('python_exec');
+  assert.equal(noRequest.ok, true);
+  assert.equal(noRequest.effectiveMs, 10000);
+
+  const unknown = checkTimeoutBudget('not_a_tool', 1000);
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.reason, 'unknown_tool');
+});
+
+test('discovery helpers find tools by scope, data class, side effect, and output format', () => {
+  // ai.image is held only by generate_image
+  const aiImage = findToolsByScope('ai.image');
+  assert.ok(aiImage.includes('generate_image'));
+
+  // confidential class is held by docintel_*
+  const confidential = findToolsByDataClass('confidential');
+  assert.ok(confidential.some((n) => n.startsWith('docintel_')));
+
+  // local-fs side effect should include create_chart
+  const localFs = findToolsBySideEffect('local-fs');
+  assert.ok(localFs.includes('create_chart'));
+
+  // png output is exclusive to generate_image
+  const pngTools = findToolsByOutputFormat('png');
+  assert.ok(pngTools.includes('generate_image'));
+});
+
+test('validateAllBuiltinManifests reports zero invalid manifests', () => {
+  const result = validateAllBuiltinManifests();
+  assert.equal(result.ok, true, `invalid: ${JSON.stringify(result.invalid)}`);
 });
 
 test('authorizeToolCall enforces destructive side-effects without approval', () => {
