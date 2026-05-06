@@ -1079,20 +1079,26 @@ function classifyTaskError(err) {
   const msg = String(err.message || err).toLowerCase();
   const code = String(err.code || err.statusCode || '').toLowerCase();
 
-  // Retryable: network / rate-limit / timeout / temporary
-  if (code.includes('rate_limit') || msg.includes('rate limit'))
+  // Non-retryable: auth / permission issues checked FIRST
+  if (msg.includes('api_key') || msg.includes('api key') || msg.includes('authentication') || msg.includes('unauthorized') || code === '401' || code === '403')
+    return { retryable: false, reason: 'auth-failure' };
+  if (msg.includes('missing') && (msg.includes('taskid') || msg.includes('required')))
+    return { retryable: false, reason: 'validation-error' };
+
+  // Retryable: rate limits (any rate / 429 / too many)
+  if (code.includes('rate_limit') || msg.includes('rate limit') || msg.includes('rate_limit') || msg.includes('too many requests') || code.startsWith('429'))
     return { retryable: true, reason: 'rate-limited', ttlMs: 15_000 };
-  if (code.includes('timeout') || msg.includes('timeout') || msg.includes('etimedout') || msg.includes('econnreset'))
+
+  // Retryable: network / timeout / connection errors
+  if (code.includes('timeout') || msg.includes('timeout') || msg.includes('etimedout') || msg.includes('econnreset') || msg.includes('econnrefused') || msg.includes('hang up') || msg.includes('socket'))
     return { retryable: true, reason: 'network-timeout', ttlMs: 5_000 };
+
+  // Retryable: server errors (5xx)
   if (code.startsWith('5') || msg.includes('internal server') || msg.includes('service unavailable') || msg.includes('bad gateway'))
     return { retryable: true, reason: 'server-error', ttlMs: 10_000 };
-  if (msg.includes('too many requests') || code === '429')
-    return { retryable: true, reason: 'throttled', ttlMs: 30_000 };
 
-  // Non-retryable: auth, validation, config
-  if (msg.includes('api_key') || msg.includes('authentication') || code === '401' || code === '403')
-    return { retryable: false, reason: 'auth-failure' };
-  if (msg.includes('missing') || msg.includes('invalid') || msg.includes('required'))
+  // Non-retryable: validation / config
+  if (msg.includes('missing') || msg.includes('invalid') || msg.includes('required') || msg.includes('not configured'))
     return { retryable: false, reason: 'validation-error' };
 
   // Default: safe to retry once

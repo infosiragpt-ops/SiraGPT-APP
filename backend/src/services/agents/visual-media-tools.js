@@ -2105,6 +2105,193 @@ const createTimeline = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 9: create_kanban_board
+// ─────────────────────────────────────────────────────────────────────────
+
+const createKanbanBoard = {
+  name: 'create_kanban_board',
+  description: 'Generate a Kanban board as an SVG file with columns (e.g. "To Do", "In Progress", "Done") and cards. Use for sprint boards, project task tracking, workflow visualizations, or any column-based task layout.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Board title (e.g. "Sprint 12 Board").' },
+      columns: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Column name (e.g. "To Do", "In Progress", "Done").' },
+            color: { type: 'string', description: 'Optional hex color for the column header.' },
+            cards: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', description: 'Card title.' },
+                  description: { type: 'string', description: 'Optional 1-2 sentence description.' },
+                  priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: 'Priority badge.' },
+                  assignee: { type: 'string', description: 'Optional assignee name or initials.' },
+                  tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags.' },
+                },
+                required: ['title'],
+              },
+              description: 'Cards in this column.',
+            },
+          },
+          required: ['name'],
+        },
+        description: '2-6 columns.',
+      },
+      theme: { type: 'string', enum: ['light', 'dark', 'corporate'], description: 'Visual theme. Default: "light".' },
+    },
+    required: ['title', 'columns'],
+    additionalProperties: false,
+  },
+  async execute({ title, columns = [], theme = 'light' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_kanban_board', preview: title });
+
+    try {
+      if (!Array.isArray(columns) || columns.length === 0) {
+        return { ok: false, error: 'columns array is empty' };
+      }
+
+      const themes = {
+        light:     { bg: '#F1F5F9', col: '#FFFFFF', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', headerText: '#0F172A' },
+        dark:      { bg: '#0F172A', col: '#1E293B', card: '#334155', text: '#F1F5F9', muted: '#94A3B8', border: '#475569', headerText: '#F1F5F9' },
+        corporate: { bg: '#F8FAFC', col: '#FFFFFF', card: '#FFFFFF', text: '#1E293B', muted: '#475569', border: '#CBD5E1', headerText: '#0F172A' },
+      };
+      const t = themes[theme] || themes.light;
+      const palette = ['#3B82F6', '#F59E0B', '#10B981', '#EC4899', '#8B5CF6', '#EF4444'];
+      const priorityColors = { low: '#10B981', medium: '#F59E0B', high: '#EF4444', critical: '#7C2D12' };
+
+      const cols = columns.slice(0, 6);
+      const colW = 240;
+      const colGap = 16;
+      const cardH = 90;
+      const cardGap = 10;
+      const headerH = 80;
+      const colHeaderH = 44;
+      const pad = 24;
+
+      const maxCards = Math.max(1, ...cols.map(c => (c.cards || []).length));
+      const colInnerH = colHeaderH + maxCards * (cardH + cardGap) + 20;
+      const W = pad * 2 + cols.length * colW + (cols.length - 1) * colGap;
+      const H = headerH + colInnerH + pad * 2;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.col}" stroke="${t.border}" stroke-width="1"/>`;
+      body += `<text x="${pad}" y="36" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="${t.headerText}">${safeTitle}</text>`;
+      const totalCards = cols.reduce((s, c) => s + (c.cards || []).length, 0);
+      body += `<text x="${pad}" y="58" font-family="Arial" font-size="12" fill="${t.muted}">${cols.length} columnas · ${totalCards} tarjetas · ${new Date().toISOString().slice(0, 10)}</text>`;
+
+      cols.forEach((col, ci) => {
+        const colX = pad + ci * (colW + colGap);
+        const colY = headerH + pad;
+        const colColor = col.color || palette[ci % palette.length];
+        // Column background
+        body += `<rect x="${colX}" y="${colY}" width="${colW}" height="${colInnerH}" rx="8" fill="${t.col}" stroke="${t.border}" stroke-width="1"/>`;
+        // Column header
+        body += `<rect x="${colX}" y="${colY}" width="${colW}" height="${colHeaderH}" rx="8" fill="${colColor}" opacity="0.12"/>`;
+        body += `<rect x="${colX}" y="${colY + colHeaderH - 3}" width="${colW}" height="3" fill="${colColor}"/>`;
+        body += `<text x="${colX + 14}" y="${colY + 28}" font-family="Arial" font-size="14" font-weight="bold" fill="${t.headerText}">${xmlEscape(String(col.name || '').slice(0, 28))}</text>`;
+        const colCards = col.cards || [];
+        body += `<text x="${colX + colW - 14}" y="${colY + 28}" text-anchor="end" font-family="Arial" font-size="12" fill="${colColor}" font-weight="bold">${colCards.length}</text>`;
+
+        colCards.slice(0, 8).forEach((card, ki) => {
+          const cy = colY + colHeaderH + 10 + ki * (cardH + cardGap);
+          const cx = colX + 10;
+          const cardW = colW - 20;
+          // Card
+          body += `<rect x="${cx}" y="${cy}" width="${cardW}" height="${cardH}" rx="6" fill="${t.card}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+          // Priority badge
+          if (card.priority) {
+            const pColor = priorityColors[card.priority] || colColor;
+            body += `<rect x="${cx}" y="${cy}" width="4" height="${cardH}" rx="2" fill="${pColor}"/>`;
+          }
+          // Title
+          const title = xmlEscape(String(card.title || '').slice(0, 50));
+          body += `<text x="${cx + 14}" y="${cy + 22}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">${title}</text>`;
+          // Description
+          if (card.description) {
+            const desc = xmlEscape(String(card.description).slice(0, 80));
+            const halfIdx = Math.ceil(desc.length / 2);
+            const cut = desc.lastIndexOf(' ', halfIdx) > 0 ? desc.lastIndexOf(' ', halfIdx) : halfIdx;
+            const line1 = desc.slice(0, cut);
+            const line2 = desc.slice(cut).trim();
+            body += `<text x="${cx + 14}" y="${cy + 40}" font-family="Arial" font-size="10" fill="${t.muted}">${line1}</text>`;
+            if (line2) body += `<text x="${cx + 14}" y="${cy + 54}" font-family="Arial" font-size="10" fill="${t.muted}">${line2}</text>`;
+          }
+          // Tags
+          if (Array.isArray(card.tags) && card.tags.length) {
+            let tx = cx + 14;
+            card.tags.slice(0, 3).forEach((tag) => {
+              const safeTag = xmlEscape(String(tag).slice(0, 12));
+              const tagW = Math.max(40, safeTag.length * 6 + 12);
+              body += `<rect x="${tx}" y="${cy + cardH - 22}" width="${tagW}" height="16" rx="8" fill="${colColor}" opacity="0.18"/>`;
+              body += `<text x="${tx + tagW / 2}" y="${cy + cardH - 10}" text-anchor="middle" font-family="Arial" font-size="9" fill="${colColor}" font-weight="bold">${safeTag}</text>`;
+              tx += tagW + 4;
+            });
+          }
+          // Assignee
+          if (card.assignee) {
+            const ass = String(card.assignee).slice(0, 20);
+            const initials = ass.split(/\s+/).map(s => s[0] || '').join('').slice(0, 2).toUpperCase() || '?';
+            body += `<circle cx="${cx + cardW - 18}" cy="${cy + cardH - 16}" r="11" fill="${colColor}" opacity="0.85"/>`;
+            body += `<text x="${cx + cardW - 18}" y="${cy + cardH - 12}" text-anchor="middle" font-family="Arial" font-size="9" font-weight="bold" fill="#fff">${xmlEscape(initials)}</text>`;
+          }
+        });
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Kanban board: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `kanban_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_kanban_board',
+        ok: true,
+        preview: `Kanban listo: ${artifact.filename} (${cols.length} columnas, ${totalCards} tarjetas, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        columns: cols.length,
+        cards: totalCards,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_kanban_board', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -2116,6 +2303,7 @@ const VISUAL_MEDIA_TOOLS = [
   createDashboardHtml,
   generateVideo,
   createTimeline,
+  createKanbanBoard,
 ];
 
 module.exports = { VISUAL_MEDIA_TOOLS };

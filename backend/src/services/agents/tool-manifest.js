@@ -568,6 +568,32 @@ function getVisualMediaManifests() {
       scopes: ["files.write"],
       data_classes: ["public","internal"],
     },
+    create_kanban_board: {
+      name: "create_kanban_board",
+      purpose: "Generate a Kanban board with columns and cards as an SVG artifact. Use for sprint planning, task tracking, or any column-based workflow visualization.",
+      inputs: {
+        type: "object", required: ["title","columns"],
+        properties: {
+          title: { type: "string" },
+          columns: { type: "array", items: { type: "object" }, description: "Columns: { name, color?, cards: [{title, description?, priority?, assignee?, tags?}] }" },
+          theme: { type: "string", enum: ["light","dark","corporate"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, columns: { type: "integer" }, cards: { type: "integer" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_columns", description: "columns array is empty.", repair_hint: "Provide at least one column." },
+      ],
+      acceptance_tests: ["returns ok:true for a 3-column board with cards"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants a sprint board", call: { title: "Sprint 12", columns: [{name:"To Do",cards:[{title:"Design",priority:"high"}]},{name:"Done",cards:[]}] } }],
+      examples_negative: [{ when: "user wants a Gantt timeline", why: "use create_timeline or create_mermaid_diagram with diagramType:gantt." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
   };
 }
 

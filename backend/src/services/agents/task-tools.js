@@ -86,9 +86,22 @@ function metadataPathFor(id) {
   return path.join(ARTIFACT_DIR, `${id}.json`);
 }
 
+function sanitizeArtifactFilename(filename) {
+  // Replace unsafe chars, then cap total length to 120 while preserving
+  // the extension. A naive slice(0, 120) on a long name would drop the
+  // extension and break MIME inference downstream.
+  const sanitized = String(filename || 'artifact').replace(/[^a-zA-Z0-9._-]/g, '_') || 'artifact';
+  if (sanitized.length <= 120) return sanitized;
+  const ext = path.extname(sanitized);
+  if (!ext || ext.length >= 120) return sanitized.slice(0, 120);
+  const base = sanitized.slice(0, sanitized.length - ext.length);
+  const keep = Math.max(1, 120 - ext.length);
+  return base.slice(0, keep) + ext;
+}
+
 function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation }) {
   ensureArtifactDir();
-  const clean = String(filename || 'artifact').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
+  const clean = sanitizeArtifactFilename(filename);
   const buf = Buffer.from(base64 || '', 'base64');
   const scope = `${ownerUserId || 'anonymous'}:${chatId || 'no-chat'}:`;
   const id = artifactIdFor(Buffer.concat([Buffer.from(clean), buf]), scope);
@@ -346,7 +359,7 @@ const createDocument = {
   },
   async execute({ filename, python, description, timeoutMs }, ctx = {}) {
     ensureArtifactDir();
-    const cleanName = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact.bin';
+    const cleanName = sanitizeArtifactFilename(filename || 'artifact.bin');
     const tmpOut = path.join(ARTIFACT_DIR, `pending-${Date.now()}-${cleanName}`);
     const ext = path.extname(cleanName).slice(1).toLowerCase();
 

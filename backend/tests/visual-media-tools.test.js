@@ -321,6 +321,52 @@ test('create_timeline: empty events fails gracefully', async () => {
   assert.equal(r.ok, false);
 });
 
+// ── create_kanban_board ──────────────────────────────────────────
+
+test('create_kanban_board: 3-column board', async () => {
+  const kb = tool('create_kanban_board');
+  assert.ok(kb);
+  const r = await kb.execute({
+    title: 'Sprint 12',
+    columns: [
+      { name: 'To Do', cards: [
+        { title: 'Design API spec', priority: 'high', assignee: 'Ana', tags: ['backend'] },
+        { title: 'Wireframes', priority: 'medium' },
+      ] },
+      { name: 'In Progress', cards: [
+        { title: 'Implement auth', description: 'OAuth + JWT refresh tokens', priority: 'critical', assignee: 'Bob' },
+      ] },
+      { name: 'Done', cards: [
+        { title: 'Setup CI', priority: 'low' },
+      ] },
+    ],
+    theme: 'light',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.columns, 3);
+  assert.equal(r.cards, 4);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.includes('Sprint 12'));
+  assert.ok(c.includes('To Do'));
+  assert.ok(c.includes('Design API spec'));
+});
+
+test('create_kanban_board: empty columns fails', async () => {
+  const r = await tool('create_kanban_board').execute({ title: 'Empty', columns: [] }, fakeCtx());
+  assert.equal(r.ok, false);
+});
+
+test('create_kanban_board: dark theme, single column', async () => {
+  const r = await tool('create_kanban_board').execute({
+    title: 'Backlog',
+    columns: [{ name: 'Backlog', cards: [{ title: 'Item 1' }, { title: 'Item 2' }] }],
+    theme: 'dark',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+});
+
 // ── create_organigram ────────────────────────────────────────────
 
 test('create_organigram: hierarchy SVG', async () => {
@@ -451,8 +497,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 8 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 8);
+test('all 9 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 9);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
