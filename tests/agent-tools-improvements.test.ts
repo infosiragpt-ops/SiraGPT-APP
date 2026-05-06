@@ -22,6 +22,7 @@ const taskTools = cjsRequire("../../backend/src/services/agents/task-tools") as 
     previewText: (s: unknown, max?: number) => string
     sanitizeArtifactFilename: (s: string) => string
     clampTimeoutMs: (input: unknown, opts: { min: number; max: number; defaultMs: number }) => number
+    clampInt: (input: unknown, opts: { min: number; max: number; defaultValue: number }) => number
     describeFileIdTruncation: (ids: unknown[], ctx?: { fileIds?: unknown[] }) => { truncated: boolean; requested: number; used: number }
     TOOL_FILE_ID_CAP: number
   }
@@ -279,6 +280,20 @@ describe("agent-tools · static_checks unsafe_yaml_load", () => {
     const { lines, codeMask } = agentTools.buildCommentCodeMask(text, "python")
     const findings = check.scan(text, { language: "python", lines, codeMask })
     assert.equal(findings.length, 0)
+  })
+})
+
+describe("task-tools · clampInt", () => {
+  const opts = { min: 5, max: 50, defaultValue: 15 }
+  it("clamps overshoot, undershoot, and falls back on bad input", () => {
+    assert.equal(taskTools.INTERNAL.clampInt(undefined, opts), 15)
+    assert.equal(taskTools.INTERNAL.clampInt(0, opts), 15)
+    assert.equal(taskTools.INTERNAL.clampInt(Number.NaN, opts), 15)
+    assert.equal(taskTools.INTERNAL.clampInt(1000, opts), 50)
+    assert.equal(taskTools.INTERNAL.clampInt(2, opts), 5)
+    assert.equal(taskTools.INTERNAL.clampInt(20, opts), 20)
+    // floors floats
+    assert.equal(taskTools.INTERNAL.clampInt(7.9, opts), 7)
   })
 })
 

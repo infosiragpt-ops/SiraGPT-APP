@@ -195,6 +195,14 @@ function clampTimeoutMs(input, { min, max, defaultMs }) {
   return Math.max(min, Math.min(n, max));
 }
 
+// Clamp a positive integer input into [min, max] with a default. Used
+// for tool-level guards on schema-bounded fields (webSearch topK/target).
+function clampInt(input, { min, max, defaultValue }) {
+  const n = Math.floor(Number(input));
+  if (!Number.isFinite(n) || n <= 0) return defaultValue;
+  return Math.max(min, Math.min(n, max));
+}
+
 function previewText(s, max = 600) {
   // Guard against callers passing a non-positive or non-finite max
   // (e.g., NaN from a failed Number() coercion). Without this, the
@@ -247,14 +255,18 @@ const pythonExec = {
       stdin: stdin || '',
       signal: ctx.signal,
     });
+    const rawStdout = r.stdout || '';
+    const rawStderr = r.stderr || '';
     const payload = {
       ok: r.ok,
       exitCode: r.exitCode,
       durationMs: r.durationMs,
       timedOut: r.timedOut,
       aborted: r.aborted,
-      stdout: previewText(r.stdout || '', 4000),
-      stderr: previewText(r.stderr || '', 2000),
+      stdout: previewText(rawStdout, 4000),
+      stderr: previewText(rawStderr, 2000),
+      stdoutTruncated: rawStdout.length > 4000,
+      stderrTruncated: rawStderr.length > 2000,
     };
     ctx.onEvent?.({
       type: 'tool_output',
@@ -290,11 +302,15 @@ const bashExec = {
       timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 30000, defaultMs: 8000 }),
       signal: ctx.signal,
     });
+    const rawStdout = r.stdout || '';
+    const rawStderr = r.stderr || '';
     const payload = {
       ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, timedOut: r.timedOut, aborted: r.aborted,
-      stdout: previewText(r.stdout || '', 4000), stderr: previewText(r.stderr || '', 2000),
+      stdout: previewText(rawStdout, 4000), stderr: previewText(rawStderr, 2000),
+      stdoutTruncated: rawStdout.length > 4000,
+      stderrTruncated: rawStderr.length > 2000,
     };
-    ctx.onEvent?.({ type: 'tool_output', tool: 'bash_exec', ok: r.ok, preview: payload.ok ? previewText(r.stdout || '', 600) : previewText(r.stderr || '', 600) });
+    ctx.onEvent?.({ type: 'tool_output', tool: 'bash_exec', ok: r.ok, preview: payload.ok ? previewText(rawStdout, 600) : previewText(rawStderr, 600) });
     return payload;
   },
 };
@@ -314,18 +330,21 @@ const webSearch = {
     required: ['query'],
     additionalProperties: false,
   },
-  async execute({ query, topK = 15, target = 100 }, ctx = {}) {
+  async execute({ query, topK, target }, ctx = {}) {
     ctx.onEvent?.({ type: 'tool_call', tool: 'web_search', preview: query });
     const { runAgenticBatch } = getAgenticBatch();
-    const collected = [];
+    // Defense-in-depth: clamp into the schema bounds so a caller
+    // bypassing JSON-schema validation can't ask for 0 or 5_000 sources.
+    const safeTopK = clampInt(topK, { min: 5, max: 50, defaultValue: 15 });
+    const safeTarget = clampInt(target, { min: 20, max: 500, defaultValue: 100 });
     let selected = [];
     let stats = null;
     try {
       for await (const evt of runAgenticBatch({
         query,
-        target,
+        target: safeTarget,
         batchSize: 10,
-        topK,
+        topK: safeTopK,
         mailto: ctx.userEmail || process.env.SEARCH_BRAIN_MAILTO,
         signal: ctx.signal,
       })) {
@@ -1420,6 +1439,7 @@ module.exports = {
     metadataPathFor,
     sanitizeArtifactFilename,
     clampTimeoutMs,
+    clampInt,
     describeFileIdTruncation,
     TOOL_FILE_ID_CAP,
     summarisePreview,
