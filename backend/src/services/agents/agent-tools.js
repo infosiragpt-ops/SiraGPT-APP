@@ -521,6 +521,24 @@ const STATIC_CHECKS = [
     },
   },
   {
+    id: 'unsafe_innerhtml',
+    description: 'Direct innerHTML / outerHTML / document.write writes — common XSS vector',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        if (/\.(innerHTML|outerHTML)\s*[+]?=/.test(stripped) ||
+            /\bdocument\.write(?:ln)?\s*\(/.test(stripped) ||
+            /\bdangerouslySetInnerHTML\b/.test(stripped)) {
+          out.push({ severity: 'warn', line: i + 1, message: 'unsafe HTML sink — sanitize input or use textContent' });
+        }
+      });
+      return out;
+    },
+  },
+  {
     id: 'empty_catch',
     description: 'Empty catch block — errors are silently swallowed',
     scan: (text, { codeMask, language }) => {

@@ -19,6 +19,7 @@ const taskTools = cjsRequire("../../backend/src/services/agents/task-tools") as 
   INTERNAL: {
     verifyArtifact: { execute: (args: { artifactId: string }, ctx?: unknown) => Promise<{ ok: boolean; error?: string; sizeBytes?: number; filename?: string }> }
     metadataPathFor: (id: string) => string
+    previewText: (s: unknown, max?: number) => string
   }
 }
 
@@ -90,6 +91,21 @@ describe("task-tools · verify_artifact lookup", () => {
   })
 })
 
+describe("task-tools · previewText resilience", () => {
+  it("survives circular references without throwing", () => {
+    const obj: Record<string, unknown> = { a: 1 }
+    obj.self = obj
+    const out = taskTools.INTERNAL.previewText(obj, 200)
+    assert.equal(typeof out, "string")
+    assert.ok(out.length > 0)
+  })
+
+  it("falls back to String() for bigint / undefined values", () => {
+    assert.equal(taskTools.INTERNAL.previewText(BigInt(7)), "7")
+    assert.equal(taskTools.INTERNAL.previewText(undefined), "undefined")
+  })
+})
+
 describe("agent-tools · static_checks console_log expansions", () => {
   function runConsoleCheck(text: string, language: string) {
     const check = agentTools.STATIC_CHECKS.find(c => c.id === "console_log")!
@@ -118,6 +134,21 @@ describe("agent-tools · static_checks console_log expansions", () => {
     ].join("\n")
     const findings = runConsoleCheck(js, "javascript")
     assert.ok(findings.some(f => f.message.includes("debugger")), `expected inline debugger finding, got ${JSON.stringify(findings)}`)
+  })
+
+  it("flags innerHTML / dangerouslySetInnerHTML / document.write as unsafe", () => {
+    const check = agentTools.STATIC_CHECKS.find(c => c.id === "unsafe_innerhtml")!
+    const code = [
+      "function render(el, html) {",
+      "  el.innerHTML = html;",
+      "  document.write(html);",
+      "  return <div dangerouslySetInnerHTML={{ __html: html }} />;",
+      "}",
+    ].join("\n")
+    const { lines, codeMask } = agentTools.buildCommentCodeMask(code, "javascript")
+    const findings = check.scan(code, { language: "javascript", lines, codeMask })
+    assert.ok(findings.length >= 3, `expected 3+ unsafe sinks, got ${JSON.stringify(findings)}`)
+    assert.ok(findings.every(f => f.severity === "warn"))
   })
 
   it("does not flag debugger inside string literals or comments", () => {

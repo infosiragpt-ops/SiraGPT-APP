@@ -165,7 +165,17 @@ function assertArtifactValidation(ext, buffer) {
 }
 
 function previewText(s, max = 600) {
-  if (typeof s !== 'string') s = JSON.stringify(s);
+  if (typeof s !== 'string') {
+    // JSON.stringify throws on circular refs and returns undefined for
+    // bigint/symbol/function values. Guard so a single malformed payload
+    // can't crash the agent's preview emission.
+    try {
+      const stringified = JSON.stringify(s);
+      s = typeof stringified === 'string' ? stringified : String(s);
+    } catch {
+      s = String(s);
+    }
+  }
   if (s.length <= max) return s;
   return s.slice(0, max) + `…  (+${s.length - max} chars truncated)`;
 }

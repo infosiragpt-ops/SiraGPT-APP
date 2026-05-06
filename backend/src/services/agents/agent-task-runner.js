@@ -11,6 +11,7 @@ const {
 const { buildUserIntentAlignmentProfile } = require('./user-intent-alignment');
 const { buildAgentTaskPlan } = require('./agent-task-plan');
 const { resolveTaskContract } = require('./task-contract-resolver');
+const { listManifests } = require('./tool-manifest');
 const {
   buildUniversalTaskContract,
   deriveLegacyTaskContract,
@@ -52,29 +53,13 @@ function routeInternals() {
 }
 
 function buildFinalizeProfile(executionProfile, universalTaskContract) {
+  // Dynamic approved tool list from the manifest — no hardcoded names.
+  // This stays current as new tools are registered without code changes.
+  const appTools = new Set(listManifests().map((m) => m.name));
   const executableContractTools = new Set(
     (universalTaskContract?.required_tools || [])
       .filter((tool) => tool !== 'finalize')
-      .filter((tool) => [
-        'web_search',
-        'create_document',
-        'verify_artifact',
-        'rag_retrieve',
-        'self_rag_answer',
-        'docintel_analyze',
-        'docintel_retrieve',
-        'docintel_extract_tables',
-        'docintel_compare',
-        'python_exec',
-        'run_tests',
-        'generate_image',
-        'create_chart',
-        'create_organigram',
-        'create_mermaid_diagram',
-        'create_infographic_svg',
-        'create_dashboard_html',
-        'generate_video',
-      ].includes(tool))
+      .filter((tool) => appTools.has(tool))
   );
   return {
     ...(executionProfile || {}),
@@ -128,9 +113,10 @@ async function persistAssistantMessage({
   if (!chatId || !prisma) return null;
   try {
     const { serializeAgentState } = routeInternals();
+    const serialized = serializeAgentState(streamState);
     const data = {
-      content: serializeAgentState(streamState),
-      tokens: Math.ceil(serializeAgentState(streamState).length / 4),
+      content: serialized,
+      tokens: Math.ceil(serialized.length / 4),
       metadata: {
         source: 'agent-task',
         taskId: task.taskId,
@@ -1080,6 +1066,42 @@ async function runAgentTaskJob(payload = {}, job = null) {
   }
 }
 
+// ── Error introspection & recovery helpers ─────────────────────
+// Used externally by the job scheduler to decide retry strategy.
+
+/**
+ * Classify an error thrown by runAgentTaskJob to determine retry eligibility.
+ * Returns { retryable, reason, ttlMs } where ttlMs is how long before retry
+ * (0 = immediate, >0 = backoff).
+ */
+function classifyTaskError(err) {
+  if (!err) return { retryable: false, reason: 'no-error' };
+  const msg = String(err.message || err).toLowerCase();
+  const code = String(err.code || err.statusCode || '').toLowerCase();
+
+  // Retryable: network / rate-limit / timeout / temporary
+  if (code.includes('rate_limit') || msg.includes('rate limit'))
+    return { retryable: true, reason: 'rate-limited', ttlMs: 15_000 };
+  if (code.includes('timeout') || msg.includes('timeout') || msg.includes('etimedout') || msg.includes('econnreset'))
+    return { retryable: true, reason: 'network-timeout', ttlMs: 5_000 };
+  if (code.startsWith('5') || msg.includes('internal server') || msg.includes('service unavailable') || msg.includes('bad gateway'))
+    return { retryable: true, reason: 'server-error', ttlMs: 10_000 };
+  if (msg.includes('too many requests') || code === '429')
+    return { retryable: true, reason: 'throttled', ttlMs: 30_000 };
+
+  // Non-retryable: auth, validation, config
+  if (msg.includes('api_key') || msg.includes('authentication') || code === '401' || code === '403')
+    return { retryable: false, reason: 'auth-failure' };
+  if (msg.includes('missing') || msg.includes('invalid') || msg.includes('required'))
+    return { retryable: false, reason: 'validation-error' };
+
+  // Default: safe to retry once
+  return { retryable: true, reason: 'unknown', ttlMs: 3_000 };
+}
+
 module.exports = {
   runAgentTaskJob,
+  buildFinalizeProfile,
+  classifyTaskError,
+  normalizeAgentRuntimeModel,
 };

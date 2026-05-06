@@ -244,3 +244,62 @@ test('agent task store: compressSnapshotBytes compresses large payloads', () => 
   assert.equal(parsed.artifactCount, 1);
   assert.equal(parsed.stats.steps, 100);
 });
+
+// ── Stats / stale-recovery / size-cap tests ─────────────────────
+
+test('agent task store: getTaskStoreStats reports counts and bytes by status', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-stats-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 't-stats-1', userId: 'u', status: 'running', displayGoal: 'a' });
+  taskStore.writeTaskSnapshot({ taskId: 't-stats-2', userId: 'u', status: 'completed', displayGoal: 'b' });
+  taskStore.writeTaskSnapshot({ taskId: 't-stats-3', userId: 'u', status: 'completed', displayGoal: 'c' });
+
+  const stats = taskStore.getTaskStoreStats();
+  assert.equal(stats.totalFiles, 3);
+  assert.ok(stats.totalBytes > 0);
+  assert.equal(stats.byStatus.running, 1);
+  assert.equal(stats.byStatus.completed, 2);
+  assert.ok(stats.oldestUpdatedAt && stats.newestUpdatedAt);
+});
+
+test('agent task store: findStaleRunningTasks + recoverStaleRunningTasks marks stuck tasks as error', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-stale-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 't-fresh', userId: 'u', status: 'running', displayGoal: 'fresh' });
+  taskStore.writeTaskSnapshot({ taskId: 't-old', userId: 'u', status: 'running', displayGoal: 'old' });
+  taskStore.updateTaskSnapshot('t-old', 'u', { updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() });
+
+  const stale = taskStore.findStaleRunningTasks({ staleAfterMs: 60 * 60 * 1000 });
+  assert.equal(stale.length, 1);
+  assert.equal(stale[0].taskId, 't-old');
+
+  const result = taskStore.recoverStaleRunningTasks({ staleAfterMs: 60 * 60 * 1000 });
+  assert.equal(result.count, 1);
+
+  const recovered = taskStore.getTaskSnapshotForUser('t-old', 'u');
+  assert.equal(recovered.status, 'error');
+  assert.ok(recovered.failedAt);
+  assert.equal(recovered.streamState.done, true);
+  assert.equal(recovered.events[recovered.events.length - 1].type, 'error');
+
+  assert.equal(taskStore.getTaskSnapshotForUser('t-fresh', 'u').status, 'running');
+});
+
+test('agent task store: pruneTaskSnapshots enforces a maxFiles size cap and preserves running tasks', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-cap-'));
+
+  for (let i = 0; i < 5; i++) {
+    taskStore.writeTaskSnapshot({
+      taskId: `t-cap-${i}`,
+      userId: 'u',
+      status: 'completed',
+      displayGoal: `g${i}`,
+      updatedAt: new Date(Date.now() - (5 - i) * 1000).toISOString(),
+    });
+  }
+  taskStore.writeTaskSnapshot({ taskId: 't-cap-running', userId: 'u', status: 'running', displayGoal: 'live' });
+
+  const result = taskStore.pruneTaskSnapshots({ retentionMs: 365 * 24 * 60 * 60 * 1000, maxFiles: 3 });
+  assert.ok(result.deletedOverflow >= 2);
+  assert.ok(taskStore.readTaskSnapshot('t-cap-running'), 'running task must survive size-cap prune');
+});
