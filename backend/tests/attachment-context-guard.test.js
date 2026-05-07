@@ -28,6 +28,7 @@ test('referencesAttachment matches typical chat questions about a file', () => {
   assert.equal(referencesAttachment('qué dice el documento?'), true);
   assert.equal(referencesAttachment('cuántos puntos hay aquí?'), true);
   assert.equal(referencesAttachment('Hola, cómo estás'), true);
+  assert.equal(referencesAttachment('dame 3 párrafos de conclusiones'), true);
   assert.equal(referencesAttachment('quiero un pitch deck'), false);
 });
 
@@ -117,4 +118,17 @@ test('stripScaffolding removes ids and headers but keeps content', () => {
   assert.equal(stripped.includes('id: abc'), false);
   assert.equal(stripped.includes('### Archivo'), false);
   assert.equal(stripped.includes('Hello world this is real content.'), true);
+});
+
+test('stripScaffolding removes Office extraction banners from fallback answers', () => {
+  const ctx = [
+    'Word document — 989 characters extracted, structure preserved as markdown',
+    '---',
+    'Informe de prueba: Gestión administrativa en organizaciones modernas',
+    'La gestión administrativa integra planificación, organización, dirección y control.',
+  ].join('\n');
+  const stripped = stripScaffolding(ctx);
+  assert.equal(stripped.includes('Word document'), false);
+  assert.equal(stripped.includes('characters extracted'), false);
+  assert.equal(stripped.includes('Informe de prueba'), true);
 });

@@ -42,7 +42,11 @@ const {
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../message-attachments');
-const { assessAttachmentContext } = require('./attachment-context-guard');
+const {
+  assessAttachmentContext,
+  countUsefulWords,
+  stripScaffolding,
+} = require('./attachment-context-guard');
 
 const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -93,6 +97,80 @@ function summarizeForChat(text, policy) {
     clipped = `${raw.slice(0, cut).trim()}...`;
   }
   return `${intro}\n\nResumen conversacional:\n\n${clipped}`;
+}
+
+function splitReadableSentences(text) {
+  const seen = new Set();
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?;:])\s+|\n+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 35)
+    .filter((sentence) => {
+      const key = sentence
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 24);
+}
+
+function looksLikeMissingAttachmentAnswer(text) {
+  const value = String(text || '').toLowerCase();
+  if (!value.trim()) return true;
+  return (
+    value.includes('no hay contenido disponible') ||
+    value.includes('no se encontró texto disponible') ||
+    value.includes('no se encontro texto disponible') ||
+    value.includes('proporciona un archivo legible') ||
+    value.includes('no pude acceder al contenido')
+  );
+}
+
+function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext }) {
+  const cleaned = stripScaffolding(uploadedFileContext)
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned || countUsefulWords(cleaned) < 30) return '';
+
+  const request = String(goal || '');
+  const requestedParagraphs = Math.max(
+    1,
+    Math.min(6, Number((request.match(/\b(\d{1,2})\s+p[aá]rrafos?\b/i) || [])[1]) || 0)
+  );
+  const wantsConclusions = /\b(conclusi[oó]n|conclusiones|concluye|concluir)\b/i.test(request);
+  const paragraphCount = requestedParagraphs || (wantsConclusions ? 3 : 2);
+  const sentences = splitReadableSentences(cleaned);
+  if (sentences.length === 0) {
+    return cleaned.slice(0, 1600);
+  }
+
+  if (!wantsConclusions) {
+    const body = sentences.slice(0, Math.max(4, paragraphCount * 2)).join(' ');
+    return body.length > 1800 ? `${body.slice(0, 1800).trim()}...` : body;
+  }
+
+  const connectors = [
+    'En primer lugar,',
+    'Asimismo,',
+    'Finalmente,',
+    'De forma complementaria,',
+    'Como cierre,',
+    'En sintesis,',
+  ];
+  const perParagraph = Math.max(1, Math.ceil(Math.min(sentences.length, paragraphCount * 3) / paragraphCount));
+  const paragraphs = [];
+  for (let index = 0; index < paragraphCount; index += 1) {
+    const group = sentences.slice(index * perParagraph, (index + 1) * perParagraph);
+    if (group.length === 0) break;
+    paragraphs.push(`${connectors[index] || 'Ademas,'} ${group.join(' ')}`);
+  }
+  return paragraphs.join('\n\n');
 }
 
 function normalizeAgentRuntimeModel(selectedModel) {
@@ -942,12 +1020,35 @@ async function runAgentTaskJob(payload = {}, job = null) {
     });
 
     let finalMarkdown = result.finalAnswer || '';
+    if (
+      Array.isArray(files) &&
+      files.length > 0 &&
+      looksLikeMissingAttachmentAnswer(finalMarkdown) &&
+      countUsefulWords(uploadedFileContext) >= 30
+    ) {
+      const fallbackMarkdown = buildAttachmentGroundedFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+      });
+      if (fallbackMarkdown) {
+        finalMarkdown = fallbackMarkdown;
+        emit({
+          type: 'quality_gate',
+          gate: 'attachment_grounding',
+          label: 'Respuesta basada en adjunto',
+          passed: true,
+          summary: 'Se uso el texto extraido del archivo cuando el modelo no devolvio una respuesta util.',
+        });
+      }
+    }
     documentPolicy = buildDocumentDeliveryPolicy({
       goal,
       displayGoal,
       finalText: finalMarkdown,
       files,
-      requestedFormat: documentPolicy?.format,
+      requestedFormat: documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required'
+        ? documentPolicy?.format
+        : null,
     });
     task.documentPolicy = documentPolicy;
     emit({ type: 'document_policy', policy: documentPolicy });

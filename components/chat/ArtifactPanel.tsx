@@ -118,7 +118,7 @@ export function ArtifactPanel() {
       </div>
 
       {/* Content */}
-      <div className="relative flex-1 min-h-0 bg-white">
+      <div className="relative flex-1 min-h-0 bg-white dark:bg-card">
         {view === "preview" ? (
           isMermaid ? (
             <MermaidFill code={code} key={`mermaid-${generation}`} />
@@ -128,7 +128,7 @@ export function ArtifactPanel() {
               title="artifact-panel"
               srcDoc={srcDoc}
               sandbox="allow-scripts"
-              className="h-full w-full border-0 bg-white"
+              className="h-full w-full border-0 bg-white dark:bg-card"
             />
           )
         ) : (

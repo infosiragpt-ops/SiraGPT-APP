@@ -153,7 +153,7 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
     <>
       <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-white dark:bg-zinc-950/70">
         {/* Preview surface */}
-        <div className="relative bg-white" style={{ minHeight: 240 }}>
+        <div className="relative bg-white dark:bg-card" style={{ minHeight: 240 }}>
           <ArtifactPreview
             key={`preview-${generation}`}
             code={code}
@@ -168,7 +168,7 @@ export function ArtifactCard({ code, language, title }: ArtifactCardProps) {
           <div className="pointer-events-none absolute inset-0 flex items-end justify-end p-3">
             <button
               onClick={() => openPanel({ code, language: lang, title: artifactTitle, view: "preview" })}
-              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-white/90 backdrop-blur-sm px-4 py-1.5 text-sm font-medium text-foreground shadow-md ring-1 ring-black/10 hover:bg-white transition-colors"
+              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full bg-white/90 dark:bg-zinc-800/90 backdrop-blur-sm px-4 py-1.5 text-sm font-medium text-foreground shadow-md ring-1 ring-black/10 hover:bg-white dark:hover:bg-zinc-700 transition-colors"
               title="Abrir el artefacto en el panel lateral"
             >
               <Maximize2 className="h-3.5 w-3.5" />
@@ -214,7 +214,7 @@ function ArtifactPreview({ code, srcDoc, language, heightClass, fillHeight }: {
       title="artifact"
       srcDoc={srcDoc}
       sandbox="allow-scripts"
-      className={`w-full border-0 bg-white ${fillHeight ? "h-full" : heightClass || "h-[400px]"}`}
+      className={`w-full border-0 bg-white dark:bg-card ${fillHeight ? "h-full" : heightClass || "h-[400px]"}`}
       style={{ aspectRatio: fillHeight ? undefined : "16 / 9" }}
     />
   )
@@ -243,7 +243,7 @@ function MermaidRender({ code, heightClass, fillHeight }: { code: string; height
   }, [code])
 
   return (
-    <div className={`grid place-items-center overflow-auto bg-white p-4 ${fillHeight ? "h-full" : heightClass || "h-[400px]"}`}>
+    <div className={`grid place-items-center overflow-auto bg-white dark:bg-card p-4 ${fillHeight ? "h-full" : heightClass || "h-[400px]"}`}>
       {err ? (
         <pre className="text-xs text-rose-600 whitespace-pre-wrap">{err}</pre>
       ) : (

@@ -30,7 +30,8 @@
     "projects": "Proyectos",
     "searchBrain": "Buscar",
     "post": "POST",
-    "design": "Diseño"
+    "design": "Diseño",
+    "code": "Código"
   },
   "projects": {
     "title": "Proyectos",

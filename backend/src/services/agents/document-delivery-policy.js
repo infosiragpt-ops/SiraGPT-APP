@@ -100,12 +100,19 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
   if (documentUnderstanding && !explicitOutput) {
     return estimatedWords >= 900 || LONG_DELIVERABLE_RE.test(requestText) ? 'doc_suggested' : 'chat_only';
   }
+  if (Array.isArray(files) && files.length > 0 && !explicitOutput) {
+    return estimatedWords >= 900 || LONG_DELIVERABLE_RE.test(requestText) ? 'doc_suggested' : 'chat_only';
+  }
   const explicitDocument = WORDISH_RE.test(requestText) || SHEET_RE.test(requestText) || DECK_RE.test(requestText) || PDF_RE.test(requestText);
   if (explicitDocument) return 'doc_required';
   if (estimatedWords >= 900) return 'doc_suggested';
-  if (estimatedWords >= 500 || files.length > 0 || LONG_DELIVERABLE_RE.test(requestText)) return 'doc_suggested';
+  if (estimatedWords >= 500 || LONG_DELIVERABLE_RE.test(requestText)) return 'doc_suggested';
   if (format !== 'docx' && estimatedWords >= 300) return 'doc_suggested';
   return 'chat_only';
+}
+
+function hasExplicitDocumentOutputRequest(value) {
+  return EXPLICIT_DOCUMENT_OUTPUT_RE.test(compactText(value));
 }
 
 function buildDocumentDeliveryPolicy({
@@ -122,6 +129,8 @@ function buildDocumentDeliveryPolicy({
   // assistant's wording can never promote a chat turn to doc_required.
   const text = compactText(`${requestText} ${finalText || ''}`);
   const transcriptionOnly = TRANSCRIPTION_RE.test(requestText) && !EXPLICIT_TRANSCRIPTION_OUTPUT_RE.test(requestText);
+  const explicitOutput = hasExplicitDocumentOutputRequest(requestText);
+  const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const estimated = estimateWords({ goal, displayGoal, finalText });
   const format = detectFormat(requestText, requestedFormat);
   const template = detectTemplate(text, format);
@@ -153,6 +162,8 @@ function buildDocumentDeliveryPolicy({
       tableSignals,
       fileCount: Array.isArray(files) ? files.length : 0,
       transcriptionOnly,
+      explicitOutput,
+      documentUnderstanding,
     },
     palette: PALETTES[template] || PALETTES.business,
   };
@@ -165,5 +176,6 @@ module.exports = {
   detectFormat,
   detectTemplate,
   estimateWords,
+  hasExplicitDocumentOutputRequest,
   wordCount,
 };

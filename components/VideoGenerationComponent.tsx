@@ -563,7 +563,7 @@ export default function VideoGenerationComponent() {
                     </span>
                     <div className="flex-1 bg-white/20 rounded-full h-1">
                       <div
-                        className="bg-white h-1 rounded-full transition-all"
+                        className="bg-white dark:bg-zinc-300 h-1 rounded-full transition-all"
                         style={{
                           width: totalDuration ? `${(currentTime / totalDuration) * 100}%` : '0%'
                         }}

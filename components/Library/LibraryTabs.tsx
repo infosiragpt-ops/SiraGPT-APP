@@ -406,7 +406,7 @@ const MediaLibrary: React.FC = () => {
                     mediaItems.map((item) => (
                         <div
                             key={`${item.messageId}-${item.type}-${item.timestamp}`}
-                            className="relative border border-gray-200 rounded-lg shadow-sm bg-white overflow-hidden group cursor-pointer aspect-w-1 aspect-h-1"
+                            className="relative border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm bg-white dark:bg-zinc-800 overflow-hidden group cursor-pointer aspect-w-1 aspect-h-1"
                             onClick={() => openMediaModal(item)}
                         >
                             {/* IMAGE */}
@@ -499,7 +499,7 @@ const MediaLibrary: React.FC = () => {
             {/* Media Modal */}
             {/* {showModal && selectedMedia && (
                 <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-                    <div className="relative bg-white rounded-lg shadow-xl max-w-4xl max-h-[90vh] overflow-hidden">
+                    <div className="relative bg-white dark:bg-zinc-900 rounded-lg shadow-xl max-w-4xl max-h-[90vh] overflow-hidden">
                         <button
                             onClick={closeMediaModal}
                             className="absolute top-3 right-3 text-white text-3xl font-bold bg-gray-800 rounded-full w-10 h-10 flex items-center justify-center hover:bg-gray-700 transition-colors duration-200 z-10"

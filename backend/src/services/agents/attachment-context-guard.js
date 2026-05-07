@@ -5,6 +5,11 @@
 
 const SCAFFOLDING_PREFIXES = [
   '### Archivo adjunto',
+  'PDF document',
+  'Word document',
+  'Excel workbook',
+  'PowerPoint presentation',
+  'Image document',
   'id:',
   'tipo:',
   'analysisId:',
@@ -31,7 +36,11 @@ function stripScaffolding(rawText) {
     if (SCAFFOLDING_NEEDLES.some((needle) => trimmed.includes(needle))) continue;
     kept.push(trimmed);
   }
-  return kept.join('\n');
+  return kept
+    .join('\n')
+    .replace(/\b(?:PDF document|Word document|Excel workbook|PowerPoint presentation|Image document)\s*[—-]\s*[^.\n]*(?:extracted|markdown|page\(s\)|sheet\(s\)|slide\(s\))[^.\n]*/giu, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function countUsefulWords(rawText) {
@@ -40,7 +49,7 @@ function countUsefulWords(rawText) {
   return matches.length;
 }
 
-const ATTACHMENT_REFERENCE_RE = /\b(est[aeo]s?|aqu[ií]|el documento|el archivo|la imagen|la foto|la captura|el pdf|el word|el excel|el texto|esto|esta|este|que dice|qu[eé] dice|qu[eé] es|qu[eé] son|qu[eé] trata|qu[eé] significa|qu[eé] aparece|de qu[eé]|cu[aá]l|cu[aá]ntos|d[oó]nde|cu[aá]ndo|por qu[eé]|c[oó]mo|qui[eé]n)\b/i;
+const ATTACHMENT_REFERENCE_RE = /\b(est[aeo]s?|aqu[ií]|el documento|el archivo|la imagen|la foto|la captura|el pdf|el word|el excel|el texto|esto|esta|este|que dice|qu[eé] dice|qu[eé] es|qu[eé] son|qu[eé] trata|qu[eé] significa|qu[eé] aparece|de qu[eé]|cu[aá]l|cu[aá]ntos|d[oó]nde|cu[aá]ndo|por qu[eé]|c[oó]mo|qui[eé]n|analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|conclusi[oó]n|conclusiones|concluye|p[aá]rrafos?|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|seg[uú]n)\b/i;
 
 function referencesAttachment(text) {
   return ATTACHMENT_REFERENCE_RE.test(String(text || ''));

@@ -103,10 +103,10 @@ export function PlanViewer({ dxf, className }: Props) {
   }, [])
 
   return (
-    <div className={`relative w-full h-full bg-white ${className || ""}`}>
+    <div className={`relative w-full h-full bg-white dark:bg-card ${className || ""}`}>
       <div ref={containerRef} className="absolute inset-0" />
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-white/60 text-sm text-muted-foreground">
+        <div className="absolute inset-0 flex items-center justify-center bg-white/60 dark:bg-black/60 text-sm text-muted-foreground">
           Dibujando plano…
         </div>
       )}

@@ -71,6 +71,28 @@ test('DocumentDeliveryPolicy still creates a file when transcription asks for Wo
   assert.equal(policy.autoGenerate, true);
 });
 
+test('DocumentDeliveryPolicy answers attached-document conclusions in chat by default', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'dame 3 párrafos de conclusiones',
+    files: ['uploaded-docx-id'],
+  });
+
+  assert.equal(policy.mode, 'chat_only');
+  assert.equal(policy.autoGenerate, false);
+  assert.equal(policy.thresholds.fileCount, 1);
+});
+
+test('DocumentDeliveryPolicy creates Word only when attached-document conclusions ask for Word', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'dame 3 párrafos de conclusiones en Word',
+    files: ['uploaded-docx-id'],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+});
+
 test('detectFormat honors explicit requested format', () => {
   assert.equal(detectFormat('Haz un informe', 'pdf'), 'pdf');
 });

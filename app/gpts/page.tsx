@@ -72,7 +72,7 @@ const curatedStoreCards: StoreCard[] = [
     author: "Por invideo.io",
     category: "DALL·E",
     rating: "4.0 ★",
-    icon: <Video className="h-9 w-9 text-black" />,
+    icon: <Video className="h-9 w-9 text-black dark:text-white" />,
   },
   {
     id: "curated-expedia",
@@ -175,7 +175,7 @@ function CuratedIconShell({ card }: { card: StoreCard }) {
           ? "bg-black ring-4 ring-sky-300/60"
           : card.id.includes("code")
             ? "bg-zinc-950"
-            : "bg-white text-black ring-1 ring-zinc-200"
+            : "bg-white dark:bg-zinc-800 text-black dark:text-white ring-1 ring-zinc-200 dark:ring-zinc-700"
 
   return (
     <div className={cn("grid h-16 w-16 shrink-0 place-items-center rounded-full", palette)}>
@@ -208,7 +208,7 @@ function StoreCardView({
       className="group relative flex min-h-[104px] cursor-pointer items-center gap-4 rounded-2xl bg-[#f8f8f8] p-4 transition duration-200 hover:bg-[#f1f1f1] focus:outline-none focus:ring-2 focus:ring-zinc-950/20"
     >
       {card.source ? (
-        <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-full bg-white ring-1 ring-zinc-200">
+        <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-full bg-white dark:bg-zinc-800 ring-1 ring-zinc-200 dark:ring-zinc-700">
           {card.icon}
         </div>
       ) : (
@@ -229,7 +229,7 @@ function StoreCardView({
                     event.stopPropagation()
                     onEdit(card.source!)
                   }}
-                  className="grid h-8 w-8 place-items-center rounded-full bg-white text-zinc-700 shadow-sm hover:text-zinc-950"
+                  className="grid h-8 w-8 place-items-center rounded-full bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 shadow-sm hover:text-zinc-950 dark:hover:text-white"
                   aria-label="Editar GPT"
                 >
                   <Edit className="h-4 w-4" />
@@ -242,7 +242,7 @@ function StoreCardView({
                     event.stopPropagation()
                     onDelete(card.source!)
                   }}
-                  className="grid h-8 w-8 place-items-center rounded-full bg-white text-zinc-700 shadow-sm hover:text-rose-600"
+                  className="grid h-8 w-8 place-items-center rounded-full bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 shadow-sm hover:text-rose-600 dark:hover:text-rose-500"
                   aria-label="Eliminar GPT"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -434,7 +434,7 @@ export default function GPTsPage() {
   }
 
   return (
-    <main data-testid="gpts-store-page" className="min-h-full bg-white text-zinc-950">
+    <main data-testid="gpts-store-page" className="min-h-full bg-white dark:bg-background text-zinc-950 dark:text-foreground">
       <div className="mx-auto flex min-h-full w-full max-w-[1220px] flex-col px-6 py-4 sm:px-8 lg:px-12">
         <header className="flex items-center justify-between gap-4">
           <h1 className="text-[1.25rem] font-medium tracking-[-0.04em] text-zinc-950">Explorar GPT</h1>
@@ -445,12 +445,12 @@ export default function GPTsPage() {
               onClick={handleMine}
               className={cn(
                 "text-[0.88rem] font-semibold tracking-[-0.02em] transition hover:text-zinc-600",
-                visibilityFilter === "mine" ? "text-zinc-950" : "text-zinc-900"
+                visibilityFilter === "mine" ? "text-zinc-950 dark:text-zinc-100" : "text-zinc-900 dark:text-zinc-300"
               )}
             >
               Mis GPT
             </button>
-            <Button data-testid="gpts-create-button" onClick={handleCreateNew} className="h-10 rounded-full bg-black px-4 text-[0.88rem] font-semibold text-white hover:bg-zinc-800">
+            <Button data-testid="gpts-create-button" onClick={handleCreateNew} className="h-10 rounded-full bg-black dark:bg-white px-4 text-[0.88rem] font-semibold text-white dark:text-black hover:bg-zinc-800 dark:hover:bg-zinc-200">
               <Plus className="mr-2 h-4 w-4" />
               Crear
             </Button>
@@ -465,7 +465,7 @@ export default function GPTsPage() {
               placeholder="Buscar GPT"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              className="h-10 rounded-xl border-zinc-200 bg-white pl-11 text-[0.94rem] text-zinc-900 shadow-none placeholder:text-zinc-400 focus-visible:ring-1 focus-visible:ring-zinc-300"
+              className="h-10 rounded-xl border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 pl-11 text-[0.94rem] text-zinc-900 dark:text-zinc-100 shadow-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-zinc-300 dark:focus-visible:ring-zinc-600"
             />
           </div>
         </section>
@@ -475,7 +475,7 @@ export default function GPTsPage() {
             <button
               type="button"
               onClick={() => scrollCategories("left")}
-              className="mr-2 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-zinc-100 text-zinc-900 transition hover:bg-zinc-200"
+              className="mr-2 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 transition hover:bg-zinc-200 dark:hover:bg-zinc-700"
               aria-label="Categorías anteriores"
             >
               <ArrowLeft className="h-4 w-4" />
@@ -493,7 +493,7 @@ export default function GPTsPage() {
                     }}
                     className={cn(
                       "relative shrink-0 pb-2.5 text-[0.88rem] font-medium tracking-[-0.025em] transition",
-                      active ? "text-zinc-950" : "text-zinc-400 hover:text-zinc-700"
+                      active ? "text-zinc-950 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                     )}
                   >
                     {category.label}
@@ -505,7 +505,7 @@ export default function GPTsPage() {
             <button
               type="button"
               onClick={() => scrollCategories("right")}
-              className="ml-2 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-zinc-100 text-zinc-900 transition hover:bg-zinc-200"
+              className="ml-2 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 transition hover:bg-zinc-200 dark:hover:bg-zinc-700"
               aria-label="Siguientes categorías"
             >
               <ArrowRight className="h-4 w-4" />
@@ -564,7 +564,7 @@ export default function GPTsPage() {
         </section>
 
         <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
-          <DialogContent className="rounded-3xl border-zinc-200 bg-white sm:max-w-lg">
+          <DialogContent className="rounded-3xl border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>Compartir GPT</DialogTitle>
               <DialogDescription>

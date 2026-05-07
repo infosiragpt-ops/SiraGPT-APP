@@ -330,13 +330,13 @@ function VirtualBrowserPanel({
         </Button>
       </div>
       <div className="min-h-0 flex-1 p-3">
-        <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-white shadow-sm">
+        <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-white dark:bg-card shadow-sm">
           {previewFile ? (
             <iframe
               key={`${previewFile.path}-${updatedAt}-${refreshKey}`}
               title={`Navegador virtual: ${previewFile.path}`}
               sandbox="allow-scripts allow-forms allow-modals"
-              className="h-full w-full bg-white"
+              className="h-full w-full bg-white dark:bg-card"
               srcDoc={document}
             />
           ) : (

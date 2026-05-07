@@ -312,7 +312,7 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
                             e.stopPropagation();
                             handleDownloadChart();
                         }}
-                        className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
+                        className="h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
                         title="Download Chart"
                     >
                         <Download className="h-4 w-4" />
@@ -379,13 +379,13 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
     if (chips.length === 0) return null;
 
     return (
-        <div className="mb-2 flex flex-wrap justify-end gap-2">
+        <div className="mb-2 flex w-full max-w-[min(92vw,36rem)] flex-wrap justify-end gap-2">
             {attachments.map((att, i) => (
                 <button
                     key={att.id || i}
                     type="button"
                     onClick={() => setIdx(i)}
-                    className="group/chip inline-flex max-w-[320px] items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-left text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-foreground/40 hover:shadow-sm dark:border-border/60"
+                    className="group/chip inline-flex max-w-full items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-left text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-foreground/40 hover:shadow-sm dark:border-border/60 sm:max-w-[360px]"
                     aria-label={`Abrir ${att.name}`}
                 >
                     {getDocumentChipIcon(att.name)}
@@ -559,7 +559,7 @@ const GeneratedImageCard = ({
                         event.stopPropagation();
                         onOpen(src);
                     }}
-                    className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-gray-800 shadow-lg transition hover:scale-105 hover:bg-white"
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 dark:bg-zinc-800/90 text-gray-800 dark:text-zinc-200 shadow-lg transition hover:scale-105 hover:bg-white dark:hover:bg-zinc-700"
                     title="Ampliar imagen"
                     aria-label="Ampliar imagen"
                 >
@@ -574,7 +574,7 @@ const GeneratedImageCard = ({
                     }}
                     className={cn(
                         "flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition hover:scale-105",
-                        editMode ? "bg-pink-600 text-white" : "bg-white/90 text-gray-800 hover:bg-white"
+                        editMode ? "bg-pink-600 text-white" : "bg-white/90 dark:bg-zinc-800/90 text-gray-800 dark:text-zinc-200 hover:bg-white dark:hover:bg-zinc-700"
                     )}
                     title="Seleccionar zona con pincel"
                     aria-label="Seleccionar zona con pincel"
@@ -1054,7 +1054,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     }, [message.files])
 
-    const hasFiles = parsedFiles && parsedFiles.length > 0;
+    const hasRenderableUserFiles = useMemo(() => {
+        return Array.isArray(parsedFiles) && parsedFiles.some(isRenderableImageAttachment);
+    }, [parsedFiles]);
     const hasContent = useMemo(() => message.content && message.content.trim() !== "", [message.content]);
 
     // Detect if this assistant message includes a structured Gmail payload to avoid duplicate markdown
@@ -2406,7 +2408,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                         e.stopPropagation();
                                                         handleDownloadImage();
                                                     }}
-                                                    className="absolute bottom-3 right-3 z-20 h-9 w-9 rounded-full bg-white/90 text-gray-800 shadow-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 hover:bg-white hover:scale-105"
+                                                    className="absolute bottom-3 right-3 z-20 h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 text-gray-800 dark:text-zinc-200 shadow-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 hover:bg-white dark:hover:bg-zinc-700 hover:scale-105"
                                                     title="Download image"
                                                 >
                                                     <Download className="h-4 w-4" />
@@ -2510,7 +2512,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             <div className={`group flex flex-col flex-1 ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
                     <>
-                        {hasFiles && (
+                        {hasRenderableUserFiles && (
                             <div className="w-full max-w-[92%] md:max-w-2xl mb-2">
                                 <FileDisplay />
                             </div>

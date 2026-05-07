@@ -109,7 +109,7 @@ export function CanvasIframe({ html, placeholder }: Props) {
           </div>
         ) : (
           <div
-            className="bg-white rounded-lg shadow-xl transition-all duration-300"
+            className="bg-white dark:bg-card rounded-lg shadow-xl transition-all duration-300"
             style={{
               width: WIDTHS[viewport],
               maxWidth: "100%",
