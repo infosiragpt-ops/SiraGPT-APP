@@ -824,6 +824,62 @@ function cleanupOrphanedArtifacts({
   return result;
 }
 
+/**
+ * Verify a snapshot file is parseable and carries the minimum
+ * structural fields. Useful for repair/health endpoints. Returns
+ * { ok, taskId, problems[] } where problems is an array of stable
+ * string codes ('missing_userId', 'invalid_status', ...).
+ */
+function verifySnapshotIntegrity(taskId) {
+  const problems = [];
+  let snapshot = null;
+  try {
+    const p = snapshotPathFor(taskId);
+    if (!fs.existsSync(p)) return { ok: false, taskId, problems: ['file_missing'] };
+    const raw = fs.readFileSync(p, 'utf8');
+    snapshot = JSON.parse(raw);
+  } catch (err) {
+    return { ok: false, taskId, problems: ['unreadable_or_corrupt'] };
+  }
+  if (!snapshot.taskId) problems.push('missing_taskId');
+  if (!snapshot.userId) problems.push('missing_userId');
+  if (snapshot.taskId && snapshot.taskId !== taskId) problems.push('taskId_mismatch');
+  const validStatuses = new Set(['running', 'queued', 'completed', 'cancelled', 'error', 'failed']);
+  if (!validStatuses.has(snapshot.status)) problems.push('invalid_status');
+  if (snapshot.events && !Array.isArray(snapshot.events)) problems.push('events_not_array');
+  if (snapshot.artifacts && !Array.isArray(snapshot.artifacts)) problems.push('artifacts_not_array');
+  // Cross-check the index agrees on userId/status, when an index entry exists.
+  try {
+    const idx = readIndex();
+    const idxEntry = idx[taskId];
+    if (idxEntry) {
+      if (String(idxEntry.userId) !== String(snapshot.userId)) problems.push('index_user_mismatch');
+      if (String(idxEntry.status) !== String(snapshot.status)) problems.push('index_status_mismatch');
+    }
+  } catch { /* index missing/corrupt is its own concern */ }
+  return { ok: problems.length === 0, taskId, problems };
+}
+
+/**
+ * Run prune + orphan-artifact cleanup back-to-back. The two sweeps
+ * are normally scheduled together (nightly cron); this wrapper saves
+ * callers from having to coordinate the order (prune first, so newly
+ * orphaned artifact ids are visible to the cleanup pass).
+ */
+function pruneAndCleanup({
+  retentionMs = DEFAULT_RETENTION_MS,
+  maxFiles = DEFAULT_MAX_FILES,
+  artifactDir,
+  graceMs = 60 * 60 * 1000,
+} = {}) {
+  const prune = pruneTaskSnapshots({ retentionMs, maxFiles });
+  const cleanup = cleanupOrphanedArtifacts({
+    ...(artifactDir ? { artifactDir } : {}),
+    graceMs,
+  });
+  return { prune, cleanup };
+}
+
 // ── Compression ─────────────────────────────────────────────────
 // When a snapshot JSON exceeds MAX_SNAPSHOT_BYTES (1 MB),
 // strip large arrays (events, checkpoints, artifacts) after retaining
@@ -891,6 +947,7 @@ module.exports = {
   indexPath,
   listTaskSnapshotsForUser,
   markTaskStatus,
+  pruneAndCleanup,
   pruneTaskSnapshots,
   readIndex,
   readTaskSnapshot,
@@ -902,6 +959,7 @@ module.exports = {
   snapshotPathFor,
   updateIndexForSnapshot,
   updateTaskSnapshot,
+  verifySnapshotIntegrity,
   writeIndex,
   writeTaskSnapshot,
 };

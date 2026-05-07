@@ -324,6 +324,16 @@ const createChart = {
       const innerW = W - M.left - M.right;
       const innerH = H - M.top - M.bottom;
 
+      // Sanitize numeric inputs — coerce non-finite values to 0 so a single
+      // bad cell (NaN/null/string) doesn't poison the entire chart.
+      datasets = datasets.map(d => ({
+        ...d,
+        data: (d.data || []).map(v => {
+          const n = Number(v);
+          return Number.isFinite(n) ? n : 0;
+        }),
+      }));
+
       // Find global max
       const allValues = datasets.flatMap(d => d.data);
       const maxVal = Math.max(...allValues, 1) * 1.15;
@@ -2776,4 +2786,13 @@ const VISUAL_MEDIA_TOOLS = [
   createProcessFlow,
 ];
 
-module.exports = { VISUAL_MEDIA_TOOLS };
+// Internal helpers exposed for unit testing — NOT part of the public agent
+// surface. Anything imported from `__test_helpers` is implementation detail
+// and may change without notice.
+const __test_helpers = {
+  generateScenesFromPrompt,
+  svgDocument,
+  xmlEscape,
+};
+
+module.exports = { VISUAL_MEDIA_TOOLS, __test_helpers };

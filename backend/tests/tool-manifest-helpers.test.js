@@ -20,8 +20,10 @@ const {
   getManifest,
   getRegistryStats,
   getRemainingBudget,
+  getToolsExceedingBudget,
   incrementToolUsage,
   listManifests,
+  summarizeUsage,
   registerToolManifest,
   unregisterToolManifest,
   validateAllBuiltinManifests,
@@ -234,6 +236,26 @@ test('create_document allowed_formats has no duplicates', () => {
     assert.equal(seen.has(ext), false, `duplicate ${ext}`);
     seen.add(ext);
   }
+});
+
+test('getToolsExceedingBudget surfaces saturated tools', () => {
+  // bash_exec cap is 60, web_search cap is 10
+  const usage = { bash_exec: 60, web_search: 10, python_exec: 1 };
+  const over = getToolsExceedingBudget(usage);
+  const names = over.map((row) => row.name).sort();
+  assert.ok(names.includes('bash_exec'));
+  assert.ok(names.includes('web_search'));
+  assert.ok(!names.includes('python_exec'));
+});
+
+test('summarizeUsage sorts by saturation descending and ignores zero counts', () => {
+  // bash_exec at 50% saturation (30/60), web_search at 80% (8/10), python_exec at ~0.8% (1/120)
+  const usage = { bash_exec: 30, web_search: 8, python_exec: 1, never_used: 0 };
+  const rows = summarizeUsage(usage);
+  const names = rows.map((row) => row.name);
+  assert.ok(!names.includes('never_used'));
+  assert.equal(rows[0].name, 'web_search');
+  assert.ok(rows[0].saturation > rows[1].saturation);
 });
 
 test('authorizeToolCall enforces destructive side-effects without approval', () => {

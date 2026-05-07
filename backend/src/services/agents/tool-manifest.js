@@ -490,6 +490,41 @@ function checkTimeoutBudget(toolName, requestedMs) {
 }
 
 /**
+ * List tools whose usage count has reached or exceeded their cap.
+ * Used by the planner/dispatcher to surface a warning when the
+ * agent is about to lock itself out of a tool family. Returns an
+ * array of { name, current, max } sorted by saturation descending.
+ */
+function getToolsExceedingBudget(usageMap = {}) {
+  const out = [];
+  for (const [name, manifest] of Object.entries(BUILTIN_MANIFESTS)) {
+    const max = manifest.usage_limits?.max_calls_per_task;
+    if (!Number.isFinite(max) || max <= 0) continue;
+    const current = Number(usageMap[name]) || 0;
+    if (current >= max) out.push({ name, current, max, saturation: 1 });
+  }
+  return out;
+}
+
+/**
+ * Per-tool usage breakdown: counts, caps, and percent consumed.
+ * Returns an array sorted by saturation descending so the most
+ * pressured tools surface first in dashboards.
+ */
+function summarizeUsage(usageMap = {}) {
+  const rows = [];
+  for (const [name, manifest] of Object.entries(BUILTIN_MANIFESTS)) {
+    const current = Number(usageMap[name]) || 0;
+    if (current === 0) continue;
+    const max = manifest.usage_limits?.max_calls_per_task;
+    const saturation = Number.isFinite(max) && max > 0 ? current / max : null;
+    rows.push({ name, current, max: Number.isFinite(max) ? max : null, saturation });
+  }
+  rows.sort((a, b) => (b.saturation ?? -1) - (a.saturation ?? -1));
+  return rows;
+}
+
+/**
  * Discovery helpers — return the names of manifests matching a
  * given attribute. Useful for the /api/agent/skills endpoint when
  * the UI wants to render "tools that need approval" or "tools that
@@ -1050,7 +1085,9 @@ module.exports = {
   findToolsBySideEffect,
   getRegistryStats,
   getRemainingBudget,
+  getToolsExceedingBudget,
   incrementToolUsage,
+  summarizeUsage,
   validateAllBuiltinManifests,
   validateManifest,
   getManifest,

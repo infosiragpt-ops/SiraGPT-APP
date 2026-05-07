@@ -593,6 +593,72 @@ test('agent task store: compactAllTerminalTasks shrinks every long terminal trac
   assert.equal(compacted.events[0]._compacted, true);
 });
 
+test('agent task store: verifySnapshotIntegrity flags missing files and corruption', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-verify-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 'v-good', userId: 'u', status: 'running', displayGoal: 'ok' });
+  const good = taskStore.verifySnapshotIntegrity('v-good');
+  assert.equal(good.ok, true);
+  assert.deepEqual(good.problems, []);
+
+  const missing = taskStore.verifySnapshotIntegrity('v-missing');
+  assert.equal(missing.ok, false);
+  assert.deepEqual(missing.problems, ['file_missing']);
+
+  // Plant a corrupt file
+  fs.writeFileSync(taskStore.snapshotPathFor('v-broken'), '{not-json}');
+  const broken = taskStore.verifySnapshotIntegrity('v-broken');
+  assert.equal(broken.ok, false);
+  assert.ok(broken.problems.includes('unreadable_or_corrupt'));
+});
+
+test('agent task store: verifySnapshotIntegrity detects index drift', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-verify-drift-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 'v-drift', userId: 'alice', status: 'running' });
+  // Mutate the index out of band so it disagrees with the snapshot.
+  const idx = taskStore.readIndex();
+  idx['v-drift'].userId = 'bob';
+  idx['v-drift'].status = 'completed';
+  taskStore.writeIndex(idx);
+
+  const result = taskStore.verifySnapshotIntegrity('v-drift');
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.includes('index_user_mismatch'));
+  assert.ok(result.problems.includes('index_status_mismatch'));
+});
+
+test('agent task store: pruneAndCleanup runs prune then orphan-cleanup', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-prune-clean-'));
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-prune-clean-art-'));
+
+  // Old, completed snapshot with one referenced artifact
+  const oldIso = new Date(Date.now() - 24 * 60 * 60 * 1000 * 2).toISOString();
+  taskStore.writeTaskSnapshot({
+    taskId: 'pc-old',
+    userId: 'u',
+    status: 'completed',
+    createdAt: oldIso,
+    updatedAt: oldIso,
+    artifacts: [{ id: 'dddddddddddddddd', filename: 'old.svg' }],
+  });
+  // Plant the artifact files (old enough that grace passes after prune)
+  fs.writeFileSync(path.join(artifactDir, 'dddddddddddddddd-old.svg'), '<svg/>');
+  fs.writeFileSync(path.join(artifactDir, 'dddddddddddddddd.json'),
+    JSON.stringify({ id: 'dddddddddddddddd', createdAt: oldIso }));
+
+  const result = taskStore.pruneAndCleanup({
+    retentionMs: 24 * 60 * 60 * 1000,
+    artifactDir,
+    graceMs: 60_000,
+  });
+
+  // Snapshot was pruned (old + completed)
+  assert.ok(result.prune.deleted >= 1);
+  // Then artifact became an orphan and got removed
+  assert.equal(result.cleanup.removed, 2);
+});
+
 test('agent task store: pruneTaskSnapshots enforces a maxFiles size cap and preserves running tasks', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-cap-'));
 

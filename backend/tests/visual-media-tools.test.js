@@ -59,7 +59,7 @@ const ARTIFACT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'vis-test-'));
 process.env.AGENT_ARTIFACT_DIR = ARTIFACT_DIR;
 
 // Load visual-media-tools (lazy, after stubs are in cache)
-const { VISUAL_MEDIA_TOOLS } = require(path.join(AGENTS_DIR, 'visual-media-tools'));
+const { VISUAL_MEDIA_TOOLS, __test_helpers: VIS_INTERNAL } = require(path.join(AGENTS_DIR, 'visual-media-tools'));
 
 function tool(name) { return VISUAL_MEDIA_TOOLS.find(t => t.name === name); }
 
@@ -669,6 +669,82 @@ test('all 11 tools have valid metadata', () => {
 test('all tool names are unique', () => {
   const names = VISUAL_MEDIA_TOOLS.map(t => t.name);
   assert.equal(new Set(names).size, names.length);
+});
+
+// ── Internal helpers ─────────────────────────────────────────────
+
+test('VIS_INTERNAL.xmlEscape: escapes the five XML metacharacters', () => {
+  const { xmlEscape } = VIS_INTERNAL;
+  assert.equal(xmlEscape('a & b < c > d "e"'), 'a &amp; b &lt; c &gt; d &quot;e&quot;');
+  assert.equal(xmlEscape(null), '');
+  assert.equal(xmlEscape(undefined), '');
+  assert.equal(xmlEscape(42), '42');
+});
+
+test('VIS_INTERNAL.svgDocument: well-formed SVG with title/desc and shadow filter', () => {
+  const { svgDocument } = VIS_INTERNAL;
+  const svg = svgDocument({ width: 400, height: 300, title: 'T & X', description: 'd', body: '<rect/>' });
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('viewBox="0 0 400 300"'));
+  assert.ok(svg.includes('<title id="vis-title">T &amp; X</title>'));
+  assert.ok(svg.includes('vis-shadow'));
+  assert.ok(svg.includes('<rect/>'));
+  assert.ok(svg.endsWith('</svg>'));
+});
+
+test('VIS_INTERNAL.generateScenesFromPrompt: scene count, durations, and time ranges', () => {
+  const { generateScenesFromPrompt } = VIS_INTERNAL;
+  const scenes = generateScenesFromPrompt('A quick narrative about innovation in technology', 12);
+  assert.ok(scenes.length >= 3 && scenes.length <= 8);
+  const total = scenes.reduce((s, x) => s + x.duration, 0);
+  assert.equal(total, 12);
+  for (const s of scenes) {
+    assert.ok(typeof s.description === 'string' && s.description.length > 0);
+    assert.ok(/^\d+s - \d+s$/.test(s.timeRange));
+    assert.ok(/^#[0-9A-F]{6}$/i.test(s.color));
+    assert.ok(s.duration >= 1);
+  }
+});
+
+test('VIS_INTERNAL.generateScenesFromPrompt: handles empty / tiny prompts gracefully', () => {
+  const { generateScenesFromPrompt } = VIS_INTERNAL;
+  const empty = generateScenesFromPrompt('', 8);
+  assert.ok(empty.length >= 3);
+  assert.equal(empty.reduce((s, x) => s + x.duration, 0), 8);
+
+  const oneWord = generateScenesFromPrompt('hi', 6);
+  assert.ok(oneWord.length >= 3);
+  for (const s of oneWord) assert.ok(s.description.length > 0);
+});
+
+// ── create_chart input hardening ─────────────────────────────────
+
+test('create_chart: tolerates NaN / null / string values without crashing', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'bar',
+    title: 'numeric safety',
+    labels: ['A', 'B', 'C', 'D'],
+    datasets: [{ label: 'mixed', data: [10, NaN, null, '20'] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const fp = assertArtifact(r);
+  const svg = fs.readFileSync(fp, 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  // No literal "NaN" rendered into the SVG (would indicate poisoned arithmetic)
+  assert.equal(svg.includes('NaN'), false, 'SVG should not contain literal NaN');
+  assert.equal(svg.includes('Infinity'), false, 'SVG should not contain literal Infinity');
+});
+
+test('create_chart: empty dataset still produces a valid SVG', async () => {
+  const r = await tool('create_chart').execute({
+    chartType: 'line',
+    title: 'Empty data',
+    labels: ['x'],
+    datasets: [{ label: 'empty', data: [] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('<svg'));
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────
