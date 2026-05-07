@@ -132,6 +132,18 @@ function looksLikeMissingAttachmentAnswer(text) {
   );
 }
 
+function looksLikeEmptyOrWeakFinalAnswer(text) {
+  const value = String(text || '').trim().toLowerCase();
+  if (!value) return true;
+  return (
+    value === 'null' ||
+    value === 'undefined' ||
+    value === '(agent returned empty message)' ||
+    value === 'respuesta vacía' ||
+    value === 'respuesta vacia'
+  );
+}
+
 function sanitizeAttachmentFallbackReason(reason) {
   const value = String(reason || '').toLowerCase();
   if (!value) return '';
@@ -236,14 +248,6 @@ function buildAttachmentUnavailableFallbackAnswer({ reason = '' } = {}) {
       ? `\n> Nota operativa: activé una respuesta segura porque ${publicReason}; preferí pedir material legible antes que inventar contenido.`
       : '',
   ].filter(Boolean).join('\n');
-}
-
-function isAttachmentDeepAnalysisRequest(goal) {
-  const value = String(goal || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-  return /\b(conclusion|conclusiones|concluir|concluye|analiza|analisis|resumen|resume|sintesis|resultado|resultados|discusion|hallazgo|hallazgos|recomendacion|recomendaciones|objetivo|objetivos|segun|interpreta)\b/.test(value);
 }
 
 function normalizeAgentRuntimeModel(selectedModel) {
@@ -1144,27 +1148,57 @@ async function runAgentTaskJob(payload = {}, job = null) {
     });
 
     let finalMarkdown = result.finalAnswer || '';
-    if (
-      Array.isArray(files) &&
-      files.length > 0 &&
-      looksLikeMissingAttachmentAnswer(finalMarkdown) &&
-      !isAttachmentDeepAnalysisRequest(displayGoal || goal) &&
-      countUsefulWords(uploadedFileContext) >= 30
-    ) {
+    let stoppedReason = result.stoppedReason;
+    const attachmentFinalNeedsRecovery = Array.isArray(files) && files.length > 0 && (
+      looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
+      looksLikeMissingAttachmentAnswer(finalMarkdown)
+    );
+    if (attachmentFinalNeedsRecovery) {
       const fallbackMarkdown = buildAttachmentGroundedFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext,
+        reason: result.stoppedReason || 'el runtime principal no entregó una respuesta final útil',
       });
-      if (fallbackMarkdown) {
-        finalMarkdown = fallbackMarkdown;
-        emit({
-          type: 'quality_gate',
-          gate: 'attachment_grounding',
-          label: 'Respuesta basada en adjunto',
-          passed: true,
-          summary: 'Se uso el texto extraido del archivo cuando el modelo no devolvio una respuesta util.',
-        });
-      }
+      const finalFallbackMarkdown = fallbackMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        reason: result.stoppedReason || 'el runtime principal no entregó una respuesta final útil',
+      });
+      finalMarkdown = finalFallbackMarkdown;
+      stoppedReason = fallbackMarkdown
+        ? 'attachment_empty_response_recovery'
+        : 'attachment_unreadable_empty_response_recovery';
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: fallbackMarkdown
+          ? 'Respuesta documental local generada porque el runtime terminó sin texto final útil.'
+          : 'Respuesta segura porque el runtime terminó sin texto final útil y no hubo texto legible suficiente.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          attachmentFallback: true,
+          usefulWords: countUsefulWords(uploadedFileContext),
+          fileCount: files.length,
+          originalStoppedReason: result.stoppedReason,
+        },
+      };
+      task.documentPolicy = documentPolicy;
+      emit({
+        type: 'repair_attempt',
+        attempt: 1,
+        status: fallbackMarkdown ? 'recovered' : 'degraded',
+        message: fallbackMarkdown
+          ? 'El runtime terminó sin una respuesta útil; se recuperó usando el texto extraído del documento.'
+          : 'El runtime terminó sin una respuesta útil; se devolvió una salida clara para pedir un archivo legible.',
+      });
+      emit({
+        type: 'quality_gate',
+        gate: 'attachment_empty_response_recovery',
+        label: fallbackMarkdown ? 'Respuesta documental recuperada' : 'Salida segura sin contenido legible',
+        passed: Boolean(fallbackMarkdown),
+        summary: fallbackMarkdown
+          ? 'Se usó el texto extraído del adjunto para evitar una tarea completada sin respuesta.'
+          : 'Se evitó una tarea completada en silencio y se explicó cómo aportar contenido legible.',
+      });
     }
     documentPolicy = buildDocumentDeliveryPolicy({
       goal,
@@ -1210,11 +1244,11 @@ async function runAgentTaskJob(payload = {}, job = null) {
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
     const doneEvent = emit({
       type: 'done',
-      stoppedReason: result.stoppedReason,
+      stoppedReason,
       stats: { steps: result.steps.length, artifacts: artifacts.length },
     });
 
-    const status = result.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+    const status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
     task.status = status;
     task.updatedAt = new Date().toISOString();
     const dbMessage = await persistAssistantMessage({
@@ -1240,7 +1274,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
         agenticOperatingCore,
         frameworks: frameworkStatus,
         durableExecution: enterpriseRuntimeProfile.durableExecution,
-        stoppedReason: result.stoppedReason,
+        stoppedReason,
         maxSteps,
         maxRuntimeMs,
       },
@@ -1255,7 +1289,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
         steps: result.steps.length,
         artifacts: artifacts.length,
         durationMs: Date.now() - startedAt,
-        stoppedReason: result.stoppedReason,
+        stoppedReason,
       },
       artifacts,
     });
@@ -1266,7 +1300,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
             steps: result.steps.length,
             artifacts: artifacts.length,
             durationMs: Date.now() - startedAt,
-            stoppedReason: result.stoppedReason,
+            stoppedReason,
           },
         });
       } catch (err) {
@@ -1283,7 +1317,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
       userId: user.id,
       chatId,
       status,
-      stoppedReason: result.stoppedReason,
+      stoppedReason,
       steps: result.steps.length,
       artifacts: artifacts.length,
       durationMs: Date.now() - startedAt,
