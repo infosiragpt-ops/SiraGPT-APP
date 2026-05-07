@@ -1179,6 +1179,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   });
                   return { ...prevChat, messages: newMessages };
                 });
+                // The corrective replacement is the final answer — release the
+                // composer immediately instead of waiting for [DONE]. Some
+                // backends pause briefly between the replace frame and the
+                // terminator (e.g. while persisting), and that gap was leaving
+                // the stop button visible after the visible reply was rendered.
+                setIsLoading(false);
+                setIsStreaming(false);
               },
             }
           );

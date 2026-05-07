@@ -547,6 +547,22 @@ class AIService {
      * to the UI — the caller streams the returned string itself.
      */
     async _runCorrectivePass({ provider, model, baseMessages, userPrompt, language, signal, temperature = 0.55 }) {
+        // The corrective pass runs AFTER the user-visible stream finished, on
+        // the same SSE connection — the client only gets [DONE] (and
+        // un-pins the stop button) when this returns. Without a hard ceiling,
+        // a slow non-streaming completion can keep the composer locked for
+        // 30-60s even though the response is already on screen. Cap at
+        // CORRECTIVE_PASS_TIMEOUT_MS (env-tunable, default 8s) and silently
+        // bail — the original streamed answer stays as-is, and [DONE] fires
+        // promptly so the UI returns to send-mode.
+        const TIMEOUT_MS = Number(process.env.CORRECTIVE_PASS_TIMEOUT_MS) || 8000;
+        const timeoutCtrl = new AbortController();
+        const timer = setTimeout(() => timeoutCtrl.abort(new Error('corrective_pass_timeout')), TIMEOUT_MS);
+        const onParentAbort = () => timeoutCtrl.abort(signal?.reason);
+        if (signal) {
+            if (signal.aborted) timeoutCtrl.abort(signal.reason);
+            else signal.addEventListener('abort', onParentAbort, { once: true });
+        }
         try {
             const client = this.getClient(provider);
             const correctivePrompt = buildCorrectivePrompt(userPrompt || '', language);
@@ -564,12 +580,21 @@ class AIService {
             });
             const resp = await client.chat.completions.create(
                 providerPayload.payload,
-                { signal }
+                { signal: timeoutCtrl.signal }
             );
             return resp.choices?.[0]?.message?.content || '';
         } catch (err) {
-            console.warn('corrective pass failed:', err.message || err);
+            const wasTimeout = timeoutCtrl.signal.aborted && err?.name === 'AbortError'
+                && !signal?.aborted;
+            if (wasTimeout) {
+                console.warn(`corrective pass abandoned after ${TIMEOUT_MS}ms — returning original response`);
+            } else {
+                console.warn('corrective pass failed:', err.message || err);
+            }
             return '';
+        } finally {
+            clearTimeout(timer);
+            if (signal) signal.removeEventListener('abort', onParentAbort);
         }
     }
 

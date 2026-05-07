@@ -660,6 +660,14 @@ class ApiClient {
 
         const decoder = new TextDecoder('utf-8');
         let batchBuffer = '';
+        // Sticky cross-read buffer — TCP packetization can split a single
+        // SSE frame (`data: ...\n\n`) across two reader.read() calls, and
+        // `[DONE]` / `replace` events arriving on the boundary used to be
+        // dropped because we re-`split('\n\n')`-ed every chunk in isolation.
+        // We now accumulate raw bytes and only consume up to the last
+        // observed `\n\n`, leaving any partial trailing frame for the next
+        // iteration.
+        let frameBuffer = '';
         let processedChunks = 0;
         const batchProcessingDelay = 20;
         let lastProcessTime = Date.now();
@@ -687,8 +695,12 @@ class ApiClient {
             return;
           }
 
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n\n');
+          frameBuffer += decoder.decode(value, { stream: true });
+          const lastBoundary = frameBuffer.lastIndexOf('\n\n');
+          if (lastBoundary === -1) continue;
+          const consumable = frameBuffer.slice(0, lastBoundary);
+          frameBuffer = frameBuffer.slice(lastBoundary + 2);
+          const lines = consumable.split('\n\n');
 
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue;
