@@ -242,6 +242,53 @@ function checkPostHog(posthog) {
   };
 }
 
+/**
+ * Check circuit breaker health for one or more named breakers.
+ *
+ * Accepts an object keyed by breaker label → CircuitBreaker instance.
+ * Reports healthy if all breakers are CLOSED, degraded if any are
+ * HALF_OPEN (recovering), and unhealthy if any are OPEN (downstream
+ * dependency is confirmed broken).
+ *
+ * Non-critical — a broken circuit means degraded experience for some
+ * features (agent task scheduling, external API calls), but the core
+ * API (auth, chat, file serving) still works.
+ */
+function checkCircuitBreakers(breakers = {}) {
+  const names = Object.keys(breakers);
+  if (names.length === 0) {
+    return { name: "circuit_breakers", status: "skipped", critical: false, latency_ms: 0, details: { count: 0 } };
+  }
+
+  const states = {};
+  let anyOpen = false;
+  let anyHalfOpen = false;
+
+  for (const name of names) {
+    const cb = breakers[name];
+    if (typeof cb?.toJSON !== "function") {
+      states[name] = "invalid";
+      continue;
+    }
+    const json = cb.toJSON();
+    states[name] = json.state;
+    if (json.state === "OPEN") anyOpen = true;
+    if (json.state === "HALF_OPEN") anyHalfOpen = true;
+  }
+
+  let status = "healthy";
+  if (anyOpen) status = "unhealthy";
+  else if (anyHalfOpen) status = "degraded";
+
+  return {
+    name: "circuit_breakers",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: { count: names.length, states },
+  };
+}
+
 // ── Composite probes ───────────────────────────────────────────────
 
 function runLivenessCheck() {
@@ -262,7 +309,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
@@ -274,6 +321,7 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   checks.push(checkSentry(sentry));
   checks.push(checkLangfuse(langfuse));
   checks.push(checkPostHog(posthog));
+  checks.push(checkCircuitBreakers(circuitBreakers));
   return composeStatus(checks);
 }
 
@@ -315,6 +363,7 @@ module.exports = {
   checkSentry,
   checkLangfuse,
   checkPostHog,
+  checkCircuitBreakers,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,

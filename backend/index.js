@@ -630,6 +630,11 @@ function startServer() {
     // can run the agent without the scheduler module importing the agent
     // layer (which would circular-require via the skills registry).
     scheduler.setInvoker(runAgent);
+    // Wire the error classifier so scheduled jobs get proper retry
+    // decisions (rate-limited → backoff, quota-exhausted → no retry).
+    // Inline require avoids circular dependencies at module load time.
+    const { classifyTaskError } = require('./src/services/agents/agent-task-runner');
+    scheduler.setJobClassifier(classifyTaskError);
     scheduler.start();
 
     async function shutdown(signal) {

@@ -31,6 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const cron = require('node-cron');
+const { withRetry } = require('../../utils/retry-with-backoff');
 
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
 const JOBS_FILE = path.join(DATA_DIR, 'scheduled-jobs.json');
@@ -47,6 +48,12 @@ const active = new Map();
 // scheduler → agent-entry → skills → scheduler.
 let _invoker = null;
 function setInvoker(fn) { _invoker = fn; }
+
+// Pluggable error classifier for retry decisions.
+// Injected by the boot sequence after classifyTaskError() is loaded.
+// Falls back to the default classifier (always-retryable) when unset.
+let _classifier = null;
+function setJobClassifier(fn) { _classifier = fn; }
 
 // ─── Persistence ──────────────────────────────────────────────────────────
 
@@ -267,16 +274,31 @@ async function fireJob(jobId, { source = 'cron', payload = null } = {}) {
       ? interpolate(job.prompt, { payload, at: startedAt.toISOString() })
       : job.prompt;
 
-    const out = await _invoker({
-      userId: job.userId,
-      prompt: effectivePrompt,
-      thinking: job.thinking,
-      source: `${source}:${job.id}`,
-    });
+    const out = await withRetry(
+      () => _invoker({
+        userId: job.userId,
+        prompt: effectivePrompt,
+        thinking: job.thinking,
+        source: `${source}:${job.id}`,
+      }),
+      {
+        maxRetries: 2,
+        baseDelayMs: 5_000,
+        maxDelayMs: 60_000,
+        classifyError: _classifier || undefined,
+        onRetry: (info) => {
+          console.warn(
+            `[scheduler] retry ${info.attempt} for job ${jobId}: ` +
+            `${info.reason}, waiting ${info.delayMs}ms`
+          );
+        },
+      },
+    );
     record.ok = true;
     record.answerSnippet = String(out?.answer || '').slice(0, 400);
   } catch (err) {
     record.error = err.message || String(err);
+    record.retries = true;
   }
   record.durationMs = Date.now() - startedAt.getTime();
 
@@ -312,6 +334,7 @@ module.exports = {
   listJobs, getJob, cancelJob,
   fireJob,
   setInvoker,
+  setJobClassifier,
   validateCron,
   interpolate,
   // Exposed for tests / admin:
