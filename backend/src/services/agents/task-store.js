@@ -474,11 +474,12 @@ function getLatestTaskForChat(chatId, userId) {
 function getTaskByJobId(jobId, userId) {
   if (!jobId) return null;
   const index = readIndex();
-  const match = Object.entries(index)
-    .find(([, meta]) => String(meta.jobId || '') === String(jobId)
-      && (!userId || String(meta.userId) === String(userId)));
-  if (!match) return null;
-  return readTaskSnapshot(match[0]);
+  const matches = Object.entries(index)
+    .filter(([, meta]) => String(meta.jobId || '') === String(jobId)
+      && (!userId || String(meta.userId) === String(userId)))
+    .sort((a, b) => Date.parse(b[1].updatedAt || 0) - Date.parse(a[1].updatedAt || 0));
+  if (!matches.length) return null;
+  return readTaskSnapshot(matches[0][0]);
 }
 
 /**
@@ -656,6 +657,68 @@ function compactSnapshotEvents(taskId, userId, { keepRecent = 200 } = {}) {
   return { compacted: cutoff, eventCount: next.events.length };
 }
 
+/**
+ * Bulk-compact every terminal task whose event log has grown beyond
+ * `eventThreshold`. Returns counts so a nightly cron job can log how
+ * much it shrunk. Active (running/queued) tasks are skipped.
+ */
+function compactAllTerminalTasks({
+  eventThreshold = AUTO_COMPACT_EVENT_THRESHOLD,
+  keepRecent = AUTO_COMPACT_KEEP_RECENT,
+} = {}) {
+  const dir = ensureDir();
+  const result = { scanned: 0, compacted: 0, skipped: 0, eventsDropped: 0 };
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
+    let snapshot;
+    try {
+      snapshot = JSON.parse(fs.readFileSync(path.join(dir, entry), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!snapshot?.taskId || !snapshot?.userId) continue;
+    if (!TERMINAL_STATUSES.has(snapshot.status)) {
+      result.skipped++;
+      continue;
+    }
+    const eventCount = Array.isArray(snapshot.events) ? snapshot.events.length : 0;
+    if (eventCount <= eventThreshold) {
+      result.skipped++;
+      continue;
+    }
+    result.scanned++;
+    try {
+      const out = compactSnapshotEvents(snapshot.taskId, snapshot.userId, { keepRecent });
+      if (out && Number.isFinite(out.compacted) && out.compacted > 0) {
+        result.compacted++;
+        result.eventsDropped += out.compacted;
+      }
+    } catch { /* best effort */ }
+  }
+  return result;
+}
+
+/**
+ * Return snapshots for any user matching one of the given statuses,
+ * newest-first. Backed by the index so a bulk admin/dashboard query
+ * does not parse every snapshot. `statuses` accepts a single string
+ * or an array.
+ */
+function getTasksByStatus(statuses, { limit = 100 } = {}) {
+  const set = new Set(Array.isArray(statuses) ? statuses : [statuses]);
+  const index = readIndex();
+  const matches = Object.entries(index)
+    .filter(([, meta]) => set.has(meta.status))
+    .sort((a, b) => Date.parse(b[1].updatedAt || 0) - Date.parse(a[1].updatedAt || 0))
+    .slice(0, limit);
+  const rows = [];
+  for (const [taskId] of matches) {
+    const snapshot = readTaskSnapshot(taskId);
+    if (snapshot) rows.push(snapshot);
+  }
+  return rows;
+}
+
 // ── Orphan artifact cleanup ─────────────────────────────────────
 // Artifacts saved by saveArtifact() (in task-tools.js) live in
 // AGENT_ARTIFACT_DIR (uploads/agent-artifacts by default) as
@@ -813,6 +876,7 @@ module.exports = {
   appendTaskEvent,
   cleanupOrphanedArtifacts,
   collectReferencedArtifactIds,
+  compactAllTerminalTasks,
   compactSnapshotEvents,
   compressSnapshotBytes,
   findStaleRunningTasks,
@@ -822,6 +886,7 @@ module.exports = {
   getTaskSnapshotForUser,
   getTaskStoreDir,
   getTaskStoreStats,
+  getTasksByStatus,
   getUserTaskMetrics,
   indexPath,
   listTaskSnapshotsForUser,

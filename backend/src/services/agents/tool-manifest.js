@@ -230,7 +230,7 @@ const BUILTIN_MANIFESTS = {
     purpose: "Write a downloadable file via a Python script that saves to os.environ[\"OUT_PATH\"]. Runs the TaskContract ArtifactReviewer before returning.",
     inputs: { type: "object", required: ["filename", "python"], properties: { filename: { type: "string" }, python: { type: "string" }, description: { type: "string" } } },
     outputs: { type: "object", properties: { ok: { type: "boolean" }, filename: { type: "string" }, downloadUrl: { type: "string" }, contractReview: { type: "object" } } },
-    allowed_formats: ["svg", "docx", "xlsx", "pptx", "pdf", "csv", "md", "txt", "json", "svg"],
+    allowed_formats: ["svg", "docx", "xlsx", "pptx", "pdf", "csv", "md", "txt", "json", "html"],
     forbidden_formats: [],
     expected_errors: [
       { code: "missing_out_path", description: "Script did not write os.environ['OUT_PATH']." },
@@ -410,6 +410,41 @@ function checkToolUsageBudget(toolName, usageMap = {}) {
   if (!Number.isFinite(max) || max <= 0) return { ok: true, current, max: null };
   if (current >= max) return { ok: false, reason: 'budget_exhausted', current, max };
   return { ok: true, current, max };
+}
+
+/**
+ * Increment a tool's usage counter. Returns the new count plus a
+ * flag indicating whether the budget is now exhausted. Pure helper —
+ * mutates `usageMap` in place so callers can chain checks across a
+ * task's lifetime without re-reading the manifest each call.
+ */
+function incrementToolUsage(toolName, usageMap = {}, n = 1) {
+  if (!toolName || !usageMap) return { ok: false, reason: 'invalid_args' };
+  const manifest = getManifest(toolName);
+  if (!manifest) return { ok: false, reason: 'unknown_tool' };
+  const max = manifest.usage_limits?.max_calls_per_task;
+  const current = (Number(usageMap[toolName]) || 0) + Number(n || 0);
+  usageMap[toolName] = current;
+  if (Number.isFinite(max) && max > 0 && current >= max) {
+    return { ok: true, current, max, exhausted: true };
+  }
+  return { ok: true, current, max: Number.isFinite(max) ? max : null, exhausted: false };
+}
+
+/**
+ * How many calls remain in the per-task budget. Returns Infinity
+ * when the manifest declares no limit. Used by the planner to pick
+ * a tool that still has headroom over one that's nearly maxed.
+ */
+function getRemainingBudget(toolName, usageMap = {}) {
+  const manifest = getManifest(toolName);
+  if (!manifest) return { ok: false, reason: 'unknown_tool' };
+  const max = manifest.usage_limits?.max_calls_per_task;
+  const current = Number(usageMap[toolName]) || 0;
+  if (!Number.isFinite(max) || max <= 0) {
+    return { ok: true, current, max: null, remaining: Infinity };
+  }
+  return { ok: true, current, max, remaining: Math.max(0, max - current) };
 }
 
 /**
@@ -1014,6 +1049,8 @@ module.exports = {
   findToolsByScope,
   findToolsBySideEffect,
   getRegistryStats,
+  getRemainingBudget,
+  incrementToolUsage,
   validateAllBuiltinManifests,
   validateManifest,
   getManifest,

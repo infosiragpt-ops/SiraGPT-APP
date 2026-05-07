@@ -140,6 +140,47 @@ test('classifyTaskError: null/undefined returns non-retryable', () => {
   assert.equal(classifyTaskError(undefined).retryable, false);
 });
 
+test('classifyTaskError: model-unavailable errors are NOT retryable', () => {
+  for (const msg of [
+    'The model `gpt-4-foo` does not exist',
+    'model_not_found: unknown model id',
+    'This model has been retired and decommissioned',
+    'no such model: claude-2',
+  ]) {
+    const result = classifyTaskError(new Error(msg));
+    assert.equal(result.retryable, false, `should NOT be retryable: ${msg}`);
+    assert.equal(result.reason, 'model-unavailable', `reason should be model-unavailable: ${msg}`);
+  }
+});
+
+test('classifyTaskError: payload-too-large errors are NOT retryable', () => {
+  const err413 = new Error('payload too large'); err413.statusCode = 413;
+  assert.equal(classifyTaskError(err413).reason, 'payload-too-large');
+  const err = new Error('Request Entity Too Large');
+  assert.equal(classifyTaskError(err).reason, 'payload-too-large');
+});
+
+test('classifyTaskError: 501 not-implemented is NOT retryable', () => {
+  const err = new Error('Not Implemented'); err.statusCode = 501;
+  const r = classifyTaskError(err);
+  assert.equal(r.retryable, false);
+  assert.equal(r.reason, 'not-implemented');
+});
+
+test('classifyTaskError: SSL/TLS errors are retryable', () => {
+  for (const msg of [
+    'unable to verify the first certificate',
+    'CERT_HAS_EXPIRED',
+    'self signed certificate in certificate chain',
+    'TLS handshake failure',
+  ]) {
+    const result = classifyTaskError(new Error(msg));
+    assert.equal(result.retryable, true, `should be retryable: ${msg}`);
+    assert.equal(result.reason, 'ssl-error', `reason should be ssl-error: ${msg}`);
+    assert.ok(result.ttlMs > 0);
+  }
+});
+
 test('normalizeAgentRuntimeModel: OpenAI models pass through', () => {
   const result = normalizeAgentRuntimeModel('gpt-4o');
   assert.equal(result.displayModel, 'gpt-4o');

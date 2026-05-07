@@ -141,6 +141,53 @@ test('static_checks: flags CORS wildcard origins', async () => {
   }
 });
 
+test('static_checks: flags prototype pollution sinks', async () => {
+  const samples = [
+    "Object.assign(Object.prototype, payload);\n",
+    "obj.__proto__ = userInput;\n",
+    "obj['__proto__'] = userInput;\n",
+  ];
+  for (const content of samples) {
+    const out = await tools.static_checks.handler({ source: 's.js', content }, { userId: 'u', collection: 'c' });
+    assert.ok(out.findings.some(f => f.rule === 'prototype_pollution'),
+      `not flagged: ${content}`);
+  }
+});
+
+test('static_checks: flags open-redirect from request input', async () => {
+  const samples = [
+    "res.redirect(req.query.next);\n",
+    "res.redirect(302, req.body.url);\n",
+    "window.location = req.query.target;\n",
+  ];
+  for (const content of samples) {
+    const out = await tools.static_checks.handler({ source: 's.js', content }, { userId: 'u', collection: 'c' });
+    assert.ok(out.findings.some(f => f.rule === 'open_redirect'),
+      `not flagged: ${content}`);
+  }
+});
+
+test('static_checks: flags JWT alg=none and jwt.decode misuse', async () => {
+  const noneAlg = "jwt.verify(token, secret, { algorithms: ['none'] });\n";
+  const decode = "const claims = jwt.decode(token);\n";
+  const r1 = await tools.static_checks.handler({ source: 's.js', content: noneAlg }, { userId: 'u', collection: 'c' });
+  const r2 = await tools.static_checks.handler({ source: 's.js', content: decode }, { userId: 'u', collection: 'c' });
+  assert.ok(r1.findings.some(f => f.rule === 'unsafe_jwt' && f.severity === 'high'));
+  assert.ok(r2.findings.some(f => f.rule === 'unsafe_jwt' && f.severity === 'warn'));
+});
+
+test('static_checks: flags timing-unsafe secret comparisons', async () => {
+  const samples = [
+    "if (token === expected) doStuff();\n",
+    "if (signature == provided) ok();\n",
+  ];
+  for (const content of samples) {
+    const out = await tools.static_checks.handler({ source: 's.js', content }, { userId: 'u', collection: 'c' });
+    assert.ok(out.findings.some(f => f.rule === 'timing_unsafe_compare'),
+      `not flagged: ${content}`);
+  }
+});
+
 test('static_checks: returns error when source missing', async () => {
   const out = await tools.static_checks.handler({}, { userId: 'u', collection: 'c' });
   assert.ok(out.error);

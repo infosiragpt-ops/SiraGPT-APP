@@ -864,6 +864,96 @@ const STATIC_CHECKS = [
     },
   },
   {
+    id: 'prototype_pollution',
+    description: 'Direct write to Object.prototype / __proto__ — prototype pollution vector',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        // Object.assign(Object.prototype, ...) / Object.assign(Foo.prototype, userInput)
+        if (/Object\.assign\s*\(\s*(?:Object|[A-Za-z_$][\w$]*)\s*\.\s*prototype\b/.test(stripped)) {
+          out.push({ severity: 'high', line: i + 1, message: 'Object.assign() into a prototype — prototype pollution risk' });
+          return;
+        }
+        // Direct assignment: foo.__proto__ = bar  /  foo['__proto__'] = bar
+        if (/\b__proto__\s*=/.test(stripped) || /\[\s*['"]__proto__['"]\s*\]\s*=/.test(line)) {
+          out.push({ severity: 'high', line: i + 1, message: '__proto__ assignment — prototype pollution risk, use Object.create(null) or a Map' });
+          return;
+        }
+        // Object.setPrototypeOf with non-null target
+        if (/Object\.setPrototypeOf\s*\(/.test(stripped)) {
+          out.push({ severity: 'warn', line: i + 1, message: 'Object.setPrototypeOf — review for prototype pollution and perf' });
+        }
+      });
+      return out;
+    },
+  },
+  {
+    id: 'open_redirect',
+    description: 'res.redirect / location.href fed directly from request input — open-redirect vector',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        // res.redirect(req.query.next) / res.redirect(req.body.url) / res.location(req.params.x)
+        if (/\bres\s*\.\s*(redirect|location)\s*\(\s*(?:[^)]*\b)?req\s*\.\s*(query|body|params|headers)\b/.test(stripped)) {
+          out.push({ severity: 'high', line: i + 1, message: 'res.redirect/location with raw request input — validate against an allow-list to prevent open-redirect' });
+          return;
+        }
+        // window.location = req.query.X / location.href = userInput pattern
+        if (/\b(?:window\.)?location(?:\.href)?\s*=\s*[^;]*\breq\s*\.\s*(query|body|params)\b/.test(stripped)) {
+          out.push({ severity: 'high', line: i + 1, message: 'location assignment from request input — open-redirect risk' });
+        }
+      });
+      return out;
+    },
+  },
+  {
+    id: 'unsafe_jwt',
+    description: 'JWT verification with algorithm "none" or unspecified algorithms — accepts forged tokens',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        // alg: 'none' / algorithm: 'none' / "alg": "none"
+        if (/\b(?:alg|algorithm|algorithms?)\s*[:=]\s*\[?\s*['"]none['"]/i.test(line)) {
+          out.push({ severity: 'high', line: i + 1, message: 'JWT alg "none" — accepts unsigned tokens, never use in production' });
+          return;
+        }
+        // jwt.decode(token) when result is used as if verified — flag as warn
+        const stripped = stripStringLiterals(line);
+        if (/\bjwt\s*\.\s*decode\s*\(/.test(stripped) && !/verify/i.test(stripped)) {
+          out.push({ severity: 'warn', line: i + 1, message: 'jwt.decode does NOT verify the signature — use jwt.verify with explicit algorithms' });
+        }
+      });
+      return out;
+    },
+  },
+  {
+    id: 'timing_unsafe_compare',
+    description: 'Token / hash comparison via == / === — leaks length info via timing side-channel',
+    scan: (text, { lines, codeMask, language }) => {
+      if (language !== 'javascript' && language !== 'typescript' && language !== 'python' && language !== 'unknown') return [];
+      const out = [];
+      lines.forEach((line, i) => {
+        if (!codeMask[i]) return;
+        const stripped = stripStringLiterals(line);
+        // === / == comparison adjacent to a sensitive identifier on either side
+        const sensitiveCmp = /\b(token|secret|signature|hmac|hash|digest|api[_-]?key|password|csrf|otp|reset[_-]?code)\w*\s*={2,3}\s*\w/i;
+        const sensitiveCmp2 = /\w\s*={2,3}\s*\w*\b(token|secret|signature|hmac|hash|digest|api[_-]?key|password|csrf|otp|reset[_-]?code)/i;
+        if (sensitiveCmp.test(stripped) || sensitiveCmp2.test(stripped)) {
+          out.push({ severity: 'warn', line: i + 1, message: 'timing-unsafe comparison on secret — use crypto.timingSafeEqual / hmac.compare_digest' });
+        }
+      });
+      return out;
+    },
+  },
+  {
     id: 'disabled_ssl_verification',
     description: 'TLS verification disabled — exposes the call to MITM',
     scan: (text, { lines, codeMask, language }) => {

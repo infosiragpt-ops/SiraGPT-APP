@@ -174,14 +174,17 @@ async function run({
   let fileCount = 0;
   for (const [name, body] of Object.entries(files || {})) {
     if (typeof name !== 'string' || typeof body !== 'string') continue;
-    if (name.includes('..') || name.startsWith('/')) continue; // stay inside dir
+    if (name.length === 0 || name.includes('\0')) continue; // reject NULs and empty names
+    if (path.isAbsolute(name)) continue;                    // reject absolute paths (any platform)
+    const resolved = path.resolve(dir, name);
+    const dirWithSep = dir.endsWith(path.sep) ? dir : dir + path.sep;
+    if (resolved !== dir && !resolved.startsWith(dirWithSep)) continue; // path traversal
     if (++fileCount > maxFiles) {
       console.warn(`[code-sandbox] max extra files (${maxFiles}) exceeded, dropping ${Object.keys(files || {}).length - maxFiles} files`);
       break;
     }
-    const p = path.join(dir, name);
-    await fs.mkdir(path.dirname(p), { recursive: true });
-    await fs.writeFile(p, body, 'utf8');
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+    await fs.writeFile(resolved, body, 'utf8');
   }
 
   const start = Date.now();
@@ -340,6 +343,8 @@ async function runTests({
     stdout: '', stderr: `unsupported test language: ${language}`,
     timedOut: false, failures: [],
     aborted: false,
+    exitCode: null,
+    durationMs: 0,
   };
 }
 

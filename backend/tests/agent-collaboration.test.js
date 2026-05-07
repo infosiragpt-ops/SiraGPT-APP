@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { decomposeGoal, MAX_SUB_AGENTS } = require('../src/services/agents/agent-collaboration');
+const { decomposeGoal, forkJoin, chain, MAX_SUB_AGENTS } = require('../src/services/agents/agent-collaboration');
 
 test('decomposeGoal: empty input returns []', () => {
   assert.deepEqual(decomposeGoal(''), []);
@@ -55,4 +55,65 @@ test('module exports forkJoin, chain, decomposeGoal, MAX_SUB_AGENTS', () => {
   assert.equal(typeof mod.chain, 'function');
   assert.equal(typeof mod.decomposeGoal, 'function');
   assert.equal(mod.MAX_SUB_AGENTS, 5);
+});
+
+test('forkJoin: empty subTasks → ok=false with no_sub_tasks', async () => {
+  const r = await forkJoin({ subTasks: [], user: { id: 'u' } });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'no_sub_tasks');
+});
+
+test('forkJoin: too many subTasks → rejected without dispatch', async () => {
+  const subTasks = Array.from({ length: MAX_SUB_AGENTS + 1 }, (_, i) => ({ goal: `g${i}` }));
+  const r = await forkJoin({ subTasks, user: { id: 'u' } });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /max .* sub-tasks/);
+});
+
+test('forkJoin: missing goal in sub-task is rejected pre-dispatch', async () => {
+  const r = await forkJoin({ subTasks: [{ goal: 'ok' }, { context: {} }], user: { id: 'u' } });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /sub-task 1: missing goal/);
+});
+
+test('chain: empty subTasks → ok=false with no_sub_tasks', async () => {
+  const r = await chain({ subTasks: [], user: { id: 'u' } });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'no_sub_tasks');
+});
+
+test('chain: too many subTasks → rejected pre-dispatch', async () => {
+  const subTasks = Array.from({ length: MAX_SUB_AGENTS + 1 }, (_, i) => ({ goal: `g${i}` }));
+  const r = await chain({ subTasks, user: { id: 'u' } });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /max .* sub-tasks/);
+});
+
+test('chain: missing goal in sub-task is rejected pre-dispatch', async () => {
+  const r = await chain({ subTasks: [{ goal: '   ' }], user: { id: 'u' } });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /missing goal/);
+});
+
+test('decomposeGoal: filters out very short fragments', () => {
+  // "y" between letters would yield 1-char fragments — drop them.
+  const parts = decomposeGoal('A y B y C', { maxParts: 5, minFragmentLength: 3 });
+  // Either keeps the original (no fragment >= 3) or returns nothing tiny.
+  for (const p of parts) {
+    assert.ok(p.goal.length >= 3, `fragment too short: "${p.goal}"`);
+  }
+});
+
+test('decomposeGoal: dedupes case-insensitively', () => {
+  const parts = decomposeGoal('Analizar datos y analizar DATOS', { maxParts: 4 });
+  const lowered = parts.map((p) => p.goal.toLowerCase());
+  const unique = new Set(lowered);
+  assert.equal(lowered.length, unique.size, 'duplicates not removed');
+});
+
+test('decomposeGoal: totalParts matches actual returned length', () => {
+  const parts = decomposeGoal('Primero analizar y luego graficar y finalmente exportar', { maxParts: 10 });
+  for (const p of parts) {
+    assert.equal(p.context.totalParts, parts.length);
+  }
 });

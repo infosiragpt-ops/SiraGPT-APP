@@ -160,3 +160,46 @@ test('sandbox: empty source is rejected', async () => {
   assert.equal(r.ok, false);
   assert.match(r.stderr, /empty source/);
 });
+
+// ─── Fixture file path safety ────────────────────────────────────────────
+
+test('sandbox: fixture file with .. traversal is rejected silently', async () => {
+  const r = await run({
+    language: 'python',
+    source: 'import os\nprint(sorted(os.listdir(".")))',
+    files: { '../escape.txt': 'pwned' },
+  });
+  assert.equal(r.ok, true);
+  // ../escape.txt must NOT have been written; only main.py is visible.
+  assert.match(r.stdout, /\['main\.py'\]/);
+});
+
+test('sandbox: fixture file with absolute path is rejected', async () => {
+  const r = await run({
+    language: 'python',
+    source: 'import os\nprint(sorted(os.listdir(".")))',
+    files: { '/tmp/evil.txt': 'pwned' },
+  });
+  assert.equal(r.ok, true);
+  assert.match(r.stdout, /\['main\.py'\]/);
+});
+
+test('sandbox: nested fixture file in subdir is allowed', async () => {
+  const r = await run({
+    language: 'python',
+    source: 'open("data/note.txt").read()\nprint("ok")',
+    files: { 'data/note.txt': 'hello' },
+  });
+  assert.equal(r.ok, true);
+  assert.match(r.stdout, /^ok\s*$/);
+});
+
+test('sandbox/runTests: unsupported language returns full shape', async () => {
+  const r = await runTests({ language: 'ruby', source: '', testSource: '' });
+  assert.equal(r.ok, false);
+  assert.equal(r.passed, 0);
+  assert.equal(r.failed, 0);
+  assert.equal(r.exitCode, null);
+  assert.equal(typeof r.durationMs, 'number');
+  assert.deepEqual(r.failures, []);
+});

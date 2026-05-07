@@ -13,8 +13,14 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   chooseGenerators,
+  contentQualityScore,
+  formatAdvice,
+  getGeneratorById,
+  getParserById,
   inferFormat,
   integrity,
+  listFormats,
+  mimeForFormat,
 } = require('../src/services/sira/document-pipeline-registry');
 
 const NEW_FORMATS = [

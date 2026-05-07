@@ -517,6 +517,82 @@ test('agent task store: getTaskStoreStats works via index fast path', () => {
   assert.equal(fast.byStatus.completed, slow.byStatus.completed);
 });
 
+test('agent task store: getTaskByJobId picks the most-recent task when jobId repeats', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-jobid-recent-'));
+  const older = new Date(Date.now() - 60_000).toISOString();
+  const newer = new Date().toISOString();
+
+  taskStore.writeTaskSnapshot({ taskId: 'jr-1', userId: 'u', jobId: 'job-X', status: 'failed', updatedAt: older });
+  taskStore.writeTaskSnapshot({ taskId: 'jr-2', userId: 'u', jobId: 'job-X', status: 'running', updatedAt: newer });
+
+  const found = taskStore.getTaskByJobId('job-X', 'u');
+  assert.equal(found.taskId, 'jr-2');
+});
+
+test('agent task store: getTasksByStatus returns matching tasks across users newest-first', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-status-q-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 'q-1', userId: 'a', status: 'running', updatedAt: new Date(Date.now() - 1000).toISOString() });
+  taskStore.writeTaskSnapshot({ taskId: 'q-2', userId: 'b', status: 'queued', updatedAt: new Date().toISOString() });
+  taskStore.writeTaskSnapshot({ taskId: 'q-3', userId: 'c', status: 'completed' });
+
+  const live = taskStore.getTasksByStatus(['running', 'queued']);
+  const ids = live.map((row) => row.taskId);
+  assert.deepEqual(ids.sort(), ['q-1', 'q-2']);
+  // newest-first: q-2 was updated more recently
+  assert.equal(live[0].taskId, 'q-2');
+
+  const single = taskStore.getTasksByStatus('completed');
+  assert.equal(single.length, 1);
+  assert.equal(single[0].taskId, 'q-3');
+});
+
+test('agent task store: compactAllTerminalTasks shrinks every long terminal trace', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-compact-bulk-'));
+
+  const buildEvents = (n) => {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      out.push({
+        id: `e:${i + 1}`, seq: i + 1,
+        ts: new Date(Date.now() - (n - i) * 1000).toISOString(),
+        type: 'tool_output', tool: 'python_exec', ok: true,
+        stdout: 'x'.repeat(800),
+      });
+    }
+    return out;
+  };
+
+  taskStore.writeTaskSnapshot({
+    taskId: 'bulk-1', userId: 'u', status: 'completed',
+    events: buildEvents(450), lastEventSeq: 450, eventLimit: 1000,
+  });
+  taskStore.writeTaskSnapshot({
+    taskId: 'bulk-2', userId: 'u', status: 'failed',
+    events: buildEvents(420), lastEventSeq: 420, eventLimit: 1000,
+  });
+  // Active task — must be skipped
+  taskStore.writeTaskSnapshot({
+    taskId: 'bulk-active', userId: 'u', status: 'running',
+    events: buildEvents(450), lastEventSeq: 450, eventLimit: 1000,
+  });
+  // Short terminal task — must be skipped
+  taskStore.writeTaskSnapshot({
+    taskId: 'bulk-short', userId: 'u', status: 'completed',
+    events: buildEvents(10), lastEventSeq: 10,
+  });
+
+  const result = taskStore.compactAllTerminalTasks({ eventThreshold: 400, keepRecent: 100 });
+  assert.equal(result.compacted, 2);
+  assert.ok(result.eventsDropped > 0);
+
+  const active = taskStore.getTaskSnapshotForUser('bulk-active', 'u');
+  assert.equal(typeof active.events[0].stdout, 'string', 'active task must not be compacted');
+
+  const compacted = taskStore.getTaskSnapshotForUser('bulk-1', 'u');
+  assert.equal(compacted.events[0]._compacted, true);
+});
+
 test('agent task store: pruneTaskSnapshots enforces a maxFiles size cap and preserves running tasks', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-cap-'));
 

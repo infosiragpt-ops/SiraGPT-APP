@@ -116,6 +116,15 @@ const GENERATORS = Object.freeze([
   { id: "odfpy",             format: "odt",   language: "python", runtime: "library", template_support: false, mime: "application/vnd.oasis.opendocument.text", preference: 85 },
   { id: "pandoc-epub",       format: "epub",  language: "binary", runtime: "binary",  template_support: false, mime: "application/epub+zip", preference: 92 },
   { id: "epub-gen",          format: "epub",  language: "node",   runtime: "library", template_support: false, mime: "application/epub+zip", preference: 85 },
+
+  // ── Streaming / line-delimited formats ─────────────────────────
+  { id: "ndjson-writer",     format: "ndjson", language: "node",  runtime: "library", template_support: false, mime: "application/x-ndjson", preference: 92 },
+  { id: "tsv-writer",        format: "tsv",   language: "node",   runtime: "library", template_support: false, mime: "text/tab-separated-values", preference: 90 },
+
+  // ── Calendar / contact / bibliography ──────────────────────────
+  { id: "ics-writer",        format: "ics",   language: "node",   runtime: "library", template_support: false, mime: "text/calendar", preference: 92 },
+  { id: "vcf-writer",        format: "vcf",   language: "node",   runtime: "library", template_support: false, mime: "text/vcard", preference: 92 },
+  { id: "bibtex-writer",     format: "bib",   language: "node",   runtime: "library", template_support: false, mime: "application/x-bibtex", preference: 90 },
 ]);
 
 const MIME_TO_FORMAT = Object.freeze({
@@ -159,6 +168,18 @@ const MIME_TO_FORMAT = Object.freeze({
   "application/x-tex": "tex",
   "application/x-latex": "tex",
   "text/x-tex": "tex",
+  "application/x-ndjson": "ndjson",
+  "application/ndjson": "ndjson",
+  "application/jsonl": "ndjson",
+  "application/x-jsonlines": "ndjson",
+  "text/tab-separated-values": "tsv",
+  "text/tsv": "tsv",
+  "text/calendar": "ics",
+  "text/x-vcalendar": "ics",
+  "text/vcard": "vcf",
+  "text/x-vcard": "vcf",
+  "application/x-bibtex": "bib",
+  "text/x-bibtex": "bib",
 });
 
 /**
@@ -263,15 +284,60 @@ function inferFormat(mime, ext) {
   const e = String(ext || "").replace(/^\./, "").toLowerCase();
   if (["pdf", "docx", "doc", "xlsx", "pptx", "ppt", "csv", "html", "htm", "md",
        "markdown", "mdown", "mkd", "svg", "txt", "json", "xml", "yaml", "yml",
-       "rtf", "odt", "epub", "tex", "latex", "ltx", "xhtml"].includes(e)) {
+       "rtf", "odt", "epub", "tex", "latex", "ltx", "xhtml",
+       "ndjson", "jsonl", "tsv", "ics", "ical", "ifb", "vcf", "vcard", "bib", "bibtex"].includes(e)) {
     if (e === "yml") return "yaml";
     if (e === "htm" || e === "xhtml") return "html";
     if (e === "markdown" || e === "mdown" || e === "mkd") return "md";
     if (e === "latex" || e === "ltx") return "tex";
+    if (e === "jsonl") return "ndjson";
+    if (e === "ical" || e === "ifb") return "ics";
+    if (e === "vcard") return "vcf";
+    if (e === "bibtex") return "bib";
     return e;
   }
   if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"].includes(e)) return "image";
   return null;
+}
+
+/**
+ * Look up a generator by id. Returns undefined when unknown.
+ */
+function getGeneratorById(id) {
+  return GENERATORS.find(g => g.id === id);
+}
+
+/**
+ * Look up a parser by id. Returns undefined when unknown.
+ */
+function getParserById(id) {
+  return PARSERS.find(p => p.id === id);
+}
+
+/**
+ * Distinct list of formats supported by either parsers or generators.
+ * Pass { side: "parsers" | "generators" } to restrict.
+ */
+function listFormats({ side } = {}) {
+  const set = new Set();
+  if (side !== "generators") {
+    for (const p of PARSERS) for (const f of p.formats) set.add(f);
+  }
+  if (side !== "parsers") {
+    for (const g of GENERATORS) set.add(g.format);
+  }
+  return Array.from(set).sort();
+}
+
+/**
+ * MIME type for a format, derived from the highest-preference generator.
+ * Returns null when no generator declares a MIME for the format.
+ */
+function mimeForFormat(format) {
+  const cands = GENERATORS.filter(g => g.format === format);
+  if (!cands.length) return null;
+  cands.sort((a, b) => b.preference - a.preference);
+  return cands[0].mime;
 }
 
 function runtimeAllowed(p, runtime) {
@@ -352,6 +418,10 @@ function contentQualityScore(content, format, options = {}) {
   const sentences = text.split(/[.!?]+/).filter(Boolean).length;
   const headings = (text.match(/^#{1,6}\s/gm) || []).length;
   const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 10).length;
+  const listItems = (text.match(/^\s*(?:[-*+]|\d+\.)\s+\S/gm) || []).length;
+  const codeBlocks = (text.match(/```[\s\S]*?```/g) || []).length;
+  const links = (text.match(/\[[^\]]+\]\([^)]+\)/g) || []).length;
+  const tableRows = (text.match(/^\s*\|.+\|\s*$/gm) || []).length;
 
   if (bodyLen < QUALITY_INDICATORS.min_body_length.min) {
     issues.push('content_too_short');
@@ -403,12 +473,34 @@ function contentQualityScore(content, format, options = {}) {
     }
   }
 
+  // Repetition: same line repeated many times suggests templated/empty filler.
+  const lines = text.split(/\n/).map(l => l.trim()).filter(l => l.length > 8);
+  if (lines.length >= 6) {
+    const counts = new Map();
+    for (const l of lines) counts.set(l, (counts.get(l) || 0) + 1);
+    const maxRep = Math.max(...counts.values());
+    if (maxRep >= Math.max(4, Math.ceil(lines.length * 0.35))) {
+      warnings.push('repeated_lines');
+      score -= 10;
+    }
+  }
+
   return {
     score: Math.max(0, Math.round(score)),
     issues,
     warnings,
     passed: score >= 60,
-    detail: { bodyLen, sentences, headings, paragraphs, avgWords: sentences > 0 ? Math.round(text.split(/\s+/).length / sentences) : 0 },
+    detail: {
+      bodyLen,
+      sentences,
+      headings,
+      paragraphs,
+      listItems,
+      codeBlocks,
+      links,
+      tableRows,
+      avgWords: sentences > 0 ? Math.round(text.split(/\s+/).length / sentences) : 0,
+    },
   };
 }
 
@@ -442,7 +534,33 @@ function formatAdvice(format, useCase = '') {
     advice.alternatives.push('svg');
     advice.notes.push('Charts and graphs render well as SVG or PNG.');
   }
+  if ((uc.includes('cv') || uc.includes('resume') || uc.includes('curriculum') || uc.includes('currículum')) && lower !== 'pdf' && lower !== 'docx') {
+    advice.alternatives.push('pdf');
+    advice.notes.push('Resumes/CVs are typically delivered as PDF (or DOCX for editable versions).');
+  }
+  if ((uc.includes('book') || uc.includes('libro') || uc.includes('ebook') || uc.includes('novel')) && lower !== 'epub' && lower !== 'pdf') {
+    advice.alternatives.push('epub');
+    advice.notes.push('Long-form publications are best as EPUB (reflowable) or PDF (fixed layout).');
+  }
+  if ((uc.includes('calendar') || uc.includes('event') || uc.includes('calendario') || uc.includes('evento') || uc.includes('meeting')) && lower !== 'ics') {
+    advice.alternatives.push('ics');
+    advice.notes.push('Calendar events should use the ICS format for cross-app compatibility.');
+  }
+  if ((uc.includes('contact') || uc.includes('contacto') || uc.includes('vcard') || uc.includes('address book')) && lower !== 'vcf') {
+    advice.alternatives.push('vcf');
+    advice.notes.push('Contact records should use the VCF (vCard) format.');
+  }
+  if ((uc.includes('citation') || uc.includes('bibliograph') || uc.includes('reference')) && lower !== 'bib') {
+    advice.alternatives.push('bib');
+    advice.notes.push('Bibliographies are best stored as BibTeX (.bib) for use with LaTeX/Pandoc.');
+  }
+  if ((uc.includes('stream') || uc.includes('log') || uc.includes('event log')) && lower !== 'ndjson') {
+    advice.alternatives.push('ndjson');
+    advice.notes.push('Streaming or line-delimited records are best as NDJSON (JSON Lines).');
+  }
 
+  // Dedupe alternatives while preserving order
+  advice.alternatives = Array.from(new Set(advice.alternatives));
   return advice;
 }
 
@@ -456,6 +574,10 @@ module.exports = {
   dispatchParse,
   dispatchGenerate,
   formatAdvice,
+  getGeneratorById,
+  getParserById,
   inferFormat,
   integrity,
+  listFormats,
+  mimeForFormat,
 };

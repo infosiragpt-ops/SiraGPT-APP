@@ -32,6 +32,12 @@ async function forkJoin({ subTasks = [], user, options = {} }) {
   if (subTasks.length > MAX_SUB_AGENTS) {
     return { ok: false, error: `max ${MAX_SUB_AGENTS} sub-tasks allowed`, results: [] };
   }
+  for (let i = 0; i < subTasks.length; i++) {
+    const t = subTasks[i];
+    if (!t || typeof t.goal !== 'string' || t.goal.trim().length === 0) {
+      return { ok: false, error: `sub-task ${i}: missing goal`, results: [] };
+    }
+  }
 
   const results = await Promise.allSettled(
     subTasks.map((task, idx) =>
@@ -74,7 +80,17 @@ async function chain({ subTasks = [], user, options = {} }) {
   if (!Array.isArray(subTasks) || subTasks.length === 0) {
     return { ok: false, error: 'no_sub_tasks', results: [] };
   }
+  if (subTasks.length > MAX_SUB_AGENTS) {
+    return { ok: false, error: `max ${MAX_SUB_AGENTS} sub-tasks allowed`, results: [] };
+  }
+  for (let i = 0; i < subTasks.length; i++) {
+    const t = subTasks[i];
+    if (!t || typeof t.goal !== 'string' || t.goal.trim().length === 0) {
+      return { ok: false, error: `sub-task ${i}: missing goal`, results: [] };
+    }
+  }
 
+  const stopOnFailure = options.stopOnFailure === true;
   const results = [];
   let context = null;
 
@@ -97,12 +113,23 @@ async function chain({ subTasks = [], user, options = {} }) {
       null
     ).catch((err) => ({ error: err?.message || String(err) }));
 
+    const stepOk = result?.ok !== false;
     results.push({
       index: idx,
       goal: task.goal,
-      ok: result?.ok !== false,
+      ok: stepOk,
       result,
     });
+
+    if (!stepOk && stopOnFailure) {
+      return {
+        ok: false,
+        pattern: 'chain',
+        results,
+        totalSubAgents: subTasks.length,
+        stoppedAt: idx,
+      };
+    }
 
     // Pass output to next step
     context = result?.output || result?.markdown || result?.summary || result;
@@ -120,9 +147,10 @@ async function chain({ subTasks = [], user, options = {} }) {
  * Decompose a complex goal into sub-tasks automatically.
  * Returns an array of { goal, context? } suitable for forkJoin or chain.
  */
-function decomposeGoal(goal, { maxParts = 4 } = {}) {
+function decomposeGoal(goal, { maxParts = 4, minFragmentLength = 3 } = {}) {
   if (!goal || typeof goal !== 'string') return [];
   const text = goal.trim();
+  if (!text) return [];
 
   // Simple heuristic: split by transition words into sub-tasks
   const separators = [
@@ -141,16 +169,29 @@ function decomposeGoal(goal, { maxParts = 4 } = {}) {
       const split = part.split(sep);
       for (const s of split) {
         const trimmed = s.trim();
-        if (trimmed) newParts.push(trimmed);
+        if (trimmed.length >= minFragmentLength) newParts.push(trimmed);
         if (newParts.length >= maxParts) break;
       }
     }
     if (newParts.length > parts.length) parts = newParts;
   }
 
-  return parts.slice(0, maxParts).map((g, idx) => ({
+  // Dedupe (case-insensitive) preserving order.
+  const seen = new Set();
+  const unique = [];
+  for (const p of parts) {
+    const key = p.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(p);
+    }
+  }
+  const finalParts = unique.slice(0, maxParts);
+  const totalParts = finalParts.length;
+
+  return finalParts.map((g, idx) => ({
     goal: g,
-    context: { partIndex: idx, totalParts: Math.min(parts.length, maxParts) },
+    context: { partIndex: idx, totalParts },
   }));
 }
 

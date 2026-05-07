@@ -1241,6 +1241,23 @@ function classifyTaskError(err) {
   if (msg.includes('missing') && (msg.includes('taskid') || msg.includes('required')))
     return { retryable: false, reason: 'validation-error' };
 
+  // Non-retryable: model unavailable / decommissioned / typo'd model id —
+  // retrying with the same model id will fail identically. Operator must
+  // update the model selection.
+  if (msg.includes('model_not_found') || msg.includes('does not exist') ||
+      msg.includes('deprecated model') || msg.includes('decommissioned') ||
+      msg.includes('has been retired') || msg.includes('no such model'))
+    return { retryable: false, reason: 'model-unavailable' };
+
+  // Non-retryable: payload too large — same prompt/file will fail again.
+  if (msg.includes('payload too large') || msg.includes('request entity too large') ||
+      code === '413')
+    return { retryable: false, reason: 'payload-too-large' };
+
+  // Non-retryable: 501 Not Implemented — feature missing on upstream.
+  if (code === '501' || msg.includes('not implemented'))
+    return { retryable: false, reason: 'not-implemented' };
+
   // Retryable: rate limits (any rate / 429 / too many)
   if (code.includes('rate_limit') || msg.includes('rate limit') || msg.includes('rate_limit') || msg.includes('too many requests') || code.startsWith('429'))
     return { retryable: true, reason: 'rate-limited', ttlMs: withJitter(15_000) };
@@ -1257,6 +1274,16 @@ function classifyTaskError(err) {
       msg.includes('epipe') || msg.includes('hang up') || msg.includes('socket') ||
       code === '408' || code === '504' || code.startsWith('408') || code.startsWith('504'))
     return { retryable: true, reason: 'network-timeout', ttlMs: withJitter(5_000) };
+
+  // Retryable: TLS/SSL handshake hiccups — usually transient (clock skew,
+  // intermediate proxy refresh). Cert *expired* on our side wouldn't fix
+  // itself, but we still classify retryable so the operator sees the
+  // pattern in retry telemetry rather than a hard fail on first call.
+  if (msg.includes('cert_has_expired') || msg.includes('unable to verify') ||
+      msg.includes('self signed certificate') || msg.includes('self-signed certificate') ||
+      msg.includes('depth_zero_self_signed') || msg.includes('ssl handshake') ||
+      msg.includes('tls handshake') || msg.includes('handshake failure'))
+    return { retryable: true, reason: 'ssl-error', ttlMs: withJitter(8_000) };
 
   // Retryable: server errors (5xx)
   if (code.startsWith('5') || msg.includes('internal server') || msg.includes('service unavailable') || msg.includes('bad gateway'))
