@@ -105,12 +105,10 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const LG_ITEM = cn(
   "relative isolate cursor-pointer rounded-xl px-2.5 py-2 text-sm font-medium",
   "text-foreground/85 transition-all duration-200",
-  "focus:bg-white/70 focus:text-foreground focus:backdrop-blur-md",
-  "data-[highlighted]:bg-white/70 data-[highlighted]:text-foreground data-[highlighted]:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.6)]",
-  "dark:focus:bg-white/10 dark:data-[highlighted]:bg-white/10",
-  "dark:data-[highlighted]:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]",
+  "focus:bg-muted/80 focus:text-foreground focus:backdrop-blur-md",
+  "data-[highlighted]:bg-muted/80 data-[highlighted]:text-foreground",
 )
-const LG_SEP = "my-1 bg-white/30 dark:bg-white/10"
+const LG_SEP = "my-1 bg-border/60"
 
 const formatSidebarChatTitle = (value: unknown) => {
   return String(value || "")
@@ -855,10 +853,10 @@ export function AppSidebar() {
                 onPointerDown={markNewChatIntent}
                 onClick={handleNewChat}
                 data-sidebar="menu-button"
-                className="group/nav peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 group-has-[[data-sidebar=menu-action]]/menu-item:pr-8 aria-disabled:pointer-events-none aria-disabled:opacity-50 group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2 [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 bg-white text-gray-900 hover:bg-gray-100 active:bg-gray-200 disabled:opacity-50 dark:bg-zinc-100 dark:text-gray-900 dark:hover:bg-zinc-200 dark:active:bg-zinc-300"
+                className="group/nav peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 group-has-[[data-sidebar=menu-action]]/menu-item:pr-8 aria-disabled:pointer-events-none aria-disabled:opacity-50 group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2 [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent/80 active:bg-sidebar-accent/60 disabled:opacity-50"
               >
                 <PenSquare className="h-4 w-4 text-indigo-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 text-gray-900">{t("newChat")}</span>
+                <span className="group-data-[state=closed]:hidden -ml-0.2 text-sidebar-accent-foreground">{t("newChat")}</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
@@ -881,7 +879,7 @@ export function AppSidebar() {
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={gpt.iconUrl} alt="" className="h-4 w-4 rounded-full object-cover" />
                     ) : (
-                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-purple-100 text-[10px] text-purple-700">
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-purple-100 dark:bg-purple-900/40 text-[10px] text-purple-700 dark:text-purple-300">
                         {gpt.iconUrl}
                       </span>
                     )
@@ -1433,11 +1431,10 @@ export function AppSidebar() {
                   side="top"
                   sideOffset={12}
                   className={cn(
-                    // Liquid-glass surface
+                    // Liquid-glass surface — CSS variables auto-switch per theme
                     "w-64 overflow-hidden rounded-2xl p-1.5",
-                    "border border-white/30 bg-white/55 backdrop-blur-2xl backdrop-saturate-150",
-                    "dark:border-white/10 dark:bg-neutral-900/55",
-                    // Outer ambient shadow + inner top highlight in one declaration
+                    "border border-border/50 bg-popover/75 backdrop-blur-2xl backdrop-saturate-150",
+                    // Outer ambient shadow + inner top highlight
                     "shadow-[0_12px_48px_-12px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.55)]",
                     "dark:shadow-[0_12px_48px_-12px_rgba(0,0,0,0.55),inset_0_1px_0_0_rgba(255,255,255,0.08)]",
                   )}
