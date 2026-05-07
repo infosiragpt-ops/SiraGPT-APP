@@ -308,6 +308,7 @@ const pythonExec = {
       return { ok: false, error: 'python_exec requires a non-empty "source" string' };
     }
     ctx.onEvent?.({ type: 'tool_call', tool: 'python_exec', preview: previewText(source, 400), language: 'python' });
+    ctx.onEvent?.({ type: 'stage', label: 'Ejecutando código Python', pct: 20 });
     const r = await sandbox.run({
       language: 'python',
       source,
@@ -328,6 +329,7 @@ const pythonExec = {
       stdoutTruncated: rawStdout.length > 4000,
       stderrTruncated: rawStderr.length > 2000,
     };
+    ctx.onEvent?.({ type: 'stage', label: 'Capturando salida', pct: 90 });
     ctx.onEvent?.({
       type: 'tool_output',
       tool: 'python_exec',
@@ -504,6 +506,7 @@ const createDocument = {
       language: 'python',
       codePreview: previewText(python, 400),
     });
+    ctx.onEvent?.({ type: 'stage', label: 'Preparando entorno Python', pct: 5 });
 
     // Inject OUT_PATH env into the script via os.environ before the
     // agent's code runs. Some models still save to a local filename
@@ -533,6 +536,7 @@ const createDocument = {
       '        shutil.copyfile(_candidate, OUT_PATH)',
     ].join('\n');
 
+    ctx.onEvent?.({ type: 'stage', label: 'Ejecutando script Python', pct: 15 });
     const r = await sandbox.run({
       language: 'python',
       source: wrapped,
@@ -552,6 +556,7 @@ const createDocument = {
       return payload;
     }
 
+    ctx.onEvent?.({ type: 'stage', label: 'Procesando archivo generado', pct: 85 });
     const raw = fs.readFileSync(tmpOut);
 
     // Heuristic validation is now advisory: it runs, but it does NOT

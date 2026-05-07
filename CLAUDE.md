@@ -116,15 +116,15 @@ npm run type-check     # TSC completo
 - `fetch-instrument.js` — OTel-instrumented fetch with header sanitization
 - `circuit-breaker.js` — Circuit breaker for external service resilience
 - `async-handler.js` — Enhanced Express error wrapper with guard integration
+- `retry-with-backoff.js` — Retry wrapper with exponential backoff, jitter, circuit breaker delegation
+- `error-telemetry.js` — Structured error reporter factory bridging to OTel spans
+- `agent-collaboration.js` — Multi-agent coordination (fork-join, chain, vote, review) with guard, retry, circuit breaker
+- `progress-stream.js` — Unified SSE progress reporter with stage transitions, heartbeat, elapsed tracking
 
 ## Next Improvement Areas
-1. **Self-healing agent retry** — use classifyTaskError() + circuit breaker in job scheduler
-2. **Agent collaboration** — multi-agent coordination patterns
-3. **Service health probes** — endpoint health monitoring
-4. **Rate limiting** — Redis-backed rate limiter for API endpoints
-5. **Error telemetry** — structured error reporting with OTel spans
-6. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
-7. **Artifact streaming** — SSE-based artifact progress for large files
+1. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
+2. **Service health probes** — endpoint health monitoring
+3. **Rate limiting** — Redis-backed rate limiter for API endpoints
 
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
