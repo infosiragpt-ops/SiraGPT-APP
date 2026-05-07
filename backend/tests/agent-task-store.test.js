@@ -659,6 +659,35 @@ test('agent task store: pruneAndCleanup runs prune then orphan-cleanup', () => {
   assert.equal(result.cleanup.removed, 2);
 });
 
+test('agent task store: deleteTaskSnapshot enforces ownership and refuses active tasks', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-delete-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 'd-done', userId: 'alice', status: 'completed' });
+  taskStore.writeTaskSnapshot({ taskId: 'd-live', userId: 'alice', status: 'running' });
+
+  // Wrong user — refused
+  const wrong = taskStore.deleteTaskSnapshot('d-done', 'bob');
+  assert.equal(wrong.ok, false);
+  assert.equal(wrong.reason, 'not_found_or_forbidden');
+  assert.ok(taskStore.readTaskSnapshot('d-done'));
+
+  // Active task — refused without force
+  const live = taskStore.deleteTaskSnapshot('d-live', 'alice');
+  assert.equal(live.ok, false);
+  assert.equal(live.reason, 'task_active');
+
+  // Force-delete an active task succeeds
+  const forced = taskStore.deleteTaskSnapshot('d-live', 'alice', { force: true });
+  assert.equal(forced.ok, true);
+  assert.equal(taskStore.readTaskSnapshot('d-live'), null);
+  assert.equal(taskStore.readIndex()['d-live'], undefined, 'index entry must be cleared');
+
+  // Owner deletes their own completed task
+  const ok = taskStore.deleteTaskSnapshot('d-done', 'alice');
+  assert.equal(ok.ok, true);
+  assert.equal(taskStore.readTaskSnapshot('d-done'), null);
+});
+
 test('agent task store: pruneTaskSnapshots enforces a maxFiles size cap and preserves running tasks', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-cap-'));
 

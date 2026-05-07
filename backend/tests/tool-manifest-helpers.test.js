@@ -258,6 +258,17 @@ test('summarizeUsage sorts by saturation descending and ignores zero counts', ()
   assert.ok(rows[0].saturation > rows[1].saturation);
 });
 
+test('manifest schema rejects duplicate items in allowed_formats', () => {
+  unregisterToolManifest('dupe_check');
+  assert.throws(() => {
+    registerToolManifest({
+      ...VALID_MANIFEST,
+      name: 'dupe_check',
+      allowed_formats: ['pdf', 'pdf'],
+    });
+  }, /invalid manifest/);
+});
+
 test('authorizeToolCall enforces destructive side-effects without approval', () => {
   unregisterToolManifest('destructive_tool');
   registerToolManifest({

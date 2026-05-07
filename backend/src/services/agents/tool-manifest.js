@@ -59,12 +59,14 @@ const toolManifestSchema = {
       type: "array",
       items: { type: "string", maxLength: 40 },
       maxItems: 20,
+      uniqueItems: true,
       description: "Extensions or MIME types this tool may produce. Empty when the tool doesn't write files.",
     },
     forbidden_formats: {
       type: "array",
       items: { type: "string", maxLength: 40 },
       maxItems: 20,
+      uniqueItems: true,
       description: "Extensions the tool must NEVER produce (e.g. web_search must never write a .docx).",
     },
     expected_errors: {

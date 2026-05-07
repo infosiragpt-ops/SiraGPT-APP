@@ -15,12 +15,14 @@ const {
   chooseGenerators,
   contentQualityScore,
   formatAdvice,
+  formatExtension,
   getGeneratorById,
   getParserById,
   inferFormat,
   integrity,
   listFormats,
   mimeForFormat,
+  validateGeneratorPlan,
 } = require('../src/services/sira/document-pipeline-registry');
 
 const NEW_FORMATS = [
@@ -267,4 +269,70 @@ test('formatAdvice: alternatives are unique', () => {
 test('formatAdvice: leaves "best" matching the chosen format', () => {
   const adv = formatAdvice('PDF', 'formal report');
   assert.equal(adv.best, 'pdf');
+});
+
+// ── formatExtension ────────────────────────────────────────────
+
+test('formatExtension: maps known formats to canonical extensions', () => {
+  assert.equal(formatExtension('pdf'), 'pdf');
+  assert.equal(formatExtension('docx'), 'docx');
+  assert.equal(formatExtension('ndjson'), 'ndjson');
+  assert.equal(formatExtension('ics'), 'ics');
+  assert.equal(formatExtension('image'), 'png');
+  assert.equal(formatExtension('IMAGE'), 'png');
+});
+
+test('formatExtension: returns null for unknown', () => {
+  assert.equal(formatExtension('whatever'), null);
+  assert.equal(formatExtension(''), null);
+  assert.equal(formatExtension(null), null);
+});
+
+test('formatExtension: round-trips with inferFormat for every supported format', () => {
+  const formats = ['pdf', 'docx', 'xlsx', 'pptx', 'csv', 'tsv', 'html', 'md',
+    'json', 'ndjson', 'xml', 'yaml', 'rtf', 'odt', 'epub', 'tex',
+    'ics', 'vcf', 'bib', 'svg', 'txt'];
+  for (const f of formats) {
+    const ext = formatExtension(f);
+    assert.ok(ext, `format ${f} must have an extension`);
+    assert.equal(inferFormat(null, ext), f, `${f} -> ${ext} -> ${inferFormat(null, ext)}`);
+  }
+});
+
+// ── validateGeneratorPlan ──────────────────────────────────────
+
+test('validateGeneratorPlan: rejects null/undefined plans', () => {
+  assert.deepEqual(validateGeneratorPlan('pdf', null).issues, ['plan_missing']);
+  assert.deepEqual(validateGeneratorPlan('pdf', undefined).issues, ['plan_missing']);
+});
+
+test('validateGeneratorPlan: tabular formats need rows', () => {
+  assert.equal(validateGeneratorPlan('csv', { rows: [] }).ok, false);
+  assert.equal(validateGeneratorPlan('csv', { rows: [{ a: 1 }] }).ok, true);
+  assert.equal(validateGeneratorPlan('csv', [{ a: 1 }]).ok, true);
+  assert.equal(validateGeneratorPlan('xlsx', { data: [{ a: 1 }] }).ok, true);
+  assert.equal(validateGeneratorPlan('tsv', { rows: [] }).ok, false);
+});
+
+test('validateGeneratorPlan: ndjson/ics/vcf need their respective collections', () => {
+  assert.equal(validateGeneratorPlan('ndjson', { records: [] }).ok, false);
+  assert.equal(validateGeneratorPlan('ndjson', { records: [{ a: 1 }] }).ok, true);
+  assert.equal(validateGeneratorPlan('ics', { events: [{ summary: 's' }] }).ok, true);
+  assert.equal(validateGeneratorPlan('ics', {}).ok, false);
+  assert.equal(validateGeneratorPlan('vcf', { contacts: [{ name: 'n' }] }).ok, true);
+  assert.equal(validateGeneratorPlan('vcf', {}).ok, false);
+});
+
+test('validateGeneratorPlan: document formats accept body or sections', () => {
+  assert.equal(validateGeneratorPlan('docx', { body: 'hello' }).ok, true);
+  assert.equal(validateGeneratorPlan('docx', { markdown: '# h' }).ok, true);
+  assert.equal(validateGeneratorPlan('docx', { sections: [{ heading: 'a' }] }).ok, true);
+  assert.equal(validateGeneratorPlan('docx', 'plain string body ok').ok, true);
+  assert.equal(validateGeneratorPlan('docx', {}).ok, false);
+});
+
+test('validateGeneratorPlan: lenient for formats without specific shape rules', () => {
+  // svg/json/png have no specific row/event shape — empty object is fine.
+  assert.equal(validateGeneratorPlan('json', {}).ok, true);
+  assert.equal(validateGeneratorPlan('svg', { svg: '<svg/>' }).ok, true);
 });

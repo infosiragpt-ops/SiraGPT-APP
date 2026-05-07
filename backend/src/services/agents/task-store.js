@@ -332,6 +332,27 @@ function listTaskSnapshotsForUser(userId, { limit = 50, useIndex = true } = {}) 
     .slice(0, limit);
 }
 
+/**
+ * Delete a task snapshot if it belongs to `userId`. Refuses to delete
+ * a running/queued task unless `force` is set, so a panicked user
+ * can't accidentally yank an in-flight job. Returns
+ * { ok, reason? } so callers branch on stable codes.
+ */
+function deleteTaskSnapshot(taskId, userId, { force = false } = {}) {
+  const snapshot = getTaskSnapshotForUser(taskId, userId);
+  if (!snapshot) return { ok: false, reason: 'not_found_or_forbidden' };
+  if (!force && (snapshot.status === 'running' || snapshot.status === 'queued')) {
+    return { ok: false, reason: 'task_active' };
+  }
+  try {
+    fs.unlinkSync(snapshotPathFor(taskId));
+  } catch (err) {
+    if (err.code !== 'ENOENT') return { ok: false, reason: 'unlink_failed' };
+  }
+  try { removeFromIndex(taskId); } catch { /* index is best-effort */ }
+  return { ok: true };
+}
+
 function pruneTaskSnapshots({
   retentionMs = DEFAULT_RETENTION_MS,
   maxFiles = DEFAULT_MAX_FILES,
@@ -935,6 +956,7 @@ module.exports = {
   compactAllTerminalTasks,
   compactSnapshotEvents,
   compressSnapshotBytes,
+  deleteTaskSnapshot,
   findStaleRunningTasks,
   getLatestTaskForChat,
   getRunningTasksForUser,

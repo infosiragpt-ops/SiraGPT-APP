@@ -340,6 +340,94 @@ function mimeForFormat(format) {
   return cands[0].mime;
 }
 
+// Canonical filesystem extension (no leading dot) for a logical format.
+// Used when persisting generator output to disk and when suggesting a
+// download filename. Stays in lock-step with `inferFormat`.
+const FORMAT_TO_EXTENSION = Object.freeze({
+  pdf: "pdf", doc: "doc", docx: "docx", xlsx: "xlsx", pptx: "pptx", ppt: "ppt",
+  csv: "csv", html: "html", md: "md", svg: "svg", txt: "txt", json: "json",
+  xml: "xml", yaml: "yaml", rtf: "rtf", odt: "odt", epub: "epub", tex: "tex",
+  ndjson: "ndjson", tsv: "tsv", ics: "ics", vcf: "vcf", bib: "bib",
+  png: "png", image: "png",
+});
+
+/**
+ * Canonical filesystem extension (without leading dot) for a logical
+ * format. Returns null for unknown formats.
+ */
+function formatExtension(format) {
+  if (!format) return null;
+  return FORMAT_TO_EXTENSION[String(format).toLowerCase()] || null;
+}
+
+/**
+ * Lightweight schema check on a generator plan. Catches obvious shape bugs
+ * (empty plans, tabular formats with no rows, etc.) before invoking a real
+ * generator that might fail with a less helpful error.
+ *
+ * Returns { ok: true } or { ok: false, issues: [...] }.
+ */
+function validateGeneratorPlan(format, plan) {
+  const issues = [];
+  const fmt = String(format || "").toLowerCase();
+
+  if (plan === null || plan === undefined) {
+    issues.push("plan_missing");
+    return { ok: false, issues };
+  }
+  if (typeof plan !== "object" && typeof plan !== "string") {
+    issues.push("plan_must_be_object_or_string");
+    return { ok: false, issues };
+  }
+
+  // Tabular formats expect rows
+  if (["csv", "tsv", "xlsx"].includes(fmt)) {
+    const rows = plan.rows || plan.data || (Array.isArray(plan) ? plan : null);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      issues.push("tabular_plan_needs_rows");
+    }
+  }
+
+  // ndjson expects an iterable of records
+  if (fmt === "ndjson") {
+    const records = plan.records || plan.rows || (Array.isArray(plan) ? plan : null);
+    if (!Array.isArray(records) || records.length === 0) {
+      issues.push("ndjson_plan_needs_records");
+    }
+  }
+
+  // ics expects events
+  if (fmt === "ics") {
+    const events = plan.events || (Array.isArray(plan) ? plan : null);
+    if (!Array.isArray(events) || events.length === 0) {
+      issues.push("ics_plan_needs_events");
+    }
+  }
+
+  // vcf expects contacts
+  if (fmt === "vcf") {
+    const contacts = plan.contacts || (Array.isArray(plan) ? plan : null);
+    if (!Array.isArray(contacts) || contacts.length === 0) {
+      issues.push("vcf_plan_needs_contacts");
+    }
+  }
+
+  // Document formats benefit from a body/sections/markdown field
+  if (["docx", "pdf", "rtf", "odt", "epub", "html", "md", "tex"].includes(fmt)) {
+    const hasContent =
+      typeof plan === "string" ||
+      typeof plan.body === "string" ||
+      typeof plan.markdown === "string" ||
+      typeof plan.html === "string" ||
+      Array.isArray(plan.sections);
+    if (!hasContent) {
+      issues.push("document_plan_needs_body_or_sections");
+    }
+  }
+
+  return { ok: issues.length === 0, issues };
+}
+
 function runtimeAllowed(p, runtime) {
   if (p.language === "python" && !runtime.python) return false;
   if (p.language === "node" && !runtime.node) return false;
@@ -568,16 +656,19 @@ module.exports = {
   PARSERS,
   GENERATORS,
   MIME_TO_FORMAT,
+  FORMAT_TO_EXTENSION,
   chooseParsers,
   chooseGenerators,
   contentQualityScore,
   dispatchParse,
   dispatchGenerate,
   formatAdvice,
+  formatExtension,
   getGeneratorById,
   getParserById,
   inferFormat,
   integrity,
   listFormats,
   mimeForFormat,
+  validateGeneratorPlan,
 };
