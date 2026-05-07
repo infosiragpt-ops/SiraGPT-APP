@@ -16,6 +16,7 @@ const {
   contentQualityScore,
   formatAdvice,
   formatExtension,
+  inspectFormat,
   getGeneratorById,
   getParserById,
   inferFormat,
@@ -335,4 +336,53 @@ test('validateGeneratorPlan: lenient for formats without specific shape rules', 
   // svg/json/png have no specific row/event shape — empty object is fine.
   assert.equal(validateGeneratorPlan('json', {}).ok, true);
   assert.equal(validateGeneratorPlan('svg', { svg: '<svg/>' }).ok, true);
+});
+
+// ── inspectFormat ──────────────────────────────────────────────
+
+test('inspectFormat: returns null for unknown formats', () => {
+  assert.equal(inspectFormat('asdf'), null);
+  assert.equal(inspectFormat(null), null);
+  assert.equal(inspectFormat(''), null);
+});
+
+test('inspectFormat: pdf summary lists OCR + layout capabilities', () => {
+  const s = inspectFormat('pdf');
+  assert.equal(s.format, 'pdf');
+  assert.equal(s.extension, 'pdf');
+  assert.equal(s.mime, 'application/pdf');
+  assert.ok(s.parsers > 0 && s.generators > 0);
+  assert.equal(s.canParse, true);
+  assert.equal(s.canGenerate, true);
+  assert.equal(s.capabilities.ocr, true);
+  assert.equal(s.capabilities.layout, true);
+  assert.ok(s.bestParser);
+  assert.ok(s.bestGenerator);
+});
+
+test('inspectFormat: ndjson is generate-only', () => {
+  const s = inspectFormat('ndjson');
+  assert.equal(s.canGenerate, true);
+  assert.equal(s.canParse, false);
+  assert.equal(s.bestGenerator, 'ndjson-writer');
+  assert.equal(s.bestParser, null);
+});
+
+test('inspectFormat: respects runtime profile', () => {
+  // Pure-node runtime: PDF generators that need binary become unavailable.
+  const noBinary = { python: true, node: true, binary: false };
+  const s = inspectFormat('pdf', noBinary);
+  assert.equal(s.canParse, true); // some python parsers still work
+  // Highest-preference generator (playwright-pdf) requires binary; verify
+  // bestGenerator is one that's actually node-library-based.
+  if (s.bestGenerator) {
+    const g = require('../src/services/sira/document-pipeline-registry').getGeneratorById(s.bestGenerator);
+    assert.notEqual(g.runtime, 'binary');
+  }
+});
+
+test('inspectFormat: csv reports tables capability', () => {
+  const s = inspectFormat('csv');
+  assert.equal(s.capabilities.tables, true);
+  assert.equal(s.extension, 'csv');
 });

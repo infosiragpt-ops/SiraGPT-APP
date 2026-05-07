@@ -361,6 +361,49 @@ function formatExtension(format) {
 }
 
 /**
+ * Capability summary for a format. Returns null when unknown to either
+ * parsers or generators. The agent can call this to decide whether a
+ * given format is reachable in the current runtime profile, what MIME
+ * type it should advertise, and whether parsers exist.
+ */
+function inspectFormat(format, runtime = { python: true, node: true, binary: true }) {
+  if (!format) return null;
+  const fmt = String(format).toLowerCase();
+
+  const parserList = PARSERS.filter(p => p.formats.includes(fmt));
+  const generatorList = GENERATORS.filter(g => g.format === fmt);
+
+  if (parserList.length === 0 && generatorList.length === 0) return null;
+
+  const allowedParsers = parserList.filter(p => runtimeAllowed(p, runtime));
+  const allowedGenerators = generatorList.filter(g => runtimeAllowed(g, runtime));
+
+  // Capability flags rolled up from any allowed parser
+  const cap = (key) => allowedParsers.some(p => !!p[key]);
+
+  return {
+    format: fmt,
+    extension: formatExtension(fmt),
+    mime: mimeForFormat(fmt),
+    parsers: parserList.length,
+    generators: generatorList.length,
+    parsersAvailable: allowedParsers.length,
+    generatorsAvailable: allowedGenerators.length,
+    canParse: allowedParsers.length > 0,
+    canGenerate: allowedGenerators.length > 0,
+    capabilities: {
+      ocr: cap("ocr"),
+      tables: cap("tables"),
+      formulas: cap("formulas"),
+      layout: cap("layout"),
+      reading_order: cap("reading_order"),
+    },
+    bestParser: allowedParsers.sort((a, b) => b.preference - a.preference)[0]?.id || null,
+    bestGenerator: allowedGenerators.sort((a, b) => b.preference - a.preference)[0]?.id || null,
+  };
+}
+
+/**
  * Lightweight schema check on a generator plan. Catches obvious shape bugs
  * (empty plans, tabular formats with no rows, etc.) before invoking a real
  * generator that might fail with a less helpful error.
@@ -664,6 +707,7 @@ module.exports = {
   dispatchGenerate,
   formatAdvice,
   formatExtension,
+  inspectFormat,
   getGeneratorById,
   getParserById,
   inferFormat,
