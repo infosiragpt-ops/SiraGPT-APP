@@ -659,6 +659,21 @@ test('agent task store: pruneAndCleanup runs prune then orphan-cleanup', () => {
   assert.equal(result.cleanup.removed, 2);
 });
 
+test('agent task store: verifyAllSnapshots flags every broken file in one pass', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-verifyall-'));
+
+  taskStore.writeTaskSnapshot({ taskId: 'all-good-1', userId: 'u', status: 'completed' });
+  taskStore.writeTaskSnapshot({ taskId: 'all-good-2', userId: 'u', status: 'running' });
+  // Plant a corrupt file
+  fs.writeFileSync(taskStore.snapshotPathFor('all-bad'), '{not-json}');
+
+  const result = taskStore.verifyAllSnapshots();
+  assert.equal(result.total, 3);
+  assert.equal(result.healthy, 2);
+  assert.equal(result.broken.length, 1);
+  assert.equal(result.broken[0].taskId, 'all-bad');
+});
+
 test('agent task store: deleteTaskSnapshot enforces ownership and refuses active tasks', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-delete-'));
 

@@ -882,6 +882,26 @@ function verifySnapshotIntegrity(taskId) {
 }
 
 /**
+ * Run verifySnapshotIntegrity over every snapshot file. Returns
+ * { total, healthy, broken: [{ taskId, problems[] }...] }. Used by
+ * an admin health endpoint to surface drift between snapshots and
+ * the index without reading every JSON twice from the caller side.
+ */
+function verifyAllSnapshots() {
+  const dir = ensureDir();
+  const broken = [];
+  let total = 0;
+  for (const entry of fs.readdirSync(dir)) {
+    if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
+    const taskId = entry.slice(0, -5);
+    total++;
+    const result = verifySnapshotIntegrity(taskId);
+    if (!result.ok) broken.push({ taskId, problems: result.problems });
+  }
+  return { total, healthy: total - broken.length, broken };
+}
+
+/**
  * Run prune + orphan-artifact cleanup back-to-back. The two sweeps
  * are normally scheduled together (nightly cron); this wrapper saves
  * callers from having to coordinate the order (prune first, so newly
@@ -981,6 +1001,7 @@ module.exports = {
   snapshotPathFor,
   updateIndexForSnapshot,
   updateTaskSnapshot,
+  verifyAllSnapshots,
   verifySnapshotIntegrity,
   writeIndex,
   writeTaskSnapshot,
