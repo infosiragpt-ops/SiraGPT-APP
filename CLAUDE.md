@@ -23,7 +23,7 @@ SiraGPT es una plataforma AI full-stack (Next.js 14 + Express.js) con sistema mu
 ```bash
 npm run dev            # Next.js dev server (puerto 3000)
 npm run build          # Next.js build
-npm test               # Tests backend (Node --test) - 994 tests
+npm test               # Tests backend (Node --test) - ~2900 tests
 npm run lint           # ESLint (ratchet: max-warnings 97)
 npx tsc --noEmit --skipLibCheck   # TypeScript check
 npm run type-check     # TSC completo
@@ -52,7 +52,44 @@ npm run type-check     # TSC completo
 | create_timeline | visual-media-tools.js | Timeline visualization |
 | create_kanban_board | visual-media-tools.js | Kanban board SVG |
 
-## Test Files (994 tests)
+## Backend Reliability Utilities
+
+### `src/utils/async-guard.js`
+**AsyncGuard** — Resource management with timeout, cleanup, and FinalizationRegistry.
+- `guard.run(promise, opts)` — wraps a promise with timeout + abort signal
+- `guard.route(fn, opts)` — Express middleware wrapper with per-route labels
+- `GuardError` — thrown on timeout, enriched with `guardId`, `guardElapsedMs`
+- `FinalizationRegistry` — GC safety net for abandoned guards
+- `raceWithSignal(promise, signal)` — exported helper for AbortSignal integration
+- Tests: 42/42 passing
+
+### `src/utils/fetch-instrument.js`
+**FetchInstrument** — Global fetch patching with OTel tracing, header sanitization, timeout.
+- `install()` / `uninstall()` — replace `globalThis.fetch` with traced version
+- `sanitizeFetchInit(init)` — strips forbidden headers (Connection, Keep-Alive, etc.)
+- OTel spans per request with method, URL, status, duration attributes
+- Request/response body size metrics (bytes read/written)
+- Tests: 38/38 passing
+
+### `src/utils/circuit-breaker.js`
+**CircuitBreaker** — State machine (CLOSED/OPEN/HALF_OPEN) for external service resilience.
+- Rolling-window failure counting with configurable threshold
+- `call(fn, opts)` — guarded invocation with timeout (CircuitTimeoutError)
+- External AbortSignal integration (not counted as failures)
+- `CircuitOpenError` — fast-fail when breaker is OPEN
+- `forceState()` / `reset()` — manual intervention
+- `toJSON()` — metrics snapshot for monitoring
+- Tests: 33/33 passing
+
+### `src/utils/async-handler.js`
+**enhanced asyncHandler** — Express async route wrapper with guard integration.
+- Backward-compatible microtask-level error forwarding
+- Optional per-route timeout (`{ timeoutMs: 30_000 }`) via AsyncGuard
+- Headers-sent detection (`res.headersSent` / `res.writableEnded`) — no double-send
+- Sync-throw propagation from non-async handlers preserved
+- Tests: 12/12 passing
+
+## Test Files (~2900 tests)
 - `backend/tests/visual-media-tools.test.js` — 23+ tests for all visual tools
 - `backend/tests/agent-task-store.test.js` — 13+ tests for task-store
 - `backend/tests/agent-task-runner-classify.test.js` — 10 tests for error classifier
@@ -62,6 +99,10 @@ npm run type-check     # TSC completo
 - `backend/tests/tool-manifest-helpers.test.js` — budget + output format tests
 - `backend/tests/agent-task-durable-events.test.js` — durable event tests
 - `tests/agent-tools-improvements.test.ts` — agent tools hardening tests
+- `backend/tests/async-guard.test.js` — 42 tests for AsyncGuard
+- `backend/tests/fetch-instrument.test.js` — 38 tests for FetchInstrument
+- `backend/tests/circuit-breaker.test.js` — 33 tests for CircuitBreaker
+- `backend/tests/async-handler.test.js` — 12 tests for enhanced asyncHandler
 
 ## Tool Manifest Functions
 - `authorizeToolCall()` — clearance-based authorization
@@ -70,12 +111,18 @@ npm run type-check     # TSC completo
 - `validateManifest()` — schema validation
 - `listManifests()` — get all registered tool manifests
 
+## Backend Reliability Modules (completed ✅)
+- `async-guard.js` — Guarded async execution with timeout, cleanup, GC safety
+- `fetch-instrument.js` — OTel-instrumented fetch with header sanitization
+- `circuit-breaker.js` — Circuit breaker for external service resilience
+- `async-handler.js` — Enhanced Express error wrapper with guard integration
+
 ## Next Improvement Areas
-1. **Self-healing agent retry** — use classifyTaskError() in job scheduler
+1. **Self-healing agent retry** — use classifyTaskError() + circuit breaker in job scheduler
 2. **Agent collaboration** — multi-agent coordination patterns
 3. **Service health probes** — endpoint health monitoring
 4. **Rate limiting** — Redis-backed rate limiter for API endpoints
-5. **Error telemetry** — structured error reporting with context
+5. **Error telemetry** — structured error reporting with OTel spans
 6. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
 7. **Artifact streaming** — SSE-based artifact progress for large files
 
