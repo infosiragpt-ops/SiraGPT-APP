@@ -3,7 +3,7 @@ const crypto = require('crypto');
 
 const MB = 1024 * 1024;
 const DEFAULT_MAX_UPLOAD_MB = 100;
-const DEFAULT_MAX_UPLOAD_FILES = 10;
+const DEFAULT_MAX_UPLOAD_FILES = 50;
 
 const EXECUTABLE_EXTENSIONS = new Set([
   'exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'pif',
@@ -126,7 +126,7 @@ function resolveUploadLimits(env = process.env) {
   const fileSize = explicitMb
     ? explicitMb * MB
     : (env.ALLOW_UNBOUNDED_UPLOADS === 'true' ? Number.POSITIVE_INFINITY : DEFAULT_MAX_UPLOAD_MB * MB);
-  const files = Math.min(positiveInteger(env.MAX_UPLOAD_FILES) || DEFAULT_MAX_UPLOAD_FILES, 25);
+  const files = Math.min(positiveInteger(env.MAX_UPLOAD_FILES) || DEFAULT_MAX_UPLOAD_FILES, 100);
   return { fileSize, files };
 }
 

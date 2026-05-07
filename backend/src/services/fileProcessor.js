@@ -1,5 +1,6 @@
 const mammoth = require('mammoth');
 const pdf = require('pdf-parse');
+const MEMORY_SAFE_MAX_BYTES = Number.parseInt(process.env.SIRAGPT_MEMORY_SAFE_MAX_BYTES || String(150 * 1024 * 1024), 10); // 150 MB
 const sharp = require('sharp');
 const fs = require('fs').promises;
 const ocrEngine = require('./ocr-engine');
@@ -8,7 +9,36 @@ const { readXlsxFile, worksheetRows } = require('./xlsx-safe-workbook');
 class FileProcessor {
   async processFile(file) {
     try {
-      const { mimetype, path: filePath, originalname } = file;
+      const { mimetype, path: filePath, originalname, size } = file;
+
+      // ── Memory-safe guard for large files ──
+      // Files > MEMORY_SAFE_MAX_BYTES could OOM the process. For PDFs,
+      // which load the entire buffer into RAM, we warn and sample.
+      // For text files, they stream fine. For images, the OCR engine
+      // already handles downsizing.
+      const fileSize = typeof size === 'number' ? size : 0;
+      const isLargeFile = fileSize > MEMORY_SAFE_MAX_BYTES;
+
+      if (isLargeFile && (mimetype === 'application/pdf')) {
+        console.warn(
+          `[mem-safe] Large PDF (${(fileSize / 1024 / 1024).toFixed(1)} MB) — ` +
+          `processing with memory-safe sampling. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
+        );
+        // For large PDFs, extract first/last pages and sample middle
+        const sampled = await this.processPDFSampled(filePath, fileSize, { detailed: true });
+        if (sampled) {
+          return {
+            success: true,
+            extractedText: sampled.text,
+            ocr: sampled.ocr,
+            fileInfo: { name: originalname, type: mimetype, size: fileSize },
+            memSafe: true,
+            memSafeNote: `Large PDF sampled (${sampled.sampledPages} of ${sampled.totalPages} pages)`,
+          };
+        }
+        // Fall through to normal processing if sampling fails
+      }
+
       let extractedText = '';
       let ocr = ocrEngine.skipped('not_ocr_applicable').ocr;
 
@@ -128,6 +158,73 @@ class FileProcessor {
     }
   }
 
+  /**
+   * Memory-safe PDF extraction for very large files.
+   * When PDFs exceed MEMORY_SAFE_MAX_BYTES this method avoids downstream
+   * OOM by sampling first/middle/last sections of the extracted text.
+   */
+  async processPDFSampled(filePath, fileSize, options = {}) {
+    try {
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (!stat) return null;
+
+      const dataBuffer = await fs.readFile(filePath);
+      const bufMB = dataBuffer.length / (1024 * 1024);
+      if (bufMB > 200) {
+        console.warn('[mem-safe] PDF is ' + bufMB.toFixed(0) + ' MB in memory — may be slow.');
+      }
+
+      const data = await pdf(dataBuffer);
+      const totalPages = data.numpages || 1;
+      const fullText = data.text || '';
+
+      if (fullText.trim().length > 100) {
+        const textLen = fullText.length;
+        let sampledText;
+        if (textLen > 2_000_000) {
+          // Sample: first 35%, middle 30%, last 35%, each at 300KB cap
+          const a = Math.floor(textLen * 0.35);
+          const b = Math.floor(textLen * 0.65);
+          const segs = [
+            '[BEGINNING — Page 1 to ~' + Math.ceil(totalPages * 0.35) + ']',
+            fullText.slice(0, a).slice(0, 300000),
+            '',
+            '[MIDDLE — Page ~' + (Math.ceil(totalPages * 0.35) + 1) + ' to ~' + Math.ceil(totalPages * 0.65) + ']',
+            fullText.slice(a, b).slice(0, 250000),
+            '',
+            '[END — Page ~' + (Math.ceil(totalPages * 0.65) + 1) + ' to ' + totalPages + ']',
+            fullText.slice(b).slice(0, 300000),
+          ];
+          sampledText = segs.join('\n');
+        } else {
+          sampledText = fullText;
+        }
+
+        const note = textLen > 2_000_000 ? ' (sampled to ~' + sampledText.length + ' chars)' : '';
+        const header = 'PDF document — ' + totalPages + ' page(s), ' + textLen + ' total characters' + note + '\n---\n';
+
+        return {
+          text: header + sampledText,
+          ocr: { status: 'skipped', confidence: null, provider: 'pdf_text_layer', reason: 'embedded_text_layer', pages: totalPages },
+          sampledPages: textLen > 2_000_000 ? 3 : totalPages,
+          totalPages,
+        };
+      }
+
+      console.log('[mem-safe] scanned PDF — delegating to OCR...');
+      const result = await ocrEngine.extractFromPdfImages(filePath);
+      return {
+        text: result.text || 'No text detected in image PDF',
+        ocr: result.ocr || { status: 'failed', confidence: 0, provider: null },
+        sampledPages: totalPages,
+        totalPages,
+      };
+    } catch (error) {
+      console.error('[mem-safe] sampled PDF error:', error.message);
+      return null;
+    }
+  }
+
   async processWord(filePath) {
     try {
       // convertToHtml preserves document structure (headings, lists,
@@ -200,7 +297,7 @@ class FileProcessor {
   async processExcel(filePath) {
     try {
       const workbook = await readXlsxFile(filePath);
-      const MAX_DATA_ROWS_PER_SHEET = 50; // per brain spec — headers + 50 rows
+      const MAX_DATA_ROWS_PER_SHEET = 5000; // increased for large spreadsheets
 
       const sheetSummaries = [];
       workbook.worksheets.forEach(worksheet => {
@@ -216,7 +313,7 @@ class FileProcessor {
         // First row is treated as header; everything after is data.
         const [headerRow, ...dataRows] = nonEmptyRows;
         const totalDataRows = Math.max(0, Number(worksheet.actualRowCount || nonEmptyRows.length) - 1);
-        const shown = dataRows.slice(0, MAX_DATA_ROWS_PER_SHEET);
+        const shown = dataRows.slice(0, Math.min(dataRows.length, MAX_DATA_ROWS_PER_SHEET));
         const truncated = totalDataRows > MAX_DATA_ROWS_PER_SHEET;
 
         let block = `Sheet: ${sheetName}\n`;

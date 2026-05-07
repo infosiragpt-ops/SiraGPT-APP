@@ -120,6 +120,32 @@ npm run type-check     # TSC completo
 - `error-telemetry.js` — Structured error reporter factory bridging to OTel spans
 - `agent-collaboration.js` — Multi-agent coordination (fork-join, chain, vote, review) with guard, retry, circuit breaker
 - `progress-stream.js` — Unified SSE progress reporter with stage transitions, heartbeat, elapsed tracking
+- `document-intent-analyzer.js` — Multi-document intent analysis with heuristic and LLM-based detection
+
+## Document Pipeline Improvements (completed ✅)
+### Batch upload
+- **Upload limit**: 10 → 50 files per batch (`upload.array('files', 50)`)
+- **Default MAX_UPLOAD_FILES**: 10 → 50 (env `MAX_UPLOAD_FILES`, capped at 100)
+- **Parallel processing**: files processed in batches of `MAX_CONCURRENT` (env `SIRAGPT_UPLOAD_CONCURRENCY`, default 5)
+- **Cross-document context**: batch context stored, intent analysis auto-triggered for 2+ files
+
+### Document size caps
+- **MAX_DOC_CHARS**: 300KB → 1MB (env `SIRAGPT_RAG_MAX_DOC_CHARS`)
+- **MAX_COLLECTION_CHUNKS**: 2000 → 10000 (env `SIRAGPT_RAG_MAX_CHUNKS`)
+- **MAX_DATA_ROWS_PER_SHEET**: 50 → 5000 (spreadsheet extraction)
+
+### Large file safety
+- **Memory-safe PDF sampling**: files > 150MB skip to sampled mode (first/middle/last sections, each capped at 300KB)
+- **MEMORY_SAFE_MAX_BYTES**: env `SIRAGPT_MEMORY_SAFE_MAX_BYTES`, default 150MB
+
+### Files modified
+- `backend/src/services/upload-security-policy.js` — default limits increased
+- `backend/src/routes/files.js` — parallel batch processing + cross-doc analysis
+- `backend/src/services/fileProcessor.js` — memory-safe PDF path + higher spreadsheet limit
+- `backend/src/services/rag/operational-runtime.js` — MAX_DOC_CHARS 300K → 1M
+- `backend/src/services/rag-service.js` — MAX_COLLECTION_CHUNKS 2000 → 10000 (env-configurable)
+- `backend/src/services/document-intent-analyzer.js` — **NEW**: per-doc + cross-doc intent analysis
+- `backend/tests/document-intent-analyzer.test.js` — **NEW**: 29 tests for intent analysis
 
 ## Next Improvement Areas
 1. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)

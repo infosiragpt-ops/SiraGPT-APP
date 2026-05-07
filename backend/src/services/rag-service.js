@@ -38,7 +38,7 @@ const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
 const DEFAULT_CHUNK_SIZE = 1200;                 // approx tokens (~4 chars each)
 const DEFAULT_CHUNK_OVERLAP = 200;
-const MAX_COLLECTION_CHUNKS = 2000;              // safety cap per (user, collection)
+const MAX_COLLECTION_CHUNKS = Number.parseInt(process.env.SIRAGPT_RAG_MAX_CHUNKS || '10000', 10); // safety cap per (user, collection)
 
 // When query expansion is enabled we run *two* embeddings (original + expanded)
 // and take the max-similarity across both as each chunk's relevance. The

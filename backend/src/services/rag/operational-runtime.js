@@ -15,7 +15,7 @@
 const crypto = require('crypto');
 
 const DEFAULT_COLLECTION = 'default';
-const MAX_DOC_CHARS = Number.parseInt(process.env.SIRAGPT_RAG_MAX_DOC_CHARS || '300000', 10);
+const MAX_DOC_CHARS = Number.parseInt(process.env.SIRAGPT_RAG_MAX_DOC_CHARS || '1000000', 10);
 const MIN_DOC_CHARS = 80;
 const DEFAULT_RETRIEVAL_K = 8;
 const EVIDENCE_SNIPPET_CHARS = 1200;

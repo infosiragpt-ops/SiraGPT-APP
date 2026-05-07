@@ -83,7 +83,7 @@ test('upload policy rejects legacy binary .xls spreadsheets in the commercial co
 test('upload limits default to a bounded commercial ceiling unless explicitly overridden', () => {
   const limits = resolveUploadLimits({});
   assert.equal(limits.fileSize, 100 * 1024 * 1024);
-  assert.equal(limits.files, 10);
+  assert.equal(limits.files, 50);
 
   const tooLarge = validateUploadPolicy({
     originalName: 'large.pdf',

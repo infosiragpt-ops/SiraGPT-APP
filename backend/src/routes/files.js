@@ -13,6 +13,7 @@ const operationalRag = require('../services/rag/operational-runtime');
 const fs = require('fs').promises;
 const path = require('path');
 const OpenAI = require('openai');
+const documentIntentAnalyzer = require('../services/document-intent-analyzer');
 
 const router = express.Router();
 
@@ -149,26 +150,29 @@ async function unlinkQuiet(p) {
   try { await fs.unlink(p); } catch (_) { /* already gone */ }
 }
 
-// Upload files
-router.post('/upload', authenticateToken, upload.array('files', 10), async (req, res) => {
-  try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: 'No files uploaded' });
-    }
 
-    const processedFiles = [];
+// ─── Parallel batch processor ──────────────────────────────────────────────
+// Processes files in chunks of MAX_CONCURRENT to avoid overwhelming the
+// event loop, DB connection pool, and upstream API rate limits.
+const MAX_CONCURRENT = Number.parseInt(process.env.SIRAGPT_UPLOAD_CONCURRENCY || '5', 10);
 
-    for (const file of req.files) {
-      // Create the File row up-front (status='uploaded') so the state
-      // machine covers every stage the user can see — including the
-      // pre-validation / pre-extraction window. The frontend that
-      // already polls /processing-status (Phase 2.2) now lights up
-      // immediately instead of waiting for extraction to complete.
+/**
+ * Process files in parallel batches. Each batch goes through:
+ * DB record → validate → extract → thumbnail → OpenAI Files → RAG schedule.
+ * Returns results in the same order as the input files array.
+ * Controlled concurrency prevents overloading event loop and API rate limits.
+ */
+async function processFilesInParallel(files, userId, prismaClient) {
+  const results = new Array(files.length).fill(null);
+
+  for (let i = 0; i < files.length; i += MAX_CONCURRENT) {
+    const batch = files.slice(i, i + MAX_CONCURRENT);
+    const batchPromises = batch.map(async (file) => {
       let fileRecord = null;
       try {
-        fileRecord = await prisma.file.create({
+        fileRecord = await prismaClient.file.create({
           data: {
-            userId: req.user.id,
+            userId,
             filename: file.filename,
             originalName: file.originalname,
             mimeType: file.mimetype,
@@ -183,26 +187,16 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
       } catch (createError) {
         console.error('[files] could not create File row:', createError.message || createError);
         await unlinkQuiet(file.path);
-        processedFiles.push({
-          name: file.originalname,
-          size: file.size,
-          type: file.mimetype,
-          success: false,
-          error: 'No se pudo registrar el archivo en la base de datos.',
+        return {
+          name: file.originalname, size: file.size, type: file.mimetype,
+          success: false, error: 'No se pudo registrar el archivo en la base de datos.',
           code: 'db_create_failed',
-        });
-        continue;
+        };
       }
 
       try {
-        // Magic-byte detection — sees the *real* content type by reading
-        // the file's leading bytes. Two responsibilities:
-        //   1. Correct the mimetype when the browser misreported it
-        //      (octet-stream, spoof, Office-ZIP).
-        //   2. Reject the upload when the real type lands outside the
-        //      allowlist — multer's pre-gate trusted the declared mime,
-        //      so we close the spoofing loophole here.
-        await fileProcessingStatus.setStage(prisma, fileRecord.id, 'validating', { userId: req.user.id });
+        // ── Validate (magic bytes) ──
+        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'validating', { userId });
         const detection = await detectMime(file.path, file.mimetype);
         const policy = validateUploadPolicy({
           originalName: file.originalname,
@@ -212,136 +206,154 @@ router.post('/upload', authenticateToken, upload.array('files', 10), async (req,
           size: file.size,
         });
         if (!policy.ok) {
-          console.warn(
-            `[files] rejected ${file.originalname}: declared=${file.mimetype} ` +
-            `real=${detection.mime || 'unknown'} reason=${policy.code}`,
-          );
-          await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
-            userId: req.user.id,
-            error: `${policy.code}: ${policy.message}`,
-          });
+          console.warn(`[files] rejected ${file.originalname}: declared=${file.mimetype} real=${detection.mime || 'unknown'} reason=${policy.code}`);
+          await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: `${policy.code}: ${policy.message}` });
           await unlinkQuiet(file.path);
-          processedFiles.push({
-            id: fileRecord.id,
-            name: file.originalname,
-            size: file.size,
-            type: file.mimetype,
-            success: false,
-            error: policy.message,
-            code: policy.code,
-            detectedMime: detection.mime || null,
-            detectedExtension: detection.ext || null,
-          });
-          continue;
+          return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, success: false, error: policy.message, code: policy.code, detectedMime: detection.mime || null, detectedExtension: detection.ext || null };
         }
         if (policy.mimeType && policy.mimeType !== file.mimetype) {
-          console.log(`[files] mime corrected for ${file.originalname}: ${file.mimetype} → ${policy.mimeType}`);
           file.mimetype = policy.mimeType;
         }
 
-        // Process file content
-        await fileProcessingStatus.setStage(prisma, fileRecord.id, 'extracting', { userId: req.user.id });
+        // ── Extract text ──
+        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
         const result = await fileProcessor.processFile(file);
-
-        // Generate thumbnail for images
         const thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
 
-        // Upload to OpenAI Files API if it's a supported file type
+        // ── Upload to OpenAI Files API ──
         let openaiFileId = null;
-        if (file.mimetype === 'application/pdf' ||
-          file.mimetype.startsWith('text/') ||
-          file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-          file.mimetype === 'application/vnd.ms-powerpoint' ||
-          file.mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+        const oaMimes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
+        if (oaMimes.includes(file.mimetype) || file.mimetype.startsWith('text/')) {
           try {
-            const fileStream = await fs.readFile(file.path);
-            const openaiFile = await openai.files.create({
-              file: new File([fileStream], file.originalname, { type: file.mimetype }),
-              purpose: 'assistants'
-            });
-            openaiFileId = openaiFile.id;
-          } catch (openaiError) {
-            console.error('OpenAI file upload error:', openaiError);
-          }
+            const buf = await fs.readFile(file.path);
+            const oaFile = await openai.files.create({ file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' });
+            openaiFileId = oaFile.id;
+          } catch (openaiError) { console.error('OpenAI file upload error:', openaiError); }
         }
 
-        // Update the File row with the now-known mime / extractedText /
-        // openaiFileId. Stage stays at 'extracting' until the RAG
-        // schedule picks it up and transitions to chunking → embedding
-        // → indexing → ready (or failed). The state machine therefore
-        // never goes backwards.
-        fileRecord = await prisma.file.update({
+        // ── Update DB record ──
+        fileRecord = await prismaClient.file.update({
           where: { id: fileRecord.id },
-          data: {
-            mimeType: file.mimetype,
-            extractedText: result.extractedText,
-            openaiFileId: openaiFileId,
-          },
+          data: { mimeType: file.mimetype, extractedText: result.extractedText, openaiFileId },
         });
 
-        const ragQueued = scheduleDefaultRagIndex(req.user.id, fileRecord);
+        const ragQueued = scheduleDefaultRagIndex(userId, fileRecord);
         const ocrMeta = serializeOcrMeta(result);
         let analysis = null;
         try {
-          analysis = await documentIntelligence.analyzeFile(prisma, {
-            userId: req.user.id,
-            fileRecord,
-            extractionResult: result,
-            force: true,
-          });
-        } catch (analysisError) {
-          console.warn('[files] document analysis failed:', analysisError.message || analysisError);
-        }
+          analysis = await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
+        } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
 
-        processedFiles.push({
-          id: fileRecord.id,
-          name: file.originalname,
-          size: file.size,
-          type: file.mimetype,
-          url: `/uploads/${req.user.id}/${file.filename}`,
-          thumbnailUrl: thumbnailPath ? `/uploads/${req.user.id}/${path.basename(thumbnailPath)}` : null,
-          extractedText: result.extractedText,
-          ...ocrMeta,
-          ...serializeAnalysisMeta(analysis),
-          openaiFileId: openaiFileId,
-          ragIndexed: ragQueued ? 'queued' : 'skipped',
-          success: result.success,
-          error: result.error
-        });
+        return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, url: `/uploads/${userId}/${file.filename}`, thumbnailUrl: thumbnailPath ? `/uploads/${userId}/${path.basename(thumbnailPath)}` : null, extractedText: result.extractedText, ...ocrMeta, ...serializeAnalysisMeta(analysis), openaiFileId, ragIndexed: ragQueued ? 'queued' : 'skipped', success: result.success, error: result.error };
       } catch (error) {
         console.error('File processing error:', error);
-        // Pin the failure on the row created at the top of the loop so
-        // the state machine reflects "extraction blew up" instead of
-        // leaving the row stuck at 'validating' / 'extracting' forever.
-        if (fileRecord && fileRecord.id) {
-          await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
-            userId: req.user.id,
-            error: `processing: ${error && error.message ? error.message : String(error)}`,
-          });
-        }
-        processedFiles.push({
-          id: fileRecord ? fileRecord.id : undefined,
-          name: file.originalname,
-          size: file.size,
-          type: file.mimetype,
-          success: false,
-          ocrStatus: 'failed',
-          ocrConfidence: 0,
-          ocrProvider: null,
-          error: error.message
-        });
+        if (fileRecord?.id) { await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: `processing: ${error?.message || error}` }); }
+        return { id: fileRecord?.id, name: file.originalname, size: file.size, type: file.mimetype, success: false, ocrStatus: 'failed', ocrConfidence: 0, ocrProvider: null, error: error.message };
       }
+    });
+    const batchResults = await Promise.all(batchPromises);
+    for (let j = 0; j < batchResults.length; j++) results[i + j] = batchResults[j];
+  }
+  return results;
+}
+
+// Upload files — parallel batch processing
+router.post('/upload', authenticateToken, upload.array('files', 50), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
     }
 
+    const processedFiles = await processFilesInParallel(req.files, req.user.id, prisma);
+
+    // ── Cross-document context for batch uploads ──
+    // When multiple files are uploaded together, build a cross-document
+    // context that correlates content. This helps the chat infer intent.
+    const successFiles = processedFiles.filter(f => f.success && f.id && f.extractedText && f.extractedText.length > 200);
+    if (successFiles.length >= 2) {
+      scheduleCrossDocumentAnalysis(processedFiles, req.user.id).catch(err =>
+        console.warn('[files] cross-document analysis error:', err.message || err)
+      );
+    }
+
+    const ok = processedFiles.filter(f => f.success).length;
     res.json({
-      message: 'Files processed successfully',
-      files: processedFiles
+      message: ok === req.files.length
+        ? 'Files processed successfully'
+        : `${ok} of ${req.files.length} files processed`,
+      files: processedFiles,
     });
   } catch (error) {
     console.error('Upload error:', error);
     res.status(500).json({ error: 'File upload failed' });
   }
 });
+
+/**
+ * Schedule async cross-document analysis using the document-intent-analyzer.
+ * Correlates content across uploaded files, infers user intent, and stores
+ * structured analysis for the chat to reference later.
+ */
+function scheduleCrossDocumentAnalysis(processedFiles, userId) {
+  return new Promise(resolve => {
+    setImmediate(async () => {
+      try {
+        const fileIds = processedFiles.filter(f => f.success && f.id && f.extractedText?.length > 200).map(f => f.id);
+        if (fileIds.length < 2) { resolve(); return; }
+
+        const records = await prisma.file.findMany({
+          where: { id: { in: fileIds }, userId },
+          select: { id: true, originalName: true, extractedText: true, mimeType: true, size: true },
+        });
+
+        if (records.length < 2) { resolve(); return; }
+
+        // Convert to the format document-intent-analyzer expects
+        const docs = records.map(r => ({
+          id: r.id,
+          name: r.originalName,
+          text: r.extractedText || '',
+          mimeType: r.mimeType,
+          size: r.size,
+        }));
+
+        // Run intent analysis on the batch (heuristic-only, no LLM)
+        const intentResult = await documentIntentAnalyzer.analyzeBatch(docs);
+
+        // Also store a lightweight preview map for quick chat reference
+        // (keyed by userId + latest)
+        if (!global.__siraBatchContext) global.__siraBatchContext = new Map();
+        const batchKey = 'batch:' + userId + ':' + Date.now();
+        global.__siraBatchContext.set(batchKey, {
+          userId,
+          createdAt: new Date().toISOString(),
+          fileCount: records.length,
+          primaryIntent: intentResult.primaryIntent,
+          crossDocSummary: intentResult.crossDocSummary,
+          totalChars: docs.reduce((s, d) => s + d.text.length, 0),
+          files: records.map(r => ({
+            id: r.id, name: r.originalName, type: r.mimeType,
+            size: r.size,
+            chars: (r.extractedText || '').length,
+            preview: (r.extractedText || '').slice(0, 2000),
+          })),
+        });
+
+        // Cap store at 20 entries
+        if (global.__siraBatchContext.size > 20) {
+          const keys = [...global.__siraBatchContext.keys()];
+          keys.slice(0, keys.length - 20).forEach(k => global.__siraBatchContext.delete(k));
+        }
+
+        console.log('[files] intent analysis for ' + records.length + ' files: ' +
+          intentResult.primaryIntent + ' (batchId=' + intentResult.batchId + ')');
+      } catch (err) {
+        console.warn('[files] cross-document analysis failed:', err.message || err);
+      }
+      resolve();
+    });
+  });
+}
 
 /**
  * GET /api/files/:id/processing-status
