@@ -851,15 +851,15 @@ export function AppSidebar() {
               - label: color fade to primary on hover */}
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
-              <SidebarMenuButton
+              <button
                 onPointerDown={markNewChatIntent}
                 onClick={handleNewChat}
-                isActive={newChatPending || (isOnChatPage && !currentChat)}
-                className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
+                data-sidebar="menu-button"
+                className="group/nav peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 group-has-[[data-sidebar=menu-action]]/menu-item:pr-8 aria-disabled:pointer-events-none aria-disabled:opacity-50 group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2 [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 bg-white text-gray-900 hover:bg-gray-100 active:bg-gray-200 disabled:opacity-50 dark:bg-zinc-100 dark:text-gray-900 dark:hover:bg-zinc-200 dark:active:bg-zinc-300"
               >
                 <PenSquare className="h-4 w-4 text-indigo-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("newChat")}</span>
-              </SidebarMenuButton>
+                <span className="group-data-[state=closed]:hidden -ml-0.2 text-gray-900">{t("newChat")}</span>
+              </button>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
               <p>{t("newChat")}</p>

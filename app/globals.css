@@ -171,7 +171,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --sidebar-foreground: 216 29% 97%;
     --sidebar-primary: 253 100% 68%;
     --sidebar-primary-foreground: 216 29% 97%;
-    --sidebar-accent: 240 3.7% 16%;     /* #28282e — subtle hover highlight */
+    --sidebar-accent: 240 3.7% 15.9%;  /* #27272a — subtle hover highlight */
     --sidebar-accent-foreground: 240 4.8% 95%;  /* #f1f1f6 — high-contrast text on accent bg */
     --sidebar-border: 215 21% 11%;     /* #161B22 */
     --sidebar-ring: 253 100% 68%;
