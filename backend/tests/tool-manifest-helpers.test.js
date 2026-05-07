@@ -19,6 +19,8 @@ const {
   findToolsBySideEffect,
   getManifest,
   getRegistryStats,
+  getRemainingBudget,
+  incrementToolUsage,
   listManifests,
   registerToolManifest,
   unregisterToolManifest,
@@ -191,6 +193,47 @@ test('discovery helpers find tools by scope, data class, side effect, and output
 test('validateAllBuiltinManifests reports zero invalid manifests', () => {
   const result = validateAllBuiltinManifests();
   assert.equal(result.ok, true, `invalid: ${JSON.stringify(result.invalid)}`);
+});
+
+test('incrementToolUsage tracks counter and flags exhaustion at the manifest cap', () => {
+  const usage = {};
+  // python_exec has max_calls_per_task: 120 in the built-in manifest.
+  const first = incrementToolUsage('python_exec', usage);
+  assert.equal(first.ok, true);
+  assert.equal(first.current, 1);
+  assert.equal(first.exhausted, false);
+
+  // bash_exec cap is 60
+  for (let i = 0; i < 60; i++) incrementToolUsage('bash_exec', usage);
+  assert.equal(usage.bash_exec, 60);
+  const last = incrementToolUsage('bash_exec', usage, 0);
+  assert.equal(last.exhausted, true);
+
+  const unknown = incrementToolUsage('does_not_exist', usage);
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.reason, 'unknown_tool');
+});
+
+test('getRemainingBudget reports headroom and Infinity for unbounded tools', () => {
+  const usage = { python_exec: 5 };
+  const remain = getRemainingBudget('python_exec', usage);
+  assert.equal(remain.ok, true);
+  assert.equal(remain.current, 5);
+  assert.equal(remain.max, 120);
+  assert.equal(remain.remaining, 115);
+
+  // No-such-tool
+  const bad = getRemainingBudget('does_not_exist', usage);
+  assert.equal(bad.ok, false);
+});
+
+test('create_document allowed_formats has no duplicates', () => {
+  const m = getManifest('create_document');
+  const seen = new Set();
+  for (const ext of m.allowed_formats) {
+    assert.equal(seen.has(ext), false, `duplicate ${ext}`);
+    seen.add(ext);
+  }
 });
 
 test('authorizeToolCall enforces destructive side-effects without approval', () => {

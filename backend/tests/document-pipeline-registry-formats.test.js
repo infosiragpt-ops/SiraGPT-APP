@@ -123,3 +123,148 @@ test('registry: rtf falls back to node when binary unavailable', () => {
   assert.ok(generators.length >= 1);
   assert.equal(generators[0].id, 'rtf-writer');
 });
+
+// ── New formats: ndjson / tsv / ics / vcf / bib ─────────────────
+
+const EXTRA_FORMATS = [
+  { format: 'ndjson', ext: 'ndjson', mime: 'application/x-ndjson' },
+  { format: 'ndjson', ext: 'jsonl',  mime: 'application/jsonl' },
+  { format: 'tsv',    ext: 'tsv',    mime: 'text/tab-separated-values' },
+  { format: 'ics',    ext: 'ics',    mime: 'text/calendar' },
+  { format: 'ics',    ext: 'ical',   mime: 'text/calendar' },
+  { format: 'vcf',    ext: 'vcf',    mime: 'text/vcard' },
+  { format: 'vcf',    ext: 'vcard',  mime: 'text/x-vcard' },
+  { format: 'bib',    ext: 'bib',    mime: 'application/x-bibtex' },
+  { format: 'bib',    ext: 'bibtex', mime: 'text/x-bibtex' },
+];
+
+for (const { format, ext, mime } of EXTRA_FORMATS) {
+  test(`registry: ${format} resolves from mime "${mime}" and ext "${ext}"`, () => {
+    assert.equal(inferFormat(mime, null), format);
+    assert.equal(inferFormat(null, ext), format);
+  });
+  test(`registry: ${format} has at least one node generator`, () => {
+    const { generators } = chooseGenerators({ format, runtime: { python: false, node: true, binary: false } });
+    assert.ok(generators.length >= 1, `${format} needs a node generator`);
+  });
+}
+
+test('registry: getGeneratorById / getParserById lookups', () => {
+  assert.equal(getGeneratorById('exceljs').format, 'xlsx');
+  assert.equal(getGeneratorById('nonexistent'), undefined);
+  assert.ok(getParserById('docling').formats.includes('pdf'));
+  assert.equal(getParserById('nope'), undefined);
+});
+
+test('registry: listFormats covers parsers and generators', () => {
+  const all = listFormats();
+  for (const fmt of ['pdf', 'docx', 'xlsx', 'pptx', 'txt', 'json', 'ndjson', 'ics', 'vcf', 'bib', 'epub']) {
+    assert.ok(all.includes(fmt), `expected ${fmt} in listFormats() — got ${all.join(',')}`);
+  }
+  const onlyGen = listFormats({ side: 'generators' });
+  assert.ok(onlyGen.includes('rtf'));
+  assert.ok(!onlyGen.includes('image'));
+  const onlyParse = listFormats({ side: 'parsers' });
+  assert.ok(onlyParse.includes('image'));
+});
+
+test('registry: mimeForFormat returns highest-preference MIME', () => {
+  assert.equal(mimeForFormat('json'), 'application/json');
+  assert.equal(mimeForFormat('csv'), 'text/csv');
+  assert.equal(mimeForFormat('ics'), 'text/calendar');
+  assert.equal(mimeForFormat('unknown'), null);
+});
+
+// ── contentQualityScore extensions ──────────────────────────────
+
+test('contentQualityScore: detects markdown structure', () => {
+  const md = `# Heading
+
+This document has multiple paragraphs and some structure.
+Sentences explaining things, with reasonable length and clarity.
+
+## Second section
+
+- bullet one
+- bullet two
+- bullet three
+
+\`\`\`js
+const x = 1;
+\`\`\`
+
+See [docs](https://example.com) for more.`;
+  const r = contentQualityScore(md, 'md');
+  assert.equal(r.passed, true);
+  assert.ok(r.detail.headings >= 2);
+  assert.ok(r.detail.listItems >= 3);
+  assert.equal(r.detail.codeBlocks, 1);
+  assert.equal(r.detail.links, 1);
+});
+
+test('contentQualityScore: flags repeated lines', () => {
+  const repeated = ['# Title', '', ...Array(10).fill('Lorem ipsum dolor sit amet consectetur adipiscing.'), ''].join('\n');
+  const r = contentQualityScore(repeated, 'md');
+  assert.ok(r.warnings.includes('repeated_lines') || r.warnings.includes('contains_placeholders'));
+});
+
+test('contentQualityScore: empty / non-string returns score 0', () => {
+  assert.equal(contentQualityScore('', 'md').score, 0);
+  assert.equal(contentQualityScore(null, 'md').score, 0);
+  assert.equal(contentQualityScore(123, 'md').score, 0);
+});
+
+test('contentQualityScore: detects markdown table rows', () => {
+  const md = `# Report
+
+| Col A | Col B |
+|-------|-------|
+| 1     | 2     |
+| 3     | 4     |
+
+Conclusion paragraph with some explanatory sentences for context.`;
+  const r = contentQualityScore(md, 'md');
+  assert.ok(r.detail.tableRows >= 4);
+});
+
+// ── formatAdvice extensions ─────────────────────────────────────
+
+test('formatAdvice: recommends pdf/docx for resume', () => {
+  const adv = formatAdvice('txt', 'create my resume');
+  assert.ok(adv.alternatives.includes('pdf'));
+  assert.ok(adv.notes.some(n => /resume|cv/i.test(n)));
+});
+
+test('formatAdvice: recommends ics for calendar events', () => {
+  const adv = formatAdvice('json', 'export my calendar of meetings');
+  assert.ok(adv.alternatives.includes('ics'));
+});
+
+test('formatAdvice: recommends vcf for contacts', () => {
+  const adv = formatAdvice('csv', 'export contact records');
+  assert.ok(adv.alternatives.includes('vcf'));
+});
+
+test('formatAdvice: recommends epub for ebook', () => {
+  const adv = formatAdvice('docx', 'publish my novel as an ebook');
+  assert.ok(adv.alternatives.includes('epub'));
+});
+
+test('formatAdvice: recommends ndjson for streaming logs', () => {
+  const adv = formatAdvice('json', 'stream of event log records');
+  assert.ok(adv.alternatives.includes('ndjson'));
+});
+
+test('formatAdvice: alternatives are unique', () => {
+  const adv = formatAdvice('json', 'data table chart calendar contact');
+  const seen = new Set();
+  for (const a of adv.alternatives) {
+    assert.ok(!seen.has(a), `duplicate alternative ${a}`);
+    seen.add(a);
+  }
+});
+
+test('formatAdvice: leaves "best" matching the chosen format', () => {
+  const adv = formatAdvice('PDF', 'formal report');
+  assert.equal(adv.best, 'pdf');
+});
