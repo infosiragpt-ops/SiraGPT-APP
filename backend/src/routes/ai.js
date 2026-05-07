@@ -6,6 +6,7 @@ const { tryConsumePlanQuota } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
+const contextWindow = require("../services/context-window");
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const googleMCPService = require('../services/google-mcp');
@@ -1254,7 +1255,14 @@ router.post(
         const hasImageFiles = processedFiles.some(f => f.mimeType && f.mimeType.startsWith('image/'));
 
         // finalPrompt = `${prompt}\n\nAttached files:\n${fileContext}`;
-        const MAX_CONTEXT_TOKENS = 200000;
+        // File-context cap scales with the selected model's actual context window
+        // so long-context models (Gemini 1M/2M, Claude Sonnet with the
+        // context-1m-2025-08-07 beta, DeepSeek V4 1M, GPT-5 400k) can absorb
+        // 200k+-word documents without being truncated by a static 200k floor.
+        // 85% leaves headroom for system prompt, conversation history and output.
+        const modelContextLimit = contextWindow.getContextLimit(actualModel);
+        const MAX_CONTEXT_TOKENS = Number(process.env.MAX_FILE_CONTEXT_TOKENS)
+          || Math.max(Math.floor(modelContextLimit * 0.85), 200000);
         const fileContextTokens = usageService.calculateTextTokens(fileContext, actualModel);
 
         let truncatedFileContext = fileContext;

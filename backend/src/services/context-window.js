@@ -36,11 +36,19 @@ const MODEL_CONTEXT_LIMITS = {
   'o3': 200000,
   'gpt-5': 400000,
   'gpt-5-mini': 400000,
-  // Anthropic (via OpenRouter)
+  // Anthropic (via OpenRouter — capped at 200k per OpenRouter's Claude routing)
   'anthropic/claude-3.5-sonnet': 200000,
   'anthropic/claude-3.7-sonnet': 200000,
   'anthropic/claude-sonnet-4': 200000,
   'anthropic/claude-opus-4': 200000,
+  // Anthropic native (via official SDK — Sonnet 4.5+ supports the
+  // `context-1m-2025-08-07` beta header for 1M-token input. Opus and Haiku
+  // stay at 200k.)
+  'claude-sonnet-4-5': 1000000,
+  'claude-sonnet-4-6': 1000000,
+  'claude-opus-4-7': 200000,
+  'claude-haiku-4-5': 200000,
+  'claude-haiku-4-5-20251001': 200000,
   // Google
   'gemini-1.5-pro': 2000000,
   'gemini-1.5-flash': 1000000,

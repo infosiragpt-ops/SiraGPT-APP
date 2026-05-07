@@ -27,7 +27,15 @@
  *   circuit breaker keeps observing failures.
  */
 
-const DEFAULT_MAX_TOKENS = Number(process.env.ANTHROPIC_NATIVE_MAX_TOKENS) || 4096;
+const DEFAULT_MAX_TOKENS = Number(process.env.ANTHROPIC_NATIVE_MAX_TOKENS) || 16384;
+
+// `context-1m-2025-08-07` is Anthropic's public beta header that lifts the
+// per-request input window from 200k to 1M tokens on Sonnet 4.5+. Enabled
+// by default whenever the native provider is active; can be disabled with
+// `ANTHROPIC_NATIVE_1M_CONTEXT=false` for tenants that don't have the
+// beta whitelisted.
+const ENABLE_1M_CONTEXT_BETA = process.env.ANTHROPIC_NATIVE_1M_CONTEXT !== 'false';
+const CONTEXT_1M_BETA_HEADER = 'context-1m-2025-08-07';
 
 let _SdkClass = null;
 let _client = null;
@@ -58,7 +66,11 @@ async function getClient() {
   if (_client) return _client;
   if (!isEnabled()) return null;
   const Sdk = await loadSdkClass();
-  _client = new Sdk({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const opts = { apiKey: process.env.ANTHROPIC_API_KEY };
+  if (ENABLE_1M_CONTEXT_BETA) {
+    opts.defaultHeaders = { 'anthropic-beta': CONTEXT_1M_BETA_HEADER };
+  }
+  _client = new Sdk(opts);
   return _client;
 }
 
