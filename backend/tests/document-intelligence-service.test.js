@@ -150,6 +150,47 @@ function createPrismaMock(files) {
   };
 }
 
+test('DocumentIntelligence retrieves conclusion evidence beyond early cover chunks', async () => {
+  const filler = Array.from({ length: 230 }, (_, index) => [
+    `# Capitulo ${index + 1}`,
+    `El desarrollo operativo ${index + 1} describe antecedentes, marco teorico y procedimientos del estudio.`,
+  ].join('\n'));
+  const text = [
+    '# Portada',
+    'FACULTAD DE NEGOCIOS Carrera Autor Asesor Bachiller.',
+    ...filler,
+    '# Conclusiones',
+    'Los resultados evidencian que el endomarketing fortalece la satisfaccion laboral y mejora el compromiso organizacional en las empresas evaluadas.',
+    'La revision tambien muestra que la comunicacion interna, el reconocimiento y el bienestar laboral son condiciones claves para sostener la productividad.',
+  ].join('\n\n');
+  const prisma = createPrismaMock([
+    {
+      id: 'file-large',
+      userId: 'user-1',
+      originalName: 'tesis.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      extractedText: text,
+    },
+  ]);
+
+  await documentIntelligence.analyzeFile(prisma, {
+    userId: 'user-1',
+    fileId: 'file-large',
+  });
+
+  const result = await documentIntelligence.retrieveEvidence(prisma, {
+    userId: 'user-1',
+    fileId: 'file-large',
+    query: 'dame 2 conclusiones profesionales',
+    limit: 3,
+  });
+
+  assert.ok(result.evidence.length >= 1);
+  assert.ok(result.evidence[0].ordinal > 200);
+  assert.match(result.evidence[0].text, /endomarketing fortalece la satisfaccion laboral/);
+  assert.doesNotMatch(result.evidence[0].text, /FACULTAD DE NEGOCIOS/);
+});
+
 test('DocumentIntelligence compares documents with evidence and deltas', async () => {
   const prisma = createPrismaMock([
     {

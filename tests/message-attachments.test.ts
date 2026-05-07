@@ -120,6 +120,107 @@ describe("message attachments · agent task persistence", () => {
     assert.match(context, /analysis-1/)
   })
 
+  it("builds deep document context from relevant evidence instead of the cover", async () => {
+    const chunks = [
+      {
+        id: "cover",
+        analysisId: "analysis-large",
+        fileId: "file-large",
+        ordinal: 1,
+        sourceType: "section",
+        sourceLabel: "Portada",
+        sectionTitle: "Portada",
+        text: "FACULTAD DE NEGOCIOS Carrera Autor Asesor Bachiller.",
+      },
+      ...Array.from({ length: 230 }, (_, index) => ({
+        id: `chunk-${index + 2}`,
+        analysisId: "analysis-large",
+        fileId: "file-large",
+        ordinal: index + 2,
+        sourceType: "section",
+        sourceLabel: `Capitulo ${index + 1}`,
+        sectionTitle: `Capitulo ${index + 1}`,
+        text: `El desarrollo operativo ${index + 1} describe antecedentes y procedimientos del estudio.`,
+      })),
+      {
+        id: "conclusion",
+        analysisId: "analysis-large",
+        fileId: "file-large",
+        ordinal: 232,
+        sourceType: "section",
+        sourceLabel: "Conclusiones",
+        sectionTitle: "Conclusiones",
+        text: "Los resultados evidencian que el endomarketing fortalece la satisfaccion laboral y mejora el compromiso organizacional.",
+      },
+    ]
+    const prisma = {
+      file: {
+        async findMany() {
+          return [
+            {
+              id: "file-large",
+              filename: "tesis.docx",
+              originalName: "tesis.docx",
+              mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              size: 500000,
+              extractedText: chunks.map((chunk) => chunk.text).join("\n\n"),
+              openaiFileId: null,
+              documentAnalysis: {
+                id: "analysis-large",
+                status: "ready",
+                summary: "Documento academico extenso",
+                textCoverage: { status: "complete" },
+                ocr: null,
+                warnings: [],
+                pageCount: null,
+                sheetCount: null,
+                slideCount: null,
+                chunkCount: chunks.length,
+                tableCount: 0,
+                chunks: [chunks[0]],
+                tables: [],
+              },
+            },
+          ]
+        },
+      },
+      documentAnalysis: {
+        async findFirst({ where }: any) {
+          assert.equal(where.fileId, "file-large")
+          return {
+            id: "analysis-large",
+            fileId: "file-large",
+            userId: "user-1",
+            status: "ready",
+            summary: "Documento academico extenso",
+            chunkCount: chunks.length,
+            tableCount: 0,
+          }
+        },
+      },
+      documentChunk: {
+        async findMany(args: any) {
+          assert.equal(args.where.analysisId, "analysis-large")
+          assert.equal(args.take, undefined)
+          return chunks
+        },
+      },
+    }
+
+    const context = await buildUploadedFileContext(prisma, {
+      userId: "user-1",
+      fileIds: ["file-large"],
+      query: "dame 2 conclusiones profesionales",
+      maxChars: 6000,
+    })
+
+    assert.match(context, /Contenido relevante recuperado desde todo el documento/)
+    assert.match(context, /endomarketing fortalece la satisfaccion laboral/)
+    const evidenceBlock = context.split("Contenido relevante recuperado desde todo el documento:")[1]
+      .split("[La evidencia")[0]
+    assert.doesNotMatch(evidenceBlock, /FACULTAD DE NEGOCIOS/)
+  })
+
   it("returns verbatim extracted text for plain transcription requests", async () => {
     const text = await buildTranscriptionTextFromFiles(prismaMock, {
       userId: "user-1",

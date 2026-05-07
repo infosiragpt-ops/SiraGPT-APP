@@ -284,6 +284,90 @@ function documentTextForRow(row, maxChars = 120000) {
   return compactString(directText || analysisText, maxChars) || '';
 }
 
+function normalizeForSearch(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function isDeepDocumentQuestion(query) {
+  return /\b(conclusion|conclusiones|concluir|concluye|analiza|analisis|resumen|resume|sintesis|sintetiza|resultado|resultados|discusion|hallazgo|hallazgos|recomendacion|recomendaciones|objetivo|objetivos|segun|interpreta|extrae)\b/.test(
+    normalizeForSearch(query)
+  );
+}
+
+function sourceLabelForEvidence(item = {}) {
+  const parts = [];
+  if (item.sectionTitle) parts.push(item.sectionTitle);
+  if (item.sourceLabel && !parts.includes(item.sourceLabel)) parts.push(item.sourceLabel);
+  if (item.pageNumber) parts.push(`pagina ${item.pageNumber}`);
+  if (item.sheetName) parts.push(`hoja ${item.sheetName}`);
+  if (item.slideNumber) parts.push(`slide ${item.slideNumber}`);
+  return parts.filter(Boolean).join(' · ') || `fragmento ${item.ordinal || item.id || ''}`.trim();
+}
+
+function buildBalancedExcerpt(text, maxChars, query = '') {
+  const source = safeText(text, '');
+  const budget = Math.max(1200, Number(maxChars) || 6000);
+  if (source.length <= budget) return source;
+
+  const normalized = normalizeForSearch(source);
+  const terms = Array.from(new Set(normalizeForSearch(query).match(/[a-z0-9]{4,}/g) || []))
+    .filter((term) => !['dame', 'para', 'como', 'documento', 'archivo', 'profesional', 'profesionales'].includes(term));
+  const firstRelevant = terms
+    .map((term) => normalized.indexOf(term))
+    .filter((idx) => idx >= Math.floor(source.length * 0.08))
+    .sort((a, b) => a - b)[0];
+
+  const headBudget = Math.floor(budget * 0.18);
+  const tailBudget = Math.floor(budget * 0.32);
+  const middleBudget = budget - headBudget - tailBudget - 120;
+  const head = source.slice(0, headBudget).trim();
+  const tail = source.slice(Math.max(0, source.length - tailBudget)).trim();
+  const middle = Number.isInteger(firstRelevant)
+    ? source.slice(
+      Math.max(0, firstRelevant - Math.floor(middleBudget / 2)),
+      Math.min(source.length, firstRelevant + Math.floor(middleBudget / 2))
+    ).trim()
+    : '';
+
+  return [
+    head,
+    middle ? '\n[Fragmento intermedio relevante]\n' + middle : '',
+    '\n[Fragmento final del documento]\n' + tail,
+  ].filter(Boolean).join('\n\n...\n\n');
+}
+
+function dedupeEvidence(items = []) {
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const key = item.id || `${item.ordinal}:${safeText(item.text, '').slice(0, 80)}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
+}
+
+async function retrieveRelevantEvidence(prisma, { userId, row, query, limit = 16 } = {}) {
+  if (!query || !row?.id || !prisma?.documentChunk || !prisma?.documentAnalysis) return [];
+  try {
+    const documentIntelligence = require('./document-intelligence');
+    const primary = await documentIntelligence.retrieveEvidence(prisma, {
+      userId,
+      fileId: row.id,
+      query,
+      limit,
+    });
+    return dedupeEvidence(primary.evidence || []);
+  } catch (err) {
+    console.warn(`[message-attachments] document evidence unavailable for ${row.id}:`, err?.message || err);
+    return [];
+  }
+}
+
 async function resolveTranscriptionFileIds(prisma, {
   userId,
   chatId = null,
@@ -384,29 +468,56 @@ async function serializeMessageAttachments(prisma, { userId, fileIds = [], clien
   });
 }
 
-async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars = 18000 } = {}) {
+async function buildUploadedFileContext(prisma, {
+  userId,
+  fileIds = [],
+  query = '',
+  maxChars = 36000,
+  evidenceLimit = 18,
+} = {}) {
   const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 8);
   if (ids.length === 0) return '';
   const rows = await loadFileRows(prisma, userId, ids);
   const ocrRows = await mapWithLimit(rows, (row) => ensureImageOcr(prisma, row, userId));
   const enrichedRows = await mapWithLimit(ocrRows, (row) => ensureDocumentAnalysis(prisma, row, userId));
   const withText = enrichedRows
-    .map((row) => ({ ...row, documentText: documentTextForRow(row, maxChars) }))
+    .map((row) => ({ ...row, documentText: documentTextForRow(row, Math.max(maxChars, 240000)) }))
     .filter((row) => hasUsefulExtractedText(row.documentText));
   if (withText.length === 0) return '';
 
   const perFileBudget = Math.max(1500, Math.floor(maxChars / withText.length));
-  const blocks = withText.map((row, index) => {
+  const deepQuestion = isDeepDocumentQuestion(query);
+  const blocks = await mapWithLimit(withText, async (row, index) => {
     const analysis = row.documentAnalysis || null;
     const chunks = Array.isArray(analysis?.chunks) ? analysis.chunks : [];
     const tables = Array.isArray(analysis?.tables) ? analysis.tables : [];
-    const text = safeText(row.documentText, '').slice(0, perFileBudget);
-    const clipped = row.documentText.length > text.length ? '\n[Extracto truncado; usa docintel_retrieve si necesitas mas contexto.]' : '';
-    const evidence = chunks.length
+    const evidence = deepQuestion
+      ? await retrieveRelevantEvidence(prisma, {
+        userId,
+        row,
+        query,
+        limit: evidenceLimit,
+      })
+      : [];
+    const selectedText = evidence.length
+      ? [
+        'Contenido relevante recuperado desde todo el documento:',
+        ...evidence.map((item, evidenceIndex) => {
+          const text = safeText(item.text, '').slice(0, Math.max(700, Math.floor(perFileBudget / Math.max(1, evidence.length))));
+          return `Evidencia ${evidenceIndex + 1} [${sourceLabelForEvidence(item)}]: ${text.replace(/\s+/g, ' ')}`;
+        }),
+      ].join('\n\n')
+      : buildBalancedExcerpt(row.documentText, perFileBudget, query);
+    const clipped = evidence.length
+      ? '\n[La evidencia fue recuperada buscando en todos los fragmentos disponibles del documento, no solo en la portada.]'
+      : row.documentText.length > selectedText.length
+        ? '\n[Extracto balanceado; si necesitas precision adicional usa docintel_retrieve con la pregunta del usuario.]'
+        : '';
+    const firstChunks = (!deepQuestion || !evidence.length) && chunks.length
       ? [
         '',
-        'Evidencia estructurada disponible:',
-        ...chunks.map((chunk) => `- ${chunk.sourceLabel || chunk.sectionTitle || `Fragmento ${chunk.ordinal}`}: ${safeText(chunk.text, '').slice(0, 500).replace(/\s+/g, ' ')}`),
+        'Primeras referencias estructuradas disponibles:',
+        ...chunks.map((chunk) => `- ${chunk.sourceLabel || chunk.sectionTitle || `Fragmento ${chunk.ordinal}`}: ${safeText(chunk.text, '').slice(0, 240).replace(/\s+/g, ' ')}`),
       ].join('\n')
       : '';
     const tableSummary = tables.length
@@ -422,14 +533,17 @@ async function buildUploadedFileContext(prisma, { userId, fileIds = [], maxChars
       `tipo: ${row.mimeType || 'desconocido'}`,
       analysis?.id ? `analysisId: ${analysis.id}` : null,
       analysis?.summary ? `resumen tecnico: ${analysis.summary}` : null,
+      analysis?.chunkCount ? `fragmentos analizados: ${analysis.chunkCount}` : null,
+      query ? `pregunta del usuario: ${query}` : null,
       '',
-      text + clipped + evidence + tableSummary,
+      selectedText + clipped + firstChunks + tableSummary,
     ].filter(Boolean).join('\n');
   });
 
   return [
     'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
-    'Usa este contenido para responder sobre el documento pegado/subido. Para evidencia estructurada llama docintel_retrieve/docintel_extract_tables; para busqueda semantica general llama rag_retrieve.',
+    'Usa este contenido para responder sobre el documento pegado/subido. Si el usuario pide analisis, resumen o conclusiones, responde desde la evidencia relevante del documento completo y no desde portada, indice, autores o metadatos preliminares.',
+    'Para evidencia estructurada adicional llama docintel_retrieve/docintel_extract_tables; para busqueda semantica general llama rag_retrieve.',
     '',
     blocks.join('\n\n---\n\n'),
   ].join('\n');

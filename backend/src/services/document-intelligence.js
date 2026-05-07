@@ -4,7 +4,10 @@ const fileProcessor = require('./fileProcessor');
 
 const MAX_CHUNK_CHARS = 3600;
 const CHUNK_OVERLAP_CHARS = 240;
-const MAX_CHUNKS = 80;
+const MAX_CHUNKS = Math.max(
+  80,
+  Math.min(Number(process.env.DOCINTEL_MAX_CHUNKS) || 1200, 5000)
+);
 const MAX_TABLE_PREVIEW_ROWS = 30;
 
 function compactString(value, max = 1200) {
@@ -636,7 +639,11 @@ async function getAnalysisForFile(prisma, { userId, fileId } = {}) {
 
 function tokenizeQuery(query) {
   return Array.from(new Set(String(query || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z0-9]{3,}/g) || []))
-    .filter((term) => !['para', 'como', 'que', 'del', 'con', 'una', 'los', 'las', 'the', 'and', 'from', 'this'].includes(term));
+    .filter((term) => ![
+      'para', 'como', 'que', 'del', 'con', 'una', 'uno', 'unos', 'unas', 'los', 'las', 'por', 'sobre',
+      'dame', 'darme', 'hazme', 'realiza', 'profesional', 'profesionales', 'documento', 'archivo',
+      'the', 'and', 'from', 'this',
+    ].includes(term));
 }
 
 function topTerms(text, limit = 20) {
@@ -659,13 +666,104 @@ function topTerms(text, limit = 20) {
     .map(([term, count]) => ({ term, count }));
 }
 
-function scoreChunk(chunk, terms) {
-  if (!terms.length) return 1 / Math.max(1, chunk.ordinal || 1);
-  const haystack = String(`${chunk.sectionTitle || ''} ${chunk.sourceLabel || ''} ${chunk.text || ''}`)
+function detectQueryIntent(query) {
+  const normalized = String(query || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
-  return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
+  return {
+    wantsConclusions: /\b(conclusion|conclusiones|concluir|concluye|cierre|hallazgos?)\b/.test(normalized),
+    wantsSummary: /\b(resumen|resume|resumir|sintesis|sintetiza)\b/.test(normalized),
+    wantsAnalysis: /\b(analiza|analisis|segun|explica|interpreta|evalua)\b/.test(normalized),
+    wantsResults: /\b(resultado|resultados|discusion|discusion|recomendacion|recomendaciones|objetivo|objetivos)\b/.test(normalized),
+  };
+}
+
+const CONCLUSION_SECTION_TERMS = [
+  'conclusion',
+  'conclusiones',
+  'discusion',
+  'discusion de resultados',
+  'resultados',
+  'hallazgos',
+  'recomendacion',
+  'recomendaciones',
+  'objetivo',
+  'objetivos',
+  'propuesta',
+];
+
+const COVER_SECTION_TERMS = [
+  'facultad',
+  'universidad',
+  'bachiller',
+  'asesor',
+  'autor',
+  'autores',
+  'carrera',
+  'titulo del articulo',
+  'ano de publicacion',
+  'portada',
+  'dedicatoria',
+  'agradecimiento',
+  'indice',
+];
+
+function normalizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function phraseHit(text, terms) {
+  return terms.some((term) => text.includes(term));
+}
+
+function countTermHits(haystack, terms) {
+  return terms.reduce((score, term) => {
+    if (!term || !haystack.includes(term)) return score;
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const occurrences = (haystack.match(new RegExp(`\\b${escaped}\\b`, 'g')) || []).length;
+    return score + 2 + Math.min(4, Math.max(0, occurrences - 1));
+  }, 0);
+}
+
+function isLikelyCoverChunk(chunk = {}) {
+  const label = normalizeSearchText(`${chunk.sectionTitle || ''} ${chunk.sourceLabel || ''}`);
+  const text = normalizeSearchText(chunk.text || '').slice(0, 1600);
+  const ordinal = Number(chunk.ordinal || 0);
+  const coverHits = COVER_SECTION_TERMS.filter((term) => label.includes(term) || text.includes(term)).length;
+  return coverHits >= 2 && (!ordinal || ordinal <= 4);
+}
+
+function expandTermsForIntent(terms, intent) {
+  const expanded = new Set(terms);
+  if (intent.wantsConclusions || intent.wantsResults) {
+    CONCLUSION_SECTION_TERMS.forEach((term) => expanded.add(term));
+  }
+  if (intent.wantsSummary || intent.wantsAnalysis) {
+    ['resumen', 'introduccion', 'metodologia', 'resultados', 'discusion', 'conclusiones', 'objetivos'].forEach((term) => expanded.add(term));
+  }
+  return Array.from(expanded);
+}
+
+function scoreChunk(chunk, terms, intent = {}) {
+  const label = normalizeSearchText(`${chunk.sectionTitle || ''} ${chunk.sourceLabel || ''}`);
+  const text = normalizeSearchText(chunk.text || '');
+  const haystack = `${label} ${text}`;
+  const expandedTerms = expandTermsForIntent(terms, intent);
+  let score = expandedTerms.length ? countTermHits(haystack, expandedTerms) : 1 / Math.max(1, chunk.ordinal || 1);
+  if (intent.wantsConclusions || intent.wantsResults) {
+    if (phraseHit(label, CONCLUSION_SECTION_TERMS)) score += 14;
+    if (phraseHit(text.slice(0, 1200), CONCLUSION_SECTION_TERMS)) score += 7;
+    if (isLikelyCoverChunk(chunk)) score -= 18;
+  }
+  if (intent.wantsAnalysis || intent.wantsSummary) {
+    if (phraseHit(label, ['resultados', 'discusion', 'metodologia', 'conclusiones', 'recomendaciones'])) score += 6;
+  }
+  score += Math.min(1.5, String(chunk.text || '').length / MAX_CHUNK_CHARS);
+  return score;
 }
 
 async function retrieveEvidence(prisma, { userId, fileId, query = '', limit = 8 } = {}) {
@@ -675,9 +773,9 @@ async function retrieveEvidence(prisma, { userId, fileId, query = '', limit = 8 
   const chunks = await prisma.documentChunk.findMany({
     where: { analysisId: analysis.id },
     orderBy: { ordinal: 'asc' },
-    take: 200,
   });
   const terms = tokenizeQuery(query);
+  const intent = detectQueryIntent(query);
   const evidence = chunks
     .map((chunk) => ({
       id: chunk.id,
@@ -691,11 +789,11 @@ async function retrieveEvidence(prisma, { userId, fileId, query = '', limit = 8 
       slideNumber: chunk.slideNumber,
       sectionTitle: chunk.sectionTitle,
       text: chunk.text,
-      score: scoreChunk(chunk, terms),
+      score: scoreChunk(chunk, terms, intent),
     }))
     .filter((item) => item.score > 0 || !terms.length)
     .sort((a, b) => b.score - a.score || a.ordinal - b.ordinal)
-    .slice(0, Math.max(1, Math.min(Number(limit) || 8, 20)));
+    .slice(0, Math.max(1, Math.min(Number(limit) || 8, 50)));
   return { evidence, analysis: serializeAnalysis(analysis, [], []) };
 }
 

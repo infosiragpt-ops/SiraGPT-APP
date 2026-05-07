@@ -875,6 +875,7 @@ router.post(
     const uploadedFileContext = await buildUploadedFileContext(prisma, {
       userId: req.user?.id,
       fileIds,
+      query: displayGoal || agentGoal,
     });
 
     // Persist the user turn and a live assistant placeholder up front so a chat

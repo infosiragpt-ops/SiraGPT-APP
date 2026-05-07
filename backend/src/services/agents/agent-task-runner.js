@@ -173,6 +173,14 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext }) {
   return paragraphs.join('\n\n');
 }
 
+function isAttachmentDeepAnalysisRequest(goal) {
+  const value = String(goal || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  return /\b(conclusion|conclusiones|concluir|concluye|analiza|analisis|resumen|resume|sintesis|resultado|resultados|discusion|hallazgo|hallazgos|recomendacion|recomendaciones|objetivo|objetivos|segun|interpreta)\b/.test(value);
+}
+
 function normalizeAgentRuntimeModel(selectedModel) {
   const displayModel = String(selectedModel || '').trim() || 'gpt-4o';
   const configuredFallback = String(
@@ -495,6 +503,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
   const uploadedFileContext = await buildUploadedFileContext(prisma, {
     userId: user.id,
     fileIds: files,
+    query: displayGoal || goal,
   });
   if (chatId && prisma) {
     try {
@@ -1024,6 +1033,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
       Array.isArray(files) &&
       files.length > 0 &&
       looksLikeMissingAttachmentAnswer(finalMarkdown) &&
+      !isAttachmentDeepAnalysisRequest(displayGoal || goal) &&
       countUsefulWords(uploadedFileContext) >= 30
     ) {
       const fallbackMarkdown = buildAttachmentGroundedFallbackAnswer({
