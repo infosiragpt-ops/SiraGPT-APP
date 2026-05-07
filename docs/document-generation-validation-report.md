@@ -1,15 +1,15 @@
 # Advanced Document Generation Validation Report
 
-Generated: 2026-05-07T14:52:22.857Z
+Generated: 2026-05-07T16:37:04.208Z
 
 ## Executive Summary
 
 The advanced document pipeline was implemented as a deterministic, offline-capable multi-agent document generation guardrail for siraGPT. It is connected to the real backend document endpoint and validates every generated artifact before delivery.
 
 - Pipeline version: 2026.04.24
-- Started: 2026-05-07T14:52:13.984Z
-- Finished: 2026-05-07T14:52:22.857Z
-- Duration: 8873 ms
+- Started: 2026-05-07T16:36:55.547Z
+- Finished: 2026-05-07T16:37:04.208Z
+- Duration: 8659 ms
 - Tests executed: 100
 - Tests passed: 100/100
 - Minimum technical score: 82
