@@ -446,10 +446,19 @@ router.post(
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+    const requestedFileIds = Array.isArray(req.body.files)
+      ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+      : [];
+    const canUseLocalDocumentRuntime = requestedFileIds.length > 0 || isTranscriptionRequest(String(req.body.goal || ''));
+    if (!process.env.OPENAI_API_KEY && !canUseLocalDocumentRuntime) {
+      return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
+    }
 
     if (process.env.AGENT_TASK_INLINE !== '1') {
       return handleQueuedTaskRequest(req, res);
+    }
+    if (!process.env.OPENAI_API_KEY && canUseLocalDocumentRuntime) {
+      return handleLocalTaskRequest(req, res, { fallbackReason: 'openai_not_configured' });
     }
 
     const rawGoal = String(req.body.goal || '');
@@ -1119,16 +1128,25 @@ router.post(
 // ─── helpers ────────────────────────────────────────────────────────────
 
 async function handleQueuedTaskRequest(req, res) {
+  const rawGoal = String(req.body.goal || '');
+  const requestedFileIds = Array.isArray(req.body.files)
+    ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+    : [];
   try {
     requireRedisUrl();
   } catch (err) {
+    if (requestedFileIds.length > 0 || isTranscriptionRequest(rawGoal)) {
+      return handleLocalTaskRequest(req, res, {
+        fallbackReason: 'redis_unavailable',
+        fallbackDetail: err.message,
+      });
+    }
     return res.status(503).json({
       error: 'REDIS_URL is required for agentic tasks. Configure Redis and restart the backend worker.',
       detail: err.message,
     });
   }
 
-  const rawGoal = String(req.body.goal || '');
   const displayGoal = normalizeDisplayGoal(req.body.displayGoal || rawGoal);
   const agentGoal = normalizeDisplayGoal(rawGoal);
   const systemContract = normalizeSystemContract(
@@ -1240,6 +1258,138 @@ async function handleQueuedTaskRequest(req, res) {
     documentPolicy,
   });
   metrics.counter('agent_task_invocations_total', { status: 'queued' });
+
+  return streamTaskEvents(req, res, taskId, req.user?.id);
+}
+
+async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallback', fallbackDetail = '' } = {}) {
+  const rawGoal = String(req.body.goal || '');
+  const displayGoal = normalizeDisplayGoal(req.body.displayGoal || rawGoal);
+  const agentGoal = normalizeDisplayGoal(rawGoal);
+  const systemContract = normalizeSystemContract(
+    req.body.systemContract || extractProfessionalContract(rawGoal)
+  );
+  let fileIds = Array.isArray(req.body.files)
+    ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+    : [];
+  if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
+    fileIds = await resolveTranscriptionFileIds(prisma, {
+      userId: req.user?.id,
+      chatId: typeof req.body.chatId === 'string' ? req.body.chatId : null,
+      providedFileIds: fileIds,
+    });
+  }
+  const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
+  const taskId = crypto.randomUUID();
+  const traceId = crypto.randomUUID();
+  const chatId = typeof req.body.chatId === 'string' ? req.body.chatId : null;
+  const model = typeof req.body.model === 'string' && req.body.model.length > 0 ? req.body.model : 'gpt-4o';
+  const parsedMaxSteps = Number.parseInt(req.body.maxSteps, 10);
+  const parsedMaxRuntimeMs = Number.parseInt(req.body.maxRuntimeMs, 10);
+  const maxSteps = Number.isFinite(parsedMaxSteps) ? parsedMaxSteps : 60;
+  const maxRuntimeMs = Number.isFinite(parsedMaxRuntimeMs) ? parsedMaxRuntimeMs : 2 * 60 * 60 * 1000;
+  const documentPolicy = buildDocumentDeliveryPolicy({
+    goal: agentGoal,
+    displayGoal,
+    files: fileIds,
+  });
+  let streamState = initialAgentState();
+  const snapshot = {
+    taskId,
+    userId: req.user?.id,
+    chatId,
+    displayGoal,
+    agentGoal,
+    systemContract,
+    fileIds,
+    fileMetadata: clientFileMetadata,
+    model,
+    maxSteps,
+    maxRuntimeMs,
+    status: 'running',
+    jobId: `local-${taskId}`,
+    queueName: 'local-agent-task',
+    traceId,
+    documentPolicy,
+    streamState,
+    events: [],
+    artifacts: [],
+  };
+  taskStore.writeTaskSnapshot(snapshot);
+
+  const queueEvent = {
+    type: 'queue_status',
+    taskId,
+    status: 'running',
+    queue: 'local-agent-task',
+    jobId: snapshot.jobId,
+    position: 0,
+    estimatedWaitMs: 0,
+  };
+  streamState = reduceAgentState(streamState, queueEvent);
+  appendTaskEvent(snapshot, queueEvent, streamState);
+  const policyEvent = { type: 'document_policy', policy: documentPolicy };
+  streamState = reduceAgentState(streamState, policyEvent);
+  appendTaskEvent(snapshot, policyEvent, streamState);
+
+  await agentTaskPersistence.upsertAgentTask({
+    ...snapshot,
+    status: 'running',
+    jobId: snapshot.jobId,
+    queueName: snapshot.queueName,
+    traceId,
+    documentPolicy,
+    state: streamState,
+  }).catch(() => null);
+
+  auditLog.audit({
+    event: 'agent_task_local_fallback_started',
+    taskId,
+    userId: req.user?.id || null,
+    chatId,
+    model,
+    traceId,
+    fallbackReason,
+    fallbackDetail,
+    fileCount: fileIds.length,
+  });
+  metrics.counter('agent_task_invocations_total', { status: 'local_fallback' });
+
+  const payload = {
+    taskId,
+    traceId,
+    user: { id: req.user?.id, email: req.user?.email },
+    goal: agentGoal,
+    displayGoal,
+    systemContract,
+    files: fileIds,
+    fileMetadata: clientFileMetadata,
+    chatId,
+    model,
+    maxSteps,
+    maxRuntimeMs,
+    documentPolicy,
+  };
+
+  Promise.resolve().then(async () => {
+    try {
+      const { runAgentTaskJob } = require('../services/agents/agent-task-runner');
+      await runAgentTaskJob(payload, {
+        id: snapshot.jobId,
+        updateProgress: async () => {},
+      });
+    } catch (err) {
+      const latest = taskStore.getTaskSnapshotForUser(taskId, req.user?.id) || snapshot;
+      if (['completed', 'cancelled', 'error'].includes(latest.status)) return;
+      const errorEvent = { type: 'error', message: err?.message || 'agent task failed' };
+      const state = reduceAgentState(latest.streamState || streamState, errorEvent);
+      appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
+      taskStore.markTaskStatus({ ...latest, userId: req.user?.id }, 'error', {
+        streamState: state,
+        stats: { error: errorEvent.message },
+      });
+    }
+  });
 
   return streamTaskEvents(req, res, taskId, req.user?.id);
 }

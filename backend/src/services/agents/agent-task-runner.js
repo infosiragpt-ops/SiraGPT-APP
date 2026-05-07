@@ -132,7 +132,22 @@ function looksLikeMissingAttachmentAnswer(text) {
   );
 }
 
-function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext }) {
+function sanitizeAttachmentFallbackReason(reason) {
+  const value = String(reason || '').toLowerCase();
+  if (!value) return '';
+  if (/quota|billing|payment|rate.?limit|too many requests|429/.test(value)) {
+    return 'el proveedor principal alcanzó un límite temporal';
+  }
+  if (/api[_ -]?key|authentication|unauthorized|forbidden|not configured|no est[aá] configurado/.test(value)) {
+    return 'el runtime principal no estuvo disponible';
+  }
+  if (/timeout|timed out|etimedout|socket|econn|network|dns|enotfound|eai_again/.test(value)) {
+    return 'el runtime principal tardó demasiado en responder';
+  }
+  return 'el runtime principal no completó la solicitud';
+}
+
+function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason = '' }) {
   const cleaned = stripScaffolding(uploadedFileContext)
     .replace(/\s+/g, ' ')
     .trim();
@@ -144,15 +159,44 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext }) {
     Math.min(6, Number((request.match(/\b(\d{1,2})\s+p[aá]rrafos?\b/i) || [])[1]) || 0)
   );
   const wantsConclusions = /\b(conclusi[oó]n|conclusiones|concluye|concluir)\b/i.test(request);
+  const wantsSummary = /\b(resumen|resume|sintesis|s[ií]ntesis|de qu[eé] trata|qu[eé] dice|explica)\b/i.test(request);
+  const wantsRecommendations = /\b(recomendaci[oó]n|recomendaciones|sugerencia|sugerencias|propuesta|propuestas)\b/i.test(request);
   const paragraphCount = requestedParagraphs || (wantsConclusions ? 3 : 2);
   const sentences = splitReadableSentences(cleaned);
   if (sentences.length === 0) {
     return cleaned.slice(0, 1600);
   }
 
+  const publicReason = sanitizeAttachmentFallbackReason(reason);
+  const note = publicReason
+    ? `\n\n> Nota operativa: respondí con el análisis documental local porque ${publicReason}. Así el chat nunca queda sin respuesta cuando el runtime principal falla.`
+    : '';
+
+  const bulletSentences = sentences
+    .slice(0, 8)
+    .map((sentence) => sentence.replace(/^[,;:\s]+/, '').trim())
+    .filter(Boolean);
+
+  const executiveSummary = bulletSentences
+    .slice(0, Math.max(3, Math.min(5, bulletSentences.length)))
+    .map((sentence) => `- ${sentence.length > 360 ? `${sentence.slice(0, 360).trim()}...` : sentence}`)
+    .join('\n');
+
   if (!wantsConclusions) {
     const body = sentences.slice(0, Math.max(4, paragraphCount * 2)).join(' ');
-    return body.length > 1800 ? `${body.slice(0, 1800).trim()}...` : body;
+    const clippedBody = body.length > 1800 ? `${body.slice(0, 1800).trim()}...` : body;
+    if (wantsSummary || wantsRecommendations) {
+      return [
+        '### Análisis del documento adjunto',
+        '',
+        executiveSummary ? `**Resumen ejecutivo**\n${executiveSummary}` : clippedBody,
+        wantsRecommendations
+          ? '\n**Siguiente paso recomendado**\n- Usar estos hallazgos como base y pedirme una matriz, informe Word/PDF o tabla comparativa si necesitas entregable descargable.'
+          : '',
+        note,
+      ].filter(Boolean).join('\n');
+    }
+    return `${clippedBody}${note}`;
   }
 
   const connectors = [
@@ -170,7 +214,28 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext }) {
     if (group.length === 0) break;
     paragraphs.push(`${connectors[index] || 'Ademas,'} ${group.join(' ')}`);
   }
-  return paragraphs.join('\n\n');
+  return [
+    '### Conclusiones basadas en el documento adjunto',
+    '',
+    paragraphs.join('\n\n'),
+    executiveSummary ? `\n**Evidencia base usada**\n${executiveSummary}` : '',
+    note,
+  ].filter(Boolean).join('\n');
+}
+
+function buildAttachmentUnavailableFallbackAnswer({ reason = '' } = {}) {
+  const publicReason = sanitizeAttachmentFallbackReason(reason);
+  return [
+    'Recibí el archivo adjunto, pero todavía no tengo texto legible suficiente para responder con precisión.',
+    '',
+    '**Para resolverlo rápido:**',
+    '- Si es un PDF escaneado o una imagen, sube una versión más nítida o con OCR.',
+    '- Si es Word/Excel/PDF con texto, vuelve a subir el archivo original.',
+    '- También puedes pegar aquí el fragmento clave y lo analizo de inmediato.',
+    publicReason
+      ? `\n> Nota operativa: activé una respuesta segura porque ${publicReason}; preferí pedir material legible antes que inventar contenido.`
+      : '',
+  ].filter(Boolean).join('\n');
 }
 
 function isAttachmentDeepAnalysisRequest(goal) {
@@ -255,10 +320,10 @@ async function runAgentTaskJob(payload = {}, job = null) {
   if (!taskId) throw new Error('agent task payload missing taskId');
   if (!user?.id) throw new Error('agent task payload missing user.id');
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
+  const hasAttachedFiles = Array.isArray(files) && files.length > 0;
   const deterministicVancouverRequest = isVancouverMatrixWordRequest(`${goal || ''} ${displayGoal || ''}`) &&
-    Array.isArray(files) &&
-    files.length > 0;
-  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest) {
+    hasAttachedFiles;
+  if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasAttachedFiles) {
     throw new Error('OPENAI_API_KEY not configured');
   }
 
@@ -889,6 +954,56 @@ async function runAgentTaskJob(payload = {}, job = null) {
       return { taskId, status, artifacts: 0 };
     }
 
+    if (!openai && hasAttachedFiles) {
+      const fallbackMarkdown = buildAttachmentGroundedFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+        reason: 'el proveedor principal no está configurado',
+      });
+      const finalFallbackMarkdown = fallbackMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        reason: 'el proveedor principal no está configurado',
+      });
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: fallbackMarkdown
+          ? 'Respuesta documental local generada sin proveedor LLM configurado.'
+          : 'Respuesta segura por adjunto sin texto legible suficiente.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          attachmentFallback: true,
+          usefulWords: countUsefulWords(uploadedFileContext),
+          fileCount: files.length,
+        },
+      };
+      task.documentPolicy = documentPolicy;
+      emit({ type: 'document_policy', policy: documentPolicy });
+      stepIdCounter = 1;
+      emit({ type: 'step_start', id: 's1', label: 'Analizando documento adjunto', icon: 'file-text' });
+      emit({ type: 'step_done', id: 's1', ok: Boolean(fallbackMarkdown) });
+      emit({
+        type: 'quality_gate',
+        gate: 'attachment_local_fallback',
+        label: fallbackMarkdown ? 'Respuesta documental garantizada' : 'Adjunto requiere texto legible',
+        passed: Boolean(fallbackMarkdown),
+        summary: fallbackMarkdown
+          ? 'Se generó una respuesta desde el texto extraído del archivo sin depender del proveedor externo.'
+          : 'Se devolvió una respuesta clara en vez de dejar el chat sin salida.',
+      });
+      return finishDeterministicTask({
+        finalMarkdown: finalFallbackMarkdown,
+        stoppedReason: fallbackMarkdown ? 'attachment_local_fallback' : 'attachment_unreadable_fallback',
+        steps: 1,
+        artifactsList: [],
+        metadata: {
+          attachmentFallback: true,
+          fallbackReason: 'openai_not_configured',
+          sourceFileIds: files,
+        },
+      });
+    }
+
     if (deterministicVancouverRequest) {
       documentPolicy = {
         ...buildDocumentDeliveryPolicy({
@@ -1175,6 +1290,67 @@ async function runAgentTaskJob(payload = {}, job = null) {
     });
     return { taskId, status, artifacts: artifacts.length };
   } catch (err) {
+    if (!controller.signal.aborted && hasAttachedFiles) {
+      const fallbackMarkdown = buildAttachmentGroundedFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+        reason: err?.message || 'el runtime principal falló',
+      });
+      const finalFallbackMarkdown = fallbackMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        reason: err?.message || 'el runtime principal falló',
+      });
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: fallbackMarkdown
+          ? 'Fallback documental local tras fallo del runtime principal.'
+          : 'Respuesta segura tras fallo del runtime y adjunto sin texto legible suficiente.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          attachmentFallback: true,
+          usefulWords: countUsefulWords(uploadedFileContext),
+          fileCount: files.length,
+        },
+      };
+      task.documentPolicy = documentPolicy;
+      emit({ type: 'document_policy', policy: documentPolicy });
+      emit({
+        type: 'repair_attempt',
+        attempt: 1,
+        status: fallbackMarkdown ? 'recovered' : 'degraded',
+        message: fallbackMarkdown
+          ? 'El runtime principal falló; se recuperó la respuesta usando el texto extraído del documento.'
+          : 'El runtime principal falló y el adjunto no aportó texto suficiente; se devolvió una salida accionable.',
+      });
+      if (!currentStepId) {
+        stepIdCounter += 1;
+        currentStepId = `s${stepIdCounter}`;
+        emit({ type: 'step_start', id: currentStepId, label: 'Recuperando respuesta desde el documento', icon: 'file-text' });
+      }
+      emit({ type: 'step_done', id: currentStepId, ok: Boolean(fallbackMarkdown) });
+      currentStepId = null;
+      emit({
+        type: 'quality_gate',
+        gate: 'attachment_runtime_recovery',
+        label: fallbackMarkdown ? 'Recuperación documental' : 'Salida segura sin contenido legible',
+        passed: Boolean(fallbackMarkdown),
+        summary: fallbackMarkdown
+          ? 'La tarea terminó con una respuesta basada en el adjunto aunque falló el proveedor principal.'
+          : 'La tarea terminó con instrucciones claras en vez de un silencio o error opaco.',
+      });
+      return finishDeterministicTask({
+        finalMarkdown: finalFallbackMarkdown,
+        stoppedReason: fallbackMarkdown ? 'attachment_runtime_recovery' : 'attachment_unreadable_recovery',
+        steps: Math.max(1, stepIdCounter),
+        artifactsList: [],
+        metadata: {
+          attachmentFallback: true,
+          fallbackReason: err?.message || 'runtime_failure',
+          sourceFileIds: files,
+        },
+      });
+    }
     const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
     task.status = controller.signal.aborted ? 'cancelled' : 'error';
     emit({ type: 'error', message });
@@ -1312,4 +1488,5 @@ module.exports = {
   buildFinalizeProfile,
   classifyTaskError,
   normalizeAgentRuntimeModel,
+  buildAttachmentGroundedFallbackAnswer,
 };

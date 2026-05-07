@@ -83,6 +83,75 @@ describe('HTTP agent task route', () => {
     assertContractResponse('agent.task.create', 503, res.body);
   });
 
+  test('streams a document-grounded fallback when Redis and OpenAI are unavailable but a file is attached', async () => {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.REDIS_URL;
+
+    const prisma = require('../src/config/database');
+    const persistence = require('../src/services/agents/agent-task-persistence');
+    const originalFileFindMany = prisma.file.findMany;
+    const originalUpsert = persistence.upsertAgentTask;
+    const originalAppend = persistence.appendAgentTaskEvent;
+    const originalArtifact = persistence.persistGeneratedArtifact;
+    prisma.file.findMany = async () => [{
+      id: 'file-http-doc-1',
+      filename: 'informe.pdf',
+      originalName: 'informe.pdf',
+      mimeType: 'application/pdf',
+      size: 2048,
+      path: '/tmp/informe.pdf',
+      extractedText: [
+        'El informe describe un programa de vacunacion comunitaria con cobertura creciente durante tres trimestres consecutivos.',
+        'Los resultados muestran reduccion de hospitalizaciones y mejor adherencia cuando se combinan brigadas moviles con recordatorios por SMS.',
+        'La principal limitacion reportada es la falta de personal en zonas rurales y la necesidad de reforzar la cadena de frio.',
+      ].join(' '),
+      openaiFileId: null,
+      documentAnalysis: {
+        id: 'analysis-http-doc-1',
+        status: 'completed',
+        summary: 'Programa de vacunacion comunitaria',
+        textCoverage: { status: 'ok' },
+        ocr: null,
+        warnings: [],
+        pageCount: 3,
+        sheetCount: null,
+        slideCount: null,
+        chunkCount: 1,
+        tableCount: 0,
+        chunks: [],
+        tables: [],
+      },
+    }];
+    persistence.upsertAgentTask = async () => null;
+    persistence.appendAgentTaskEvent = async () => null;
+    persistence.persistGeneratedArtifact = async () => null;
+
+    try {
+      const res = await request(buildApp())
+        .post('/api/agent/task')
+        .set('Authorization', auth.authHeader)
+        .send({
+          goal: 'Qué dice este documento?',
+          files: ['file-http-doc-1'],
+          fileMetadata: [{ id: 'file-http-doc-1', name: 'informe.pdf', mimeType: 'application/pdf' }],
+          maxSteps: 3,
+          maxRuntimeMs: 60000,
+        });
+
+      assert.equal(res.status, 200);
+      assert.match(res.headers['content-type'], /text\/event-stream/);
+      assert.match(res.text, /final_text/);
+      assert.match(res.text, /Análisis del documento adjunto/);
+      assert.match(res.text, /programa de vacunacion comunitaria/);
+      assert.match(res.text, /done/);
+    } finally {
+      prisma.file.findMany = originalFileFindMany;
+      persistence.upsertAgentTask = originalUpsert;
+      persistence.appendAgentTaskEvent = originalAppend;
+      persistence.persistGeneratedArtifact = originalArtifact;
+    }
+  });
+
   test('reads durable task status for the authenticated owner', async () => {
     const taskStore = require('../src/services/agents/task-store');
     taskStore.writeTaskSnapshot({

@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { classifyTaskError, normalizeAgentRuntimeModel } = require('../src/services/agents/agent-task-runner');
+const { classifyTaskError, normalizeAgentRuntimeModel, buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');
 
 test('classifyTaskError: rate-limit errors are retryable', () => {
   for (const msg of [
@@ -202,4 +202,27 @@ test('normalizeAgentRuntimeModel: respects AGENT_TASK_RUNTIME_MODEL env override
   const result = normalizeAgentRuntimeModel('claude-opus');
   assert.equal(result.runtimeModel, 'gpt-4.1-nano');
   delete process.env.AGENT_TASK_RUNTIME_MODEL;
+});
+
+test('buildAttachmentGroundedFallbackAnswer: returns professional document answer from extracted context', () => {
+  const context = [
+    'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
+    '### Archivo adjunto 1: informe.pdf',
+    'El informe describe un programa de vacunacion comunitaria con cobertura creciente durante tres trimestres consecutivos.',
+    'Los resultados muestran reduccion de hospitalizaciones y mejor adherencia cuando se combinan brigadas moviles con recordatorios por SMS.',
+    'La principal limitacion reportada es la falta de personal en zonas rurales y la necesidad de reforzar la cadena de frio.',
+    'El documento recomienda monitoreo semanal, capacitacion del equipo local y priorizacion de adultos mayores.',
+  ].join('\n');
+
+  const answer = buildAttachmentGroundedFallbackAnswer({
+    goal: 'Resume el documento y dame recomendaciones',
+    uploadedFileContext: context,
+    reason: 'el proveedor externo falló',
+  });
+
+  assert.match(answer, /Análisis del documento adjunto/);
+  assert.match(answer, /Resumen ejecutivo/);
+  assert.match(answer, /vacunacion comunitaria/);
+  assert.match(answer, /Siguiente paso recomendado/);
+  assert.match(answer, /nunca queda sin respuesta/);
 });
