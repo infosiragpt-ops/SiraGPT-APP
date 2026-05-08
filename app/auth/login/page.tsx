@@ -63,43 +63,43 @@ export default function LoginPage() {
   }
 
   const fieldClassName =
-    "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15 dark:border-white/20 dark:bg-black dark:text-white dark:placeholder:text-zinc-500 dark:focus-visible:border-white/45 dark:focus-visible:ring-white/20"
+    "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15"
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-neutral-50 p-4 dark:bg-black">
+    <div className="relative flex min-h-screen items-center justify-center bg-neutral-50 p-4 text-neutral-950" style={{ colorScheme: "light" }}>
       <Button
         type="button"
         variant="ghost"
         onClick={handleBack}
-        className="absolute left-4 top-4 h-10 gap-2 rounded-full border border-neutral-200 bg-white/90 px-4 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-neutral-950 dark:border-white/10 dark:bg-zinc-950/80 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-white sm:left-6 sm:top-6"
+        className="absolute left-4 top-4 h-10 gap-2 rounded-full border border-neutral-200 bg-white/90 px-4 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-neutral-950 sm:left-6 sm:top-6"
         aria-label="Volver atras"
       >
         <ArrowLeft className="h-4 w-4" />
         Volver
       </Button>
-      <Card className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] dark:border-white/15 dark:bg-zinc-950 dark:text-zinc-50 dark:shadow-[0_28px_70px_-18px_rgba(0,0,0,0.75)]">
+      <Card className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)]">
         <CardHeader className="text-center">
           <div className="mb-4 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-neutral-900 bg-neutral-900 dark:border-white dark:bg-white">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-neutral-900 bg-neutral-900">
               <Image
                 src="/sira-gpt.png"
                 alt=""
                 width={40}
                 height={40}
-                className="brightness-0 invert dark:brightness-100 dark:invert-0"
+                className="brightness-0 invert"
               />
             </div>
           </div>
-          <CardTitle className="text-2xl font-semibold tracking-tight text-neutral-900 dark:text-white">
+          <CardTitle className="text-2xl font-semibold tracking-tight text-neutral-900">
             {t("welcomeBack")}
           </CardTitle>
-          <CardDescription className="text-neutral-600 dark:text-zinc-400">{t("tagline")}</CardDescription>
+          <CardDescription className="text-neutral-600">{t("tagline")}</CardDescription>
         </CardHeader>
 
         <CardContent>
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="email" className="text-neutral-900 dark:text-zinc-100">
+              <Label htmlFor="email" className="text-neutral-900">
                 {t("email")}
               </Label>
               <Input
@@ -116,7 +116,7 @@ export default function LoginPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password" className="text-neutral-900 dark:text-zinc-100">
+              <Label htmlFor="password" className="text-neutral-900">
                 {t("password")}
               </Label>
               <div className="relative">
@@ -135,7 +135,7 @@ export default function LoginPage() {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="absolute right-0 top-0 h-full px-3 py-2 text-neutral-600 hover:bg-transparent hover:text-neutral-900 dark:text-zinc-400 dark:hover:text-white"
+                  className="absolute right-0 top-0 h-full px-3 py-2 text-neutral-600 hover:bg-transparent hover:text-neutral-900"
                   onClick={() => setShowPassword(!showPassword)}
                   disabled={isLoading}
                 >
@@ -147,7 +147,7 @@ export default function LoginPage() {
             <div className="flex items-center justify-between">
               <Link
                 href="/auth/forgot-password"
-                className="text-sm text-neutral-600 underline-offset-4 hover:text-neutral-900 hover:underline dark:text-zinc-400 dark:hover:text-white"
+                className="text-sm text-neutral-600 underline-offset-4 hover:text-neutral-900 hover:underline"
               >
                 {t("forgotPassword")}
               </Link>
@@ -155,7 +155,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full bg-neutral-900 font-semibold text-white shadow-sm hover:bg-neutral-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+              className="w-full bg-neutral-900 font-semibold text-white shadow-sm hover:bg-neutral-800"
               disabled={isLoading}
             >
               {isLoading ? (
@@ -175,7 +175,7 @@ export default function LoginPage() {
                 <Separator className="w-full" />
               </div>
               <div className="relative flex justify-center text-xs uppercase tracking-wider">
-                <span className="bg-white px-2 text-neutral-500 dark:bg-zinc-950 dark:text-zinc-500">
+                <span className="bg-white px-2 text-neutral-500">
                   {t("orContinueWith")}
                 </span>
               </div>
@@ -186,7 +186,7 @@ export default function LoginPage() {
                 variant="outline"
                 disabled={isLoading}
                 onClick={() => (window.location.href = `${getNormalizedApiBaseUrl()}/auth/google`)}
-                className="w-full border-neutral-300 bg-white font-medium text-neutral-900 hover:bg-neutral-100 dark:border-white/25 dark:bg-transparent dark:text-white dark:hover:bg-white/10"
+                className="w-full border-neutral-300 bg-white font-medium text-neutral-900 hover:bg-neutral-100"
               >
 
                 <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
@@ -215,11 +215,11 @@ export default function LoginPage() {
         </CardContent>
 
         <CardFooter className="justify-center text-center">
-          <p className="text-sm text-neutral-600 dark:text-zinc-400">
+          <p className="text-sm text-neutral-600">
             {t("noAccount")}{" "}
             <Link
               href="/auth/register"
-              className="font-semibold text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 transition-colors hover:decoration-neutral-900 dark:text-white dark:decoration-white/40 dark:hover:decoration-white"
+              className="font-semibold text-neutral-900 underline decoration-neutral-900/30 underline-offset-4 transition-colors hover:decoration-neutral-900"
             >
               {t("signUp")}
             </Link>

@@ -92,6 +92,10 @@ import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
+import {
+  normalizeNavigationHref,
+  useNavigationTransition,
+} from "@/components/navigation-transition-context"
 import { apiClient } from "@/lib/api"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -126,7 +130,8 @@ type SidebarNavItemProps = {
   active: boolean
   pending: boolean
   sidebarState: "open" | "closed"
-  markNavigationIntent: (href: string) => void
+  navigationLabel?: string
+  markNavigationIntent: (href: string, label?: string) => void
   prefetchOnHover: (href: string) => void
   onNavigate?: () => void
 }
@@ -140,10 +145,16 @@ function SidebarNavItem({
   active,
   pending,
   sidebarState,
+  navigationLabel,
   markNavigationIntent,
   prefetchOnHover,
   onNavigate,
 }: SidebarNavItemProps) {
+  const intentLabel = navigationLabel ?? (typeof label === "string" ? label : undefined)
+  const markIntent = React.useCallback(() => {
+    markNavigationIntent(href, intentLabel)
+  }, [href, intentLabel, markNavigationIntent])
+
   return (
     <Tooltip delayDuration={300}>
       <TooltipTrigger asChild>
@@ -163,10 +174,18 @@ function SidebarNavItem({
             scroll={false}
             aria-current={active ? "page" : undefined}
             className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1"
-            onPointerDown={() => markNavigationIntent(href)}
-            onFocus={() => markNavigationIntent(href)}
+            onPointerDown={markIntent}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                if (event.key === " ") event.preventDefault()
+                markIntent()
+              }
+            }}
             onMouseEnter={() => prefetchOnHover(href)}
-            onClick={onNavigate}
+            onClick={() => {
+              markIntent()
+              onNavigate?.()
+            }}
           >
             <Icon className={cn("h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]", iconClassName)} />
             <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">
@@ -271,11 +290,20 @@ export function AppSidebar() {
 
   const [selectedType, setSelectedType] = React.useState("Text Chat")
   const { state, toggleSidebar, isMobile, setOpenMobile } = useSidebar()
-  const [navPending, startNavTransition] = React.useTransition()
-  const [pendingHref, setPendingHref] = React.useState<string | null>(null)
+  const [, startNavTransition] = React.useTransition()
+  const {
+    pendingHref,
+    markNavigationIntent: markSharedNavigationIntent,
+    clearNavigationIntent,
+  } = useNavigationTransition()
   const [newChatPending, setNewChatPending] = React.useState(false)
-  const activePathname = pendingHref ?? pathname
-  const navigate = React.useCallback((href: string) => {
+  const normalizedPathname = normalizeNavigationHref(pathname)
+  const activePathname = pendingHref ?? normalizedPathname
+  const isPendingRoute = React.useCallback(
+    (href: string) => pendingHref === normalizeNavigationHref(href),
+    [pendingHref],
+  )
+  const navigate = React.useCallback((href: string, label?: string) => {
     // Mobile should close the sheet immediately after a tap. Desktop
     // stays open so the active item can change in-frame; collapsing it
     // here makes navigation feel slower and removes the feedback target.
@@ -283,17 +311,21 @@ export function AppSidebar() {
 
     // If we're already on the route, don't push again. Keeping the
     // current frame avoids a redundant RSC fetch.
-    if (pathname === href || pathname.startsWith(href + '/')) return
-    setPendingHref(href)
-    startNavTransition(() => { router.push(href, { scroll: false }) })
-  }, [isMobile, pathname, router, setOpenMobile])
-  // Clear the pending marker once navigation settled. pathname is
-  // the trigger: it changes the frame after router.push resolves.
-  React.useEffect(() => {
-    if (!navPending && pendingHref && (pathname === pendingHref || pathname.startsWith(pendingHref + '/'))) {
-      setPendingHref(null)
+    const targetHref = normalizeNavigationHref(href)
+    if (normalizedPathname === targetHref || normalizedPathname.startsWith(`${targetHref}/`)) {
+      clearNavigationIntent()
+      return
     }
-  }, [navPending, pendingHref, pathname])
+    markSharedNavigationIntent(targetHref, label)
+    startNavTransition(() => { router.push(href, { scroll: false }) })
+  }, [
+    clearNavigationIntent,
+    isMobile,
+    markSharedNavigationIntent,
+    normalizedPathname,
+    router,
+    setOpenMobile,
+  ])
   React.useEffect(() => {
     if (!newChatPending) return
     const id = window.setTimeout(() => setNewChatPending(false), 250)
@@ -302,15 +334,16 @@ export function AppSidebar() {
   const prefetchOnHover = React.useCallback((href: string) => {
     try { router.prefetch(href) } catch { /* ignore */ }
   }, [router])
-  const markNavigationIntent = React.useCallback((href: string) => {
-    if (pathname === href || pathname.startsWith(href + '/')) return
-    setPendingHref(href)
-    try { router.prefetch(href) } catch { /* ignore */ }
-  }, [pathname, router])
+  const markNavigationIntent = React.useCallback((href: string, label?: string) => {
+    const targetHref = normalizeNavigationHref(href)
+    if (normalizedPathname === targetHref || normalizedPathname.startsWith(`${targetHref}/`)) return
+    markSharedNavigationIntent(targetHref, label)
+    try { router.prefetch(targetHref) } catch { /* ignore */ }
+  }, [markSharedNavigationIntent, normalizedPathname, router])
   const markNewChatIntent = React.useCallback(() => {
     setNewChatPending(true)
-    setPendingHref('/chat')
-  }, [])
+    markSharedNavigationIntent("/chat", t("newChat"))
+  }, [markSharedNavigationIntent, t])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
@@ -507,7 +540,7 @@ export function AppSidebar() {
     if (!pathname.startsWith('/chat') || hasQuery) {
       startNavTransition(() => { router.replace('/chat', { scroll: false }) })
     } else {
-      window.setTimeout(() => setPendingHref(null), 0)
+      window.setTimeout(clearNavigationIntent, 0)
     }
     if (isMobile) {
       setOpenMobile(false);
@@ -616,7 +649,7 @@ export function AppSidebar() {
       const data = await response.json().catch(() => ({}))
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo abrir el GPT")
       localStorage.setItem("currentChatId", data.chat.id)
-      setPendingHref("/chat")
+      markSharedNavigationIntent("/chat", data.chat?.title || "Chat")
       router.push(`/chat?id=${data.chat.id}`, { scroll: false })
       if (isMobile) setOpenMobile(false)
     } catch (error) {
@@ -625,22 +658,23 @@ export function AppSidebar() {
   }
 
   const handleChatClick = (chatId: string) => {
-    setPendingHref('/chat')
+    markSharedNavigationIntent("/chat", "Chat")
     selectChat(chatId)
     // Navigate to chat page if not already there
     if (!pathname.startsWith('/chat')) {
       startNavTransition(() => { router.push(`/chat?id=${chatId}`, { scroll: false }) })
     } else {
-      window.setTimeout(() => setPendingHref(null), 0)
+      window.setTimeout(clearNavigationIntent, 0)
     }
     if (isMobile) {
       setOpenMobile(false);
     }
   }
 
-  const handleSearchClick = () => {
+  const handleSearchClick = React.useCallback(() => {
     setSearchOpen(true)
-  }
+    if (isMobile) setOpenMobile(false)
+  }, [isMobile, setOpenMobile])
 
 
 
@@ -896,6 +930,13 @@ export function AppSidebar() {
             <TooltipTrigger asChild>
               <SidebarMenuButton
                 onClick={handleSearchClick}
+                onPointerDown={handleSearchClick}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    if (event.key === " ") event.preventDefault()
+                    handleSearchClick()
+                  }
+                }}
                 className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
                 variant="default"
               >
@@ -915,7 +956,7 @@ export function AppSidebar() {
             icon={Images}
             iconClassName="text-amber-500"
             active={isOnLibraryPage}
-            pending={pendingHref === '/library'}
+            pending={isPendingRoute("/library")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
@@ -929,7 +970,7 @@ export function AppSidebar() {
             icon={LayoutGrid}
             iconClassName="text-emerald-500"
             active={isOnGPTsPage}
-            pending={pendingHref === '/gpts'}
+            pending={isPendingRoute("/gpts")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
@@ -943,7 +984,7 @@ export function AppSidebar() {
             icon={Sparkles}
             iconClassName="text-teal-500"
             active={isOnParaphrasePage}
-            pending={pendingHref === '/parafraseo'}
+            pending={isPendingRoute("/parafraseo")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
@@ -962,7 +1003,7 @@ export function AppSidebar() {
             icon={FolderKanban}
             iconClassName="text-rose-500"
             active={isOnProjectsPage}
-            pending={pendingHref === '/projects'}
+            pending={isPendingRoute("/projects")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
@@ -981,7 +1022,7 @@ export function AppSidebar() {
             icon={Palette}
             iconClassName="text-fuchsia-500"
             active={isOnDesignPage}
-            pending={pendingHref === '/design'}
+            pending={isPendingRoute("/design")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
@@ -1001,7 +1042,7 @@ export function AppSidebar() {
             icon={Code2}
             iconClassName="text-emerald-500"
             active={isOnCodePage}
-            pending={pendingHref === '/code'}
+            pending={isPendingRoute("/code")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}

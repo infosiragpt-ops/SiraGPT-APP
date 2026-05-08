@@ -3,6 +3,8 @@
 import * as React from "react"
 import { usePathname } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
+import { NavigationTransitionProvider } from "@/components/navigation-transition-context"
+import { RouteTransitionShell } from "@/components/route-transition-shell"
 import { SidebarInset, useSidebar } from "@/components/ui/sidebar"
 import { AuthGuard } from "@/components/auth-guard"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
@@ -21,17 +23,19 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <AuthGuard>
-      <div className="app-shell-viewport flex w-full">
-        <AppSidebar />
-        <SidebarInset className="w-0 min-w-0 flex-1">
-          {/* Bridges window-level tool-activation events into
-              setOpen(false) on the VISIBLE sidebar's provider. Must
-              live here because this level's useSidebar() resolves to
-              the outer provider that actually drives the sidebar DOM. */}
-          <SidebarCollapseBridge />
-          {children}
-        </SidebarInset>
-      </div>
+      <NavigationTransitionProvider>
+        <div className="app-shell-viewport flex w-full">
+          <AppSidebar />
+          <SidebarInset className="w-0 min-w-0 flex-1">
+            {/* Bridges window-level tool-activation events into
+                setOpen(false) on the VISIBLE sidebar's provider. Must
+                live here because this level's useSidebar() resolves to
+                the outer provider that actually drives the sidebar DOM. */}
+            <SidebarCollapseBridge />
+            <RouteTransitionShell>{children}</RouteTransitionShell>
+          </SidebarInset>
+        </div>
+      </NavigationTransitionProvider>
     </AuthGuard>
   )
 }

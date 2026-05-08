@@ -14,18 +14,21 @@ const {
 } = require('../services/oauth-state');
 
 const router = express.Router();
-const googleOAuthConfigured = Boolean(
-  process.env.GOOGLE_CLIENT_ID &&
-  process.env.GOOGLE_CLIENT_SECRET &&
-  process.env.GOOGLE_AUTH_URI
-);
 const googleIntegrationsConfigured = Boolean(
   process.env.GOOGLE_CLIENT_ID &&
   process.env.GOOGLE_CLIENT_SECRET
 );
 
+const getFrontendUrl = () => (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
+
+const isGoogleOAuthConfigured = () => (
+  typeof passport.isGoogleOAuthConfigured === 'function'
+    ? passport.isGoogleOAuthConfigured()
+    : Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_AUTH_URI)
+);
+
 const requireGoogleOAuth = (req, res, next) => {
-  if (googleOAuthConfigured) return next();
+  if (isGoogleOAuthConfigured()) return next();
   return res.status(503).json({
     error: 'Google OAuth is not configured for this environment'
   });
@@ -98,10 +101,10 @@ router.get('/google/callback',
       });
 
       // Redirect to frontend with token
-      res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${token}`);
+      res.redirect(`${getFrontendUrl()}/auth/callback?token=${token}`);
     } catch (error) {
       console.error('Google auth callback error:', error);
-      res.redirect(`${process.env.FRONTEND_URL}/auth/login?error=auth_failed`);
+      res.redirect(`${getFrontendUrl()}/auth/login?error=auth_failed`);
     }
   }
 );

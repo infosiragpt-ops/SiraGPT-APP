@@ -56,7 +56,7 @@ export default async function RootLayout({
         <PostHogClientInit />
         <SyncfusionBannerRemover />
         <NextIntlClientProvider locale={locale} messages={messages}>
-          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+          <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
             <AuthProvider>
               <SettingsProvider>
                 <AppWrapper>
