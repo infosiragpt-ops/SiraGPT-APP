@@ -297,6 +297,20 @@ function isDeepDocumentQuestion(query) {
   );
 }
 
+function isGenericDocumentOverviewQuestion(query) {
+  const normalized = normalizeForSearch(query);
+  if (!/\b(resumen|resume|sintesis|analisis general|de que trata|que dice|explica)\b/.test(normalized)) {
+    return false;
+  }
+  const terms = normalized.match(/[a-z0-9]{4,}/g) || [];
+  const domainTerms = terms.filter((term) => ![
+    'dame', 'hazme', 'hacer', 'hace', 'quiero', 'necesito', 'puedes', 'podrias',
+    'resumen', 'resume', 'sintesis', 'analisis', 'general', 'explica', 'trata',
+    'dice', 'este', 'esta', 'esto', 'documento', 'archivo', 'adjunto', 'sobre',
+  ].includes(term));
+  return domainTerms.length === 0;
+}
+
 function sourceLabelForEvidence(item = {}) {
   const parts = [];
   if (item.sectionTitle) parts.push(item.sectionTitle);
@@ -491,7 +505,8 @@ async function buildUploadedFileContext(prisma, {
     const analysis = row.documentAnalysis || null;
     const chunks = Array.isArray(analysis?.chunks) ? analysis.chunks : [];
     const tables = Array.isArray(analysis?.tables) ? analysis.tables : [];
-    const evidence = deepQuestion
+    const genericOverview = isGenericDocumentOverviewQuestion(query);
+    const evidence = deepQuestion && !genericOverview
       ? await retrieveRelevantEvidence(prisma, {
         userId,
         row,

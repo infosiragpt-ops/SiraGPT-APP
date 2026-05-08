@@ -26,6 +26,32 @@ test('upload policy accepts extension fallback for octet-stream browser uploads'
   assert.equal(result.mimeType, 'application/pdf');
 });
 
+test('upload policy accepts harmless repeated dots in basename', () => {
+  const result = validateUploadPolicy({
+    originalName: 'Captura de pantalla 2026-01-01 a la(s) 5.20.33 p. m..png',
+    declaredMime: 'image/png',
+    detectedMime: 'image/png',
+    detectionSource: 'magic-bytes',
+    size: 1024,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.code, 'accepted');
+});
+
+test('upload policy still rejects path traversal style names', () => {
+  const result = validateUploadPolicy({
+    originalName: '../report.pdf',
+    declaredMime: 'application/pdf',
+    detectedMime: 'application/pdf',
+    detectionSource: 'magic-bytes',
+    size: 1024,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'invalid_filename');
+});
+
 test('upload policy rejects mismatched extension and magic bytes', () => {
   const result = validateUploadPolicy({
     originalName: 'renamed.docx',

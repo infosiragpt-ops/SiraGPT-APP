@@ -15,8 +15,11 @@ const EXECUTABLE_EXTENSIONS = new Set([
   'reg', 'inf',
 ]);
 
-// Characters that are dangerous in filenames (path traversal, shell injection, etc.)
-const DANGEROUS_FILENAME_PATTERN = /[\0\r\n\x00-\x1f<>:"|?*\\]|(\.\.)/;
+// Characters that are dangerous in filenames (path traversal, shell injection, etc.).
+// Do not reject a harmless double-dot inside the *basename* (for example
+// macOS screenshots sometimes arrive as `... p. m..png`). Path traversal is
+// handled below by rejecting directory separators and literal `.` / `..` names.
+const DANGEROUS_FILENAME_PATTERN = /[\0\r\n\x00-\x1f<>:"|?*\\/]/;
 
 const ALLOWED_MIMES = new Set([
   // Images
@@ -159,10 +162,13 @@ function isActiveContentMime(mime) {
 
 function sanitizeFilename(name) {
   if (!name) return null;
-  // Reject path traversal ("/" "..") and control characters
-  if (DANGEROUS_FILENAME_PATTERN.test(name)) return null;
+  const raw = String(name);
+  // Reject directory components and control/shell-hostile characters, but allow
+  // normal punctuation in the basename. The double-extension executable guard
+  // below still catches `invoice.exe.pdf` and similar tricks.
+  if (DANGEROUS_FILENAME_PATTERN.test(raw)) return null;
   // Strip to basename (remove any directory components)
-  const base = path.basename(String(name));
+  const base = path.basename(raw);
   // Reject empty after basename extraction
   if (!base || base === '.' || base === '..') return null;
   return base;

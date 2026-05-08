@@ -14,16 +14,32 @@ const SCAFFOLDING_PREFIXES = [
   'tipo:',
   'analysisId:',
   'resumen tecnico:',
+  'fragmentos analizados:',
+  'pregunta del usuario:',
 ];
 
 const SCAFFOLDING_NEEDLES = [
   'Contexto inicial de archivos adjuntos',
   'Usa este contenido para responder',
   'Para evidencia estructurada llama',
+  'Para evidencia estructurada adicional llama',
+  'Contenido relevante recuperado desde todo el documento',
   'Evidencia estructurada disponible:',
+  'Primeras referencias estructuradas disponibles:',
   'Tablas detectadas:',
   '[Extracto truncado',
+  '[Extracto balanceado',
+  '[La evidencia fue recuperada',
 ];
+
+function stripEvidenceLabel(line) {
+  const trimmed = String(line || '').trim();
+  const evidenceMatch = trimmed.match(/^Evidencia\s+\d+\s+\[[^\]]+\]:\s*(.+)$/i);
+  if (evidenceMatch) return evidenceMatch[1].trim();
+  const bulletReferenceMatch = trimmed.match(/^-\s+[^:]{1,160}:\s+(.+)$/);
+  if (bulletReferenceMatch) return bulletReferenceMatch[1].trim();
+  return trimmed;
+}
 
 function stripScaffolding(rawText) {
   const lines = String(rawText || '').split(/\r?\n/);
@@ -34,7 +50,9 @@ function stripScaffolding(rawText) {
     if (trimmed === '---') continue;
     if (SCAFFOLDING_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) continue;
     if (SCAFFOLDING_NEEDLES.some((needle) => trimmed.includes(needle))) continue;
-    kept.push(trimmed);
+    const content = stripEvidenceLabel(trimmed);
+    if (!content) continue;
+    kept.push(content);
   }
   return kept
     .join('\n')
