@@ -165,6 +165,23 @@ describe('AsyncGuard', () => {
         assert.ok(typeof err.guardElapsedMs === 'number');
       }
     });
+
+    test('redacts labels in timeout errors and metadata', async () => {
+      const guard = new AsyncGuard({ defaultTimeoutMs: 30 });
+      const err = await catchRejection(
+        guard.run(never(), {
+          label: 'sync Bearer abcdefghijklmnopqrstuvwxyz123456 https://example.com/?api_key=secret',
+          timeoutMs: 30,
+        })
+      );
+
+      assert.ok(err instanceof GuardError);
+      assert.doesNotMatch(err.message, /abcdefghijklmnopqrstuvwxyz123456|api_key=secret/);
+      assert.doesNotMatch(err.label, /abcdefghijklmnopqrstuvwxyz123456|api_key=secret/);
+      assert.doesNotMatch(JSON.stringify(err.toJSON()), /abcdefghijklmnopqrstuvwxyz123456|api_key=secret/);
+      assert.match(err.label, /\*\*\*bearer-token-redacted\*\*\*/);
+      assert.match(err.label, /api_key=\*\*\*/);
+    });
   });
 
   describe('fetch()', () => {
@@ -254,6 +271,26 @@ describe('AsyncGuard', () => {
       assert.ok(err instanceof GuardError);
       assert.equal(err.code, 'FETCH_ERROR');
       assert.equal(err.reason, 'network-error');
+    });
+
+    test('redacts fetch URLs and upstream messages in GuardError payloads', async () => {
+      const mockFetch = async () => {
+        throw new Error('failed Bearer abcdefghijklmnopqrstuvwxyz123456 at https://example.com/?api_key=secret');
+      };
+
+      const guard = new AsyncGuard({ defaultTimeoutMs: 5000 });
+      const guardedFetch = guard.fetch(mockFetch);
+
+      const err = await catchRejection(
+        guardedFetch('https://user:pass@example.com/api?api_key=secret&page=2')
+      );
+
+      assert.ok(err instanceof GuardError);
+      assert.doesNotMatch(err.message, /abcdefghijklmnopqrstuvwxyz123456|api_key=secret|user:pass/);
+      assert.doesNotMatch(err.stack, /abcdefghijklmnopqrstuvwxyz123456|api_key=secret|user:pass/);
+      assert.doesNotMatch(JSON.stringify(err.toJSON()), /abcdefghijklmnopqrstuvwxyz123456|api_key=secret|user:pass/);
+      assert.match(err.message, /api_key=\*\*\*/);
+      assert.match(err.message, /\*\*\*bearer-token-redacted\*\*\*/);
     });
 
     test('passes through successful responses', async () => {
@@ -489,6 +526,18 @@ describe('AsyncGuard', () => {
         originalError: original,
       });
       assert.ok(err.stack.includes('original db error'));
+    });
+
+    test('keeps sanitized original errors out of enumerable payloads', () => {
+      const original = new Error('failed Bearer abcdefghijklmnopqrstuvwxyz123456 https://example.com/?api_key=secret');
+      const err = new GuardError('wrapped', {
+        reason: 'timeout',
+        originalError: original,
+      });
+
+      assert.doesNotMatch(JSON.stringify(err), /abcdefghijklmnopqrstuvwxyz123456|api_key=secret/);
+      assert.doesNotMatch(err.originalError.message, /abcdefghijklmnopqrstuvwxyz123456|api_key=secret/);
+      assert.equal(Object.prototype.propertyIsEnumerable.call(err, 'originalError'), false);
     });
   });
 

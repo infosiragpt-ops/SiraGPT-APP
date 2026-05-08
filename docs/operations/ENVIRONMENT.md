@@ -58,6 +58,8 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `RATE_LIMIT_EXPENSIVE_MAX` | Max expensive requests per window | `60` |
 | `RATE_LIMIT_API_MAX` | Max API requests per window | `1000` |
 | `RATE_LIMIT_STORE` | Rate limit store backend | `auto` (Redis or memory) |
+| `SIRAGPT_REDACT_EXTRA_HEADERS` | Optional comma-separated header names to redact from logs/traces in addition to the built-in deny list | (empty) |
+| `SIRAGPT_REDACT_EXTRA_QUERY_KEYS` | Optional comma-separated query parameter names to redact from logs/traces in addition to the built-in deny list | (empty) |
 | `PLAN_QUOTAS_ENFORCED` | Enforce plan-based token quotas | `true` |
 
 ## 📊 Observability

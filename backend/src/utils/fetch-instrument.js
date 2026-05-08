@@ -20,6 +20,7 @@
 
 const { trace, context, SpanStatusCode, propagation } = require('@opentelemetry/api');
 const pino = require('pino');
+const { redactString, redactUrl } = require('./secret-redactor');
 
 // ── Peer dependency: async-guard ───────────────────────────────────────────
 // We import from async-guard to reuse sanitiseFetchInit.  In a real
@@ -98,7 +99,7 @@ function nextRequestId() {
 function spanAttrs(method, url, status, elapsedMs, contentLength) {
   const attrs = {
     'http.method': method || 'GET',
-    'http.url': String(url).slice(0, 500),
+    'http.url': redactUrl(url, { maxLen: 500 }),
     'http.status_code': status ?? 0,
     'fetch.duration_ms': elapsedMs,
   };
@@ -113,11 +114,9 @@ function contentLength(res) {
   return v ? Number(v) : undefined;
 }
 
-/** Truncate a URL for logging. */
-function truncateUrl(url, maxLen) {
-  const s = typeof url === 'string' ? url : String(url);
-  if (s.length <= maxLen) return s;
-  return s.slice(0, maxLen) + '…';
+/** Redact and truncate a URL for logging. */
+function logUrl(url, maxLen) {
+  return redactUrl(url, { maxLen });
 }
 
 /** Check if a status code falls within the success range. */
@@ -332,7 +331,7 @@ class FetchInstrument {
             log.info({
               requestId,
               method,
-              url: truncateUrl(urlStr, opts.logUrlMaxLength),
+              url: logUrl(urlStr, opts.logUrlMaxLength),
               msg: 'fetch start',
             });
           }
@@ -390,7 +389,7 @@ class FetchInstrument {
             log[level]({
               requestId,
               method,
-              url: truncateUrl(urlStr, opts.logUrlMaxLength),
+              url: logUrl(urlStr, opts.logUrlMaxLength),
               status: response.status,
               elapsedMs: Math.round(elapsed),
               contentLength: cl,
@@ -425,9 +424,9 @@ class FetchInstrument {
         log.warn({
           requestId,
           method,
-          url: truncateUrl(urlStr, opts.logUrlMaxLength),
+          url: logUrl(urlStr, opts.logUrlMaxLength),
           elapsedMs: Math.round(elapsed),
-          error: err?.message,
+          error: redactString(err?.message),
           isTimeout,
           msg: 'fetch error',
         });
@@ -438,9 +437,13 @@ class FetchInstrument {
         span.setAttributes(spanAttrs(method, urlStr, 0, elapsed));
         span.setStatus({
           code: SpanStatusCode.ERROR,
-          message: isTimeout ? 'timeout' : (err?.message || 'unknown error'),
+          message: isTimeout ? 'timeout' : (redactString(err?.message) || 'unknown error'),
         });
-        span.recordException(err);
+        span.recordException({
+          name: err?.name || 'Error',
+          message: redactString(err?.message),
+          stack: redactString(err?.stack),
+        });
         span.end();
       }
 

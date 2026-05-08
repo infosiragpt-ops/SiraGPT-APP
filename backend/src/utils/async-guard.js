@@ -49,6 +49,7 @@
  */
 
 const crypto = require('crypto');
+const { redactErrorLike, redactString, redactUrl } = require('./secret-redactor');
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -81,22 +82,26 @@ class GuardError extends Error {
    * @param {Error} [opts.originalError] - wrapped original error
    */
   constructor(message, opts = {}) {
-    super(message);
+    super(redactString(message));
     this.name = 'GuardError';
     this.code = opts.code || 'GUARD_TIMEOUT';
     this.reason = opts.reason || 'timeout';
     this.elapsedMs = opts.elapsedMs;
     this.timeoutMs = opts.timeoutMs;
-    this.label = opts.label || null;
+    this.label = opts.label ? redactString(opts.label) : null;
     this.guardId = opts.guardId || null;
-    this.originalError = opts.originalError || null;
+    Object.defineProperty(this, 'originalError', {
+      value: opts.originalError ? redactErrorLike(opts.originalError) : null,
+      enumerable: false,
+      configurable: true,
+    });
 
     // Timestamps for observability
     this.timestamp = new Date().toISOString();
 
     // If we're wrapping an original error, copy its stack trace
-    if (this.originalError && this.originalError.stack) {
-      this.stack = `${this.stack}\nCaused by: ${this.originalError.stack}`;
+    if (this.originalError?.stack) {
+      this.stack = `${this.stack}\nCaused by: ${redactString(this.originalError.stack)}`;
     }
   }
 
@@ -106,10 +111,10 @@ class GuardError extends Error {
       name: this.name,
       code: this.code,
       reason: this.reason,
-      message: this.message,
+      message: redactString(this.message),
       elapsedMs: this.elapsedMs,
       timeoutMs: this.timeoutMs,
-      label: this.label,
+      label: this.label ? redactString(this.label) : this.label,
       guardId: this.guardId,
       timestamp: this.timestamp,
     };
@@ -328,7 +333,7 @@ class AsyncGuard {
    */
   register(opts = {}) {
     const id = this._nextId();
-    const label = opts.label || '';
+    const label = opts.label ? redactString(opts.label) : '';
     const timeoutMs = clampInt(
       opts.timeoutMs,
       this._defaultTimeoutMs,
@@ -498,8 +503,11 @@ class AsyncGuard {
         MAX_TIMEOUT_MS
       );
 
+      const inputLabel = typeof input === 'string' || input instanceof URL
+        ? redactUrl(input, { maxLen: 120 })
+        : 'Request';
       const token = guard.register({
-        label: `fetch:${typeof input === 'string' ? input.slice(0, 120) : 'Request'}`,
+        label: `fetch:${inputLabel}`,
         timeoutMs: timeout,
       });
 
@@ -627,8 +635,9 @@ class AsyncGuard {
     const guard = this;
     const label = opts.label || fn.name || 'anonymous_route';
     return (req, res, next) => {
+      const routePath = req.originalUrl || req.url || '';
       const guardOpts = {
-        label: `${label}:${req.method} ${req.originalUrl || req.url}`,
+        label: `${label}:${req.method} ${redactUrl(routePath, { maxLen: 200 })}`,
         timeoutMs: opts.timeoutMs,
       };
 

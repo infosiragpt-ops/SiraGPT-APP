@@ -256,6 +256,27 @@ describe('FetchInstrument', () => {
       assert.equal(dones[0].status, 200);
     });
 
+    it('redacts secrets from logged URLs without mutating the outgoing request', async () => {
+      const { logger, lines } = captureLogs();
+      const fi2 = new FetchInstrument({ timeoutMs: 5000, logger });
+      let capturedInput = null;
+      const url = 'https://user:pass@example.com/path?access_token=secret&page=2';
+
+      globalThis.fetch = async (input) => {
+        capturedInput = input;
+        return makeResponse('logged');
+      };
+
+      await fi2._tracedFetch(url);
+      const starts = lines.filter(l => l.msg === 'fetch start');
+      const dones = lines.filter(l => l.msg === 'fetch done');
+
+      assert.equal(capturedInput, url);
+      assert.equal(starts[0].url, 'https://example.com/path?access_token=***&page=2');
+      assert.equal(dones[0].url, 'https://example.com/path?access_token=***&page=2');
+      assert.doesNotMatch(JSON.stringify(lines), /secret|user:pass/);
+    });
+
     it('does not log when logRequests is false', async () => {
       const { logger, lines } = captureLogs();
       const fi2 = new FetchInstrument({ timeoutMs: 5000, logger, logRequests: false });
@@ -283,6 +304,21 @@ describe('FetchInstrument', () => {
       assert.equal(errs.length, 1);
       assert.equal(errs[0].level, 'warn');
       assert.ok(errs[0].isTimeout === false);
+    });
+
+    it('redacts secrets from network error logs', async () => {
+      const { logger, lines } = captureLogs();
+      const fi2 = new FetchInstrument({ timeoutMs: 5000, logger });
+      globalThis.fetch = async () => {
+        throw new Error('upstream Bearer abcdefghijklmnopqrstuvwxyz123456 failed at https://api.example.com/?api_key=secret');
+      };
+
+      await assert.rejects(() => fi2._tracedFetch('https://api.example.com/?api_key=secret'));
+      const errs = lines.filter(l => l.msg === 'fetch error');
+      assert.equal(errs.length, 1);
+      assert.equal(errs[0].url, 'https://api.example.com/?api_key=***');
+      assert.match(errs[0].error, /\*\*\*bearer-token-redacted\*\*\*/);
+      assert.doesNotMatch(JSON.stringify(errs), /abcdefghijklmnopqrstuvwxyz123456|api_key=secret/);
     });
 
     it('tracks active count correctly', async () => {
