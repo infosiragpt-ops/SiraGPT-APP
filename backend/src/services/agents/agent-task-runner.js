@@ -99,6 +99,41 @@ function summarizeForChat(text, policy) {
   return `${intro}\n\nResumen conversacional:\n\n${clipped}`;
 }
 
+function normalizeAttachmentFallbackContent(text) {
+  const tableHeaderCells = new Set([
+    'n', 'no', 'titulo', 'titulo del articulo', 'autores', 'ano de publicacion',
+    'enfoque y o tipo de estudio', 'muestreo', 'procedencia', 'ocupacion',
+    'instrumento', 'modelo teorico', 'resultados',
+  ]);
+  const cells = String(text || '')
+    .replace(/\*{1,3}/g, '')
+    .replace(/\|/g, '\n')
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^[-:]{2,}$/.test(line))
+    .filter((line) => !/^\d{1,3}$/.test(line))
+    .filter((line) => {
+      const key = line
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+      return !tableHeaderCells.has(key);
+    });
+  return cells.join('. ');
+}
+
+function normalizedKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 function splitReadableSentences(text) {
   const seen = new Set();
   return String(text || '')
@@ -107,17 +142,39 @@ function splitReadableSentences(text) {
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence.length >= 35)
     .filter((sentence) => {
-      const key = sentence
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9]+/g, ' ')
-        .trim();
+      const key = normalizedKey(sentence);
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     })
-    .slice(0, 24);
+    .slice(0, 36);
+}
+
+function scoreAttachmentSentence(sentence, request = '') {
+  const normalized = normalizedKey(sentence);
+  let score = 0;
+  if (/\b(se encontro|se evidencio|se identifico|se observo|muestra|indica|concluye|recomienda|sugiere|resultado|resultados|hallazgo|hallazgos|asocia|asociacion|relacion significativa|incrementa|reduce|mejora)\b/.test(normalized)) score += 5;
+  if (/\b(ansiedad|depresion|estres|riesgo|impacto|efecto|efectos|salud mental|rendimiento|adiccion|vulnerabilidad|malestar)\b/.test(normalized)) score += 2;
+  if (sentence.length >= 80 && sentence.length <= 420) score += 1;
+  if (/\b(cuantitativo|cualitativo|transversal|probabilistico|conveniencia|cuestionario|escala|inventario|modelo teorico|autores|publicacion)\b/.test(normalized)) score -= 2;
+
+  const requestTerms = Array.from(new Set(normalizedKey(request).match(/[a-z0-9]{5,}/g) || []))
+    .filter((term) => !['resumen', 'resume', 'documento', 'archivo', 'adjunto', 'quiero', 'dame', 'necesito', 'analisis'].includes(term));
+  for (const term of requestTerms) {
+    if (normalized.includes(term)) score += 1;
+  }
+  return score;
+}
+
+function selectAttachmentSentences(sentences, request = '', limit = 8) {
+  const ranked = sentences.map((sentence, index) => ({ sentence, index, score: scoreAttachmentSentence(sentence, request) }));
+  const strong = ranked
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, limit)
+    .sort((a, b) => a.index - b.index)
+    .map((item) => item.sentence);
+  return strong.length ? strong : sentences.slice(0, limit);
 }
 
 function looksLikeMissingAttachmentAnswer(text) {
@@ -160,7 +217,8 @@ function sanitizeAttachmentFallbackReason(reason) {
 }
 
 function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason = '' }) {
-  const cleaned = stripScaffolding(uploadedFileContext)
+  const cleanedRaw = stripScaffolding(uploadedFileContext);
+  const cleaned = normalizeAttachmentFallbackContent(cleanedRaw)
     .replace(/\s+/g, ' ')
     .trim();
   if (!cleaned || countUsefulWords(cleaned) < 30) return '';
@@ -184,9 +242,8 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
     ? `\n\n> Nota operativa: respondí con el análisis documental local porque ${publicReason}. Así el chat nunca queda sin respuesta cuando el runtime principal falla.`
     : '';
 
-  const bulletSentences = sentences
-    .slice(0, 8)
-    .map((sentence) => sentence.replace(/^[,;:\s]+/, '').trim())
+  const bulletSentences = selectAttachmentSentences(sentences, request, 8)
+    .map((sentence) => sentence.replace(/^[,;:\s]+/, '').replace(/\.{2,}/g, '.').trim())
     .filter(Boolean);
 
   const executiveSummary = bulletSentences
@@ -250,6 +307,51 @@ function buildAttachmentUnavailableFallbackAnswer({ reason = '' } = {}) {
   ].filter(Boolean).join('\n');
 }
 
+// Map a user-selected model id to the provider whose OpenAI-compatible
+// chat/completions API can serve the agent runtime. The agent runner is
+// built against the OpenAI Node SDK shape, but DeepSeek, OpenRouter and
+// Gemini's OpenAI-compat surface all speak the same protocol, so we
+// don't have to force-remap every selection to `gpt-4o-mini`.
+function detectAgentRuntimeProvider(modelId) {
+  const id = String(modelId || '').trim();
+  if (!id) return null;
+  if (/^(gpt-|o\d|chatgpt-|ft:gpt-|ft:o)/i.test(id)) {
+    return { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null };
+  }
+  if (/^deepseek(-|\/|$)/i.test(id)) {
+    return { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com' };
+  }
+  if (/^gemini-/i.test(id) || /^imagen-/i.test(id)) {
+    return {
+      provider: 'Gemini',
+      apiKeyEnv: 'GEMINI_API_KEY',
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    };
+  }
+  if (/^(anthropic|meta-llama|moonshotai|x-ai|openrouter)\//i.test(id)) {
+    return {
+      provider: 'OpenRouter',
+      apiKeyEnv: 'OPENROUTER_API_KEY',
+      baseURL: 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
+        'X-Title': 'SiraGPT',
+      },
+    };
+  }
+  return null;
+}
+
+function buildOpenAICompatibleClient(target) {
+  if (!target || !target.apiKeyEnv) return null;
+  const apiKey = process.env[target.apiKeyEnv];
+  if (!apiKey) return null;
+  const opts = { apiKey };
+  if (target.baseURL) opts.baseURL = target.baseURL;
+  if (target.defaultHeaders) opts.defaultHeaders = target.defaultHeaders;
+  return new OpenAI(opts);
+}
+
 function normalizeAgentRuntimeModel(selectedModel) {
   const displayModel = String(selectedModel || '').trim() || 'gpt-4o';
   const configuredFallback = String(
@@ -257,13 +359,61 @@ function normalizeAgentRuntimeModel(selectedModel) {
     process.env.AGENT_TASK_RUNTIME_MODEL ||
     'gpt-4o-mini'
   ).trim();
-  const isOpenAICompatible = /^(gpt-|o\d|chatgpt-|ft:gpt-|ft:o)/i.test(displayModel);
+  const detected = detectAgentRuntimeProvider(displayModel);
+  const isOpenAINative = detected && detected.provider === 'OpenAI';
   return {
     displayModel,
-    runtimeModel: isOpenAICompatible ? displayModel : configuredFallback,
-    runtimeProvider: isOpenAICompatible ? 'selected-openai' : 'openai-fallback',
-    remapped: !isOpenAICompatible,
+    runtimeModel: detected ? displayModel : configuredFallback,
+    runtimeProvider: isOpenAINative
+      ? 'selected-openai'
+      : detected
+        ? `selected-${detected.provider.toLowerCase()}`
+        : 'openai-fallback',
+    detected,
+    remapped: !detected,
   };
+}
+
+// Resolve the OpenAI-compatible client the agent runtime should drive.
+// Tries the user's selected provider first; if that provider has no API
+// key configured, walks a small fallback list so we never hand the
+// runtime null on a host that has at least one key set.
+function resolveAgentRuntimeClient(profile) {
+  const tried = new Set();
+  const tryTarget = (target) => {
+    if (!target) return null;
+    const key = `${target.provider}:${target.apiKeyEnv}`;
+    if (tried.has(key)) return null;
+    tried.add(key);
+    return buildOpenAICompatibleClient(target);
+  };
+
+  let primary = tryTarget(profile?.detected);
+  if (primary) {
+    return { client: primary, model: profile.runtimeModel, provider: profile.detected.provider };
+  }
+
+  const fallbackTargets = [
+    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: profile?.runtimeModel || 'gpt-4o-mini' },
+    { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+    {
+      provider: 'OpenRouter',
+      apiKeyEnv: 'OPENROUTER_API_KEY',
+      baseURL: 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
+        'X-Title': 'SiraGPT',
+      },
+      model: 'moonshotai/kimi-k2.6',
+    },
+  ];
+  for (const target of fallbackTargets) {
+    const client = tryTarget(target);
+    if (client) {
+      return { client, model: target.model, provider: target.provider };
+    }
+  }
+  return { client: null, model: profile?.runtimeModel || 'gpt-4o-mini', provider: 'unconfigured' };
 }
 
 async function persistAssistantMessage({
@@ -352,7 +502,19 @@ async function runAgentTaskJob(payload = {}, job = null) {
   const finalizeProfile = buildFinalizeProfile(executionProfile, universalTaskContract);
   let taskContract = deriveLegacyTaskContract(universalTaskContract);
   let taskContractSource = 'fallback';
-  const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+  // Resolve the actual OpenAI-compatible client (and final model id) for
+  // the user's selected provider. If the user picked DeepSeek and we have
+  // DEEPSEEK_API_KEY, we drive DeepSeek directly — without this, every
+  // non-OpenAI selection used to be silently remapped to gpt-4o-mini and
+  // would hard-fail whenever OPENAI_API_KEY was rate-limited.
+  const runtimeClientResolution = resolveAgentRuntimeClient(runtimeModelProfile);
+  const openai = runtimeClientResolution.client;
+  if (runtimeClientResolution.client) {
+    runtimeModelProfile.runtimeModel = runtimeClientResolution.model;
+    runtimeModelProfile.runtimeProvider = runtimeClientResolution.provider;
+    runtimeModelProfile.remapped = runtimeClientResolution.model !== runtimeModelProfile.displayModel
+      || runtimeClientResolution.provider !== runtimeModelProfile.detected?.provider;
+  }
   if (!plainTranscriptionRequest && openai) {
     try {
       const resolved = await resolveTaskContract({

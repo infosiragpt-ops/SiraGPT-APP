@@ -189,7 +189,33 @@ test('normalizeAgentRuntimeModel: OpenAI models pass through', () => {
   assert.equal(result.remapped, false);
 });
 
-test('normalizeAgentRuntimeModel: non-OpenAI models use fallback', () => {
+test('normalizeAgentRuntimeModel: DeepSeek models keep their provider (no fallback to gpt-4o-mini)', () => {
+  const result = normalizeAgentRuntimeModel('deepseek-v4-flash');
+  assert.equal(result.displayModel, 'deepseek-v4-flash');
+  assert.equal(result.runtimeModel, 'deepseek-v4-flash');
+  assert.equal(result.runtimeProvider, 'selected-deepseek');
+  assert.equal(result.remapped, false);
+});
+
+test('normalizeAgentRuntimeModel: OpenRouter slugs (anthropic, kimi, etc.) keep their provider', () => {
+  const claude = normalizeAgentRuntimeModel('anthropic/claude-3.5-sonnet');
+  assert.equal(claude.runtimeProvider, 'selected-openrouter');
+  assert.equal(claude.runtimeModel, 'anthropic/claude-3.5-sonnet');
+  assert.equal(claude.remapped, false);
+
+  const kimi = normalizeAgentRuntimeModel('moonshotai/kimi-k2.6');
+  assert.equal(kimi.runtimeProvider, 'selected-openrouter');
+  assert.equal(kimi.remapped, false);
+});
+
+test('normalizeAgentRuntimeModel: Gemini models keep their provider', () => {
+  const result = normalizeAgentRuntimeModel('gemini-2.5-pro');
+  assert.equal(result.runtimeProvider, 'selected-gemini');
+  assert.equal(result.runtimeModel, 'gemini-2.5-pro');
+  assert.equal(result.remapped, false);
+});
+
+test('normalizeAgentRuntimeModel: unknown bare names fall back to OpenAI default', () => {
   const result = normalizeAgentRuntimeModel('claude-sonnet-4');
   assert.equal(result.displayModel, 'claude-sonnet-4');
   assert.ok(result.runtimeModel.includes('gpt-4o-mini'));
@@ -197,7 +223,7 @@ test('normalizeAgentRuntimeModel: non-OpenAI models use fallback', () => {
   assert.equal(result.remapped, true);
 });
 
-test('normalizeAgentRuntimeModel: respects AGENT_TASK_RUNTIME_MODEL env override', () => {
+test('normalizeAgentRuntimeModel: respects AGENT_TASK_RUNTIME_MODEL env override for unknown names', () => {
   process.env.AGENT_TASK_RUNTIME_MODEL = 'gpt-4.1-nano';
   const result = normalizeAgentRuntimeModel('claude-opus');
   assert.equal(result.runtimeModel, 'gpt-4.1-nano');
