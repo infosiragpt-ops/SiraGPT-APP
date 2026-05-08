@@ -102,6 +102,7 @@ async function search(index, {
   filters = null,
   recency = null,
   rerankFn = null,
+  rerankPoolSize = null,
   mode = "hybrid",
   minScore = 0,
 } = {}) {
@@ -171,8 +172,13 @@ async function search(index, {
   // 4. Apply minScore threshold
   fused = fused.filter(h => h.score >= minScore);
 
-  // Take top-K * 3 for reranking (more candidates → better precision).
-  const oversample = Math.min(fused.length, Math.max(topK * 3, topK));
+  // Take top-N for reranking (more candidates → better precision).
+  // `rerankPoolSize` overrides the default oversampling — use it when
+  // wiring a true cross-encoder (top-100 → top-10).
+  const poolSize = Number.isFinite(rerankPoolSize) && rerankPoolSize > 0
+    ? Math.floor(rerankPoolSize)
+    : Math.max(topK * 3, topK);
+  const oversample = Math.min(fused.length, poolSize);
   let top = fused.slice(0, oversample);
 
   // 5. Cross-encoder reranking (if injected).
@@ -208,6 +214,125 @@ async function search(index, {
   }));
 
   return { hits, trace };
+}
+
+/**
+ * searchEnhanced — orchestrator that layers HyDE query expansion and
+ * cross-encoder reranking on top of the base hybrid search.
+ *
+ * Flow:
+ *   1. (optional) HyDE: ask cheap LLM for hypothetical answers,
+ *      embed them, average with the user-query embedding.
+ *   2. Hybrid retrieval: BM25 + dense → RRF fuse → top-N pool (default 100).
+ *   3. (optional) Cross-encoder rerank: real model scores [query, chunk]
+ *      pairs, reorders the pool. Final cut to topK.
+ *
+ * Both stages are gated by env flags (`SIRA_HYDE_ENABLED`,
+ * `SIRA_RERANK_ENABLED`) so they can be toggled per environment
+ * without code changes. The orchestrator degrades gracefully: any
+ * stage failure falls back to baseline hybrid search.
+ *
+ * @param {object} index            output of buildIndex()
+ * @param {object} args
+ * @param {string} args.query
+ * @param {number[]} [args.queryEmbedding]
+ * @param {number} [args.topK]
+ * @param {object} [args.filters]
+ * @param {object} [args.recency]
+ * @param {string} [args.mode]
+ * @param {number} [args.minScore]
+ * @param {Function} [args.generateFn]   LLM call for HyDE: (prompt, opts) → string
+ * @param {Function} [args.embedFn]      embedder for HyDE hypotheticals: (text) → number[]
+ * @param {Function} [args.rerankFn]     pre-built reranker; if absent and rerank
+ *                                       is enabled we lazy-load the cross-encoder
+ * @param {boolean} [args.hydeEnabled]   override env flag
+ * @param {boolean} [args.rerankEnabled] override env flag
+ * @param {number} [args.rerankPoolSize] candidates handed to reranker (default 100)
+ */
+async function searchEnhanced(index, args = {}) {
+  const {
+    query,
+    queryEmbedding = null,
+    topK = TOPK_DEFAULT,
+    filters = null,
+    recency = null,
+    mode = "hybrid",
+    minScore = 0,
+    generateFn = null,
+    embedFn = null,
+    rerankFn = null,
+    hydeEnabled = null,
+    rerankEnabled = null,
+    rerankPoolSize = null,
+    hydeWeight = null,
+    hydeBypassChars = null,
+  } = args;
+
+  const trace = { hyde: null, rerank: null };
+
+  // Stage 1: HyDE
+  let effectiveEmbedding = queryEmbedding;
+  const hyde = require("../rag/hyde");
+  const wantsHyde = hydeEnabled === true || (hydeEnabled !== false && hyde.isEnabled());
+  if (wantsHyde && Array.isArray(queryEmbedding) && queryEmbedding.length > 0
+      && typeof generateFn === "function" && typeof embedFn === "function") {
+    try {
+      const expanded = await hyde.expandQuery({
+        query,
+        queryEmbedding,
+        generateFn,
+        embedFn,
+        weight: hydeWeight ?? hyde.DEFAULT_HYDE_WEIGHT,
+        bypassChars: hydeBypassChars ?? hyde.DEFAULT_BYPASS_CHARS,
+      });
+      effectiveEmbedding = expanded.embedding;
+      trace.hyde = expanded.trace;
+    } catch (err) {
+      trace.hyde = { bypassed: true, reason: `expand_failed:${err && err.message}` };
+    }
+  } else {
+    trace.hyde = { bypassed: true, reason: wantsHyde ? "no_inputs" : "disabled" };
+  }
+
+  // Stage 2: resolve reranker
+  const reranker = require("../rag/reranker");
+  const wantsRerank = rerankEnabled === true || (rerankEnabled !== false && reranker.isEnabled());
+  let effectiveRerankFn = rerankFn;
+  let pool = rerankPoolSize;
+  if (wantsRerank && !effectiveRerankFn) {
+    try {
+      effectiveRerankFn = await reranker.getRerankerFn({ force: true });
+    } catch (err) {
+      effectiveRerankFn = null;
+      trace.rerank = { bypassed: true, reason: `load_failed:${err && err.message}` };
+    }
+  }
+  if (wantsRerank && effectiveRerankFn && !pool) {
+    pool = reranker.getPoolSize();
+  }
+  if (trace.rerank == null) {
+    trace.rerank = effectiveRerankFn
+      ? { used: true, pool_size: pool || null }
+      : { bypassed: true, reason: wantsRerank ? "unavailable" : "disabled" };
+  }
+
+  // Stage 3: hybrid search with the (maybe) expanded embedding and reranker.
+  const result = await search(index, {
+    query,
+    queryEmbedding: effectiveEmbedding,
+    topK,
+    filters,
+    recency,
+    rerankFn: effectiveRerankFn,
+    rerankPoolSize: pool,
+    mode,
+    minScore,
+  });
+
+  return {
+    hits: result.hits,
+    trace: { ...result.trace, hyde: trace.hyde, rerank: trace.rerank },
+  };
 }
 
 /**
@@ -365,6 +490,7 @@ function mkErr(code, message) {
 module.exports = {
   buildIndex,
   search,
+  searchEnhanced,
   groundCitations,
   // exposed for unit tests
   bm25,
