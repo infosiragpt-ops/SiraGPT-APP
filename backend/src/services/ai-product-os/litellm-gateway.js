@@ -19,6 +19,9 @@ const DEFAULT_RETRY_ON = Object.freeze([
   "server_error",
 ]);
 
+const MAX_ATTEMPT_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_RETRY_DELAY_MS = 30_000;
+
 const PROVIDER_ALIASES = Object.freeze({
   gemini: "google",
   google: "google",
@@ -202,6 +205,22 @@ function createGatewayPlan({
     retry_policy: {
       max_retries: clampInt(policy.max_retries ?? policy.maxRetries ?? 1, 0, 5),
       retry_on: Array.isArray(policy.retry_on) ? [...policy.retry_on] : [...DEFAULT_RETRY_ON],
+      attempt_timeout_ms: clampInt(
+        policy.attempt_timeout_ms ?? policy.attemptTimeoutMs ?? 0,
+        0,
+        MAX_ATTEMPT_TIMEOUT_MS,
+      ),
+      base_delay_ms: clampInt(
+        policy.retry_delay_ms ?? policy.retryDelayMs ?? 0,
+        0,
+        MAX_RETRY_DELAY_MS,
+      ),
+      max_delay_ms: clampInt(
+        policy.max_retry_delay_ms ?? policy.maxRetryDelayMs ?? MAX_RETRY_DELAY_MS,
+        0,
+        MAX_RETRY_DELAY_MS,
+      ),
+      respect_retry_after: policy.respect_retry_after !== false && policy.respectRetryAfter !== false,
     },
     release_gate: {
       forbid_unregistered_provider: true,
@@ -417,6 +436,7 @@ async function dispatchGatewayCall({
   payload,
   providers,
   telemetry,
+  sleep = delay,
 } = {}) {
   if (!plan || typeof plan !== "object") throw gatewayError("missing_gateway_plan", "gateway plan is required");
   if (!payload || typeof payload !== "object") throw gatewayError("missing_payload", "gateway payload is required");
@@ -441,15 +461,26 @@ async function dispatchGatewayCall({
       const startedAt = Date.now();
       try {
         emit(telemetry, "model_gateway.attempt_started", { deployment: deployment.id, attempt });
-        const output = await adapter({
-          ...payload,
-          selectedModel: deployment.selected_model,
-          gateway: {
-            plan,
-            deployment,
-            attempt,
-          },
-        });
+        const attemptGuard = createAttemptGuard(plan.retry_policy.attempt_timeout_ms, deployment, attempt);
+        let output;
+        try {
+          output = await raceWithAttemptSignal(
+            adapter({
+              ...payload,
+              selectedModel: deployment.selected_model,
+              gateway: {
+                plan,
+                deployment,
+                attempt,
+                signal: attemptGuard.signal,
+                deadline_ms: attemptGuard.deadlineMs,
+              },
+            }),
+            attemptGuard.signal,
+          );
+        } finally {
+          attemptGuard.cleanup();
+        }
         const latencyMs = Date.now() - startedAt;
         const usage = normalizeUsage(output?.usage);
         const cost = estimateCostUsd({
@@ -478,9 +509,24 @@ async function dispatchGatewayCall({
         const latencyMs = Date.now() - startedAt;
         const classified = classifyProviderError(error);
         attempts.push(traceAttempt({ deployment, status: "failed", attempt, latencyMs, error: classified }));
-        emit(telemetry, "model_gateway.attempt_failed", { deployment: deployment.id, attempt, error_class: classified.error_class });
+        emit(telemetry, "model_gateway.attempt_failed", {
+          deployment: deployment.id,
+          attempt,
+          error_class: classified.error_class,
+          retry_after_ms: classified.retry_after_ms ?? null,
+        });
         lastError = classified;
         if (!shouldRetry(classified, plan.retry_policy) || attempt >= maxAttempts) break;
+        const retryDelayMs = resolveRetryDelayMs(classified, plan.retry_policy, attempt);
+        if (retryDelayMs > 0) {
+          emit(telemetry, "model_gateway.retry_scheduled", {
+            deployment: deployment.id,
+            attempt,
+            retry_delay_ms: retryDelayMs,
+            error_class: classified.error_class,
+          });
+          await sleep(retryDelayMs);
+        }
       }
     }
   }
@@ -528,6 +574,7 @@ function classifyProviderError(error) {
   const message = String(error?.message || error || "");
   const status = Number(error?.status || error?.statusCode || error?.response?.status || 0);
   const code = String(error?.code || error?.cause?.code || "").toLowerCase();
+  const retryAfterMs = readRetryAfterMs(error);
   let errorClass = "unknown";
   if (status === 401 || status === 403 || code.includes("auth") || message.match(/api key|unauthori[sz]ed|forbidden/i)) {
     errorClass = "auth";
@@ -551,7 +598,129 @@ function classifyProviderError(error) {
   classified.status = status || null;
   classified.retryable = retryable;
   classified.error_class = errorClass;
+  classified.retry_after_ms = retryAfterMs;
   return classified;
+}
+
+function createAttemptGuard(timeoutMs, deployment, attempt) {
+  const ms = Number(timeoutMs) || 0;
+  if (ms <= 0) {
+    return {
+      signal: undefined,
+      deadlineMs: null,
+      cleanup() {},
+    };
+  }
+
+  const controller = new AbortController();
+  const deadlineMs = Date.now() + ms;
+  const timer = setTimeout(() => {
+    const err = gatewayError(
+      "attempt_timeout",
+      `provider ${deployment.id} attempt ${attempt} timed out after ${ms}ms`,
+    );
+    err.status = 408;
+    try { controller.abort(err); } catch {}
+  }, ms);
+
+  return {
+    signal: controller.signal,
+    deadlineMs,
+    cleanup() { clearTimeout(timer); },
+  };
+}
+
+function raceWithAttemptSignal(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(signal.reason || gatewayError("attempt_aborted", "provider attempt aborted"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      reject(signal.reason || gatewayError("attempt_aborted", "provider attempt aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
+function resolveRetryDelayMs(error, retryPolicy = {}, attempt = 1) {
+  const maxDelay = clampInt(retryPolicy.max_delay_ms ?? MAX_RETRY_DELAY_MS, 0, MAX_RETRY_DELAY_MS);
+  if (maxDelay <= 0) return 0;
+
+  if (
+    retryPolicy.respect_retry_after !== false &&
+    Number.isFinite(error?.retry_after_ms) &&
+    error.retry_after_ms > 0
+  ) {
+    return Math.min(Math.ceil(error.retry_after_ms), maxDelay);
+  }
+
+  const baseDelay = clampInt(retryPolicy.base_delay_ms ?? 0, 0, maxDelay);
+  if (baseDelay <= 0) return 0;
+  return Math.min(baseDelay * (2 ** Math.max(0, Number(attempt) - 1)), maxDelay);
+}
+
+function readRetryAfterMs(error) {
+  const directMs = normalizeRetryAfterMs(error?.retryAfterMs ?? error?.retry_after_ms, true);
+  if (directMs != null) return directMs;
+
+  const directSeconds = normalizeRetryAfterMs(error?.retryAfter ?? error?.retry_after, false);
+  if (directSeconds != null) return directSeconds;
+
+  const headerSources = [error?.headers, error?.response?.headers, error?.cause?.headers];
+  for (const headers of headerSources) {
+    const retryAfter = getHeader(headers, "retry-after");
+    const parsed = normalizeRetryAfterMs(retryAfter, false);
+    if (parsed != null) return parsed;
+  }
+  return null;
+}
+
+function getHeader(headers, name) {
+  if (!headers) return null;
+  const lower = String(name).toLowerCase();
+  if (typeof headers.get === "function") return headers.get(name) ?? headers.get(lower);
+  if (typeof headers.forEach === "function") {
+    let found = null;
+    headers.forEach((value, key) => {
+      if (String(key).toLowerCase() === lower) found = value;
+    });
+    return found;
+  }
+  if (typeof headers === "object") {
+    for (const key of Object.keys(headers)) {
+      if (String(key).toLowerCase() === lower) return headers[key];
+    }
+  }
+  return null;
+}
+
+function normalizeRetryAfterMs(value, alreadyMs = false) {
+  if (value == null || value === "") return null;
+  const raw = String(value).trim();
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) {
+    const ms = alreadyMs ? numeric : numeric * 1000;
+    return Math.max(0, Math.ceil(ms));
+  }
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  return null;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function shouldRetry(error, retryPolicy) {
@@ -581,6 +750,7 @@ function traceAttempt({ deployment, status, attempt = 0, latencyMs = 0, usage = 
     cost_usd: cost,
     error_class: error?.error_class || error?.code || null,
     error_message: error?.message || null,
+    retry_after_ms: error?.retry_after_ms ?? null,
   };
 }
 
@@ -625,4 +795,6 @@ module.exports = {
   dispatchGatewayCall,
   createLiteLLMGateway,
   classifyProviderError,
+  resolveRetryDelayMs,
+  readRetryAfterMs,
 };

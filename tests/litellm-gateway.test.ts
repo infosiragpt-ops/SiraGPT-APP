@@ -217,4 +217,79 @@ describe("litellm gateway · dispatch policy", () => {
       /exceeds budget/,
     )
   })
+
+  it("honors Retry-After before retrying the selected provider", async () => {
+    let calls = 0
+    const delays: number[] = []
+    const plan = gateway.createGatewayPlan({
+      selectedModel: { provider: "openai", modelId: "gpt-5-mini", modality: "text" },
+      messages: [{ role: "user", content: "hola" }],
+      policy: { max_retries: 1 },
+    })
+
+    const result = await gateway.dispatchGatewayCall({
+      plan,
+      payload: {
+        selectedModel: { provider: "openai", modelId: "gpt-5-mini", modality: "text" },
+        messages: [{ role: "user", content: "hola" }],
+      },
+      providers: {
+        openai: async () => {
+          calls += 1
+          if (calls === 1) {
+            const error: any = new Error("too many requests")
+            error.status = 429
+            error.headers = { "retry-after": "2" }
+            throw error
+          }
+          return { text: "ok after retry", usage: { input_tokens: 3, output_tokens: 2 } }
+        },
+      },
+      sleep: async (ms: number) => { delays.push(ms) },
+    })
+
+    assert.equal(calls, 2)
+    assert.deepEqual(delays, [2000])
+    assert.equal(result.output.text, "ok after retry")
+    assert.equal(result.trace.attempts[0].error_class, "rate_limit")
+    assert.equal(result.trace.attempts[0].retry_after_ms, 2000)
+    assert.equal(result.trace.attempts[1].status, "success")
+  })
+
+  it("bounds hung provider attempts with an abortable deadline", async () => {
+    let signalWasProvided = false
+    let deadlineWasProvided = false
+    const plan = gateway.createGatewayPlan({
+      selectedModel: { provider: "openai", modelId: "gpt-5-mini", modality: "text" },
+      messages: [{ role: "user", content: "hola" }],
+      policy: { max_retries: 0, attempt_timeout_ms: 5 },
+    })
+
+    try {
+      await gateway.dispatchGatewayCall({
+        plan,
+        payload: {
+          selectedModel: { provider: "openai", modelId: "gpt-5-mini", modality: "text" },
+          messages: [{ role: "user", content: "hola" }],
+        },
+        providers: {
+          openai: async ({ gateway: gatewayContext }: any) => {
+            signalWasProvided = Boolean(
+              gatewayContext.signal && typeof gatewayContext.signal.addEventListener === "function",
+            )
+            deadlineWasProvided = Number.isFinite(gatewayContext.deadline_ms)
+            return new Promise(() => {})
+          },
+        },
+      })
+      assert.fail("expected gateway call to time out")
+    } catch (error: any) {
+      assert.match(error.message, /timed out/)
+      assert.equal(error.gateway_trace.attempts[0].error_class, "timeout")
+      assert.equal(error.gateway_trace.attempts[0].status, "failed")
+    }
+
+    assert.equal(signalWasProvided, true)
+    assert.equal(deadlineWasProvided, true)
+  })
 })
