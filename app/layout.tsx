@@ -10,6 +10,7 @@ import { AppWrapper } from "@/components/app-wrapper"
 import 'katex/dist/katex.min.css';
 import { SettingsProvider } from "@/lib/settings-context"
 import { SyncfusionBannerRemover } from "@/components/SyncfusionBannerRemover"
+import { GlobalDropRedirector } from "@/components/GlobalDropRedirector"
 import { SentryClientInit } from "@/components/sentry-client-init"
 import { PostHogClientInit } from "@/components/posthog-client-init"
 import { NextIntlClientProvider } from "next-intl"
@@ -62,6 +63,7 @@ export default async function RootLayout({
                 <AppWrapper>
                   {children}
                 </AppWrapper>
+                <GlobalDropRedirector />
                 <Toaster />
               </SettingsProvider>
             </AuthProvider>

@@ -4909,6 +4909,34 @@ But first, you need to connect your Spotify account securely using the button be
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Hand-off from GlobalDropRedirector — when a file is dropped on a
+  // non-/chat page the redirector navigates here and stashes the
+  // File[] on window. Pick them up once and run them through the
+  // normal validate→upload pipeline so the gesture feels continuous.
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const w = window as unknown as { __siraPendingFiles?: File[] };
+    const pending = w.__siraPendingFiles;
+    if (!pending || pending.length === 0) return;
+    delete w.__siraPendingFiles;
+    const { accepted, rejected } = validateBatch(pending, {
+      existingCount: uploadedFilesRef.current.length,
+    });
+    if (rejected.length > 0) {
+      const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
+        acc[r.reason] = (acc[r.reason] || 0) + 1;
+        return acc;
+      }, {});
+      Object.entries(grouped).forEach(([reason, n]) => {
+        toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
+      });
+    }
+    if (accepted.length > 0) {
+      handleAndUploadFiles(filesToFileList(accepted), 'drop');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /**
    * Clipboard paste handler — wired to BOTH the textarea (so it fires
    * even when text is pasted) AND a document-level listener (so paste
