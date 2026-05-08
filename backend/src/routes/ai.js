@@ -133,6 +133,11 @@ function hasEnv(name) {
   return String(process.env[name] || '').trim().length > 0;
 }
 
+/**
+ * Create an OpenAI-compatible client for a named provider.
+ * Kept for backward compatibility — new code should use
+ * resolveProviderWithFailover() instead.
+ */
 function createProviderClient(provider) {
   if (provider === "Gemini") {
     return new OpenAI({
@@ -158,6 +163,29 @@ function createProviderClient(provider) {
   return new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
   });
+}
+
+/**
+ * Resolve a provider client with automatic failover via the
+ * provider-registry. Falls back to createProviderClient() if
+ * the registry has no matching provider registered.
+ *
+ * @param {string} provider — "OpenAI", "Gemini", "DeepSeek", "OpenRouter"
+ * @returns {Promise<{ client: OpenAI, providerName: string }>}
+ */
+async function resolveProviderWithFailover(provider) {
+  try {
+    const { getProviderRegistry } = require('../services/agents/provider-registry');
+    const registry = getProviderRegistry();
+    const resolved = await registry.resolve(provider);
+    if (resolved) {
+      const client = new OpenAI({ apiKey: resolved.apiKey, baseURL: resolved.baseURL });
+      return { client, providerName: resolved.name || provider };
+    }
+  } catch {
+    // Registry unavailable — fall through to legacy path
+  }
+  return { client: createProviderClient(provider), providerName: provider };
 }
 
 function isDirectDeepSeekModel(modelName) {

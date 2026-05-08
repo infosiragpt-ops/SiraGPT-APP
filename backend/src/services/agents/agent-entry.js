@@ -19,7 +19,15 @@ const reactAgent = require('../react-agent');
 const executor = require('./executor');
 const skills = require('../skills');
 
+// ── Observability ──────────────────────────────────────────────
+// Structured logger and tracer wire into every agent run so that
+// operations, errors, and performance are visible in production
+// dashboards without manual instrumentation.
+const { getLogger } = require('./structured-logger');
+const { getTracer } = require('./performance-tracer');
+
 const MAX_SPAWN_DEPTH = 3;
+const log = getLogger('agent-entry');
 
 /**
  * Run the agent for a specific user, returning when the run finishes.
@@ -72,6 +80,13 @@ async function runAgent(opts) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const ctx = { openai, userId, collection, source, depth };
 
+  const startTime = Date.now();
+  const spanId = String(startTime);
+  const tracer = getTracer();
+  const span = tracer.start('agent.run');
+
+  log.info({ userId: String(userId), thinking, depth, source }, 'agent_run_started');
+
   const { skills: loaded } = skills.get();
   const chosen = skillIds
     ? Array.from(loaded.values()).filter(s => skillIds.includes(s.id))
@@ -80,29 +95,45 @@ async function runAgent(opts) {
   const { skills: wrapped } = skills.wrapSkillsWithPolicy(chosen, policy);
   const tools = wrapped.map(s => skills.toReactTool(s));
 
-  if (thinking === 'low') {
-    const r = await reactAgent.run(openai, {
-      query: prompt, tools, ctx, maxSteps, model,
-    });
-    return {
-      answer: r.finalAnswer || '',
-      stoppedReason: r.stoppedReason,
-      steps: r.steps,
-      source,
-    };
-  }
+  try {
+    if (thinking === 'low') {
+      const reactSpan = tracer.start('react.run', span.spanId);
+      try {
+        const r = await reactAgent.run(openai, {
+          query: prompt, tools, ctx, maxSteps, model,
+        });
+        return {
+          answer: r.finalAnswer || '',
+          stoppedReason: r.stoppedReason,
+          steps: r.steps,
+          source,
+        };
+      } finally {
+        tracer.end(reactSpan);
+      }
+    }
 
-  const r = await executor.run(openai, {
-    goal: prompt, tools, thinking,
-    executorModel: model, ctx,
-  });
-  return {
-    answer: r.finalAnswer || '',
-    plan: r.plan,
-    stoppedReason: r.stoppedReason,
-    steps: r.stepResults,
-    source,
-  };
+    const execSpan = tracer.start('executor.run', span.spanId);
+    try {
+      const r = await executor.run(openai, {
+        goal: prompt, tools, thinking,
+        executorModel: model, ctx,
+      });
+      return {
+        answer: r.finalAnswer || '',
+        plan: r.plan,
+        stoppedReason: r.stoppedReason,
+        steps: r.stepResults,
+        source,
+      };
+    } finally {
+      tracer.end(execSpan);
+    }
+  } finally {
+    tracer.end(span);
+    const elapsed = Date.now() - startTime;
+    log.info({ elapsed, userId: String(userId), depth }, 'agent_run_finished');
+  }
 }
 
 module.exports = { runAgent, MAX_SPAWN_DEPTH };

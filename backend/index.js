@@ -1,5 +1,12 @@
 require('dotenv').config();
 
+// ── Agent platform bootstrap ────────────────────────────────
+// Initialises the new platform services (provider-registry,
+// bulkhead pool, structured-logger, performance-tracer,
+// sub-agent-orchestrator) before the server accepts traffic.
+const { initAgentSystem } = require('./src/services/agents/agent-system');
+initAgentSystem();
+
 // ── Startup validation ─────────────────────────────────────
 // Catches placeholder secrets, missing required env vars, and
 // dangerous configurations before the server accepts traffic.
