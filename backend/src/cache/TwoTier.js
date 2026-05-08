@@ -22,6 +22,7 @@ class TwoTier {
     metrics = null,
     l1MaxEntries,
     l1TtlMs,
+    l1Policy,
     defaultTtlMs,
     now = () => Date.now(),
     hrtime = () => Number(process.hrtime.bigint()),
@@ -36,6 +37,7 @@ class TwoTier {
       ttlMs: l1TtlMs || this._defaultTtlMs,
       now,
       onEvict: () => this._metrics.recordL1Eviction(),
+      policy: l1Policy || 'lru',
     });
     this._l2 = l2; // may be null
   }
@@ -56,12 +58,15 @@ class TwoTier {
       return undefined;
     }
     const start = this._hrtime();
+    const l1Policy = this._l1 && this._l1.policy ? this._l1.policy : 'lru';
     const v1 = this._l1.get(key);
     if (v1 !== undefined) {
       this._metrics.recordL1Hit();
+      this._metrics.recordHitByPolicy(l1Policy);
       this._markLatency(start);
       return v1;
     }
+    this._metrics.recordMissByPolicy(l1Policy);
     if (this._l2) {
       let v2;
       try {

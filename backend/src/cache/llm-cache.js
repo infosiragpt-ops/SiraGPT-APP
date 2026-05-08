@@ -22,6 +22,12 @@
 const { createHash } = require('node:crypto');
 const { TwoTier } = require('./TwoTier');
 const { createRedisStore } = require('./RedisStore');
+const {
+  isSemanticCacheEnabled,
+  getSemanticCache,
+  buildScopeKey,
+  extractSemanticQuery,
+} = require('./semantic');
 
 const KEY_VERSION = 'v1';
 const DEFAULT_CHAT_TTL_MS = 10 * 60 * 1000;     // 10 min
@@ -170,7 +176,7 @@ function _resetSingletonForTests() { _singleton = null; }
  * provider call when the cache misses or is bypassed. `kind` is 'chat' or
  * 'embedding'; the wrapper picks the right key + bypass predicate.
  */
-async function getOrCompute({ kind, request, compute, cache, env, ttlMs } = {}) {
+async function getOrCompute({ kind, request, compute, cache, env, ttlMs, semantic } = {}) {
   if (typeof compute !== 'function') {
     throw new TypeError('getOrCompute: compute() is required');
   }
@@ -201,13 +207,75 @@ async function getOrCompute({ kind, request, compute, cache, env, ttlMs } = {}) 
   const hit = await c.get(key);
   if (hit !== undefined) return hit;
 
+  // Semantic layer (chat-only): only consulted on exact-cache miss. Falls
+  // back silently if the embed function is missing or throws — a semantic
+  // miss must never break the request path.
+  const semCtx = kind === 'chat'
+    ? await _trySemanticLookup({ request, env: eff, semantic, twoTier: c })
+    : null;
+  if (semCtx && 'value' in semCtx) {
+    return semCtx.value;
+  }
+
   const result = await compute();
   // Don't cache nullish — protects against transient empty responses.
   if (result !== undefined && result !== null) {
     const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : defaultTtl;
     c.set(key, result, ttl);
+    if (semCtx && semCtx.queryVec) {
+      try {
+        semCtx.store.set(semCtx.scope, semCtx.queryVec, result, { ttlMs: ttl });
+      } catch (_err) { /* swallow — cache should not break compute */ }
+    }
   }
   return result;
+}
+
+/**
+ * Attempt a semantic-cache lookup. Returns one of:
+ *   - { value }                                 — semantic hit, caller returns it
+ *   - { store, scope, queryVec }                — miss but write-through context
+ *   - null                                      — semantic disabled / unavailable
+ *
+ * Errors (missing key, embed throw, dimension mismatch) are swallowed and
+ * surface as null so the request path is never gated on this layer.
+ */
+async function _trySemanticLookup({ request, env, semantic, twoTier }) {
+  if (!isSemanticCacheEnabled(env)) return null;
+  const queryText = extractSemanticQuery(request);
+  if (!queryText) return null;
+  const sem = semantic || getSemanticCache({ env });
+  let embedFn = sem.embed;
+  if (!embedFn) {
+    // Lazy: try to bind rag-service.embed on first use. Wrapped in try
+    // because rag-service requires OPENAI_API_KEY at call time, not at
+    // require time, but circular/missing-deps would still surface here.
+    try {
+      const rag = require('../services/rag-service');
+      if (typeof rag.embed === 'function') {
+        embedFn = rag.embed;
+        sem.setEmbed(embedFn);
+      }
+    } catch (_err) { /* no embedder available */ }
+  }
+  if (typeof embedFn !== 'function') return null;
+  let queryVec;
+  try {
+    const embeds = await embedFn([queryText]);
+    queryVec = Array.isArray(embeds) ? embeds[0] : null;
+  } catch (_err) {
+    return null;
+  }
+  if (!queryVec || queryVec.length === 0) return null;
+  const scope = buildScopeKey(request);
+  const hit = sem.store.get(scope, queryVec);
+  if (hit) {
+    if (twoTier && typeof twoTier.metrics?.recordSemanticHit === 'function') {
+      twoTier.metrics.recordSemanticHit();
+    }
+    return { value: hit.value };
+  }
+  return { store: sem.store, scope, queryVec };
 }
 
 module.exports = {
