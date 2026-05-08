@@ -62,6 +62,22 @@ jobs:
       - name: Lint (hard gate, ratcheted)
         run: npm run lint -- --max-warnings 97
 
+      # Belt-and-braces ratchet: count warnings explicitly so a regression
+      # surfaces a clear error message instead of relying solely on
+      # `--max-warnings` exit codes from `next lint`. Update LINT_WARN_CAP
+      # alongside `package.json` and the `--max-warnings` flag above.
+      - name: Lint warning-count ratchet
+        env:
+          LINT_WARN_CAP: '97'
+        run: |
+          set -o pipefail
+          COUNT=$(npx --no-install next lint 2>&1 | grep -c 'Warning:' || true)
+          echo "Lint warnings: ${COUNT} (cap: ${LINT_WARN_CAP})"
+          if [ "${COUNT}" -gt "${LINT_WARN_CAP}" ]; then
+            echo "::error ::Lint warning count ${COUNT} exceeds cap ${LINT_WARN_CAP}. Fix new warnings or lower the cap."
+            exit 1
+          fi
+
       # Hard gate — TypeScript errors fail the build. Baseline is
       # clean today (0 errors); flip is safe. `--ignoreDeprecations 5.0`
       # is kept to avoid noise from libraries that haven't migrated to
@@ -89,6 +105,23 @@ jobs:
             nextjs-${{ runner.os }}-
       - name: Next.js build
         run: npm run build
+
+      # Hard gate — gzipped bundle size must stay under the budget defined
+      # in scripts/bundle-size-budget.json. Re-seed with
+      # `node scripts/bundle-size-check.js --update-baseline` after a
+      # deliberate, vetted change and commit the updated JSON alongside
+      # the PR that grew the bundle.
+      - name: Bundle-size budget gate
+        run: node scripts/bundle-size-check.js
+
+      - name: Upload bundle-size report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-size-report
+          path: bundle-size-report.json
+          retention-days: 14
+          if-no-files-found: ignore
 
   # ───────────────────────────────────────────────────────────────────
   # BACKEND — Express API in backend/

@@ -297,6 +297,7 @@ model File {
   documentAnalysis DocumentAnalysis?
   documentChunks DocumentChunk[]
   documentTables DocumentTable[]
+  documentNodes  DocumentNode[]
 
   customGptId String?
   customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id],onDelete: SetNull)
@@ -338,6 +339,7 @@ model DocumentAnalysis {
   file   File @relation(fields: [fileId], references: [id], onDelete: Cascade)
   chunks DocumentChunk[]
   tables DocumentTable[]
+  nodes  DocumentNode[]
 
   @@index([userId, updatedAt])
   @@map("document_analyses")
@@ -391,6 +393,37 @@ model DocumentTable {
   @@index([analysisId, ordinal])
   @@index([fileId, ordinal])
   @@map("document_tables")
+}
+
+// Hierarchical document nodes — tree structure (root → sections →
+// subsections → paragraphs) with bottom-up summaries. Built by
+// services/rag/hierarchical-chunker.js for queries that need
+// either pinpoint recall or whole-document overview.
+model DocumentNode {
+  id          String   @id
+  fileId      String
+  analysisId  String?
+  parentId    String?
+  level       Int
+  role        String   // 'root' | 'section' | 'paragraph' | …
+  heading     String?
+  text        String   @default("") @db.Text
+  summary     String   @default("") @db.Text
+  embedding   Json?    // float[] stored as JSON for portability
+  metadata    Json?
+  ordinal     Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  file     File              @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  analysis DocumentAnalysis? @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  parent   DocumentNode?     @relation("DocumentNodeChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children DocumentNode[]    @relation("DocumentNodeChildren")
+
+  @@index([fileId, ordinal])
+  @@index([fileId, level])
+  @@index([parentId])
+  @@index([analysisId])
+  @@map("document_nodes")
 }
 
 model Payment {
@@ -897,4 +930,71 @@ model SchedulerRun {
   @@index([startedAt])
   @@index([status])
   @@map("scheduler_runs")
+}
+
+// Audit log — one row per state-changing action observable in the
+// system. Designed to answer "who did what to which resource, and
+// what did it look like before vs. after". The before/after JSON
+// blobs are intentionally schema-less so any subsystem (chats,
+// projects, files, settings, agent tasks…) can write audit rows
+// without coupling its shape to this table.
+//
+// Fields:
+//   - actorType: 'user' | 'agent' | 'system' | 'api' | 'admin'
+//   - actorId: stable id of the actor (User.id, agent name, …)
+//   - actorName: optional human-readable label (email, "scheduler")
+//   - resourceType: domain noun ('chat', 'project', 'file', 'user', …)
+//   - resourceId: id of the touched resource (nullable for collection-
+//     scoped events like 'login')
+//   - action: imperative verb ('create' | 'update' | 'delete' |
+//     'access' | 'login' | 'export' | …)
+//   - before / after: full or partial snapshots of the resource
+//   - diff: computed shallow diff of changed keys (for fast filter)
+//   - metadata: free-form context (ip, userAgent, requestId, reason)
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorType    String
+  actorId      String?
+  actorName    String?
+  resourceType String
+  resourceId   String?
+  action       String
+  before       Json?
+  after        Json?
+  diff         Json?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([actorType, actorId, createdAt])
+  @@index([resourceType, resourceId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+// Document index cache — keyed by SHA-256 of the source file's bytes.
+// Stores the output of the RAG pipeline (chunks + embeddings + optional
+// hierarchy root) so identical re-uploads short-circuit. `pageHashes` is
+// an array of per-page (or per-chunk-group) hashes for incremental
+// recompute: when the user re-uploads a near-identical file, the store
+// reuses embeddings of pages whose hash is unchanged and only recomputes
+// the rest.
+model DocumentIndex {
+  contentHash     String   @id
+  version         Int      @default(1)
+  chunks          Json
+  embeddings      Json
+  pageHashes      Json?
+  hierarchyRootId String?
+  bytesSize       Int      @default(0)
+  embedTokens     Int      @default(0)
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  accessedAt      DateTime @default(now())
+  hitCount        Int      @default(0)
+
+  @@index([accessedAt])
+  @@index([createdAt])
+  @@index([hierarchyRootId])
+  @@map("document_index")
 }

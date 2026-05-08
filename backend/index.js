@@ -112,6 +112,7 @@ const researchRoutes = require('./src/routes/research');
 const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
 const agentTaskRoutes = require('./src/routes/agent-task');
+const agentBatchRoutes = require('./src/routes/agent-batch');
 const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
@@ -279,9 +280,10 @@ app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/', apiLimiter);
 
 // Idempotency runs AFTER rate-limit (so a flood of replays still
-// costs the limiter quota) but BEFORE every other handler so a
-// cache hit short-circuits everything downstream.
-app.use(idempotency);
+// costs the limiter quota). It is mounted scoped to the agent task
+// and tool-call surfaces below — see app.use('/api/agent', idempotency)
+// further down — so the body-hash check can read req.body which
+// requires express.json to have parsed it first.
 
 // Body parsing middleware
 app.use(compression({
@@ -526,7 +528,14 @@ app.use('/api/computer-use', computerUseRoutes);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/research', researchRoutes);
 app.use('/api/rag', ragRoutes);
+// Idempotency is scoped to the surfaces that mutate durable state
+// at real cost (LLM tokens, sandbox compute, queued workers): agent
+// task creation and tool-call execution. Mount sits after body
+// parsing so the middleware can fingerprint req.body for the 409
+// "key reused with different body" check.
+app.use('/api/agent', idempotency);
 app.use('/api/agent', agentTaskRoutes);
+app.use('/api/agent', agentBatchRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/se-agents', seAgentsRoutes);
 app.use('/api/artifacts', artifactsRoutes);
