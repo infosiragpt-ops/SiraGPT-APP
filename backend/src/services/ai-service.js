@@ -17,8 +17,38 @@ const {
     buildProviderChatPayload,
     classifyProviderError,
 } = require('./ai-product-os/litellm-gateway');
+const { sharedFetch } = require('../utils/provider-http-agent');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
+
+/**
+ * writeWithBackpressure — write a frame to an Express response and, if
+ * the kernel send buffer is full, await the `drain` event before
+ * resolving. Returning the awaitable from inside the provider read loop
+ * propagates pause-pressure naturally: the OpenAI/undici reader stops
+ * pulling bytes from the upstream socket while we wait. Without this we
+ * would queue chunks in V8 indefinitely on slow clients (mobile uplink,
+ * large HTML artifacts, etc.) and trade latency for memory.
+ */
+function writeWithBackpressure(res, frame) {
+    if (!res || res.writableEnded || res.destroyed) return Promise.resolve(false);
+    let ok;
+    try { ok = res.write(frame); }
+    catch { return Promise.resolve(false); }
+    if (ok !== false) return Promise.resolve(true);
+    return new Promise((resolve) => {
+        const cleanup = () => {
+            res.off?.('drain', onDrain);
+            res.off?.('close', onTerminal);
+            res.off?.('error', onTerminal);
+        };
+        const onDrain = () => { cleanup(); resolve(true); };
+        const onTerminal = () => { cleanup(); resolve(false); };
+        res.on('drain', onDrain);
+        res.on('close', onTerminal);
+        res.on('error', onTerminal);
+    });
+}
 
 /**
  * Resolve the fallback model chain from env. Comma-separated names,
@@ -154,8 +184,13 @@ class AIService {
      * @returns {OpenAI} - OpenAI client ka instance
      */
     getClient(provider) {
+        // Route every provider through the shared keep-alive fetch so we
+        // amortize TLS handshakes across requests. See provider-http-agent.js.
+        const baseOpts = { fetch: sharedFetch };
+
         if (provider === "Gemini") {
             return new OpenAI({
+                ...baseOpts,
                 apiKey: process.env.GEMINI_API_KEY,
                 baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
             });
@@ -163,6 +198,7 @@ class AIService {
 
         if (provider === "OpenRouter") {
             return new OpenAI({
+                ...baseOpts,
                 apiKey: process.env.OPENROUTER_API_KEY,
                 baseURL: "https://openrouter.ai/api/v1",
                 defaultHeaders: {
@@ -174,6 +210,7 @@ class AIService {
 
         if (provider === "DeepSeek") {
             return new OpenAI({
+                ...baseOpts,
                 apiKey: process.env.DEEPSEEK_API_KEY,
                 baseURL: "https://api.deepseek.com",
             });
@@ -181,6 +218,7 @@ class AIService {
 
         // Default provider OpenAI hai
         return new OpenAI({
+            ...baseOpts,
             apiKey: process.env.OPENAI_API_KEY,
         });
     }
@@ -424,7 +462,7 @@ class AIService {
                                 if (!firstByteSeen) { firstByteSeen = true; clearTimeout(firstByteTimer); }
                                 fullResponseContent += contentChunk;
                                 hasStreamedAnyContent = true;
-                                res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
+                                await writeWithBackpressure(res, `data: ${JSON.stringify({ content: contentChunk })}\n\n`);
                             }
                         }
 
