@@ -6,35 +6,33 @@
  * network blip does not re-execute the operation, it returns the
  * cached response from the first successful run.
  *
- * Why this exists:
- *   The platform has expensive POST endpoints (agent task creation,
- *   document generation, payment webhooks) where a duplicate
- *   submission costs real money — LLM tokens, sandbox compute,
- *   sometimes literal Stripe charges. Mobile clients on flaky
- *   networks retry aggressively. Without idempotency keys, the
- *   server has no way to distinguish "the user clicked twice" from
- *   "the user clicked once but the response was lost in flight".
+ * Three Stripe-equivalent properties are load-bearing here:
  *
- * How it works:
- *   1. Client picks a UUID per logical operation, sends it as
- *      `Idempotency-Key: <uuid>` on the POST.
- *   2. Middleware computes a cache key as `idem:<userId>:<key>`
- *      (anonymous traffic uses `idem:ip:<ip>:<key>`).
- *   3. If the cache hit, the cached `{ status, body, headers }` is
- *      replayed. The response includes `X-Idempotency-Replay: true`
- *      so the client / dashboards can spot replays.
- *   4. On a miss, the original handler runs. The response is captured
- *      via a `res.json` proxy and stored with a 24h TTL. Subsequent
- *      retries within the TTL get the same response.
+ *   1. Replay — second call with the same key returns the captured
+ *      2xx body from the first call within the TTL window (24h
+ *      default).
  *
- * Storage:
- *   Same posture as rate-limit-store + webauthn-challenge-store:
- *   Redis when REDIS_URL is set, in-memory Map fallback. Lazy GC
- *   on read/write for the in-memory mode — no setInterval that
- *   would prevent process shutdown.
+ *   2. Body fingerprint — second call with the SAME key but a
+ *      DIFFERENT body returns 409. A client that mutates the request
+ *      payload while reusing an idempotency key is almost always a
+ *      bug; replaying the wrong response would silently corrupt
+ *      state, so we surface the conflict instead.
+ *
+ *   3. In-flight lock — concurrent calls with the same key wait for
+ *      the first one to finish, OR fast-fail with 409 if the lock
+ *      cannot be acquired within `lockTimeoutMs`. This stops the
+ *      classic "double-click on a flaky network" race where two
+ *      copies of the same expensive operation run in parallel.
+ *
+ * Storage: Redis when REDIS_URL is set, in-memory Map fallback.
+ * Lazy GC on read/write — no setInterval that would prevent process
+ * shutdown. The fallback store is good enough for single-instance
+ * dev and CI; production benefits from the Redis lock being globally
+ * coherent across workers.
  *
  * What is NOT cached:
- *   - GET / HEAD / OPTIONS: idempotent by HTTP semantics, no key needed.
+ *   - GET / HEAD / OPTIONS / DELETE: idempotent (or unsafe-to-cache)
+ *     by HTTP semantics, no key needed.
  *   - 4xx / 5xx responses by default. A 500 from a transient bug
  *     should NOT lock subsequent retries into the same failure for
  *     24h. The cache only retains responses with `2xx` status; a
@@ -48,7 +46,11 @@
  * dictionary attacks on the cache key namespace.
  */
 
+const crypto = require('crypto');
+
 const DEFAULT_TTL_SECONDS = 24 * 60 * 60;
+const DEFAULT_LOCK_TIMEOUT_MS = 30_000;
+const DEFAULT_LOCK_POLL_MS = 50;
 const DEFAULT_MAX_KEY_LEN = 256;
 const DEFAULT_MIN_KEY_LEN = 1;
 const REPLAY_HEADER = 'X-Idempotency-Replay';
@@ -70,9 +72,41 @@ function resolveIdempotencyConfig(env = process.env) {
     enabled: parseBoolean(env.IDEMPOTENCY_ENABLED, false),
     ttlSeconds: clampInt(env.IDEMPOTENCY_TTL_SECONDS, DEFAULT_TTL_SECONDS, 60, 7 * 24 * 3600),
     maxKeyLen: clampInt(env.IDEMPOTENCY_MAX_KEY_LEN, DEFAULT_MAX_KEY_LEN, 8, 1024),
+    lockTimeoutMs: clampInt(env.IDEMPOTENCY_LOCK_TIMEOUT_MS, DEFAULT_LOCK_TIMEOUT_MS, 100, 5 * 60_000),
+    lockPollMs: clampInt(env.IDEMPOTENCY_LOCK_POLL_MS, DEFAULT_LOCK_POLL_MS, 5, 5_000),
     redisPrefix: String(env.IDEMPOTENCY_REDIS_PREFIX || 'idem:'),
   };
 }
+
+/**
+ * stableStringify — canonical JSON for body hashing. Object key order
+ * cannot affect the hash, otherwise a client serializing the same
+ * logical payload with different key ordering would trip a 409
+ * mismatch.
+ */
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(stableStringify).join(',') + ']';
+  }
+  const keys = Object.keys(value).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(value[k])).join(',') + '}';
+}
+
+function computeBodyHash(body) {
+  if (body === undefined) return null;
+  try {
+    const serialized = stableStringify(body);
+    if (serialized === undefined) return null;
+    return crypto.createHash('sha256').update(serialized).digest('hex');
+  } catch (_err) {
+    return null;
+  }
+}
+
+function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 /**
  * createInMemoryIdempotencyStore — Map-based, lazy-GC'd. Used when
@@ -80,6 +114,15 @@ function resolveIdempotencyConfig(env = process.env) {
  * a future-pressure-cap is unnecessary because the per-user key
  * space is bounded by the rate limiter (a user can mint at most
  * RATE_LIMIT_API_MAX × TTL keys before the limiter cuts them off).
+ *
+ * Two record states share the same map:
+ *   { state: 'pending', bodyHash, expiresAt }   — in-flight lock
+ *   { state: 'final',   status, body, headers, bodyHash, expiresAt }
+ *
+ * tryAcquire(key, bodyHash, lockTtlMs) atomically inserts a pending
+ * record only if no record exists. Returns:
+ *   { acquired: true }                         — caller owns the slot
+ *   { acquired: false, existing }              — somebody else has it
  */
 function createInMemoryIdempotencyStore({ ttlSeconds = DEFAULT_TTL_SECONDS, now = () => Date.now() } = {}) {
   const map = new Map();
@@ -99,14 +142,33 @@ function createInMemoryIdempotencyStore({ ttlSeconds = DEFAULT_TTL_SECONDS, now 
         map.delete(key);
         return null;
       }
-      return entry.value;
+      return entry;
     },
     async put(key, value, customTtlSeconds) {
       gc();
       const ttl = (typeof customTtlSeconds === 'number' && customTtlSeconds > 0)
         ? customTtlSeconds
         : ttlSeconds;
-      map.set(key, { value, expiresAt: now() + ttl * 1000 });
+      map.set(key, { ...value, expiresAt: now() + ttl * 1000 });
+    },
+    async tryAcquire(key, bodyHash, lockTtlMs) {
+      gc();
+      const existing = map.get(key);
+      if (existing && existing.expiresAt > now()) {
+        return { acquired: false, existing };
+      }
+      map.set(key, {
+        state: 'pending',
+        bodyHash: bodyHash || null,
+        expiresAt: now() + lockTtlMs,
+      });
+      return { acquired: true };
+    },
+    async release(key) {
+      const existing = map.get(key);
+      if (existing && existing.state === 'pending') {
+        map.delete(key);
+      }
     },
     _size() { return map.size; },
   };
@@ -132,6 +194,33 @@ function createRedisIdempotencyStore({ redis, prefix, ttlSeconds }) {
         await redis.set(`${prefix}${key}`, JSON.stringify(value), 'EX', ttl);
       } catch (_err) {
         // best-effort; a failed put just means the next retry runs the handler.
+      }
+    },
+    async tryAcquire(key, bodyHash, lockTtlMs) {
+      try {
+        const payload = JSON.stringify({ state: 'pending', bodyHash: bodyHash || null });
+        const setRes = await redis.set(`${prefix}${key}`, payload, 'PX', lockTtlMs, 'NX');
+        if (setRes) return { acquired: true };
+        const raw = await redis.get(`${prefix}${key}`);
+        return { acquired: false, existing: raw ? JSON.parse(raw) : null };
+      } catch (_err) {
+        // If Redis flakes we degrade to "acquired" so the request
+        // proceeds rather than hanging. The trade-off is one
+        // duplicate execution under split-brain — preferable to a
+        // wedged client retry loop.
+        return { acquired: true };
+      }
+    },
+    async release(key) {
+      try {
+        const raw = await redis.get(`${prefix}${key}`);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.state === 'pending') {
+          await redis.del(`${prefix}${key}`);
+        }
+      } catch (_err) {
+        // best-effort
       }
     },
   };
@@ -192,6 +281,38 @@ function isStreamingResponse(res) {
   return ct.includes('text/event-stream');
 }
 
+function replayCached(res, cached, rawKey) {
+  res.setHeader(REPLAY_HEADER, 'true');
+  res.setHeader(REPLAY_KEY_HEADER, rawKey);
+  if (cached.headers && typeof cached.headers === 'object') {
+    for (const [name, value] of Object.entries(cached.headers)) {
+      // Don't echo Set-Cookie from a cached response — cookies
+      // bind to a session that may have rotated since.
+      if (name.toLowerCase() === 'set-cookie') continue;
+      res.setHeader(name, value);
+    }
+  }
+  return res.status(cached.status).json(cached.body);
+}
+
+function respondMismatch(res, rawKey) {
+  res.setHeader(REPLAY_HEADER, 'mismatch');
+  res.setHeader(REPLAY_KEY_HEADER, rawKey);
+  return res.status(409).json({
+    error: 'idempotency-key-mismatch',
+    hint: 'this Idempotency-Key was already used with a different request body within the TTL window',
+  });
+}
+
+function respondInProgress(res, rawKey) {
+  res.setHeader(REPLAY_HEADER, 'in-progress');
+  res.setHeader(REPLAY_KEY_HEADER, rawKey);
+  return res.status(409).json({
+    error: 'idempotency-key-in-progress',
+    hint: 'a request with this Idempotency-Key is still being processed; retry after it completes',
+  });
+}
+
 /**
  * idempotencyMiddleware — factory. Pass `{ store }` for tests; in
  * production the factory builds a Redis-or-memory store from env.
@@ -200,6 +321,13 @@ function idempotencyMiddleware(options = {}) {
   const env = options.env || process.env;
   const config = resolveIdempotencyConfig(env);
   const store = options.store || createIdempotencyStore(env);
+  const lockTimeoutMs = typeof options.lockTimeoutMs === 'number' ? options.lockTimeoutMs : config.lockTimeoutMs;
+  // lockHoldMs is how long a pending lock survives in the store
+  // (defaults to lockTimeoutMs). Tests decouple it so a short wait
+  // timeout can be observed without racing the lock's own expiry.
+  const lockHoldMs = typeof options.lockHoldMs === 'number' ? options.lockHoldMs : lockTimeoutMs;
+  const lockPollMs = typeof options.lockPollMs === 'number' ? options.lockPollMs : config.lockPollMs;
+  const now = options.now || (() => Date.now());
 
   return async function idempotency(req, res, next) {
     // Only POST/PUT/PATCH benefit. GET/HEAD/OPTIONS are idempotent
@@ -237,20 +365,49 @@ function idempotencyMiddleware(options = {}) {
     }
 
     const cacheKey = buildCacheKey(req, rawKey);
-    const cached = await store.get(cacheKey);
-    if (cached && cached.status && cached.body !== undefined) {
-      res.setHeader(REPLAY_HEADER, 'true');
-      res.setHeader(REPLAY_KEY_HEADER, rawKey);
-      if (cached.headers && typeof cached.headers === 'object') {
-        for (const [name, value] of Object.entries(cached.headers)) {
-          // Don't echo Set-Cookie from a cached response — cookies
-          // bind to a session that may have rotated since.
-          if (name.toLowerCase() === 'set-cookie') continue;
-          res.setHeader(name, value);
+    const bodyHash = computeBodyHash(req.body);
+
+    // First check for an already-final cached response. Common case
+    // (genuine retry) hits here and short-circuits before any locking.
+    const cachedExisting = await store.get(cacheKey);
+    if (cachedExisting && cachedExisting.state === 'final') {
+      if (cachedExisting.bodyHash && bodyHash && cachedExisting.bodyHash !== bodyHash) {
+        return respondMismatch(res, rawKey);
+      }
+      return replayCached(res, cachedExisting, rawKey);
+    }
+
+    // Try to claim the lock. If somebody else owns it, we either
+    // wait for them to finish (same body) or fast-fail (different
+    // body, or wait timed out).
+    let acquired = false;
+    let lastSeen = cachedExisting || null;
+    const deadline = now() + lockTimeoutMs;
+    while (true) {
+      const attempt = await store.tryAcquire(cacheKey, bodyHash, lockHoldMs);
+      if (attempt.acquired) {
+        acquired = true;
+        break;
+      }
+      const existing = attempt.existing;
+      if (existing && existing.state === 'final') {
+        if (existing.bodyHash && bodyHash && existing.bodyHash !== bodyHash) {
+          return respondMismatch(res, rawKey);
+        }
+        return replayCached(res, existing, rawKey);
+      }
+      if (existing && existing.state === 'pending') {
+        if (existing.bodyHash && bodyHash && existing.bodyHash !== bodyHash) {
+          return respondMismatch(res, rawKey);
         }
       }
-      return res.status(cached.status).json(cached.body);
+      if (now() >= deadline) {
+        return respondInProgress(res, rawKey);
+      }
+      lastSeen = existing;
+      await delay(lockPollMs);
     }
+    void lastSeen;
 
     res.setHeader(REPLAY_HEADER, 'fresh');
     res.setHeader(REPLAY_KEY_HEADER, rawKey);
@@ -259,9 +416,11 @@ function idempotencyMiddleware(options = {}) {
     // every JSON-returning route uses) but NOT res.write / res.end
     // — streaming responses are intentionally not cached and the
     // SSE check below catches them.
+    let settled = false;
     const originalJson = res.json.bind(res);
     res.json = function patchedJson(body) {
       const status = res.statusCode || 200;
+      settled = true;
       // Only cache 2xx. A 500 should not lock retries into a stale
       // failure for 24h.
       if (status >= 200 && status < 300 && !isStreamingResponse(res)) {
@@ -275,13 +434,31 @@ function idempotencyMiddleware(options = {}) {
         // Fire-and-forget: a slow Redis put should never block the
         // response. Errors are swallowed by the store.
         void store.put(cacheKey, {
+          state: 'final',
           status,
           body,
           headers: headersToCache,
+          bodyHash,
         });
+      } else {
+        // Non-2xx or streaming: drop the pending lock so subsequent
+        // retries can run fresh instead of waiting on a phantom slot.
+        if (acquired) void store.release(cacheKey);
       }
       return originalJson(body);
     };
+
+    // If the handler ends without calling res.json (e.g. throws or
+    // streams), release the lock when the response closes so the
+    // next retry isn't blocked for the full lock TTL.
+    if (typeof res.on === 'function') {
+      res.on('close', () => {
+        if (!settled && acquired) void store.release(cacheKey);
+      });
+      res.on('finish', () => {
+        if (!settled && acquired) void store.release(cacheKey);
+      });
+    }
 
     return next();
   };
@@ -294,7 +471,10 @@ module.exports = {
   createInMemoryIdempotencyStore,
   createRedisIdempotencyStore,
   buildCacheKey,
+  computeBodyHash,
+  stableStringify,
   REPLAY_HEADER,
   REPLAY_KEY_HEADER,
   DEFAULT_TTL_SECONDS,
+  DEFAULT_LOCK_TIMEOUT_MS,
 };
