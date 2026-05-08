@@ -8,7 +8,6 @@ import { ArtifactPanelProvider } from "@/lib/artifact-panel-context"
 import { BackgroundStreamsProvider } from "@/lib/background-streams-context"
 import { needsChatContext, needsSidebar } from "@/lib/app-wrapper-routes"
 import { ErrorBoundary } from "@/components/error-boundary"
-import { ConnectionStatus } from "@/components/connection-status"
 
 interface AppWrapperProps {
   children: React.ReactNode
@@ -52,7 +51,7 @@ export function AppWrapper({ children }: AppWrapperProps) {
 
   // For pages that don't need any special layout
   if (!pageNeedsChatContext && !pageNeedsSidebar) {
-    return <>{children}<ConnectionStatus /></>
+    return <>{children}</>
   }
 
   // For pages that need chat context and sidebar
@@ -66,7 +65,6 @@ export function AppWrapper({ children }: AppWrapperProps) {
                 <ProviderGuard label="ArtifactPanel">
                   <ArtifactPanelProvider>
                     {children}
-                    <ConnectionStatus />
                   </ArtifactPanelProvider>
                 </ProviderGuard>
               </ChatProvider>
@@ -86,7 +84,6 @@ export function AppWrapper({ children }: AppWrapperProps) {
                   <SidebarProvider>
                     <AppShell>
                       {children}
-                      <ConnectionStatus />
                     </AppShell>
                   </SidebarProvider>
                 </ArtifactPanelProvider>
@@ -103,7 +100,6 @@ export function AppWrapper({ children }: AppWrapperProps) {
     <SidebarProvider>
       <AppShell>
         {children}
-        <ConnectionStatus />
       </AppShell>
     </SidebarProvider>
   )

@@ -72,13 +72,21 @@ import {
     stripNonCopyableArtifactBlocks,
 } from "@/lib/rich-clipboard"
 
-// Adjusted truncateUrl function to ensure links are not overly shortened
-const truncateUrl = (url: string, maxLength: number = 30) => {
+// Adjusted truncateUrl function to ensure links are not overly shortened.
+// Guards against non-string inputs — the renderer is fed citation/source
+// objects from the backend whose `url` field is occasionally null,
+// undefined or wrapped in an object during streaming. Without this
+// guard the whole message bubble crashes with
+// "url.split is not a function" and shows the red "no se pudo
+// renderizar" error.
+const truncateUrl = (url: unknown, maxLength: number = 30) => {
+    if (typeof url !== 'string' || url.length === 0) return '';
     if (url.length <= maxLength) return url;
-    const domain = url.split('/')[2]; // Extract domain
-    const path = url.split('/').slice(3).join('/'); // Extract path
+    const parts = url.split('/');
+    const domain = parts[2] ?? url;
+    const path = parts.slice(3).join('/');
     const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
-    return `${domain}/${truncatedPath}`;
+    return path ? `${domain}/${truncatedPath}` : domain;
 };
 
 const NON_IMAGE_EXTENSIONS = new Set([
