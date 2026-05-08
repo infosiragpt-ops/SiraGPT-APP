@@ -6,6 +6,20 @@ const fs = require('fs').promises;
 const ocrEngine = require('./ocr-engine');
 const { readXlsxFile, selectWorkbookWorksheets, worksheetRows } = require('./xlsx-safe-workbook');
 
+let _streamingPdf;
+let _streamingPdfTried = false;
+function getStreamingPdf() {
+  if (_streamingPdfTried) return _streamingPdf || null;
+  _streamingPdfTried = true;
+  try { _streamingPdf = require('./document/streaming-pdf'); } catch { _streamingPdf = null; }
+  return _streamingPdf;
+}
+
+const STREAMING_PDF_THRESHOLD = Number.parseInt(
+  process.env.SIRAGPT_STREAMING_PDF_THRESHOLD || String(MEMORY_SAFE_MAX_BYTES),
+  10
+);
+
 class FileProcessor {
   async processFile(file) {
     try {
@@ -22,9 +36,36 @@ class FileProcessor {
       if (isLargeFile && (mimetype === 'application/pdf')) {
         console.warn(
           `[mem-safe] Large PDF (${(fileSize / 1024 / 1024).toFixed(1)} MB) — ` +
-          `processing with memory-safe sampling. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
+          `attempting streaming extraction. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
         );
-        // For large PDFs, extract first/last pages and sample middle
+
+        const streaming = await this.processPDFStreaming(filePath, fileSize, { detailed: true }).catch((err) => {
+          console.warn('[mem-safe] streaming PDF failed:', err && err.message);
+          return null;
+        });
+        if (streaming) {
+          return {
+            success: true,
+            extractedText: streaming.text,
+            ocr: streaming.ocr,
+            fileInfo: { name: originalname, type: mimetype, size: fileSize },
+            memSafe: true,
+            memSafeNote:
+              `Large PDF streamed (${streaming.pageCount} pages, ` +
+              `${streaming.totalChars} chars, peakRss=${streaming.peakRssMb.toFixed(0)}MB` +
+              `${streaming.partial ? ', partial=true' : ''})`,
+            streaming: true,
+            partial: streaming.partial,
+            metrics: {
+              pageCount: streaming.pageCount,
+              totalChars: streaming.totalChars,
+              peakRssMb: streaming.peakRssMb,
+              elapsedMs: streaming.elapsedMs,
+            },
+          };
+        }
+
+        // Fall back to legacy sampled mode if streaming unavailable.
         const sampled = await this.processPDFSampled(filePath, fileSize, { detailed: true });
         if (sampled) {
           return {
@@ -156,6 +197,54 @@ class FileProcessor {
       console.error(`❌ PDF processing error for ${filePath}:`, error);
       throw new Error(`PDF processing failed: ${error.message}`);
     }
+  }
+
+  /**
+   * Streaming PDF extraction: yields pages incrementally and bounds RSS.
+   * Replaces the lossy sampled-mode for files > MEMORY_SAFE_MAX_BYTES so
+   * page-by-page chat queries can hit any region of the document.
+   */
+  async processPDFStreaming(filePath, fileSize, options = {}) {
+    const mod = getStreamingPdf();
+    if (!mod) return null;
+
+    const maxChars = Number.parseInt(process.env.SIRAGPT_STREAMING_PDF_MAX_CHARS || '4000000', 10);
+    const parts = [];
+    let totalChars = 0;
+    let truncated = false;
+
+    const result = await mod.extractPdfStreaming(filePath, {
+      collectText: false,
+      onPage: (p) => {
+        if (truncated) return;
+        if (totalChars + p.charCount > maxChars) {
+          const remaining = Math.max(0, maxChars - totalChars);
+          parts.push(`\n[page ${p.page}]\n` + p.text.slice(0, remaining));
+          totalChars += remaining;
+          truncated = true;
+          return;
+        }
+        parts.push(`\n[page ${p.page}]\n` + p.text);
+        totalChars += p.charCount;
+      },
+    });
+
+    const partial = Boolean(result.partial || truncated);
+    const header =
+      `PDF document — ${result.pageCount} page(s) streamed, ` +
+      `${totalChars} chars` +
+      (partial ? ' (partial — RSS or char cap reached)' : '') +
+      `\n---\n`;
+
+    return {
+      text: header + parts.join(''),
+      ocr: { status: 'skipped', confidence: null, provider: 'pdf_text_layer', reason: 'embedded_text_layer', pages: result.pageCount },
+      pageCount: result.pageCount,
+      totalChars,
+      peakRssMb: result.peakRssMb,
+      elapsedMs: result.elapsedMs,
+      partial,
+    };
   }
 
   /**
