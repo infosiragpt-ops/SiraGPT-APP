@@ -118,6 +118,8 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 |----------|-------------|---------|
 | `AGENT_QUEUE_NAME` | BullMQ queue name | `siragpt-agent-tasks` |
 | `AGENT_WORKER_CONCURRENCY` | Concurrent agent workers | `2` |
+| `AGENT_TASK_BOOT_RECOVERY_DISABLED` | Disable boot-time recovery of stale local task snapshots left `running`/`queued` after a process restart | `false` |
+| `AGENT_TASK_BOOT_RECOVERY_STALE_MS` | Minimum snapshot age before boot recovery marks a local in-flight task as errored; BullMQ-backed snapshots are skipped when Redis is configured | `60000` |
 | `AGENTIC_RAG_PROVIDER` | RAG provider for agents | `internal` |
 | `AGENTIC_AGENT_ENGINE` | Agent reasoning engine | `react` |
 

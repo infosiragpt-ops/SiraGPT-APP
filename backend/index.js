@@ -128,6 +128,7 @@ const socialPostsRoutes = require('./src/routes/social-posts');
 const githubCodexRoutes = require('./src/routes/github-codex');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
+const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
 const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
 const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
 
@@ -621,6 +622,7 @@ function startServer() {
         }
     });
 
+    recoverAgentTasksAfterBoot({ logger });
     startAgentTaskWorker();
 
     // Initialize WebSocket server for Computer Use

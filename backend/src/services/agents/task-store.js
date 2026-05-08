@@ -605,10 +605,16 @@ function recoverStaleRunningTasks({
   staleAfterMs = DEFAULT_STALE_RUNNING_MS,
   markAs = 'error',
   reason = 'recovered_after_restart',
+  skipJobBacked = false,
 } = {}) {
   const stale = findStaleRunningTasks({ staleAfterMs });
   const recovered = [];
+  const skipped = [];
   for (const row of stale) {
+    if (skipJobBacked && row.jobId) {
+      skipped.push({ taskId: row.taskId, userId: row.userId, reason: 'job_backed' });
+      continue;
+    }
     const snapshot = readTaskSnapshot(row.taskId);
     if (!snapshot) continue;
     const stamp = nowIso();
@@ -635,7 +641,7 @@ function recoverStaleRunningTasks({
     try { updateIndexForSnapshot(next); } catch { /* ignore */ }
     recovered.push({ taskId: snapshot.taskId, userId: snapshot.userId, previousStatus: snapshot.status });
   }
-  return { recovered, count: recovered.length };
+  return { recovered, skipped, count: recovered.length, skippedCount: skipped.length };
 }
 
 /**
