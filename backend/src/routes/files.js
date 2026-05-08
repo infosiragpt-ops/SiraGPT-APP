@@ -6,6 +6,7 @@ const fileProcessingStatus = require('../services/file-processing-status');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
 const documentIntelligence = require('../services/document-intelligence');
+const documentContext = require('../services/agents/document-context');
 const { validateUploadPolicy } = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
@@ -709,6 +710,105 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Delete file error:', error);
     res.status(500).json({ error: 'Failed to delete file' });
+  }
+});
+
+// ── Document diagnostics and repair endpoints ────────────────────
+// Built on the robust document-context service, these routes let the
+// frontend check document health, retry failed analyses, and repair
+// stuck pipeline states without a full re-upload.
+
+/**
+ * GET /api/files/:id/diagnose
+ *
+ * Full diagnostic of a file's document analysis pipeline: processing
+ * stage, extracted text quality, analysis DB records, chunk/table
+ * counts, and a recommended action when something is wrong.
+ *
+ * Response includes `canRepair` (boolean) and `recommendedAction`
+ * (human-readable string) when the file needs attention.
+ */
+router.get('/:id/diagnose', authenticateToken, async (req, res) => {
+  try {
+    const result = await documentContext.diagnoseFile(prisma, {
+      userId: req.user.id,
+      fileId: req.params.id,
+    });
+    if (!result.ok) {
+      const status = result.code === 'file_not_found' ? 404 : 422;
+      return res.status(status).json({ error: result.error, code: result.code });
+    }
+    return res.json({
+      file: result.result.diagnostics,
+      canRepair: result.result.canRepair,
+      recommendedAction: result.result.recommendedAction,
+    });
+  } catch (err) {
+    console.error('[files] diagnose error:', err.message || err);
+    return res.status(500).json({ error: 'Failed to diagnose document', detail: err.message });
+  }
+});
+
+/**
+ * POST /api/files/:id/repair
+ *
+ * Full repair pipeline for a document: re-extracts text (if empty),
+ * re-runs document intelligence analysis with retry, and re-indexes
+ * in the RAG vector store. Logs every step and returns the new
+ * analysis result.
+ *
+ * Safe to call on healthy documents (no-op on the analysis side;
+ * just returns current state).
+ */
+router.post('/:id/repair', authenticateToken, async (req, res) => {
+  try {
+    const result = await documentContext.repairDocument(prisma, rag, {
+      userId: req.user.id,
+      fileId: req.params.id,
+    });
+    if (!result.ok) {
+      const status = result.code === 'file_not_found' ? 404 : 500;
+      return res.status(status).json({
+        error: result.error,
+        code: result.code,
+        diagnostics: result.diagnostics || null,
+      });
+    }
+    return res.json({
+      message: 'Documento reparado correctamente',
+      fileName: result.result.fileName,
+      analysis: result.result.analysis,
+      previousDiagnostics: result.result.diagnostics,
+    });
+  } catch (err) {
+    console.error('[files] repair error:', err.message || err);
+    return res.status(500).json({ error: 'Failed to repair document', detail: err.message });
+  }
+});
+
+/**
+ * GET /api/files/diagnostics/batch
+ *
+ * Batch diagnostic scan of all the user's files. Returns aggregate
+ * summary (healthy / stuck / failed / processing counts) plus a
+ * per-file breakdown with stage, error, age, and disk presence.
+ *
+ * The frontend can use this to show a document health dashboard
+ * or automatically prompt the user to repair stale files.
+ */
+router.get('/diagnostics/batch', authenticateToken, async (req, res) => {
+  try {
+    const result = await documentContext.batchDiagnose(prisma, req.user.id);
+    if (!result.ok) {
+      return res.status(500).json({ error: result.error, code: result.code });
+    }
+    return res.json({
+      summary: result.result.summary,
+      files: result.result.files,
+    });
+  } catch (err) {
+    console.error('[files] batch diagnostics error:', err.message || err);
+    return res.status(500).json({ error: 'Failed to scan documents', detail: err.message });
   }
 });
 
