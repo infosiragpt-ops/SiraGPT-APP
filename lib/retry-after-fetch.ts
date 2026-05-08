@@ -29,6 +29,13 @@
  *     `retryAfterFetch(input, init, options)`. Migrating apiClient
  *     to use it across the board is a follow-up.
  *
+ * Reliability guarantees:
+ *   - Each attempt has a bounded timeout (30s by default, 0 disables).
+ *   - init.signal and options.signal are both honored, including
+ *     during Retry-After sleep.
+ *   - Retry response bodies are cancelled before sleeping so sockets
+ *     are returned to the runtime promptly.
+ *
  * Privacy note: the helper does NOT log request bodies / URLs. It
  * only logs the wait decision via `options.onWait` (caller-provided)
  * so an analytics layer can opt into tracking how many users hit
@@ -38,7 +45,21 @@
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_BACKOFF_MS = 500;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 30_000;
 const RETRYABLE_STATUSES = new Set([429, 503]);
+
+export class RetryAfterFetchTimeoutError extends Error {
+  readonly code = 'RETRY_AFTER_FETCH_TIMEOUT'
+  readonly timeoutMs: number
+  readonly attempt: number
+
+  constructor(timeoutMs: number, attempt: number) {
+    super(`Fetch attempt ${attempt} timed out after ${timeoutMs}ms`)
+    this.name = 'RetryAfterFetchTimeoutError'
+    this.timeoutMs = timeoutMs
+    this.attempt = attempt
+  }
+}
 
 export interface RetryAfterFetchOptions {
   maxRetries?: number
@@ -52,6 +73,10 @@ export interface RetryAfterFetchOptions {
   sleepFn?: (ms: number) => Promise<void>
   /** Test seam — defaults to Date.now. */
   now?: () => number
+  /** Per-attempt timeout. Set 0 to disable. Defaults to 30s. */
+  timeoutMs?: number
+  /** Optional external cancellation signal, merged with init.signal. */
+  signal?: AbortSignal
   /** Optional observer for analytics; called per wait decision. */
   onWait?: (info: { attempt: number; waitMs: number; status: number; source: 'header-seconds' | 'header-date' | 'backoff' }) => void
 }
@@ -88,6 +113,151 @@ function exponentialBackoff(attempt: number, base: number, cap: number): number 
   return Math.min(cap, Math.round(jitter))
 }
 
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && 'aborted' in value
+    && typeof (value as AbortSignal).addEventListener === 'function',
+  )
+}
+
+function makeAbortError(message: string): Error {
+  const err = new Error(message)
+  err.name = 'AbortError'
+  return err
+}
+
+function abortReason(signal: AbortSignal, fallback: string): unknown {
+  return (signal as any).reason ?? makeAbortError(fallback)
+}
+
+function throwIfAborted(signals: AbortSignal[]) {
+  for (const signal of signals) {
+    if (signal.aborted) {
+      throw abortReason(signal, 'Fetch was aborted before it started')
+    }
+  }
+}
+
+function createAttemptSignal(signals: AbortSignal[], timeoutMs: number, attempt: number) {
+  const controller = new AbortController()
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const cleanups: Array<() => void> = []
+
+  const abortFrom = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(abortReason(signal, 'Fetch was aborted'))
+    }
+  }
+
+  for (const signal of signals) {
+    if (signal.aborted) {
+      abortFrom(signal)
+      continue
+    }
+    const listener = () => abortFrom(signal)
+    signal.addEventListener('abort', listener, { once: true })
+    cleanups.push(() => signal.removeEventListener('abort', listener))
+  }
+
+  if (timeoutMs > 0) {
+    timeoutId = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        controller.abort(new RetryAfterFetchTimeoutError(timeoutMs, attempt))
+      }
+    }, timeoutMs)
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup() {
+      if (timeoutId) clearTimeout(timeoutId)
+      for (const cleanup of cleanups.splice(0)) cleanup()
+    },
+  }
+}
+
+function abortPromise(signal: AbortSignal): { promise: Promise<never>; cleanup: () => void } {
+  if (signal.aborted) {
+    return {
+      promise: Promise.reject(abortReason(signal, 'Fetch was aborted')),
+      cleanup: () => undefined,
+    }
+  }
+  let listener: (() => void) | null = null
+  const promise = new Promise<never>((_, reject) => {
+    listener = () => reject(abortReason(signal, 'Fetch was aborted'))
+    signal.addEventListener('abort', listener, { once: true })
+  })
+  return {
+    promise,
+    cleanup: () => {
+      if (listener) signal.removeEventListener('abort', listener)
+      listener = null
+    },
+  }
+}
+
+async function runFetchAttempt(
+  fetchImpl: typeof fetch,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  externalSignals: AbortSignal[],
+  timeoutMs: number,
+  attempt: number,
+): Promise<Response> {
+  throwIfAborted(externalSignals)
+  const attemptSignal = createAttemptSignal(externalSignals, timeoutMs, attempt)
+  const abort = abortPromise(attemptSignal.signal)
+  const attemptInit: RequestInit = { ...(init ?? {}), signal: attemptSignal.signal }
+  try {
+    return await Promise.race([
+      fetchImpl(input as any, attemptInit),
+      abort.promise,
+    ])
+  } catch (error) {
+    if (attemptSignal.signal.aborted) {
+      throw abortReason(attemptSignal.signal, 'Fetch was aborted')
+    }
+    throw error
+  } finally {
+    abort.cleanup()
+    attemptSignal.cleanup()
+  }
+}
+
+async function sleepWithAbort(
+  sleep: (ms: number) => Promise<void>,
+  waitMs: number,
+  signals: AbortSignal[],
+): Promise<void> {
+  throwIfAborted(signals)
+  const controller = new AbortController()
+  const cleanups: Array<() => void> = []
+
+  for (const signal of signals) {
+    const listener = () => {
+      if (!controller.signal.aborted) {
+        controller.abort(abortReason(signal, 'Retry wait was aborted'))
+      }
+    }
+    if (signal.aborted) listener()
+    else {
+      signal.addEventListener('abort', listener, { once: true })
+      cleanups.push(() => signal.removeEventListener('abort', listener))
+    }
+  }
+
+  const abort = abortPromise(controller.signal)
+  try {
+    await Promise.race([sleep(waitMs), abort.promise])
+  } finally {
+    abort.cleanup()
+    for (const cleanup of cleanups.splice(0)) cleanup()
+  }
+}
+
 /**
  * retryAfterFetch — single-call wrapper with Retry-After handling.
  *
@@ -106,11 +276,13 @@ export async function retryAfterFetch(
   const fetchImpl = options.fetchImpl ?? fetch
   const sleep = options.sleepFn ?? defaultSleep
   const now = options.now ?? Date.now
+  const timeoutMs = Math.max(0, options.timeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS)
+  const externalSignals = [init?.signal, options.signal].filter(isAbortSignal)
 
   let lastResponse: Response | null = null
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    const response = await fetchImpl(input as any, init)
+    const response = await runFetchAttempt(fetchImpl, input, init, externalSignals, timeoutMs, attempt + 1)
     lastResponse = response
 
     if (!RETRYABLE_STATUSES.has(response.status)) {
@@ -140,8 +312,8 @@ export async function retryAfterFetch(
     // connection can be released back to the pool. Some runtimes
     // (Safari, older Node) leak sockets if the body is left
     // open across a delay.
-    try { await response.body?.cancel?.() } catch (_) { /* ignore */ }
-    await sleep(waitMs)
+    try { await response.body?.cancel?.() } catch { /* ignore */ }
+    await sleepWithAbort(sleep, waitMs, externalSignals)
   }
 
   // Unreachable under normal flow — kept for type narrowing.
@@ -152,5 +324,6 @@ export const RETRY_AFTER_FETCH_DEFAULTS = {
   DEFAULT_MAX_RETRIES,
   DEFAULT_BASE_BACKOFF_MS,
   DEFAULT_MAX_BACKOFF_MS,
+  DEFAULT_ATTEMPT_TIMEOUT_MS,
   RETRYABLE_STATUSES,
 }

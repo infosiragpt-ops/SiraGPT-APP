@@ -201,3 +201,65 @@ describe("retryAfterFetch — defaults exposure", () => {
     assert.ok(RETRY_AFTER_FETCH_DEFAULTS.RETRYABLE_STATUSES.has(503))
   })
 })
+
+describe("retryAfterFetch — bounded attempts and cancellation", () => {
+  test("times out a hung attempt and aborts the attempt signal", async () => {
+    let capturedSignal: AbortSignal | undefined
+    const fetchStub: any = async (_input: any, init?: RequestInit) => {
+      capturedSignal = init?.signal as AbortSignal | undefined
+      return new Promise<Response>(() => undefined)
+    }
+
+    await assert.rejects(
+      retryAfterFetch("https://api.example.com/hung", undefined, {
+        fetchImpl: fetchStub,
+        timeoutMs: 10,
+        maxRetries: 0,
+      }),
+      (error: any) => {
+        assert.equal(error.name, "RetryAfterFetchTimeoutError")
+        assert.equal(error.code, "RETRY_AFTER_FETCH_TIMEOUT")
+        assert.equal(error.timeoutMs, 10)
+        assert.equal(error.attempt, 1)
+        return true
+      },
+    )
+    assert.equal(capturedSignal?.aborted, true)
+  })
+
+  test("external abort before the first attempt prevents fetch from running", async () => {
+    const controller = new AbortController()
+    const reason = new Error("caller stopped")
+    controller.abort(reason)
+    let calls = 0
+
+    await assert.rejects(
+      retryAfterFetch("https://api.example.com/abort", { signal: controller.signal }, {
+        fetchImpl: (async () => {
+          calls += 1
+          return makeResponse({ status: 200 })
+        }) as any,
+      }),
+      /caller stopped/,
+    )
+    assert.equal(calls, 0)
+  })
+
+  test("external abort during Retry-After sleep stops waiting immediately", async () => {
+    const controller = new AbortController()
+    const fetchStub = makeFetchStub([
+      { status: 429, headers: { "retry-after": "30" } },
+      { status: 200 },
+    ])
+
+    await assert.rejects(
+      retryAfterFetch("https://api.example.com/retry", { signal: controller.signal }, {
+        fetchImpl: fetchStub,
+        sleepFn: async () => new Promise<void>(() => undefined),
+        onWait: () => controller.abort(new Error("stop waiting")),
+      }),
+      /stop waiting/,
+    )
+    assert.equal(fetchStub.calls().length, 1)
+  })
+})
