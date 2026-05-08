@@ -34,7 +34,9 @@
     "licenses:report": "node scripts/generate-third-party-licenses.js",
     "licenses:check": "node scripts/generate-third-party-licenses.js --check",
     "security:validate": "node scripts/validate-supply-chain.js",
-    "sbom:generate": "node scripts/validate-supply-chain.js --sbom-only"
+    "sbom:generate": "node scripts/validate-supply-chain.js --sbom-only",
+    "skill:list": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts list",
+    "skill:validate": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts validate"
   },
   "dependencies": {
     "@ai-sdk/langchain": "2.0.174",
