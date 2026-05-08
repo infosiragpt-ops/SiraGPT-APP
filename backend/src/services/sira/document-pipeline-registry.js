@@ -96,6 +96,8 @@ const GENERATORS = Object.freeze([
   // ── HTML / Markdown ────────────────────────────────────────────
   { id: "markdown-it",       format: "html",  language: "node",   runtime: "library", template_support: false, mime: "text/html", preference: 90 },
   { id: "marked",            format: "html",  language: "node",   runtime: "library", template_support: false, mime: "text/html", preference: 88 },
+  { id: "sira-markdown-frontmatter", format: "md", language: "node", runtime: "library", template_support: false, mime: "text/markdown", preference: 92 },
+  { id: "pandoc-md",         format: "md",   language: "binary", runtime: "binary",  template_support: false, mime: "text/markdown", preference: 80 },
 
   // ── LaTeX ──────────────────────────────────────────────────────
   { id: "pandoc",            format: "tex",   language: "binary", runtime: "binary",  template_support: false, mime: "application/x-tex", preference: 95 },
@@ -111,10 +113,13 @@ const GENERATORS = Object.freeze([
 
   // ── Office alternatives (RTF / ODT / EPUB) ─────────────────────
   { id: "pandoc-rtf",        format: "rtf",   language: "binary", runtime: "binary",  template_support: false, mime: "application/rtf", preference: 90 },
+  { id: "sira-rtf",          format: "rtf",   language: "node",   runtime: "library", template_support: false, mime: "application/rtf", preference: 86 },
   { id: "rtf-writer",        format: "rtf",   language: "node",   runtime: "library", template_support: false, mime: "application/rtf", preference: 80 },
   { id: "pandoc-odt",        format: "odt",   language: "binary", runtime: "binary",  template_support: false, mime: "application/vnd.oasis.opendocument.text", preference: 90 },
+  { id: "sira-odt",          format: "odt",   language: "node",   runtime: "library", template_support: false, mime: "application/vnd.oasis.opendocument.text", preference: 86 },
   { id: "odfpy",             format: "odt",   language: "python", runtime: "library", template_support: false, mime: "application/vnd.oasis.opendocument.text", preference: 85 },
   { id: "pandoc-epub",       format: "epub",  language: "binary", runtime: "binary",  template_support: false, mime: "application/epub+zip", preference: 92 },
+  { id: "sira-epub",         format: "epub",  language: "node",   runtime: "library", template_support: false, mime: "application/epub+zip", preference: 86 },
   { id: "epub-gen",          format: "epub",  language: "node",   runtime: "library", template_support: false, mime: "application/epub+zip", preference: 85 },
 
   // ── Streaming / line-delimited formats ─────────────────────────
@@ -672,6 +677,14 @@ function formatAdvice(format, useCase = '') {
   if ((uc.includes('book') || uc.includes('libro') || uc.includes('ebook') || uc.includes('novel')) && lower !== 'epub' && lower !== 'pdf') {
     advice.alternatives.push('epub');
     advice.notes.push('Long-form publications are best as EPUB (reflowable) or PDF (fixed layout).');
+  }
+  if ((uc.includes('legacy') || uc.includes('wordpad') || uc.includes('compat')) && lower !== 'rtf') {
+    advice.alternatives.push('rtf');
+    advice.notes.push('RTF is portable across legacy word processors when DOCX is too modern.');
+  }
+  if ((uc.includes('libreoffice') || uc.includes('opendocument') || uc.includes('open document') || uc.includes('open-source office')) && lower !== 'odt') {
+    advice.alternatives.push('odt');
+    advice.notes.push('ODT is the native LibreOffice/OpenDocument format for editable text documents.');
   }
   if ((uc.includes('calendar') || uc.includes('event') || uc.includes('calendario') || uc.includes('evento') || uc.includes('meeting')) && lower !== 'ics') {
     advice.alternatives.push('ics');

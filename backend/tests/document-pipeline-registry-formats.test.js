@@ -124,7 +124,8 @@ test('registry: rtf falls back to node when binary unavailable', () => {
     runtime: { python: false, node: true, binary: false },
   });
   assert.ok(generators.length >= 1);
-  assert.equal(generators[0].id, 'rtf-writer');
+  assert.equal(generators[0].id, 'sira-rtf');
+  assert.ok(generators.some((g) => g.id === 'rtf-writer'));
 });
 
 // ── New formats: ndjson / tsv / ics / vcf / bib ─────────────────
