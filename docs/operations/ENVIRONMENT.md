@@ -104,6 +104,8 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `UPLOAD_DIR` | Upload directory path | `uploads` |
 | `UPLOAD_MAX_FILE_MB` | Alternative file size limit var | `50` |
 | `MAX_UPLOAD_FILES` | Max files per upload | `10` |
+| `SIRAGPT_XLSX_MAX_SHEETS` | Max worksheets extracted per XLSX workbook; extra sheets are skipped with an explicit marker | `5` |
+| `SIRAGPT_XLSX_DEFANG_FORMULAS` | Prefix formula-like spreadsheet text with `'` during extraction to prevent formula injection on reuse | `true` |
 | `OCR_MODE` | OCR processing mode | `hybrid` |
 | `OCR_MIN_CONFIDENCE` | Minimum OCR confidence | `70` |
 | `OCR_VISION_MODEL` | Vision model for OCR fallback | (auto) |

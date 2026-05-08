@@ -3,8 +3,13 @@ const assert = require('node:assert/strict');
 
 const {
   addRowsWorksheet,
+  cellToText,
   createWorkbook,
+  defangCellText,
+  getXlsxMaxSheets,
   readXlsxBuffer,
+  selectWorkbookWorksheets,
+  shouldDefangCellText,
   worksheetRows,
   writeWorkbookBuffer,
 } = require('../src/services/xlsx-safe-workbook');
@@ -42,4 +47,97 @@ test('worksheetRows applies row and column bounds before preview extraction', ()
     ['r1c1', 'r1c2'],
     ['r2c1', 'r2c2'],
   ]);
+});
+
+test('xlsx-safe-workbook defangs formula-injection prefixes in extracted text', () => {
+  assert.equal(shouldDefangCellText('=cmd|\' /C calc\'!A0'), true);
+  assert.equal(shouldDefangCellText('+SUM(A1:A2)'), true);
+  assert.equal(shouldDefangCellText('-10+20'), true);
+  assert.equal(shouldDefangCellText('@HYPERLINK("https://evil")'), true);
+  assert.equal(shouldDefangCellText('\t=cmd'), true);
+  assert.equal(shouldDefangCellText('\r=cmd'), true);
+  assert.equal(shouldDefangCellText(' =cmd'), true);
+  assert.equal(shouldDefangCellText('\u00a0=cmd'), true);
+  assert.equal(shouldDefangCellText('\uFEFF=cmd'), true);
+  assert.equal(shouldDefangCellText('\u200B=cmd'), true);
+  assert.equal(shouldDefangCellText('ordinary text'), false);
+
+  assert.equal(defangCellText('=cmd'), "'=cmd");
+  assert.equal(defangCellText('+SUM(A1:A2)'), "'+SUM(A1:A2)");
+  assert.equal(defangCellText('-10+20'), "'-10+20");
+  assert.equal(defangCellText('@HYPERLINK("https://evil")'), "'@HYPERLINK(\"https://evil\")");
+  assert.equal(defangCellText('safe'), 'safe');
+  assert.equal(defangCellText('=cmd', { enabled: false }), '=cmd');
+  assert.equal(defangCellText(defangCellText('=cmd')), "'=cmd");
+  assert.equal(cellToText(-10), '-10');
+  assert.equal(cellToText({ value: -10, text: '-10' }), '-10');
+  assert.equal(cellToText({ value: true, text: 'true' }), 'true');
+});
+
+test('worksheetRows defangs dangerous spreadsheet text and formula fallbacks', () => {
+  const workbook = createWorkbook();
+  const sheet = addRowsWorksheet(workbook, 'Danger', [
+    ['Name', 'Payload'],
+    ['A', '=cmd|\' /C calc\'!A0'],
+    ['B', '+SUM(A1:A2)'],
+  ]);
+  sheet.getCell('B4').value = { formula: 'HYPERLINK("https://evil.example", "x")' };
+
+  assert.deepEqual(worksheetRows(sheet, { maxRows: 4, maxColumns: 2 }), [
+    ['Name', 'Payload'],
+    ['A', "'=cmd|' /C calc'!A0"],
+    ['B', "'+SUM(A1:A2)"],
+    ['', "'=HYPERLINK(\"https://evil.example\", \"x\")"],
+  ]);
+
+  assert.equal(cellToText({ formula: 'SUM(A1:A2)' }, { enabled: false }), '=SUM(A1:A2)');
+});
+
+test('selectWorkbookWorksheets applies a bounded sheet cap with env override', () => {
+  const workbook = createWorkbook();
+  for (let i = 1; i <= 8; i += 1) {
+    addRowsWorksheet(workbook, `Sheet${i}`, [['A'], [i]]);
+  }
+
+  const previous = process.env.SIRAGPT_XLSX_MAX_SHEETS;
+  try {
+    delete process.env.SIRAGPT_XLSX_MAX_SHEETS;
+    const defaultSelection = selectWorkbookWorksheets(workbook);
+    assert.equal(defaultSelection.total, 8);
+    assert.equal(defaultSelection.worksheets.length, 5);
+    assert.equal(defaultSelection.skipped, 3);
+    assert.equal(defaultSelection.maxSheets, 5);
+
+    process.env.SIRAGPT_XLSX_MAX_SHEETS = '7';
+    const envSelection = selectWorkbookWorksheets(workbook);
+    assert.equal(getXlsxMaxSheets(), 7);
+    assert.equal(envSelection.worksheets.length, 7);
+    assert.equal(envSelection.skipped, 1);
+
+    process.env.SIRAGPT_XLSX_MAX_SHEETS = '10000';
+    assert.equal(selectWorkbookWorksheets(workbook).maxSheets, 100);
+  } finally {
+    if (previous == null) delete process.env.SIRAGPT_XLSX_MAX_SHEETS;
+    else process.env.SIRAGPT_XLSX_MAX_SHEETS = previous;
+  }
+});
+
+test('cellToText defangs rich text and hyperlink text while preserving numeric results', () => {
+  assert.equal(cellToText({ richText: [{ text: '=' }, { text: 'cmd()' }] }), "'=cmd()");
+  assert.equal(cellToText({ hyperlink: 'https://example.test', text: '=click' }), "'=click");
+  assert.equal(cellToText({ formula: 'SUM(A1:A2)', result: 0 }), '0');
+});
+
+test('selectWorkbookWorksheets fails closed on invalid caps and empty workbook shapes', () => {
+  const workbook = createWorkbook();
+  addRowsWorksheet(workbook, 'Only', [['A'], [1]]);
+
+  assert.equal(selectWorkbookWorksheets(workbook, { maxSheets: 0 }).worksheets.length, 1);
+  assert.equal(selectWorkbookWorksheets(workbook, { maxSheets: -10 }).worksheets.length, 1);
+  assert.deepEqual(selectWorkbookWorksheets({ worksheets: undefined }), {
+    worksheets: [],
+    total: 0,
+    skipped: 0,
+    maxSheets: 5,
+  });
 });

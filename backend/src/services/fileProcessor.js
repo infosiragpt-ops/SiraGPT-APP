@@ -4,7 +4,7 @@ const MEMORY_SAFE_MAX_BYTES = Number.parseInt(process.env.SIRAGPT_MEMORY_SAFE_MA
 const sharp = require('sharp');
 const fs = require('fs').promises;
 const ocrEngine = require('./ocr-engine');
-const { readXlsxFile, worksheetRows } = require('./xlsx-safe-workbook');
+const { readXlsxFile, selectWorkbookWorksheets, worksheetRows } = require('./xlsx-safe-workbook');
 
 class FileProcessor {
   async processFile(file) {
@@ -300,7 +300,8 @@ class FileProcessor {
       const MAX_DATA_ROWS_PER_SHEET = 5000; // increased for large spreadsheets
 
       const sheetSummaries = [];
-      workbook.worksheets.forEach(worksheet => {
+      const { worksheets, total, skipped, maxSheets } = selectWorkbookWorksheets(workbook);
+      worksheets.forEach(worksheet => {
         const sheetName = worksheet.name;
         const nonEmptyRows = worksheetRows(worksheet, { maxRows: MAX_DATA_ROWS_PER_SHEET + 1 })
           .filter(row => Array.isArray(row) && row.length > 0);
@@ -328,7 +329,12 @@ class FileProcessor {
       });
 
       const sheetNames = workbook.worksheets.map((worksheet) => worksheet.name);
-      const header = `Excel workbook — ${sheetNames.length} sheet(s): ${sheetNames.join(', ')}\n\n`;
+      let header = `Excel workbook — ${total} sheet(s): ${sheetNames.join(', ')}\n`;
+      if (skipped > 0) {
+        header += `Showing first ${worksheets.length} sheet(s); ${skipped} sheet(s) skipped by safety cap (${maxSheets}).\n`;
+        sheetSummaries.push(`[truncated: ${skipped} sheet(s) skipped by safety cap]`);
+      }
+      header += '\n';
       return header + sheetSummaries.join('\n');
     } catch (error) {
       throw new Error(`Excel processing failed: ${error.message}`);
