@@ -12,14 +12,17 @@ const {
   signOAuthState,
   verifyOAuthState,
 } = require('../services/oauth-state');
+const {
+  getFrontendUrl,
+  getGoogleGmailCallbackURL,
+  getGoogleServicesCallbackURL,
+} = require('../config/oauth-url-policy');
 
 const router = express.Router();
 const googleIntegrationsConfigured = Boolean(
   process.env.GOOGLE_CLIENT_ID &&
   process.env.GOOGLE_CLIENT_SECRET
 );
-
-const getFrontendUrl = () => (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/+$/, '');
 
 const isGoogleOAuthConfigured = () => (
   typeof passport.isGoogleOAuthConfigured === 'function'
@@ -45,14 +48,14 @@ const requireGoogleIntegrations = (req, res, next) => {
 const gmailOauth2Client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
+  getGoogleGmailCallbackURL()
 );
 
 // Google Calendar & Drive OAuth configuration
 const googleServicesOauth2Client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_CALENDAR_DRIVE_URI
+  getGoogleServicesCallbackURL()
 );
 
 // Google OAuth routes
@@ -260,7 +263,7 @@ router.get('/gmail/reauth', authenticateToken, requireGoogleIntegrations, (req, 
     const oauth2Client = new OAuth2Client(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
-      `${process.env.BASE_URL}/api/auth/gmail/callback`
+      getGoogleGmailCallbackURL()
     );
 
     const scopes = [

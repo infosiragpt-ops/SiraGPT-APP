@@ -395,10 +395,10 @@ describe('AsyncGuard', () => {
       assert.equal(result.headers['x-flag'], 'true');
     });
 
-    test('passes Headers instance through unchanged', () => {
+    test('normalizes Headers instance to a safe dictionary', () => {
       const h = new Headers({ 'content-type': 'text/plain' });
       const result = sanitizeFetchInit({ headers: h });
-      assert.ok(result.headers instanceof Headers);
+      assert.deepEqual(result.headers, { 'content-type': 'text/plain' });
     });
 
     test('handles null/undefined init gracefully', () => {

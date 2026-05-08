@@ -3,7 +3,7 @@
  *
  * Problems this solves:
  *
- *   1. "Dangling timed-out operations" (cf. OpenClaw #78439):
+ *   1. "Dangling timed-out operations":
  *      Async operations that time out without cleanup may leave
  *      internal state (file handles, DB transactions, agent tool
  *      lanes) reachable and leaking. This module wraps every async
@@ -483,10 +483,8 @@ class AsyncGuard {
     const defaultTimeout = defaults.timeoutMs || this._defaultTimeoutMs;
 
     return async function guardedFetch(input, init = {}) {
-      // Sanitize headers — strip Symbol-typed keys and non-standard
-      // properties that could cause native fetch to reject the request
-      // (cf. OpenClaw #77846 — "drop third-party symbol metadata from
-      // plain request header dictionaries").
+      // Sanitize headers so SDK metadata cannot make native fetch
+      // reject an otherwise valid request.
       const safeInit = sanitizeFetchInit(init);
 
       // Apply per-request timeout
@@ -724,8 +722,8 @@ function clampInt(raw, fallback, min, max) {
  *     "null"/"undefined" when passed to Headers, which is wrong).
  *   - Non-string header values (coerces them to string).
  *
- * This addresses the same class of issue as OpenClaw #77846 (drop
- * third-party symbol metadata from plain request header dictionaries).
+ * This keeps guarded fetch compatible with SDKs that decorate request
+ * dictionaries with metadata that native fetch cannot serialize.
  */
 function sanitizeFetchInit(init) {
   if (!init || typeof init !== 'object' || Array.isArray(init)) {
@@ -736,17 +734,7 @@ function sanitizeFetchInit(init) {
 
   // Sanitize headers
   if (result.headers != null) {
-    if (typeof result.headers === 'object' && !(result.headers instanceof Headers)) {
-      const sanitized = {};
-      for (const key of Object.getOwnPropertyNames(result.headers)) {
-        const value = result.headers[key];
-        if (value == null) continue; // skip null/undefined
-        if (typeof value === 'symbol') continue; // skip symbol values
-        sanitized[key] = typeof value === 'string' ? value : String(value);
-      }
-      result.headers = sanitized;
-    }
-    // Headers instance is kept as-is (native Headers handles sanitization)
+    result.headers = sanitizeHeaders(result.headers);
   }
 
   // Drop Symbol keys from the top-level init object
@@ -772,6 +760,55 @@ function sanitizeFetchInit(init) {
   return result;
 }
 
+function putSanitizedHeader(target, key, value) {
+  if (key == null || typeof key === 'symbol') return;
+  if (value == null || typeof value === 'symbol') return;
+  const name = String(key).trim();
+  if (!name) return;
+  target[name] = typeof value === 'string' ? value : String(value);
+}
+
+function sanitizeHeaderEntries(entries) {
+  const sanitized = {};
+  for (const entry of entries) {
+    if (!entry || typeof entry[Symbol.iterator] !== 'function') continue;
+    const pair = Array.from(entry);
+    if (pair.length < 2) continue;
+    putSanitizedHeader(sanitized, pair[0], pair[1]);
+  }
+  return sanitized;
+}
+
+function sanitizeHeaders(headers) {
+  if (!headers || typeof headers !== 'object') return headers;
+
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    const sanitized = {};
+    headers.forEach((value, key) => putSanitizedHeader(sanitized, key, value));
+    return sanitized;
+  }
+
+  if (Array.isArray(headers)) {
+    return sanitizeHeaderEntries(headers);
+  }
+
+  if (typeof headers.forEach === 'function') {
+    const sanitized = {};
+    headers.forEach((value, key) => putSanitizedHeader(sanitized, key, value));
+    return sanitized;
+  }
+
+  if (typeof headers[Symbol.iterator] === 'function') {
+    return sanitizeHeaderEntries(headers);
+  }
+
+  const sanitized = {};
+  for (const key of Object.getOwnPropertyNames(headers)) {
+    putSanitizedHeader(sanitized, key, headers[key]);
+  }
+  return sanitized;
+}
+
 // ── Singleton instance ───────────────────────────────────────────────────
 
 /**
@@ -792,6 +829,7 @@ module.exports = {
   defaultGuard,
   // Utilities (exported for testing)
   sanitizeFetchInit,
+  sanitizeHeaders,
   isAbortError,
   raceWithSignal,
   // Constants

@@ -60,9 +60,11 @@
 ## DNS / Domains
 
 - [ ] `api.siragpt.com` → backend (via reverse proxy)
-- [ ] `app.siragpt.com` → frontend (Next.js)
+- [ ] `siragpt.com` → frontend (Next.js)
 - [ ] Stripe webhook → `https://api.siragpt.com/api/payments/stripe/webhook`
 - [ ] Google OAuth redirect → `https://api.siragpt.com/api/auth/google/callback`
+- [ ] Gmail OAuth redirect → `https://api.siragpt.com/api/auth/gmail/callback`
+- [ ] Google Calendar/Drive OAuth redirect → `https://api.siragpt.com/api/auth/google-services/callback`
 
 ---
 

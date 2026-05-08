@@ -11,8 +11,7 @@
  *   - `createFetch(options?)` — factory for a one-off instrumented fetch.
  *
  * The wrapper reuses sanitizeFetchInit (from async-guard) to strip
- * Symbol-typed metadata from header objects — addressing the same
- * class of leak that OpenClaw fixed in v2026.5.6 (#77846).
+ * request metadata that native fetch cannot serialize.
  *
  * @module fetch-instrument
  */
@@ -283,7 +282,7 @@ class FetchInstrument {
       method = String(init.method).toUpperCase();
     }
 
-    // Sanitize headers (strip Symbol keys/values — OpenClaw #77846)
+    // Sanitize headers before native fetch sees them.
     let safeInit;
     try {
       safeInit = sanitizeFetchInit(init || {});

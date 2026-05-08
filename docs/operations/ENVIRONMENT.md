@@ -149,6 +149,18 @@ docker compose up -d
 | `NEXT_PUBLIC_APP_NAME` | Application name | `siraGPT` |
 | `NEXT_PUBLIC_APP_DESCRIPTION` | App description | `Multi-LLM AI Platform` |
 
+## Google OAuth Public URLs
+
+| Variable | Description | Production value |
+|----------|-------------|------------------|
+| `GOOGLE_AUTH_BASE_URL` | Public backend origin used to build Google OAuth callbacks | `https://api.siragpt.com` |
+| `GOOGLE_AUTH_URI` | Login callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/google/callback` |
+| `GOOGLE_REDIRECT_URI` | Gmail integration callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/gmail/callback` |
+| `GOOGLE_REDIRECT_CALENDAR_DRIVE_URI` | Calendar/Drive integration callback registered in Google Cloud Console | `https://api.siragpt.com/api/auth/google-services/callback` |
+| `GOOGLE_ALLOW_FRONTEND_CALLBACK` | Set to `true` only for same-origin deployments where the frontend domain intentionally proxies OAuth callbacks | unset |
+
+In production, SiraGPT rejects localhost callbacks and frontend-domain Google callbacks when the API has its own public host. This prevents `redirect_uri_mismatch` regressions when `siragpt.com` serves the UI and `api.siragpt.com` serves the backend.
+
 ---
 
 ## Advanced: WebAuthn (Passkeys)

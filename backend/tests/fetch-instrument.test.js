@@ -119,6 +119,31 @@ describe('FetchInstrument', () => {
       assert.equal(symKeys.length, 0);
       assert.equal(result.headers['content-type'], 'application/json');
     });
+
+    it('normalizes iterable header pairs without leaking symbol metadata', () => {
+      const result = sanitizeFetchInit({
+        headers: [
+          ['accept', 'application/json'],
+          ['x-attempt', 2],
+          [Symbol('secret'), 'skip'],
+          ['x-skip', Symbol('skip')],
+        ],
+      });
+
+      assert.deepEqual(result.headers, {
+        accept: 'application/json',
+        'x-attempt': '2',
+      });
+    });
+
+    it('normalizes Headers instances into a plain safe dictionary', () => {
+      const headers = new Headers();
+      headers.set('x-token', 'abc');
+      const result = sanitizeFetchInit({ headers });
+
+      assert.deepEqual(result.headers, { 'x-token': 'abc' });
+      assert.equal(Object.getOwnPropertySymbols(result.headers).length, 0);
+    });
   });
 
   describe('_tracedFetch() / instrumentedFetch()', () => {

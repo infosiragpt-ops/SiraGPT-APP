@@ -4,64 +4,10 @@ const JwtStrategy = require('passport-jwt').Strategy;
 const ExtractJwt = require('passport-jwt').ExtractJwt;
 const prisma = require('./database');
 const bcrypt = require('bcryptjs');
-
-const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
-
-const stripTrailingSlash = (value) => String(value || '').replace(/\/+$/, '');
-
-const isProduction = () => process.env.NODE_ENV === 'production';
-
-const isLocalhostUrl = (value) => {
-  if (!value) return false;
-  try {
-    const parsed = new URL(value);
-    return LOCAL_HOSTNAMES.has(parsed.hostname);
-  } catch {
-    return /(^|\/\/)(localhost|127\.0\.0\.1|\[?::1\]?)(:|\/|$)/i.test(String(value));
-  }
-};
-
-const inferBackendUrlFromFrontend = () => {
-  try {
-    const frontendUrl = new URL(process.env.FRONTEND_URL || '');
-    if (frontendUrl.hostname === 'siragpt.com' || frontendUrl.hostname === 'www.siragpt.com') {
-      return 'https://api.siragpt.com';
-    }
-  } catch {
-    return '';
-  }
-  return '';
-};
-
-const resolvePublicBackendUrl = () => {
-  const candidates = [
-    process.env.GOOGLE_AUTH_BASE_URL,
-    process.env.BACKEND_PUBLIC_URL,
-    process.env.API_PUBLIC_URL,
-    process.env.PUBLIC_API_URL,
-    process.env.BASE_URL,
-    process.env.APP_URL
-  ];
-
-  for (const candidate of candidates) {
-    const normalized = stripTrailingSlash(candidate);
-    if (!normalized) continue;
-    if (isProduction() && isLocalhostUrl(normalized)) continue;
-    return normalized;
-  }
-
-  const inferred = inferBackendUrlFromFrontend();
-  if (inferred) return inferred;
-  return isProduction() ? 'https://api.siragpt.com' : 'http://localhost:5000';
-};
-
-const getGoogleCallbackURL = () => {
-  const configuredCallback = stripTrailingSlash(process.env.GOOGLE_AUTH_URI);
-  if (configuredCallback && !(isProduction() && isLocalhostUrl(configuredCallback))) {
-    return configuredCallback;
-  }
-  return `${resolvePublicBackendUrl()}/api/auth/google/callback`;
-};
+const {
+  stripTrailingSlash,
+  getGoogleCallbackURL,
+} = require('./oauth-url-policy');
 
 const isGoogleOAuthConfigured = () => Boolean(
   process.env.GOOGLE_CLIENT_ID &&
@@ -71,6 +17,11 @@ const isGoogleOAuthConfigured = () => Boolean(
 
 const googleCallbackURL = getGoogleCallbackURL();
 const googleOAuthConfigured = isGoogleOAuthConfigured();
+const configuredGoogleCallback = stripTrailingSlash(process.env.GOOGLE_AUTH_URI);
+
+if (configuredGoogleCallback && configuredGoogleCallback !== googleCallbackURL) {
+  console.warn(`Google OAuth callback override ignored; using ${googleCallbackURL}`);
+}
 
 // Google OAuth Strategy with extended scopes. Keep email/password auth available
 // when Google OAuth is not configured on a given environment.
