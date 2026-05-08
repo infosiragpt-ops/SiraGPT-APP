@@ -4,6 +4,7 @@ const Parser = require("rss-parser");
 const Bottleneck = require("bottleneck");
 const CircuitBreaker = require("opossum");
 const UserAgent = require("user-agents");
+const { sanitizeHeaders } = require("../../../../utils/async-guard");
 
 const rssParser = new Parser({
   headers: { "User-Agent": "siraGPT-search-brain/1.0" },
@@ -75,7 +76,7 @@ async function fetchWithTimeout(url, opts = {}) {
       "User-Agent": opts.userAgent || userAgent(),
       ...(opts.headers || {}),
     };
-    const res = await fetch(url, { signal: controller.signal, headers });
+    const res = await fetch(url, { signal: controller.signal, headers: sanitizeHeaders(headers) });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     return res;
   } finally {

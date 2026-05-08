@@ -270,6 +270,52 @@ describe('AsyncGuard', () => {
       const body = await response.json();
       assert.deepEqual(body, { ok: true });
     });
+
+    test('honors custom fetch timeout instead of aborting immediately', async () => {
+      const mockFetch = async () => {
+        await delay(25);
+        return new Response('ok', { status: 200 });
+      };
+
+      const guard = new AsyncGuard({ defaultTimeoutMs: 5000 });
+      const guardedFetch = guard.fetch(mockFetch, { timeoutMs: 10 });
+
+      const response = await guardedFetch('https://example.com/custom-timeout', { timeout: 100 });
+      assert.equal(response.status, 200);
+    });
+
+    test('keeps bounded timeout when an external signal is present', async () => {
+      const controller = new AbortController();
+      const mockFetch = async () => {
+        await delay(25);
+        return new Response('ok', { status: 200 });
+      };
+
+      const guard = new AsyncGuard({ defaultTimeoutMs: 5000 });
+      const guardedFetch = guard.fetch(mockFetch, { timeoutMs: 100 });
+
+      const response = await guardedFetch('https://example.com/external-signal', {
+        signal: controller.signal,
+      });
+      assert.equal(response.status, 200);
+    });
+
+    test('classifies caller cancellation as FETCH_ABORTED', async () => {
+      const controller = new AbortController();
+      const mockFetch = async () => never();
+
+      const guard = new AsyncGuard({ defaultTimeoutMs: 5000 });
+      const guardedFetch = guard.fetch(mockFetch, { timeoutMs: 5000 });
+      const promise = guardedFetch('https://example.com/cancelled', {
+        signal: controller.signal,
+      });
+
+      controller.abort(new Error('caller stopped'));
+      const err = await catchRejection(promise);
+      assert.ok(err instanceof GuardError);
+      assert.equal(err.code, 'FETCH_ABORTED');
+      assert.equal(err.reason, 'aborted');
+    });
   });
 
   describe('route()', () => {

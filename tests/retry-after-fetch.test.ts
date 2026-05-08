@@ -263,3 +263,36 @@ describe("retryAfterFetch — bounded attempts and cancellation", () => {
     assert.equal(fetchStub.calls().length, 1)
   })
 })
+
+describe("retryAfterFetch — request init sanitization", () => {
+  test("strips SDK metadata from headers before native fetch sees init", async () => {
+    let capturedInit: RequestInit | undefined
+    const fetchStub: any = async (_input: any, init?: RequestInit) => {
+      capturedInit = init
+      return makeResponse({ status: 200 })
+    }
+
+    const headers: Record<PropertyKey, unknown> = {
+      accept: "application/json",
+      "x-attempt": 2,
+      "x-null": null,
+      "x-symbol-value": Symbol("skip"),
+    }
+    headers[Symbol("sdk-metadata")] = "not-a-header"
+    const init: any = { headers }
+    init[Symbol("init-metadata")] = "not-fetch-init"
+
+    const res = await retryAfterFetch("https://api.example.com/safe", init, {
+      fetchImpl: fetchStub,
+      maxRetries: 0,
+    })
+
+    assert.equal(res.status, 200)
+    assert.deepEqual(capturedInit?.headers, {
+      accept: "application/json",
+      "x-attempt": "2",
+    })
+    assert.equal(Object.getOwnPropertySymbols(capturedInit || {}).length, 0)
+    assert.equal(Object.getOwnPropertySymbols((capturedInit?.headers || {}) as object).length, 0)
+  })
+})

@@ -14,6 +14,7 @@ const registry = require("../src/services/searchBrain/universal/providerRegistry
 const settings = require("../src/services/searchBrain/universal/settings");
 const { runUniversalSearch, INTERNAL: O_INTERNAL } = require("../src/services/searchBrain/universal/orchestrator");
 const { CATEGORIES, REGIONS } = require("../src/services/searchBrain/universal/types");
+const providerUtils = require("../src/services/searchBrain/universal/providers/providerUtils");
 
 process.env.SEARCH_BRAIN_SETTINGS_DISABLE_PRISMA = "1";
 
@@ -170,6 +171,38 @@ test("settings: refuses to persist keys when ENCRYPTION_KEY is missing", async (
   await settings.clear("u4");
   await assert.rejects(() => settings.update("u4", { keys: { core: "secret" } }), /ENCRYPTION_KEY/);
   if (prior) process.env.ENCRYPTION_KEY = prior;
+});
+
+test("providerUtils: fetchJson strips decorated header metadata", async () => {
+  const previousFetch = globalThis.fetch;
+  let capturedHeaders;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      capturedHeaders = init.headers;
+      return {
+        ok: true,
+        json: async () => ({ ok: true }),
+      };
+    };
+
+    const headers = {
+      "x-safe": "yes",
+      "x-count": 2,
+      "x-null": null,
+      "x-symbol-value": Symbol("skip"),
+    };
+    headers[Symbol("sdk-metadata")] = "skip";
+
+    const body = await providerUtils.fetchJson("https://example.test/data", { headers });
+    assert.deepEqual(body, { ok: true });
+    assert.equal(capturedHeaders["x-safe"], "yes");
+    assert.equal(capturedHeaders["x-count"], "2");
+    assert.equal(Object.prototype.hasOwnProperty.call(capturedHeaders, "x-null"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(capturedHeaders, "x-symbol-value"), false);
+    assert.equal(Object.getOwnPropertySymbols(capturedHeaders).length, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
 
 // ─── Orchestrator ────────────────────────────────────────────────────────

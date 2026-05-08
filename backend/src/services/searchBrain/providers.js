@@ -24,6 +24,7 @@
  */
 
 const { USER_AGENT } = require("./types");
+const { sanitizeHeaders } = require("../../utils/async-guard");
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_MAX_RESULTS = 20;
@@ -45,7 +46,7 @@ async function fetchJson(url, { timeoutMs = DEFAULT_TIMEOUT_MS, mailto, extraHea
     const ua = mailto ? `${USER_AGENT} (mailto:${mailto})` : USER_AGENT;
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { "User-Agent": ua, Accept: "application/json", ...extraHeaders },
+      headers: sanitizeHeaders({ "User-Agent": ua, Accept: "application/json", ...extraHeaders }),
     });
     if (!res.ok) return null;
     return await res.json();

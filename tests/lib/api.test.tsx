@@ -25,6 +25,30 @@ describe('api client core', () => {
     expect(opts.headers.get('Authorization')).toBe('Bearer my-token')
   })
 
+  it('sanitizes decorated headers before constructing request headers', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true }),
+    })
+
+    const headers: Record<PropertyKey, unknown> = {
+      'x-safe': 'yes',
+      'x-count': 2,
+      'x-null': null,
+      'x-symbol-value': Symbol('skip'),
+    }
+    headers[Symbol('sdk-metadata')] = 'skip'
+
+    await (api as any).request('/auth/me', { headers })
+
+    const [, opts] = mockFetch.mock.calls[0]
+    expect(opts.headers.get('x-safe')).toBe('yes')
+    expect(opts.headers.get('x-count')).toBe('2')
+    expect(opts.headers.has('x-null')).toBe(false)
+    expect(opts.headers.has('x-symbol-value')).toBe(false)
+  })
+
   it('returns null for 204 No Content (via getCurrentUser)', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

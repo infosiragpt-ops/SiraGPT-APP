@@ -487,10 +487,16 @@ class AsyncGuard {
       // reject an otherwise valid request.
       const safeInit = sanitizeFetchInit(init);
 
-      // Apply per-request timeout
-      const timeout = safeInit.timeout || safeInit.signal
-        ? undefined  // don't override when an external signal or custom timeout is present
-        : defaultTimeout;
+      // Apply a bounded per-request timeout while still forwarding a
+      // caller-provided AbortSignal. A previous ternary treated any
+      // external signal or custom timeout as `undefined`, which made
+      // setTimeout fire immediately in Node and cancelled valid fetches.
+      const timeout = clampInt(
+        safeInit.timeout,
+        defaultTimeout,
+        MIN_TIMEOUT_MS,
+        MAX_TIMEOUT_MS
+      );
 
       const token = guard.register({
         label: `fetch:${typeof input === 'string' ? input.slice(0, 120) : 'Request'}`,
@@ -499,12 +505,20 @@ class AsyncGuard {
 
       // Wire external signal if provided (e.g. from an upstream controller)
       const externalSignal = safeInit.signal;
+      let externallyAborted = false;
+      let removeExternalAbort = null;
       if (externalSignal) {
-        externalSignal.addEventListener('abort', () => {
+        const forwardExternalAbort = () => {
           if (token.state === GUARD_PENDING) {
+            externallyAborted = true;
             try { token.controller.abort(externalSignal.reason || 'upstream abort'); } catch {}
           }
-        }, { once: true });
+        };
+        if (externalSignal.aborted) forwardExternalAbort();
+        else {
+          externalSignal.addEventListener('abort', forwardExternalAbort, { once: true });
+          removeExternalAbort = () => externalSignal.removeEventListener('abort', forwardExternalAbort);
+        }
       }
 
       const mergedInit = {
@@ -549,7 +563,7 @@ class AsyncGuard {
           throw enriched;
         }
 
-        if (isAbortError(err)) {
+        if (externallyAborted || isAbortError(err)) {
           token.cancel();
           const elapsed = token.elapsedMs();
           const enriched = new GuardError(
@@ -584,6 +598,7 @@ class AsyncGuard {
         throw enriched;
       } finally {
         clearTimeout(timeoutTimer);
+        if (removeExternalAbort) removeExternalAbort();
         if (token.state === GUARD_PENDING) {
           token.settle();
         }

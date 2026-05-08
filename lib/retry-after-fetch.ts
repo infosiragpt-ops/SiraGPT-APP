@@ -42,6 +42,8 @@
  * 429s without leaking user data.
  */
 
+import { sanitizeFetchInit } from './fetch-sanitize'
+
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_BACKOFF_MS = 500;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
@@ -210,7 +212,7 @@ async function runFetchAttempt(
   throwIfAborted(externalSignals)
   const attemptSignal = createAttemptSignal(externalSignals, timeoutMs, attempt)
   const abort = abortPromise(attemptSignal.signal)
-  const attemptInit: RequestInit = { ...(init ?? {}), signal: attemptSignal.signal }
+  const attemptInit: RequestInit = { ...sanitizeFetchInit(init), signal: attemptSignal.signal }
   try {
     return await Promise.race([
       fetchImpl(input as any, attemptInit),

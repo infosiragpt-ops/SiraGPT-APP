@@ -1,5 +1,6 @@
 // Frontend API client for backend integration
 import { streamSseJson } from "./sse-client"
+import { sanitizeFetchHeaders } from "./fetch-sanitize"
 
 /** Backend mounts routes under `/api` (e.g. `/api/auth/login`). Accept env with or without `/api`. */
 export function getNormalizedApiBaseUrl(): string {
@@ -74,7 +75,7 @@ class ApiClient {
     // Build headers once (they don't change between retries — and
     // Idempotency-Key MUST stay stable across retries for the
     // backend dedup to work).
-    const headers = new Headers(options.headers);
+    const headers = new Headers(sanitizeFetchHeaders(options.headers as any));
 
     if (this.token) {
       headers.set('Authorization', `Bearer ${this.token}`);
