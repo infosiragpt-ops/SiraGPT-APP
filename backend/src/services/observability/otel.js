@@ -103,6 +103,68 @@ function resolveOpenTelemetryConfig(env = process.env) {
   };
 }
 
+// Resolve the OTel sampler from env. Mirrors the OTel-spec env vars so
+// ops can dial sampling globally without code changes.
+//
+//   OTEL_TRACES_SAMPLER       = always_on | always_off | traceidratio |
+//                               parentbased_always_on (default) |
+//                               parentbased_always_off |
+//                               parentbased_traceidratio
+//   OTEL_TRACES_SAMPLER_ARG   = ratio in [0, 1] for ratio-based samplers
+//
+// Defaulting to parentbased_always_on preserves today's behavior (sample
+// every root span) while still respecting upstream sampling decisions
+// when our service is downstream of an already-sampled trace.
+function resolveSampler(env = process.env) {
+  const raw = String(env.OTEL_TRACES_SAMPLER || 'parentbased_always_on')
+    .trim()
+    .toLowerCase();
+  const arg = Number.parseFloat(env.OTEL_TRACES_SAMPLER_ARG);
+  const ratio = Number.isFinite(arg) ? Math.min(Math.max(arg, 0), 1) : 1;
+
+  let sdkTrace;
+  try {
+    sdkTrace = require('@opentelemetry/sdk-trace-base');
+  } catch (_err) {
+    return { sampler: null, kind: raw, ratio };
+  }
+
+  const {
+    AlwaysOnSampler,
+    AlwaysOffSampler,
+    ParentBasedSampler,
+    TraceIdRatioBasedSampler,
+  } = sdkTrace;
+
+  switch (raw) {
+    case 'always_on':
+      return { sampler: new AlwaysOnSampler(), kind: raw, ratio: 1 };
+    case 'always_off':
+      return { sampler: new AlwaysOffSampler(), kind: raw, ratio: 0 };
+    case 'traceidratio':
+      return { sampler: new TraceIdRatioBasedSampler(ratio), kind: raw, ratio };
+    case 'parentbased_always_off':
+      return {
+        sampler: new ParentBasedSampler({ root: new AlwaysOffSampler() }),
+        kind: raw,
+        ratio: 0,
+      };
+    case 'parentbased_traceidratio':
+      return {
+        sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(ratio) }),
+        kind: raw,
+        ratio,
+      };
+    case 'parentbased_always_on':
+    default:
+      return {
+        sampler: new ParentBasedSampler({ root: new AlwaysOnSampler() }),
+        kind: 'parentbased_always_on',
+        ratio: 1,
+      };
+  }
+}
+
 function buildResourceAttributes({ env = process.env, serviceName = DEFAULT_SERVICE_NAME, deploymentEnvironment } = {}) {
   const attrs = {
     "service.name": serviceName,
@@ -130,7 +192,11 @@ function createInstrumentationConfig() {
     "@opentelemetry/instrumentation-http": {
       ignoreIncomingRequestHook: (req) => {
         const url = typeof req?.url === "string" ? req.url : "";
-        return url === "/metrics" || url.startsWith("/health");
+        return (
+          url === "/metrics" ||
+          url.startsWith("/internal/metrics") ||
+          url.startsWith("/health")
+        );
       },
     },
     "@opentelemetry/instrumentation-pino": { enabled: true },
@@ -163,11 +229,15 @@ function startOpenTelemetry({ env = process.env, logger = console } = {}) {
     const { OTLPTraceExporter } = require("@opentelemetry/exporter-trace-otlp-http");
     const { getNodeAutoInstrumentations } = require("@opentelemetry/auto-instrumentations-node");
 
+    const samplerConfig = resolveSampler(env);
     sdk = new NodeSDK({
       resource: resourceFromAttributes(config.resourceAttributes),
       traceExporter: new OTLPTraceExporter({ url: config.endpoint }),
+      ...(samplerConfig.sampler ? { sampler: samplerConfig.sampler } : {}),
       instrumentations: [getNodeAutoInstrumentations(createInstrumentationConfig())],
     });
+    state.sampler = samplerConfig.kind;
+    state.samplerRatio = samplerConfig.ratio;
 
     sdk.start();
     state = {
@@ -235,6 +305,10 @@ function getOpenTelemetryStatus() {
   };
 
   if (state.error) details.error = state.error;
+  if (state.sampler) {
+    details.sampler = state.sampler;
+    if (typeof state.samplerRatio === 'number') details.sampler_ratio = state.samplerRatio;
+  }
   return details;
 }
 
@@ -247,6 +321,7 @@ module.exports = {
   isTruthy,
   resolveOpenTelemetryConfig,
   resolveOtlpTraceEndpoint,
+  resolveSampler,
   shutdownOpenTelemetry,
   startOpenTelemetry,
 };

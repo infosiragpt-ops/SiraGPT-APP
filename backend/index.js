@@ -330,6 +330,12 @@ const { requestIdMiddleware } = require('./src/middleware/request-id');
 app.use(requestIdMiddleware);
 const { otelRequestContextMiddleware } = require('./src/middleware/otel-request-context');
 app.use(otelRequestContextMiddleware);
+// RED method (Rate, Errors, Duration) per matched route. Sits after
+// otel context so the active span is in scope and before route mounting
+// so every endpoint is observed. Cost is one Map lookup + one histogram
+// observation per response.
+const { redMetricsMiddleware } = require('./src/middleware/red-metrics');
+app.use(redMetricsMiddleware);
 if (process.env.NODE_ENV !== 'production') {
     app.use(morgan('dev'));
 }
@@ -474,10 +480,15 @@ app.get('/health', async (_req, res) => {
 const observabilityMetrics = require('./src/services/agents/metrics');
 require('./src/services/sira/metrics');
 
-app.get('/metrics', (_req, res) => {
+function renderPromMetrics(_req, res) {
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.send(observabilityMetrics.renderText());
-});
+}
+app.get('/metrics', renderPromMetrics);
+// Operator-facing alias under /internal/* — keeps the public surface
+// area predictable when ops only allow-list the internal path through
+// the ingress (and blackholes /metrics from the edge).
+app.get('/internal/metrics', renderPromMetrics);
 
 // ── Interactive API documentation ───────────────────────────────
 // Renders the OpenAPI 3.1 spec (built by services/contracts/

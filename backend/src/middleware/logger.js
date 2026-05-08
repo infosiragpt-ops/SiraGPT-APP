@@ -1,6 +1,10 @@
 const pino = require('pino');
 const pinoHttp = require('pino-http');
 const { randomUUID } = require('crypto');
+// OpenTelemetry API is the no-op tracer when the SDK isn't started, so
+// requiring it unconditionally is safe and adds zero cost when tracing
+// is disabled.
+const { context: otelContext, trace: otelTrace } = require('@opentelemetry/api');
 
 // Paths the logger MUST never emit in cleartext. fast-redact (pino's
 // underlying engine) supports literal paths and one-level `*` wildcards,
@@ -69,6 +73,30 @@ const REDACT_PATHS = [
 // `req.log.info({ req })` cannot leak the bearer token in the access
 // log. We keep `remove: false` so log shape stays stable for downstream
 // parsers — only the value changes.
+// Trace correlation mixin: every log line emitted while an OTel span is
+// active picks up `trace_id` / `span_id` / `trace_flags`. Lets ops join
+// a log line back to its trace in Tempo/Jaeger without requiring the
+// caller to thread context manually. The mixin returns an empty object
+// when no span is active (e.g. background workers, startup), so it adds
+// no noise to off-request logs.
+function traceCorrelationMixin() {
+  try {
+    const span = otelTrace.getSpan(otelContext.active());
+    if (!span) return {};
+    const ctx = typeof span.spanContext === 'function' ? span.spanContext() : null;
+    if (!ctx || !ctx.traceId) return {};
+    return {
+      trace_id: ctx.traceId,
+      span_id: ctx.spanId,
+      trace_flags: typeof ctx.traceFlags === 'number'
+        ? `0${ctx.traceFlags.toString(16)}`.slice(-2)
+        : undefined,
+    };
+  } catch (_err) {
+    return {};
+  }
+}
+
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
   redact: {
@@ -76,6 +104,7 @@ const logger = pino({
     censor: '[REDACTED]',
     remove: false,
   },
+  mixin: traceCorrelationMixin,
 });
 
 // HTTP request logger — auto-attaches `req.id` to every request and
@@ -108,4 +137,4 @@ const httpLogger = pinoHttp({
   },
 });
 
-module.exports = { logger, httpLogger, REDACT_PATHS };
+module.exports = { logger, httpLogger, REDACT_PATHS, traceCorrelationMixin };
