@@ -5,6 +5,7 @@ const DEFAULT_SERVICE_NAME = "siragpt-backend";
 let sdk = null;
 let state = {
   configured: false,
+  requested: false,
   enabled: false,
   started: false,
   serviceName: DEFAULT_SERVICE_NAME,
@@ -40,13 +41,15 @@ function resolveOpenTelemetryConfig(env = process.env) {
   const hasExplicitToggle = nonEmpty(env.OTEL_ENABLED);
   const hasEndpoint = Boolean(resolveOtlpTraceEndpoint(env));
   const tracesExporter = String(env.OTEL_TRACES_EXPORTER || "otlp").trim().toLowerCase();
-  const enabled = !sdkDisabled && (hasExplicitToggle ? isTruthy(env.OTEL_ENABLED) : hasEndpoint);
+  const requested = !sdkDisabled && (hasExplicitToggle ? isTruthy(env.OTEL_ENABLED) : hasEndpoint);
+  const enabled = requested;
   const serviceName = env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
   const deploymentEnvironment = env.OTEL_DEPLOYMENT_ENVIRONMENT || env.NODE_ENV || "development";
 
   if (!enabled) {
     return {
       configured: hasExplicitToggle || hasEndpoint,
+      requested,
       enabled: false,
       serviceName,
       exporter: "none",
@@ -57,6 +60,7 @@ function resolveOpenTelemetryConfig(env = process.env) {
   if (tracesExporter === "none") {
     return {
       configured: true,
+      requested: false,
       enabled: false,
       serviceName,
       exporter: "none",
@@ -67,6 +71,7 @@ function resolveOpenTelemetryConfig(env = process.env) {
   if (tracesExporter !== "otlp") {
     return {
       configured: true,
+      requested,
       enabled: false,
       serviceName,
       exporter: tracesExporter,
@@ -78,6 +83,7 @@ function resolveOpenTelemetryConfig(env = process.env) {
   if (!endpoint) {
     return {
       configured: true,
+      requested,
       enabled: false,
       serviceName,
       exporter: "otlp-http",
@@ -87,6 +93,7 @@ function resolveOpenTelemetryConfig(env = process.env) {
 
   return {
     configured: true,
+    requested: true,
     enabled: true,
     serviceName,
     exporter: "otlp-http",
@@ -141,6 +148,7 @@ function startOpenTelemetry({ env = process.env, logger = console } = {}) {
   const config = resolveOpenTelemetryConfig(env);
   state = {
     configured: config.configured,
+    requested: config.requested,
     enabled: config.enabled,
     started: false,
     serviceName: config.serviceName,
@@ -164,6 +172,7 @@ function startOpenTelemetry({ env = process.env, logger = console } = {}) {
     sdk.start();
     state = {
       configured: true,
+      requested: true,
       enabled: true,
       started: true,
       serviceName: config.serviceName,
@@ -182,6 +191,7 @@ function startOpenTelemetry({ env = process.env, logger = console } = {}) {
     const message = err && err.message ? String(err.message) : "unknown";
     state = {
       configured: true,
+      requested: true,
       enabled: true,
       started: false,
       serviceName: config.serviceName,
@@ -216,6 +226,7 @@ async function shutdownOpenTelemetry() {
 function getOpenTelemetryStatus() {
   const details = {
     configured: Boolean(state.configured),
+    requested: Boolean(state.requested),
     enabled: Boolean(state.enabled),
     started: Boolean(state.started),
     service_name: state.serviceName || DEFAULT_SERVICE_NAME,

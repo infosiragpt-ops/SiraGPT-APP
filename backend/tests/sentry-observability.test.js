@@ -8,6 +8,7 @@ test('Sentry backend config is disabled without DSN', () => {
   const config = sentry.resolveSentryConfig({ NODE_ENV: 'test' });
 
   assert.equal(config.configured, false);
+  assert.equal(config.requested, false);
   assert.equal(config.enabled, false);
   assert.equal(config.environment, 'test');
   assert.equal(config.tracesSampleRate, 0);
@@ -22,10 +23,21 @@ test('Sentry backend config is opt-in and clamps trace sample rate', () => {
   });
 
   assert.equal(config.configured, true);
+  assert.equal(config.requested, true);
   assert.equal(config.enabled, true);
   assert.equal(config.environment, 'staging');
   assert.equal(config.tracesSampleRate, 1);
   assert.equal(config.sendDefaultPii, false);
+});
+
+test('Sentry config records explicit enable intent even without a DSN', () => {
+  const config = sentry.resolveSentryConfig({
+    SENTRY_ENABLED: 'true',
+  });
+
+  assert.equal(config.configured, false);
+  assert.equal(config.requested, true);
+  assert.equal(config.enabled, false);
 });
 
 test('Sentry health check is informational and non-critical', () => {

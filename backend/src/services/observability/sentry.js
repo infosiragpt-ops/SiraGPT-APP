@@ -4,6 +4,7 @@ let sentryClient = null;
 let runtimeStatus = {
   enabled: false,
   configured: false,
+  requested: false,
   started: false,
   reason: 'not_started',
 };
@@ -22,10 +23,11 @@ function parseSampleRate(value, fallback = 0) {
 function resolveSentryConfig(env = process.env) {
   const dsn = String(env.SENTRY_DSN || '').trim();
   const configured = Boolean(dsn);
-  const enabled = parseBoolean(env.SENTRY_ENABLED, configured);
+  const requested = parseBoolean(env.SENTRY_ENABLED, configured);
   return {
     configured,
-    enabled: enabled && configured,
+    requested,
+    enabled: requested && configured,
     dsn,
     environment: env.SENTRY_ENVIRONMENT || env.NODE_ENV || 'development',
     release: env.SENTRY_RELEASE || env.npm_package_version || undefined,
@@ -65,13 +67,16 @@ function startSentry(env = process.env) {
   runtimeStatus = {
     enabled: config.enabled,
     configured: config.configured,
+    requested: config.requested,
     started: false,
     environment: config.environment,
     release: config.release || null,
     traces_sample_rate: config.tracesSampleRate,
     profiles_sample_rate: config.profilesSampleRate,
     profiling_loaded: false,
-    reason: config.configured ? 'disabled' : 'not_configured',
+    reason: config.requested && !config.configured
+      ? 'missing_dsn'
+      : (config.configured ? 'disabled' : 'not_configured'),
   };
 
   if (!config.enabled) return getSentryStatus();

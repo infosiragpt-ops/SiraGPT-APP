@@ -6,6 +6,8 @@
 
 const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   buildProductionMemoryStore,
@@ -28,6 +30,16 @@ function fakePrisma({ project = null, projectDocs = [], chats = [] } = {}) {
       findMany: async (args) => { calls.push(["chat.findMany", args]); return chats; },
     },
   };
+}
+
+function readProductionCompose() {
+  return fs.readFileSync(path.resolve(__dirname, "../../docker-compose.prod.yml"), "utf8");
+}
+
+function extractServiceBlock(yaml, serviceName) {
+  const match = yaml.match(new RegExp(`\\n  ${serviceName}:\\n([\\s\\S]*?)(?=\\n  [a-zA-Z0-9_-]+:\\n|\\nvolumes:\\n|$)`));
+  assert.ok(match, `expected ${serviceName} service in docker-compose.prod.yml`);
+  return match[1];
 }
 
 // ── buildProductionMemoryStore ─────────────────────────────────────
@@ -125,5 +137,29 @@ describe("buildProductionWorkspaceDeps", () => {
     assert.deepEqual(await deps.docs.list({ projectId: "p" }), []);
     assert.equal(await deps.instructions.get({ projectId: "p" }), "");
     assert.deepEqual(await deps.conversations.listRecent({ projectId: "p", userId: "u" }), []);
+  });
+});
+
+// ── docker-compose.prod.yml topology ──────────────────────────────
+
+describe("production Compose topology", () => {
+  test("normal production deploy builds and starts only the frontend container", () => {
+    const yaml = readProductionCompose();
+    const frontend = extractServiceBlock(yaml, "frontend");
+
+    assert.match(yaml, /docker compose -f docker-compose\.prod\.yml up -d --no-deps frontend/);
+    assert.doesNotMatch(frontend, /depends_on:/);
+    assert.match(frontend, /NEXT_PUBLIC_API_URL:\s+\$\{NEXT_PUBLIC_API_URL:-https:\/\/api\.siragpt\.com\/api\}/);
+    assert.match(frontend, /NEXT_PUBLIC_URL:\s+\$\{NEXT_PUBLIC_URL:-https:\/\/siragpt\.com\}/);
+  });
+
+  test("Docker backend is available only through the explicit docker-backend profile", () => {
+    const yaml = readProductionCompose();
+    const backend = extractServiceBlock(yaml, "backend");
+    const frontend = extractServiceBlock(yaml, "frontend");
+
+    assert.match(backend, /profiles:\s+\["docker-backend"\]/);
+    assert.match(yaml, /COMPOSE_PROFILES=docker-backend docker compose -f docker-compose\.prod\.yml up -d backend/);
+    assert.doesNotMatch(frontend, /backend:/);
   });
 });

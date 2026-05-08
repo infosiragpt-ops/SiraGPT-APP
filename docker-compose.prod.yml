@@ -2,13 +2,14 @@
 # siraGPT — Production Docker Compose
 # ──────────────────────────────────────────────────────────────
 # Standalone production compose file (not an override).
-# Designed for single-host deploys with health checks, resource
-# limits, log rotation, and restart policies.
+# Official production topology: backend runs under PM2 on the host,
+# frontend runs in Docker. The backend Docker service is retained only
+# for explicit fallback/testing via COMPOSE_PROFILES=docker-backend.
 #
 # Usage:
-#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml up -d --no-deps frontend
 #   docker compose -f docker-compose.prod.yml logs -f
-#   docker compose -f docker-compose.prod.yml down
+#   COMPOSE_PROFILES=docker-backend docker compose -f docker-compose.prod.yml up -d backend
 #
 # For multi-host / load-balanced deployments, use Kubernetes or
 # Nomad instead. This file targets a single production VM.
@@ -71,8 +72,12 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Backend ───────────────────────────────────────────────
+  # ── Optional Docker Backend ───────────────────────────────
+  # Production serves the backend with PM2 on the host. This service is
+  # intentionally profile-gated so normal frontend deploys never try to
+  # recreate it or bind port 5000.
   backend:
+    profiles: ["docker-backend"]
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -136,17 +141,14 @@ services:
       cache_from:
         - siragpt-frontend:latest
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5000/api}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.siragpt.com/api}
         NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-siraGPT}
         NEXT_PUBLIC_APP_DESCRIPTION: ${NEXT_PUBLIC_APP_DESCRIPTION:-Multi-LLM AI Platform}
-        NEXT_PUBLIC_URL: ${NEXT_PUBLIC_URL:-http://localhost:3000}
+        NEXT_PUBLIC_URL: ${NEXT_PUBLIC_URL:-https://siragpt.com}
         NEXT_PUBLIC_POSTHOG_KEY: ${NEXT_PUBLIC_POSTHOG_KEY:-}
         NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
     image: siragpt-frontend:latest
     restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_started
     ports:
       - "127.0.0.1:3000:3000"   # Reverse proxy (nginx/caddy) in front
     environment:

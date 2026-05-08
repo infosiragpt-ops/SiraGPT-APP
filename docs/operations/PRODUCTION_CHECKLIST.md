@@ -1,5 +1,7 @@
 # 🚀 siraGPT — Production Deployment Checklist
 
+Official topology: the backend runs on the host with PM2 and the frontend runs in Docker. The backend Docker service exists only as an explicit fallback profile and must not be started by normal frontend deploys.
+
 ## Pre-Flight Checks
 
 - [ ] **JWT_SECRET** — generated with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` (64 hex chars)
@@ -18,7 +20,8 @@
 
 - [ ] **Reverse proxy** — Nginx/Caddy/Traefik in front of the API
 - [ ] **SSL/TLS** — Let's Encrypt (auto via Caddy) or cloud LB
-- [ ] **Docker** — multi-stage builds verified (`docker compose build --no-cache`)
+- [ ] **Docker** — frontend multi-stage build verified (`docker compose -f docker-compose.prod.yml build frontend`)
+- [ ] **PM2 backend** — `sira-api-backend` online and managed outside Compose
 - [ ] **Health checks** — load balancer uses `/health/live` (liveness) and `/health/ready` (readiness)
 - [ ] **Log rotation** — `docker compose` logs configured with `max-size: 10m`
 - [ ] **Resource limits** — memory limits set in Docker Compose or orchestrator
@@ -43,7 +46,7 @@
 - [ ] **Sentry** — `SENTRY_DSN` configured; source maps uploaded on deploy
 - [ ] **OpenTelemetry** — `OTEL_ENABLED=true` with OTLP endpoint
 - [ ] **PostHog** — `POSTHOG_API_KEY` set for product analytics
-- [ ] **Health endpoint** — external uptime monitor hitting `/health` every 30s
+- [ ] **Health endpoint** — external uptime monitor hitting `/health` every 30s; disabled optional integrations report `skipped`
 - [ ] **Metrics** — `/metrics` scraped by Prometheus or observed manually
 - [ ] **Alerts** — on health check failure, high error rate, low disk space
 - [ ] **Logs** — shipped to centralized logging (Grafana Loki, Papertrail, etc.)
@@ -54,7 +57,7 @@
 - [ ] **Backend boot smoke** — `/health` returns 200 within 30s
 - [ ] **Security audit** — critical-only, blocks build on failure
 - [ ] **License audit** — `THIRD_PARTY_LICENSES.md` up-to-date
-- [ ] **Docker image** — built and pushed on every merge to `main`
+- [ ] **Docker image** — frontend image builds on every merge to `main`
 - [ ] **Rollback** — previous Docker images tagged and accessible
 
 ## DNS / Domains
@@ -77,23 +80,36 @@ SESSION_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString
 echo "JWT_SECRET=$JWT_SECRET"
 echo "SESSION_SECRET=$SESSION_SECRET"
 
-# Deploy with Docker
+# Deploy with the production topology
 cp .env.example .env
 # Edit .env with your keys
-docker compose up -d
+APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 
 # Verify
-curl http://localhost:5000/health
-curl http://localhost:3000
+curl https://api.siragpt.com/health
+curl https://siragpt.com/auth/login
+```
+
+## Production Commands
+
+```bash
+# Normal frontend deployment. Backend stays under PM2.
+docker compose -f docker-compose.prod.yml up -d --no-deps frontend
+
+# Docker backend fallback/testing only. Do not use for normal production deploys.
+COMPOSE_PROFILES=docker-backend docker compose -f docker-compose.prod.yml up -d backend
+
+# Backend process managed by PM2.
+pm2 restart sira-api-backend --update-env
 ```
 
 ## Troubleshooting
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
-| Backend won't start | Missing env vars | Check `docker compose logs backend` for startup validator errors |
+| Backend won't start | Missing env vars | Check `pm2 logs sira-api-backend` for startup validator errors |
 | Health check fails | DB/Redis not reachable | Verify service containers are healthy: `docker compose ps` |
-| CORS errors | Wrong or missing CORS_ORIGINS | Set `CORS_ORIGINS=https://app.siragpt.com` |
+| CORS errors | Wrong or missing CORS_ORIGINS | Set `CORS_ORIGINS=https://siragpt.com,https://www.siragpt.com` |
 | Auth fails | Placeholder JWT_SECRET | Generate a real secret (see one-time setup above) |
-| Uploads broken | Missing uploads volume | `docker compose up -d` recreates volumes |
+| Uploads broken | Backend upload path missing | Verify the host upload directory used by PM2 exists and is writable |
 | Rate limiting too strict | Window too small | Adjust `RATE_LIMIT_*` env vars or check Redis connection |

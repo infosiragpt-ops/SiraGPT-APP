@@ -10,8 +10,9 @@
 cp .env.example .env
 # Fill in your API keys, database URLs, etc.
 
-# 3. Deploy with Docker
-docker compose up -d
+# 3. Deploy with production topology
+# Backend: PM2 on host. Frontend: Docker.
+APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 ```
 
 ---
@@ -148,6 +149,8 @@ docker compose up -d
 | `NEXT_PUBLIC_URL` | Frontend URL | `http://localhost:3000` |
 | `NEXT_PUBLIC_APP_NAME` | Application name | `siraGPT` |
 | `NEXT_PUBLIC_APP_DESCRIPTION` | App description | `Multi-LLM AI Platform` |
+
+Production Compose defaults `NEXT_PUBLIC_API_URL` to `https://api.siragpt.com/api` and `NEXT_PUBLIC_URL` to `https://siragpt.com`. Keep those values for the public deployment so OAuth callbacks stay on the API domain.
 
 ## Google OAuth Public URLs
 

@@ -22,12 +22,14 @@ describe("resolvePostHogConfig", () => {
   test("disabled when POSTHOG_API_KEY is missing", () => {
     const cfg = resolvePostHogConfig({});
     assert.equal(cfg.configured, false);
+    assert.equal(cfg.requested, false);
     assert.equal(cfg.enabled, false);
   });
 
   test("auto-enables when POSTHOG_API_KEY is set", () => {
     const cfg = resolvePostHogConfig({ POSTHOG_API_KEY: "phc_test" });
     assert.equal(cfg.configured, true);
+    assert.equal(cfg.requested, true);
     assert.equal(cfg.enabled, true);
     // Default points at PostHog Cloud US — operators set POSTHOG_HOST
     // for EU cloud or self-hosted deploys.
@@ -46,6 +48,14 @@ describe("resolvePostHogConfig", () => {
       POSTHOG_ENABLED: "false",
     });
     assert.equal(cfg.configured, true);
+    assert.equal(cfg.requested, false);
+    assert.equal(cfg.enabled, false);
+  });
+
+  test("POSTHOG_ENABLED=true records intent even when key is missing", () => {
+    const cfg = resolvePostHogConfig({ POSTHOG_ENABLED: "true" });
+    assert.equal(cfg.configured, false);
+    assert.equal(cfg.requested, true);
     assert.equal(cfg.enabled, false);
   });
 

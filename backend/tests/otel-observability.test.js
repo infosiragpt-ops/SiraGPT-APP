@@ -16,6 +16,7 @@ describe("OpenTelemetry config", () => {
   test("stays disabled by default when no endpoint or toggle is present", () => {
     const config = resolveOpenTelemetryConfig({});
     assert.equal(config.enabled, false);
+    assert.equal(config.requested, false);
     assert.equal(config.reason, "otel_not_enabled");
     assert.equal(config.serviceName, "siragpt-backend");
   });
@@ -39,6 +40,7 @@ describe("OpenTelemetry config", () => {
     });
 
     assert.equal(config.enabled, true);
+    assert.equal(config.requested, true);
     assert.equal(config.exporter, "otlp-http");
     assert.equal(config.endpoint, "https://otel.example.com/v1/traces");
     assert.equal(config.resourceAttributes["service.name"], "siragpt-api");
@@ -51,7 +53,18 @@ describe("OpenTelemetry config", () => {
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://otel.example.com/v1/traces",
     });
     assert.equal(config.enabled, false);
+    assert.equal(config.requested, false);
     assert.equal(config.reason, "otel_not_enabled");
+  });
+
+  test("records explicit tracing intent when endpoint config is missing", () => {
+    const config = resolveOpenTelemetryConfig({
+      OTEL_ENABLED: "true",
+    });
+    assert.equal(config.configured, true);
+    assert.equal(config.requested, true);
+    assert.equal(config.enabled, false);
+    assert.equal(config.reason, "missing_otlp_trace_endpoint");
   });
 
   test("marks unsupported exporters as configured but not enabled", () => {
@@ -61,6 +74,7 @@ describe("OpenTelemetry config", () => {
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://otel.example.com/v1/traces",
     });
     assert.equal(config.enabled, false);
+    assert.equal(config.requested, true);
     assert.equal(config.reason, "unsupported_trace_exporter");
     assert.equal(config.exporter, "console");
   });

@@ -23,6 +23,7 @@ describe("resolveLangfuseConfig", () => {
   test("disabled when no keys are present", () => {
     const cfg = resolveLangfuseConfig({});
     assert.equal(cfg.configured, false);
+    assert.equal(cfg.requested, false);
     assert.equal(cfg.enabled, false);
   });
 
@@ -32,6 +33,7 @@ describe("resolveLangfuseConfig", () => {
       LANGFUSE_SECRET_KEY: "sk-test",
     });
     assert.equal(cfg.configured, true);
+    assert.equal(cfg.requested, true);
     assert.equal(cfg.enabled, true);
     assert.equal(cfg.baseUrl, "https://cloud.langfuse.com");
   });
@@ -43,6 +45,17 @@ describe("resolveLangfuseConfig", () => {
       LANGFUSE_ENABLED: "false",
     });
     assert.equal(cfg.configured, true);
+    assert.equal(cfg.requested, false);
+    assert.equal(cfg.enabled, false);
+  });
+
+  test("LANGFUSE_ENABLED=true records intent even when keys are incomplete", () => {
+    const cfg = resolveLangfuseConfig({
+      LANGFUSE_ENABLED: "true",
+      LANGFUSE_PUBLIC_KEY: "pk-test",
+    });
+    assert.equal(cfg.configured, false);
+    assert.equal(cfg.requested, true);
     assert.equal(cfg.enabled, false);
   });
 

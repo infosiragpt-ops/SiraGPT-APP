@@ -40,6 +40,7 @@ let langfuseClient = null;
 let runtimeStatus = {
   enabled: false,
   configured: false,
+  requested: false,
   started: false,
   reason: 'not_started',
 };
@@ -63,12 +64,13 @@ function resolveLangfuseConfig(env = process.env) {
   // Auto-enable when both keys are set; let LANGFUSE_ENABLED=false
   // explicitly opt out for staging deploys that share the secret.
   const explicitToggle = env.LANGFUSE_ENABLED;
-  const enabled = explicitToggle === undefined || explicitToggle === ''
+  const requested = explicitToggle === undefined || explicitToggle === ''
     ? configured
     : parseBoolean(explicitToggle, configured);
   return {
     configured,
-    enabled: enabled && configured,
+    requested,
+    enabled: requested && configured,
     publicKey,
     secretKey,
     baseUrl: baseUrl || 'https://cloud.langfuse.com',
@@ -94,6 +96,7 @@ function startLangfuse(env = process.env) {
   runtimeStatus = {
     ...runtimeStatus,
     configured: config.configured,
+    requested: config.requested,
     enabled: config.enabled,
     started: true,
   };

@@ -30,6 +30,7 @@ let posthogClient = null;
 let runtimeStatus = {
   enabled: false,
   configured: false,
+  requested: false,
   started: false,
   reason: 'not_started',
 };
@@ -44,12 +45,13 @@ function resolvePostHogConfig(env = process.env) {
   const host = String(env.POSTHOG_HOST || env.POSTHOG_API_HOST || '').trim();
   const configured = Boolean(apiKey);
   const explicitToggle = env.POSTHOG_ENABLED;
-  const enabled = explicitToggle === undefined || explicitToggle === ''
+  const requested = explicitToggle === undefined || explicitToggle === ''
     ? configured
     : parseBoolean(explicitToggle, configured);
   return {
     configured,
-    enabled: enabled && configured,
+    requested,
+    enabled: requested && configured,
     apiKey,
     host: host || 'https://us.i.posthog.com',
     flushAt: Number.parseInt(env.POSTHOG_FLUSH_AT, 10) || 20,
@@ -72,6 +74,7 @@ function startPostHog(env = process.env) {
   runtimeStatus = {
     ...runtimeStatus,
     configured: config.configured,
+    requested: config.requested,
     enabled: config.enabled,
     started: true,
   };

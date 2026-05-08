@@ -144,49 +144,60 @@ function checkModelProvidersConfigured() {
   };
 }
 
-function checkOpenTelemetry(telemetry) {
-  const details = typeof telemetry === "function" ? telemetry() : (telemetry || {});
-  const configured = Boolean(details.configured || details.enabled || details.started);
+function resolveOptionalIntegrationHealth(details) {
+  const configured = Boolean(details.configured);
+  const enabled = Boolean(details.enabled);
+  const started = Boolean(details.started);
+  const requested = details.requested === undefined
+    ? (details.enabled === undefined ? configured : enabled)
+    : Boolean(details.requested);
 
   let status = "skipped";
-  if (details.started) status = "healthy";
-  else if (configured) status = "degraded";
+  if (requested && started && details.enabled !== false) status = "healthy";
+  else if (requested) status = "degraded";
+
+  const reason = details.reason || (requested ? "not_started" : (configured ? "disabled" : "not_configured"));
+
+  return { configured, requested, enabled, started, status, reason };
+}
+
+function checkOpenTelemetry(telemetry) {
+  const details = typeof telemetry === "function" ? telemetry() : (telemetry || {});
+  const state = resolveOptionalIntegrationHealth(details);
 
   return {
     name: "opentelemetry",
-    status,
+    status: state.status,
     critical: false,
     latency_ms: 0,
     details: {
-      configured,
-      enabled: Boolean(details.enabled),
-      started: Boolean(details.started),
+      configured: state.configured,
+      requested: state.requested,
+      enabled: state.enabled,
+      started: state.started,
       service_name: details.service_name || details.serviceName || "siragpt-backend",
       exporter: details.exporter || "none",
-      reason: details.reason || (configured ? "not_started" : "not_configured"),
+      reason: state.reason,
     },
   };
 }
 
 function checkSentry(sentry) {
   const details = typeof sentry === "function" ? sentry() : (sentry || {});
-  const configured = Boolean(details.configured || details.enabled || details.started);
-
-  let status = "skipped";
-  if (details.started) status = "healthy";
-  else if (configured) status = "degraded";
+  const state = resolveOptionalIntegrationHealth(details);
 
   return {
     name: "sentry",
-    status,
+    status: state.status,
     critical: false,
     latency_ms: 0,
     details: {
-      configured,
-      enabled: Boolean(details.enabled),
-      started: Boolean(details.started),
+      configured: state.configured,
+      requested: state.requested,
+      enabled: state.enabled,
+      started: state.started,
       environment: details.environment || process.env.NODE_ENV || "development",
-      reason: details.reason || (configured ? "not_started" : "not_configured"),
+      reason: state.reason,
       traces_sample_rate: Number(details.traces_sample_rate || 0),
     },
   };
@@ -194,50 +205,38 @@ function checkSentry(sentry) {
 
 function checkLangfuse(langfuse) {
   const details = typeof langfuse === "function" ? langfuse() : (langfuse || {});
-  const configured = Boolean(details.configured || details.enabled || details.started);
-
-  // Mirrors checkSentry: a configured-but-not-started state is
-  // "degraded" so an ops dashboard can spot the misconfig without
-  // failing the whole readiness probe (langfuse is non-critical).
-  let status = "skipped";
-  if (details.started && details.enabled !== false) status = "healthy";
-  else if (configured) status = "degraded";
+  const state = resolveOptionalIntegrationHealth(details);
 
   return {
     name: "langfuse",
-    status,
+    status: state.status,
     critical: false,
     latency_ms: 0,
     details: {
-      configured,
-      enabled: Boolean(details.enabled),
-      started: Boolean(details.started),
-      reason: details.reason || (configured ? "not_started" : "not_configured"),
+      configured: state.configured,
+      requested: state.requested,
+      enabled: state.enabled,
+      started: state.started,
+      reason: state.reason,
     },
   };
 }
 
 function checkPostHog(posthog) {
   const details = typeof posthog === "function" ? posthog() : (posthog || {});
-  const configured = Boolean(details.configured || details.enabled || details.started);
-
-  // Same posture as checkLangfuse: non-critical (analytics buffer
-  // outages don't take the API down), with degraded surface for
-  // configured-but-not-started so the misconfig is visible in dashboards.
-  let status = "skipped";
-  if (details.started && details.enabled !== false) status = "healthy";
-  else if (configured) status = "degraded";
+  const state = resolveOptionalIntegrationHealth(details);
 
   return {
     name: "posthog",
-    status,
+    status: state.status,
     critical: false,
     latency_ms: 0,
     details: {
-      configured,
-      enabled: Boolean(details.enabled),
-      started: Boolean(details.started),
-      reason: details.reason || (configured ? "not_started" : "not_configured"),
+      configured: state.configured,
+      requested: state.requested,
+      enabled: state.enabled,
+      started: state.started,
+      reason: state.reason,
     },
   };
 }

@@ -17,6 +17,9 @@ const {
   checkProcess,
   checkModelProvidersConfigured,
   checkOpenTelemetry,
+  checkSentry,
+  checkLangfuse,
+  checkPostHog,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,
@@ -194,6 +197,40 @@ describe("checkOpenTelemetry", () => {
     assert.equal(r.status, "degraded");
     assert.equal(r.critical, false);
     assert.equal(r.details.reason, "missing_otlp_trace_endpoint");
+  });
+});
+
+// ── Optional observability checks ─────────────────────────────────
+
+describe("optional observability health checks", () => {
+  test("optional integrations disabled at boot are skipped, not degraded", () => {
+    for (const check of [checkOpenTelemetry, checkSentry, checkLangfuse, checkPostHog]) {
+      const r = check({
+        configured: true,
+        requested: false,
+        enabled: false,
+        started: true,
+        reason: "disabled_by_env",
+      });
+      assert.equal(r.status, "skipped", `${r.name} should be skipped when disabled`);
+      assert.equal(r.details.requested, false);
+      assert.equal(r.critical, false);
+    }
+  });
+
+  test("requested integrations with missing config are degraded", () => {
+    for (const check of [checkOpenTelemetry, checkSentry, checkLangfuse, checkPostHog]) {
+      const r = check({
+        configured: false,
+        requested: true,
+        enabled: false,
+        started: true,
+        reason: "missing_required_config",
+      });
+      assert.equal(r.status, "degraded", `${r.name} should be degraded when requested`);
+      assert.equal(r.details.requested, true);
+      assert.equal(r.details.reason, "missing_required_config");
+    }
   });
 });
 
