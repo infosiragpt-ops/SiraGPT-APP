@@ -1247,6 +1247,16 @@ const verifyArtifact = {
       const metadataPath = metadataPathFor(id);
       if (fs.existsSync(metadataPath)) metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
     } catch { /* metadata is auxiliary */ }
+    if (ctx.userId) {
+      if (!metadata?.ownerUserId) {
+        ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact ownership metadata missing' });
+        return { ok: false, error: 'artifact ownership metadata missing' };
+      }
+      if (String(metadata.ownerUserId) !== String(ctx.userId)) {
+        ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact not found' });
+        return { ok: false, error: 'artifact not found' };
+      }
+    }
 
     let entry = null;
     if (metadata?.filename) {

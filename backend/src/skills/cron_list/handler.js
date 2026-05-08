@@ -15,6 +15,8 @@ async function execute(args, ctx) {
       prompt_preview: j.prompt.slice(0, 160),
       thinking: j.thinking,
       enabled: j.enabled,
+      status: j.status,
+      status_details: j.statusDetails || null,
       createdAt: j.createdAt,
       lastRunAt: j.lastRunAt || null,
       lastRunOk: j.lastRuns?.[0]?.ok ?? null,

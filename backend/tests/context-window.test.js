@@ -4,7 +4,10 @@ const assert = require('node:assert/strict');
 const {
   estimateTokens,
   fitMessagesToContext,
+  getCompletionLimit,
   getContextLimit,
+  normalizeReservedCompletionTokens,
+  MODEL_COMPLETION_LIMITS,
   MODEL_CONTEXT_LIMITS,
   tokensOfMessage,
 } = require('../src/services/context-window');
@@ -34,6 +37,13 @@ describe('context limit lookup', () => {
     assert.equal(getContextLimit('gpt-4o-2024-08-06'), MODEL_CONTEXT_LIMITS['gpt-4o']);
     assert.equal(getContextLimit('unknown-model'), 8192);
     assert.equal(getContextLimit(), 8192);
+  });
+
+  test('returns exact, partial, and default model completion limits', () => {
+    assert.equal(getCompletionLimit('deepseek-v4-flash'), MODEL_COMPLETION_LIMITS['deepseek-v4-flash']);
+    assert.equal(getCompletionLimit('gpt-4o-2024-08-06'), MODEL_COMPLETION_LIMITS['gpt-4o']);
+    assert.equal(getCompletionLimit('unknown-model'), 4096);
+    assert.equal(getCompletionLimit(), 4096);
   });
 });
 
@@ -69,6 +79,24 @@ describe('fitMessagesToContext', () => {
     assert.match(result.messages[1].content, /se omitieron \d+ mensaje\(s\) antiguo\(s\)/);
     assert.deepEqual(result.messages.slice(-5), messages.slice(-5));
     assert.equal(result.totalTokens <= result.budget, true);
+  });
+
+  test('clamps impossible completion reserves so the prompt budget stays positive', () => {
+    const messages = [
+      { role: 'system', content: 'system prompt' },
+      { role: 'user', content: 'short task' },
+    ];
+
+    const result = fitMessagesToContext(messages, 'unknown-model', { reservedCompletionTokens: 999999 });
+
+    assert.equal(result.reservedCompletionTokens, 4096);
+    assert.equal(result.budget, Math.floor(8192 * 0.8) - 4096);
+    assert.equal(result.droppedCount, 0);
+  });
+
+  test('normalizes negative or non-numeric reserves to zero', () => {
+    assert.equal(normalizeReservedCompletionTokens(-50, 'gpt-4o'), 0);
+    assert.equal(normalizeReservedCompletionTokens('not-a-number', 'gpt-4o'), 0);
   });
 
   test('handles empty or invalid message arrays', () => {

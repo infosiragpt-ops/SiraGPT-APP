@@ -80,6 +80,8 @@ test('createCronJob persists and activates', () => {
   const list = sched.listJobs({ userId: 42 });
   assert.equal(list.length, 1);
   assert.equal(list[0].id, job.id);
+  assert.equal(list[0].status, 'idle');
+  assert.equal(list[0].statusDetails.active, true);
 });
 
 test('listJobs filters by userId + type', () => {
@@ -141,6 +143,8 @@ test('fireJob routes through the registered invoker', async () => {
   assert.equal(fresh.lastRuns.length, 1);
   assert.equal(fresh.lastRuns[0].ok, true);
   assert.match(fresh.lastRuns[0].answerSnippet, /ran for 9/);
+  assert.equal(fresh.status, 'ok');
+  assert.equal(fresh.statusDetails.lastRunOk, true);
 });
 
 test('fireJob captures invoker errors into the run record', async () => {
@@ -152,6 +156,34 @@ test('fireJob captures invoker errors into the run record', async () => {
   const fresh = sched.getJob(job.id);
   assert.equal(fresh.lastRuns[0].ok, false);
   assert.match(fresh.lastRuns[0].error, /boom/);
+  assert.equal(fresh.status, 'error');
+  assert.match(fresh.statusDetails.reason, /boom/);
+});
+
+test('computed status reports disabled, skipped, idle, running, ok, and error states', async () => {
+  resetJobsFile();
+  assert.equal(sched.computeJobStatus({ id: 'disabled', enabled: false, type: 'webhook' }), 'disabled');
+  assert.equal(sched.computeJobStatus({ id: 'bad-cron', enabled: true, type: 'cron', cron: 'bad', lastRuns: [] }), 'skipped');
+
+  const idleJob = sched.createWebhookJob({ userId: 1, prompt: 'idle' });
+  assert.equal(sched.getJob(idleJob.id).status, 'idle');
+
+  let release;
+  const blocker = new Promise((resolve) => { release = resolve; });
+  sched.setInvoker(async () => {
+    assert.equal(sched.getJob(idleJob.id).status, 'running');
+    release();
+    await blocker;
+    return { answer: 'done' };
+  });
+  const run = sched.fireJob(idleJob.id, { source: 'webhook', payload: {} });
+  await blocker;
+  await run;
+  assert.equal(sched.getJob(idleJob.id).status, 'ok');
+
+  sched.setInvoker(async () => { throw new Error('failed'); });
+  await sched.fireJob(idleJob.id, { source: 'webhook', payload: {} });
+  assert.equal(sched.getJob(idleJob.id).status, 'error');
 });
 
 test('fireJob returns "not found" for an unknown id', async () => {

@@ -128,11 +128,7 @@ function createSemanticAdapter({ longTermMemory } = {}) {
 
     recall: _wrap(async ({ scope, query = "", limit = 10 }) => {
       if (typeof longTermMemory.recallFacts !== "function") return [];
-      const results = await longTermMemory.recallFacts({
-        userId: scope.userId,
-        query,
-        limit,
-      });
+      const results = await longTermMemory.recallFacts(scope.userId, query, limit);
       // recallFacts returns Array<{ fact, score, ... }>. Translate.
       return (results || []).map((r) => ({
         item: r.fact || r.text || r,

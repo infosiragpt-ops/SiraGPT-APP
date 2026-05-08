@@ -97,6 +97,28 @@ describe("task-tools · verify_artifact lookup", () => {
     assert.equal(result.filename, filename)
     assert.ok((result.sizeBytes ?? 0) > 0)
   })
+
+  it("rejects verify_artifact when ownership metadata belongs to another user", async () => {
+    const id = "facefeed12345678"
+    const filename = "private.txt"
+    fs.writeFileSync(path.join(tmpArtifactDir, `${id}-${filename}`), "secret\n")
+    fs.writeFileSync(taskTools.INTERNAL.metadataPathFor(id), JSON.stringify({
+      id,
+      filename,
+      format: "txt",
+      mime: "text/plain",
+      sizeBytes: 7,
+      ownerUserId: "owner-a",
+      createdAt: new Date().toISOString(),
+    }))
+
+    const result = await taskTools.INTERNAL.verifyArtifact.execute(
+      { artifactId: id },
+      { userId: "owner-b" },
+    )
+    assert.equal(result.ok, false)
+    assert.match(result.error || "", /not found/)
+  })
 })
 
 describe("task-tools · sanitizeArtifactFilename", () => {

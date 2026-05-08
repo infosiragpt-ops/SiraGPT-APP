@@ -42,6 +42,7 @@ const LAST_RUNS_KEEP = 10;
 // Kept separate from the persisted job so we can re-hydrate on boot
 // without having to serialise node-cron task objects.
 const active = new Map();
+const running = new Set();
 
 // Pluggable agent invoker. The skills layer injects the real invoker
 // at boot (setInvoker). This avoids a circular require between
@@ -229,12 +230,13 @@ function listJobs({ userId, type = null } = {}) {
     if (userId != null && j.userId !== userId) return false;
     if (type && j.type !== type) return false;
     return true;
-  });
+  }).map(withComputedStatus);
 }
 
 function getJob(jobId) {
   const jobs = loadAll();
-  return jobs.find(j => j.id === jobId) || null;
+  const job = jobs.find(j => j.id === jobId) || null;
+  return job ? withComputedStatus(job) : null;
 }
 
 function cancelJob({ userId, jobId }) {
@@ -267,6 +269,7 @@ async function fireJob(jobId, { source = 'cron', payload = null } = {}) {
   const record = { at: startedAt.toISOString(), source, durationMs: 0, ok: false };
 
   try {
+    running.add(job.id);
     // Interpolate a lightweight {{payload.*}} template so webhook
     // callers can pass context. Cron jobs with no payload get the
     // plain prompt.
@@ -299,6 +302,8 @@ async function fireJob(jobId, { source = 'cron', payload = null } = {}) {
   } catch (err) {
     record.error = err.message || String(err);
     record.retries = true;
+  } finally {
+    running.delete(job.id);
   }
   record.durationMs = Date.now() - startedAt.getTime();
 
@@ -312,6 +317,54 @@ async function fireJob(jobId, { source = 'cron', payload = null } = {}) {
   }
   appendRunLog({ jobId, ...record });
   return { ok: record.ok, record };
+}
+
+function withComputedStatus(job) {
+  if (!job || typeof job !== 'object') return job;
+  const status = computeJobStatus(job);
+  return {
+    ...job,
+    status,
+    statusDetails: buildStatusDetails(job, status),
+  };
+}
+
+function computeJobStatus(job) {
+  if (!job || typeof job !== 'object') return 'skipped';
+  if (!job.enabled) return 'disabled';
+  if (running.has(job.id)) return 'running';
+
+  if (job.type === 'cron') {
+    const check = validateCron(job.cron);
+    if (!check.ok) return 'skipped';
+    if (!active.has(job.id)) return 'skipped';
+  }
+
+  const last = Array.isArray(job.lastRuns) ? job.lastRuns[0] : null;
+  if (!last) return 'idle';
+  return last.ok ? 'ok' : 'error';
+}
+
+function buildStatusDetails(job, status) {
+  const last = Array.isArray(job?.lastRuns) ? job.lastRuns[0] : null;
+  const details = {
+    computedAt: new Date().toISOString(),
+    lastRunAt: job?.lastRunAt || last?.at || null,
+    lastRunOk: last?.ok ?? null,
+    active: active.has(job?.id),
+    running: running.has(job?.id),
+  };
+  if (job?.type === 'cron') {
+    const check = validateCron(job.cron);
+    details.cronValid = check.ok;
+    if (!check.ok) details.reason = check.reason;
+  }
+  if (status === 'disabled') details.reason = 'job disabled';
+  if (status === 'skipped' && !details.reason && job?.type === 'cron' && !active.has(job.id)) {
+    details.reason = 'cron job is not active in this process';
+  }
+  if (status === 'error' && last?.error) details.reason = last.error;
+  return details;
 }
 
 function interpolate(template, ctx) {
@@ -336,8 +389,11 @@ module.exports = {
   setInvoker,
   setJobClassifier,
   validateCron,
+  computeJobStatus,
+  withComputedStatus,
   interpolate,
   // Exposed for tests / admin:
   _active: active,
+  _running: running,
   _paths: { DATA_DIR, JOBS_FILE, RUN_LOG_FILE },
 };

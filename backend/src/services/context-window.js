@@ -60,17 +60,58 @@ const MODEL_CONTEXT_LIMITS = {
   'meta-llama/llama-3.3-70b-instruct': 131000,
   'deepseek/deepseek-chat': 65000,
   'deepseek/deepseek-r1': 65000,
-  'deepseek-v4-flash': 128000,
-  'deepseek-v4-pro': 128000,
+  'deepseek-v4-flash': 1000000,
+  'deepseek-v4-pro': 1000000,
   'deepseek-chat': 128000,
   'deepseek-reasoner': 128000,
   'x-ai/grok-2': 131000,
   'x-ai/grok-beta': 131000,
+  'x-ai/grok-4': 256000,
   // Moonshot / Kimi (OpenRouter slug)
   'moonshotai/kimi-k2.6': 262144,
 };
 
+const MODEL_COMPLETION_LIMITS = {
+  'gpt-4o': 16384,
+  'gpt-4o-mini': 16384,
+  'gpt-4-turbo': 4096,
+  'gpt-4': 8192,
+  'gpt-3.5-turbo': 4096,
+  'o1': 100000,
+  'o1-mini': 65536,
+  'o1-preview': 32768,
+  'o3-mini': 100000,
+  'o3': 100000,
+  'gpt-5': 128000,
+  'gpt-5-mini': 128000,
+  'anthropic/claude-3.5-sonnet': 8192,
+  'anthropic/claude-3.7-sonnet': 8192,
+  'anthropic/claude-sonnet-4': 64000,
+  'anthropic/claude-opus-4': 32000,
+  'claude-sonnet-4-5': 64000,
+  'claude-sonnet-4-6': 64000,
+  'claude-opus-4-7': 32000,
+  'claude-haiku-4-5': 32000,
+  'claude-haiku-4-5-20251001': 32000,
+  'gemini-1.5-pro': 8192,
+  'gemini-1.5-flash': 8192,
+  'gemini-2.0-flash': 8192,
+  'gemini-2.5-pro': 65536,
+  'gemini-2.5-flash': 65536,
+  'deepseek/deepseek-chat': 8192,
+  'deepseek/deepseek-r1': 65536,
+  'deepseek-v4-flash': 384000,
+  'deepseek-v4-pro': 384000,
+  'deepseek-chat': 8192,
+  'deepseek-reasoner': 65536,
+  'x-ai/grok-2': 8192,
+  'x-ai/grok-beta': 8192,
+  'x-ai/grok-4': 32768,
+  'moonshotai/kimi-k2.6': 65536,
+};
+
 const DEFAULT_CONTEXT_LIMIT = 8192;
+const DEFAULT_COMPLETION_LIMIT = 4096;
 const SAFETY_RATIO = 0.8;
 const KEEP_HEAD = 1;   // first message (usually system)
 const KEEP_TAIL = 5;   // last N conversational messages
@@ -104,6 +145,23 @@ function getContextLimit(model) {
   return DEFAULT_CONTEXT_LIMIT;
 }
 
+function getCompletionLimit(model) {
+  if (!model) return DEFAULT_COMPLETION_LIMIT;
+  if (MODEL_COMPLETION_LIMITS[model]) return MODEL_COMPLETION_LIMITS[model];
+  for (const [key, value] of Object.entries(MODEL_COMPLETION_LIMITS)) {
+    if (model.includes(key) || key.includes(model)) return value;
+  }
+  return DEFAULT_COMPLETION_LIMIT;
+}
+
+function normalizeReservedCompletionTokens(value, model) {
+  const requested = Number(value);
+  const normalized = Number.isFinite(requested) ? Math.max(0, Math.floor(requested)) : 0;
+  const safeContextBudget = Math.floor(getContextLimit(model) * SAFETY_RATIO);
+  const maxReserveInsideContext = Math.max(0, safeContextBudget - 1);
+  return Math.min(normalized, getCompletionLimit(model), maxReserveInsideContext);
+}
+
 /** Per-message token count (role + content). */
 function tokensOfMessage(msg) {
   if (!msg) return 0;
@@ -126,11 +184,12 @@ function fitMessagesToContext(messages, model, { reservedCompletionTokens = 1024
   }
 
   const limit = getContextLimit(model);
-  const budget = Math.floor(limit * SAFETY_RATIO) - reservedCompletionTokens;
+  const reserved = normalizeReservedCompletionTokens(reservedCompletionTokens, model);
+  const budget = Math.max(1, Math.floor(limit * SAFETY_RATIO) - reserved);
 
   let total = messages.reduce((acc, m) => acc + tokensOfMessage(m), 0);
   if (total <= budget) {
-    return { messages, droppedCount: 0, totalTokens: total, budget };
+    return { messages, droppedCount: 0, totalTokens: total, budget, reservedCompletionTokens: reserved };
   }
 
   const head = messages.slice(0, KEEP_HEAD);
@@ -162,13 +221,16 @@ function fitMessagesToContext(messages, model, { reservedCompletionTokens = 1024
   const next = [...head, ...breadcrumb, ...kept, ...tail];
   const newTotal = next.reduce((acc, m) => acc + tokensOfMessage(m), 0);
 
-  return { messages: next, droppedCount, totalTokens: newTotal, budget };
+  return { messages: next, droppedCount, totalTokens: newTotal, budget, reservedCompletionTokens: reserved };
 }
 
 module.exports = {
   estimateTokens,
   getContextLimit,
+  getCompletionLimit,
+  normalizeReservedCompletionTokens,
   tokensOfMessage,
   fitMessagesToContext,
   MODEL_CONTEXT_LIMITS,
+  MODEL_COMPLETION_LIMITS,
 };

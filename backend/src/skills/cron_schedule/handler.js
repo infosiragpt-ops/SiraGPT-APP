@@ -14,6 +14,7 @@ async function execute(args, ctx) {
     id: job.id,
     cron: job.cron,
     timezone: job.timezone,
+    status: scheduler.getJob(job.id)?.status || "idle",
     prompt_preview: job.prompt.slice(0, 160),
   };
 }

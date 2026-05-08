@@ -75,7 +75,7 @@ describe("createSemanticAdapter (faked long-term-memory)", () => {
     const calls = [];
     return {
       _calls: calls,
-      async recallFacts(args) { calls.push(["recallFacts", args]); return recallReturns; },
+      async recallFacts(userId, query, limit, opts) { calls.push(["recallFacts", { userId, query, limit, opts }]); return recallReturns; },
       async clearUserMemory(userId) { calls.push(["clearUserMemory", userId]); },
       async memoryStats(userId) { calls.push(["memoryStats", userId]); return statsReturns; },
     };
@@ -101,6 +101,24 @@ describe("createSemanticAdapter (faked long-term-memory)", () => {
     assert.equal(r[0].id, "f1");
     assert.equal(r[1].score, 0.71);
     assert.equal(ltm._calls[0][0], "recallFacts");
+    assert.deepEqual(ltm._calls[0][1], { userId: "u1", query: "Tailwind", limit: 5, opts: undefined });
+  });
+
+  test("recall supports the real long-term-memory result shape", async () => {
+    const ltm = fakeLongTermMemory({
+      recallReturns: [
+        { text: "SiraGPT uses PM2 for the backend", category: "ops", score: 0.84, importance: 0.6 },
+      ],
+    });
+    const adapter = createSemanticAdapter({ longTermMemory: ltm });
+    const r = await adapter.recall({ tier: "semantic", scope: { userId: "ops-user" }, query: "backend", limit: 3 });
+
+    assert.equal(r[0].item, "SiraGPT uses PM2 for the backend");
+    assert.equal(r[0].score, 0.84);
+    assert.equal(r[0].importance, 0.6);
+    assert.equal(ltm._calls[0][1].userId, "ops-user");
+    assert.equal(ltm._calls[0][1].query, "backend");
+    assert.equal(ltm._calls[0][1].limit, 3);
   });
 
   test("forget calls clearUserMemory on the user", async () => {
