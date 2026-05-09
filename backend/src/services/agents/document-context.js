@@ -8,6 +8,7 @@
  *   - Content validation with fallback analysis strategies
  *   - Agent context injection: converts file records → structured context
  *     blocks that the LLM can reason over
+ *   - Hierarchical context for large documents (outline → summary → detail)
  *   - Health check: detects stuck/failed documents and surfaces recoverable
  *     diagnostics
  *
@@ -31,37 +32,47 @@ const MIN_CONTENT_CHARS = Number.parseInt(process.env.SIRAGPT_DOC_MIN_CONTENT_CH
 const AGENT_CONTEXT_MAX_CHARS = Number.parseInt(process.env.SIRAGPT_DOC_AGENT_CONTEXT_CHARS || '80000', 10);
 const MAX_CHUNKS_IN_CONTEXT = Number.parseInt(process.env.SIRAGPT_DOC_AGENT_MAX_CHUNKS || '20', 10);
 
+// Hierarchical context config for large documents
+const HIERARCHICAL_OUTLINE_CHARS = Number.parseInt(process.env.SIRAGPT_HIERARCHICAL_OUTLINE_CHARS || '4000', 10);
+const HIERARCHICAL_SUMMARY_CHARS = Number.parseInt(process.env.SIRAGPT_HIERARCHICAL_SUMMARY_CHARS || '8000', 10);
+
+let _hierarchicalChunker;
+let _hierarchicalChunkerTried = false;
+function getHierarchicalChunker() {
+  if (_hierarchicalChunkerTried) return _hierarchicalChunker || null;
+  _hierarchicalChunkerTried = true;
+  try { _hierarchicalChunker = require('../document/hierarchical-document-chunker'); } catch { _hierarchicalChunker = null; }
+  return _hierarchicalChunker;
+}
+
+let _streamingPdf;
+let _streamingPdfTried = false;
+function getStreamingPdf() {
+  if (_streamingPdfTried) return _streamingPdf || null;
+  _streamingPdfTried = true;
+  try { _streamingPdf = require('../document/streaming-pdf'); } catch { _streamingPdf = null; }
+  return _streamingPdf;
+}
+
 const log = getLogger('document-context');
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-/**
- * Sleep for `ms` milliseconds. Used in retry loops.
- */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Compute exponential backoff delay for retry `attempt` (0-indexed).
- * Base × 2^attempt + jitter (±20%).
- */
 function backoffDelay(attempt) {
   const base = RETRY_BASE_MS * Math.pow(2, attempt);
-  const jitter = base * 0.2 * (Math.random() * 2 - 1); // ±20%
+  const jitter = base * 0.2 * (Math.random() * 2 - 1);
   return Math.round(Math.max(base + jitter, 500));
 }
 
-/**
- * Check whether extracted text has genuinely useful content beyond
- * boilerplate, error messages, or a single line of garbage.
- */
 function hasMeaningfulContent(text) {
   if (!text || typeof text !== 'string') return false;
   const trimmed = text.trim();
   if (trimmed.length < MIN_CONTENT_CHARS) return false;
 
-  // Reject pure error messages masquerading as extracted text
   const errorPatterns = [
     /^error processing/i,
     /^no text (extracted|detected|found)/i,
@@ -72,18 +83,13 @@ function hasMeaningfulContent(text) {
   ];
   if (errorPatterns.some((p) => p.test(trimmed.slice(0, 100)))) return false;
 
-  // Must contain at least some alphanumeric characters (not just symbols/whitespace)
   const alphaNum = (trimmed.match(/[A-Za-z0-9ÁÉÍÓÚáéíóúÑñÜü]/g) || []).length;
   if (alphaNum < 20) return false;
 
-  // Ratio of useful characters must be > 15% (otherwise it's mostly symbols/digits/noise)
   const usefulRatio = alphaNum / trimmed.length;
   return usefulRatio > 0.15;
 }
 
-// ── Span helper (safe fallback when tracer is not initialised) ─
-// Wraps tracer.start()/end() so we don't depend on a custom
-// startActiveSpan method that may not exist in all tracer versions.
 function withSpan(tracer, name, fn) {
   const span = tracer.start ? tracer.start(name) : { traceId: 'noop', spanId: 'noop', startTime: Date.now() };
   const safeSpan = {
@@ -117,22 +123,6 @@ function withSpan(tracer, name, fn) {
 
 /**
  * Analyze a file with retry and structured error reporting.
- *
- * Wraps `documentIntelligence.analyzeFile` with:
- *   - Retry loop (exponential backoff) for transient DB/network failures
- *   - Content validation: if extracted text is empty or garbage, returns
- *     a clear diagnostic instead of "skipped"
- *   - Trace event emission for observability
- *
- * @param {object} prisma - Prisma client
- * @param {object} opts
- * @param {string} opts.userId
- * @param {string} [opts.fileId]
- * @param {object} [opts.fileRecord]  - Pre-fetched file row (avoids extra query)
- * @param {object} [opts.extractionResult] - Result from fileProcessor.processFile
- * @param {boolean} [opts.force=false] - Force re-analysis even if cached
- * @param {number} [opts.maxRetries=MAX_RETRIES]
- * @returns {Promise<{ok: boolean, result?: object, error?: string, code?: string}>}
  */
 async function analyzeWithRetry(prisma, opts = {}) {
   const { userId, fileId, fileRecord, extractionResult, force = false, maxRetries = MAX_RETRIES } = opts;
@@ -148,7 +138,6 @@ async function analyzeWithRetry(prisma, opts = {}) {
     span.setAttribute('file.name', ctx.fileName);
 
     try {
-      // ── Input validation ──
       if (!prisma) {
         span.setStatus({ code: 2, message: 'no prisma client' });
         return { ok: false, error: 'Document context requires Prisma client', code: 'no_prisma' };
@@ -158,7 +147,6 @@ async function analyzeWithRetry(prisma, opts = {}) {
         return { ok: false, error: 'User identification required for document analysis', code: 'no_user' };
       }
 
-      // ── Fetch file record if not provided ──
       let file = fileRecord;
       if (!file && fileId) {
         file = await prisma.file.findFirst({ where: { id: fileId, userId } });
@@ -168,10 +156,8 @@ async function analyzeWithRetry(prisma, opts = {}) {
         return { ok: false, error: `File${fileId ? ` ${fileId}` : ''} not found`, code: 'file_not_found' };
       }
 
-      // ── Check if extracted text exists and is meaningful ──
       const currentText = file.extractedText;
       if (!hasMeaningfulContent(currentText)) {
-        // Attempt re-extraction if the file still exists on disk
         const reExtracted = await attemptReExtraction(prisma, file, userId, tracer);
         if (reExtracted.ok) {
           file = { ...file, extractedText: reExtracted.text };
@@ -200,7 +186,6 @@ async function analyzeWithRetry(prisma, opts = {}) {
         }
       }
 
-      // ── Run analysis with retry ──
       let lastError = null;
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
@@ -218,14 +203,13 @@ async function analyzeWithRetry(prisma, opts = {}) {
             span.setAttribute('analysis.chunkCount', analysis.chunkCount || 0);
             span.setAttribute('analysis.tableCount', analysis.tableCount || 0);
 
-            // Mark as ready if analysis produced chunks
             if (analysis.chunkCount > 0 && analysis.status === 'ready') {
               await fileProcessingStatus
                 .setStage(prisma, file.id, 'ready', { userId })
-                .catch(() => { /* non-fatal */ });
+                .catch(() => {});
             }
 
-            span.setStatus({ code: 1 }); // OK
+            span.setStatus({ code: 1 });
             log.info('[document-context] analysis complete', {
               fileId: file.id,
               fileName: file.originalName,
@@ -238,7 +222,6 @@ async function analyzeWithRetry(prisma, opts = {}) {
             return { ok: true, result: analysis };
           }
 
-          // null analysis = no useful text even for the retry
           span.setStatus({ code: 2, message: 'analysis returned null' });
           return {
             ok: false,
@@ -263,9 +246,8 @@ async function analyzeWithRetry(prisma, opts = {}) {
             continue;
           }
 
-          // Non-transient or exhausted retries
           const finalMsg = isTransient
-            ? `El analisis del documento fallo después de ${maxRetries + 1} intentos`
+            ? `El analisis del documento fallo despues de ${maxRetries + 1} intentos`
             : `Error en el analisis del documento: ${err.message || 'error desconocido'}`;
 
           await fileProcessingStatus
@@ -273,7 +255,7 @@ async function analyzeWithRetry(prisma, opts = {}) {
               userId,
               error: `analysis: ${err && err.message ? err.message.slice(0, 200) : 'unknown'}`,
             })
-            .catch(() => { /* non-fatal */ });
+            .catch(() => {});
 
           span.setStatus({ code: 2, message: err.message || 'analysis_error' });
           log.error('[document-context] analysis failed', {
@@ -296,7 +278,6 @@ async function analyzeWithRetry(prisma, opts = {}) {
         }
       }
 
-      // Should not reach here, but TypeScript safety
       span.setStatus({ code: 2, message: 'unreachable' });
       return { ok: false, error: 'Unexpected error in analysis retry loop', code: 'internal' };
     } catch (outerErr) {
@@ -315,12 +296,6 @@ async function analyzeWithRetry(prisma, opts = {}) {
   });
 }
 
-/**
- * Attempt to re-extract text from a file that has empty or garbage
- * extractedText but still exists on disk.
- *
- * @returns {Promise<{ok: boolean, text?: string, reason?: string, fileExists?: boolean, attempted?: boolean}>}
- */
 async function attemptReExtraction(prisma, file, userId, tracer = null) {
   const span = tracer?.startSpan?.('document-context.attemptReExtraction');
   try {
@@ -348,7 +323,6 @@ async function attemptReExtraction(prisma, file, userId, tracer = null) {
     });
 
     if (result && result.extractedText && hasMeaningfulContent(result.extractedText)) {
-      // Update DB with fresh extracted text
       await prisma.file
         .update({
           where: { id: file.id },
@@ -388,10 +362,6 @@ async function attemptReExtraction(prisma, file, userId, tracer = null) {
   }
 }
 
-/**
- * Check whether an error is likely transient (DB timeout, rate limit,
- * connection reset) vs permanent (schema mismatch, missing table).
- */
 function isTransientError(err) {
   if (!err) return true;
   const msg = String(err.message || '').toLowerCase();
@@ -402,31 +372,27 @@ function isTransientError(err) {
     'deadlock', 'lock wait', 'retry', 'reconnect',
     'prisma', 'database', '500',
   ];
-  // If it has a status code >= 500, it's transient server error
   if (err.status >= 500) return true;
-
   return transientPatterns.some((p) => msg.includes(p));
 }
 
 /**
- * Build a structured document context block for the agent's system prompt.
+ * Build a HIERARCHICAL document context block for the agent's system prompt.
  *
- * Takes an analysis result + file record and produces a compact, cited
- * markdown block that the LLM can use for document-grounded reasoning.
+ * For large documents (1000+ pages), uses progressive loading strategy
+ * inspired by how humans read: outline first, then summary, then detail-on-demand.
  *
- * @param {object} analysis - Result from analyzeWithRetry (or analyzeFile)
- * @param {object} file - File record from Prisma
- * @param {object} [opts]
- * @param {number} [opts.maxChars=AGENT_CONTEXT_MAX_CHARS]
- * @param {number} [opts.maxChunks=MAX_CHUNKS_IN_CONTEXT]
- * @returns {{ block: string, truncated: boolean, charCount: number }}
+ * Strategy selection based on document size:
+ *   - Small (<30K chars): all chunks inline
+ *   - Large (30K-100K chars): outline + summary + limited chunks
+ *   - Massive (>100K chars): outline + progressive summary + representative chunks
  */
 function buildAgentContextBlock(analysis, file, opts = {}) {
   const maxChars = opts.maxChars || AGENT_CONTEXT_MAX_CHARS;
   const maxChunks = opts.maxChunks || MAX_CHUNKS_IN_CONTEXT;
 
   if (!analysis || !file) {
-    return { block: '', truncated: false, charCount: 0 };
+    return { block: '', truncated: false, charCount: 0, strategy: 'empty' };
   }
 
   const fileName = file.originalName || file.filename || 'Documento';
@@ -435,90 +401,189 @@ function buildAgentContextBlock(analysis, file, opts = {}) {
   const chunkCount = analysis.chunkCount || 0;
   const tableCount = analysis.tableCount || 0;
   const language = analysis.language || 'unknown';
-  const status = analysis.status || 'unknown';
-  const coverage = analysis.textCoverage?.extractionCoverage || 0;
+
+  // Strategy selection
+  const isMassive = charCount > 100000;
+  const isLarge = charCount > 30000;
+  const strategy = isMassive ? 'massive' : (isLarge ? 'large' : 'small');
 
   const parts = [];
   let totalChars = 0;
   let truncated = false;
 
-  // Header
-  const header = `📄 Document: ${fileName}
-Type: ${fileType} | Language: ${language} | Status: ${status}
-Chars: ${charCount.toLocaleString()} | Chunks: ${chunkCount} | Tables: ${tableCount}
-${coverage > 0 ? `Text coverage: ${(coverage * 100).toFixed(0)}%` : ''}
-───`;
-
-  parts.push(header);
-  totalChars += header.length;
-
-  // Chunks (most relevant / earliest first)
-  const chunks = (analysis.chunks || []).slice(0, maxChunks);
-  for (const chunk of chunks) {
-    if (totalChars >= maxChars) {
-      truncated = true;
-      break;
-    }
-
-    const label = chunk.sectionTitle || chunk.sourceLabel || `Fragmento ${chunk.ordinal || '?'}`;
-    const chunkText = (chunk.text || '').trim();
-    let available = maxChars - totalChars - label.length - 20; // room for formatting
-    if (available <= 0) {
-      truncated = true;
-      break;
-    }
-
-    const displayText = chunkText.length > available
-      ? chunkText.slice(0, available - 3) + '...'
-      : chunkText;
-
-    const block = `\n[${chunk.ordinal || '?'}] ${label}:\n${displayText}`;
-    parts.push(block);
-    totalChars += block.length;
+  // ── Step 1: Document header ──
+  {
+    const header = [
+      '[' + fileName + '] (' + fileType + ')',
+      'Tamano: ' + charCount.toLocaleString() + ' caracteres | ' + chunkCount + ' fragmentos | ' + tableCount + ' tablas | Idioma: ' + language,
+      'Estrategia: ' + strategy,
+      '---',
+    ].join('\n');
+    parts.push(header);
+    totalChars += header.length;
   }
 
-  // Tables summary (compact)
+  // ── Step 2: Build document outline (for large/massive documents) ──
+  let outline = null;
+  let progressiveSummary = null;
+
+  const hierMod = getHierarchicalChunker();
+  if ((isLarge || isMassive) && hierMod && file.extractedText) {
+    try {
+      const hierarchy = hierMod.buildHierarchicalStructure(file, file.extractedText);
+      if (hierarchy.outline) {
+        outline = hierarchy.outline;
+      }
+      if (hierarchy.progressiveSummary) {
+        progressiveSummary = hierarchy.progressiveSummary;
+      }
+    } catch (hierErr) {
+      log.warn('[document-context] hierarchical outline failed:', hierErr.message);
+    }
+  }
+
+  // Fallback outline from page structure
+  if (!outline && getStreamingPdf() && analysis.chunks) {
+    try {
+      const pages = (analysis.chunks || [])
+        .filter(function(c) { return c.pageNumber; })
+        .map(function(c) {
+          return { page: c.pageNumber, text: c.text || '', structure: {} };
+        });
+      if (pages.length > 0) {
+        const mdOutline = getStreamingPdf().buildMarkdownOutline(pages);
+        if (mdOutline) outline = mdOutline;
+      }
+    } catch (_) {}
+  }
+
+  // Inject outline
+  if (outline) {
+    const trimmedOutline = outline.length > HIERARCHICAL_OUTLINE_CHARS
+      ? outline.slice(0, HIERARCHICAL_OUTLINE_CHARS - 80) + '\n... (truncated)'
+      : outline;
+
+    var outlineBlock = '\nEsquema del documento:\n' + trimmedOutline + '\n---';
+    if (totalChars + outlineBlock.length <= maxChars) {
+      parts.push(outlineBlock);
+      totalChars += outlineBlock.length;
+    } else {
+      truncated = true;
+    }
+  }
+
+  // ── Step 3: Progressive summary ──
+  if ((isLarge || isMassive) && !truncated) {
+    let summaryText = null;
+
+    if (progressiveSummary) {
+      summaryText = progressiveSummary.slice(0, HIERARCHICAL_SUMMARY_CHARS);
+    } else if (analysis.summary) {
+      summaryText = analysis.summary.slice(0, HIERARCHICAL_SUMMARY_CHARS);
+    } else if (analysis.chunks && analysis.chunks.length > 0) {
+      var firstC = analysis.chunks[0];
+      var lastC = analysis.chunks[analysis.chunks.length - 1];
+      var firstLbl = firstC.sectionTitle || firstC.sourceLabel || 'Inicio';
+      var lastLbl = lastC.sectionTitle || lastC.sourceLabel || 'Final';
+      summaryText = firstLbl + ':\n' + (firstC.text || '').slice(0, 2000) +
+        '\n\n' + lastLbl + ':\n' + (lastC.text || '').slice(0, 1500);
+    }
+
+    if (summaryText) {
+      var summaryBlock = '\nResumen progresivo:\n' + summaryText + '\n---';
+      if (totalChars + summaryBlock.length <= maxChars) {
+        parts.push(summaryBlock);
+        totalChars += summaryBlock.length;
+      } else {
+        truncated = true;
+      }
+    }
+  }
+
+  // ── Step 4: Content chunks ──
+  var remainingForChunks = maxChars - totalChars - 300;
+  var maxChunksToInclude = maxChunks;
+
+  if (isMassive && outline) {
+    maxChunksToInclude = Math.min(maxChunksToInclude, 8);
+  } else if (isLarge && outline) {
+    maxChunksToInclude = Math.min(maxChunksToInclude, 12);
+  }
+  if (!isLarge) {
+    maxChunksToInclude = Math.min((analysis.chunks || []).length, 30);
+  }
+
+  if (remainingForChunks > 0) {
+    var chunks = (analysis.chunks || []).slice(0, maxChunksToInclude);
+    for (var i = 0; i < chunks.length && remainingForChunks > 0; i++) {
+      var chunk = chunks[i];
+      var label = chunk.sectionTitle || chunk.sourceLabel || 'Fragmento ' + (chunk.ordinal || '?');
+      var chunkText = (chunk.text || '').trim();
+      if (!chunkText) continue;
+
+      var sectionRef = chunk.sectionPath ? ' (' + chunk.sectionPath + ')' : '';
+      var pageRef = chunk.pageNumber ? ' [p.' + chunk.pageNumber + ']' : '';
+
+      var overhead = label.length + sectionRef.length + pageRef.length + 40;
+      var available = remainingForChunks - overhead;
+      if (available <= 0) {
+        truncated = true;
+        break;
+      }
+
+      var displayText = chunkText.length > available
+        ? chunkText.slice(0, available - 3) + '...'
+        : chunkText;
+
+      var block = '\n[' + (chunk.ordinal || i + 1) + '] ' + label + pageRef + sectionRef + ':\n' + displayText;
+      parts.push(block);
+      totalChars += block.length;
+      remainingForChunks -= block.length;
+    }
+  }
+
+  // ── Step 5: Tables ──
   if (analysis.tables && analysis.tables.length > 0 && !truncated) {
-    const tablesBlock = `\n─── Tables (${analysis.tables.length}):\n` +
-      analysis.tables
-        .slice(0, 5)
-        .map((t) => `  • ${t.title || t.sourceLabel || `Table ${t.ordinal}`}: ${(t.columns || []).length} cols, ${t.rowCount} rows`)
-        .join('\n');
-
-    const remaining = maxChars - totalChars;
-    const trimTables = tablesBlock.length > remaining ? tablesBlock.slice(0, Math.max(remaining, 0)) : tablesBlock;
-    parts.push(trimTables);
-    totalChars += trimTables.length;
-    if (trimTables.length < tablesBlock.length) truncated = true;
+    var remForTables = maxChars - totalChars;
+    if (remForTables > 200) {
+      var tableLines = [];
+      tableLines.push('--- Tablas (' + analysis.tables.length + '):');
+      var tbls = analysis.tables.slice(0, 5);
+      for (var ti = 0; ti < tbls.length; ti++) {
+        var t = tbls[ti];
+        var loc = t.sheetName ? ' en "' + t.sheetName + '"' : '';
+        var cols = t.columns ? t.columns.length : 0;
+        var rows = t.rowCount || 0;
+        var previewLen = t.markdown ? t.markdown.length : 0;
+        tableLines.push('  - ' + (t.title || t.sourceLabel || 'Tabla ' + (ti + 1)) + loc + ': ' + cols + ' cols, ' + rows + ' filas' + (previewLen > 0 ? ', ' + previewLen + ' chars' : ''));
+      }
+      var tablesBlock = '\n' + tableLines.join('\n');
+      if (tablesBlock.length <= remForTables) {
+        parts.push(tablesBlock);
+        totalChars += tablesBlock.length;
+      }
+    }
   }
 
-  // Footer with summary
-  if (!truncated && analysis.summary) {
-    const summaryBlock = `\n─── Summary:\n${analysis.summary.slice(0, 600)}`;
-    const remaining = maxChars - totalChars;
-    if (summaryBlock.length <= remaining) {
-      parts.push(summaryBlock);
+  // ── Step 6: Compact footer ──
+  if (!truncated) {
+    var footer = '\n---\nDocumento cargado: ' + fileName + ' (' + chunkCount + ' fragmentos)';
+    if (totalChars + footer.length <= maxChars) {
+      parts.push(footer);
     }
   }
 
   return {
     block: parts.join('\n'),
-    truncated,
+    truncated: truncated,
     charCount: totalChars,
+    strategy: strategy,
+    outlineOnly: outline != null && chunks && chunks.length > 0 && !isLarge,
   };
 }
 
 /**
  * Perform a health check on a file's document analysis pipeline.
- *
- * Examines the file record, extracted text, analysis DB records, and
- * processing stage to produce a complete diagnostic report.
- *
- * @param {object} prisma
- * @param {object} opts
- * @param {string} opts.userId
- * @param {string} opts.fileId
- * @returns {Promise<{ok: boolean, result?: object, error?: string}>}
  */
 async function diagnoseFile(prisma, opts = {}) {
   const { userId, fileId } = opts;
@@ -560,7 +625,6 @@ async function diagnoseFile(prisma, opts = {}) {
     const hasUsefulText = hasMeaningfulContent(file.extractedText);
     const stage = file.processingStage || 'unknown';
 
-    // Fetch analysis record
     let analysisRecord = null;
     let chunkCount = 0;
     let tableCount = 0;
@@ -584,7 +648,6 @@ async function diagnoseFile(prisma, opts = {}) {
         tableCount = analysisRecord._count?.tables || analysisRecord.tableCount || 0;
       }
     } catch {
-      // analysis table might not exist
       analysisRecord = null;
     }
 
@@ -614,7 +677,7 @@ async function diagnoseFile(prisma, opts = {}) {
     span.setAttribute('stage', stage);
     span.setAttribute('hasUsefulText', hasUsefulText);
 
-    const canRepair = status === 'stuck' || status === 'failed_analysis' || status === 'empty_extraction' || status === 'failed';
+    const canRepair = ['stuck', 'failed_analysis', 'empty_extraction', 'failed'].includes(status);
 
     return {
       ok: true,
@@ -627,28 +690,19 @@ async function diagnoseFile(prisma, opts = {}) {
   });
 }
 
-/**
- * Determine overall health status from pipeline state.
- */
 function determineHealthStatus(stage, hasUsefulText, hasAnalysis, chunkCount) {
   if (stage === 'failed') return 'failed';
-  // Check for missing / empty content BEFORE 'healthy' — otherwise a
-  // file with no extracted text but a stale analysis record gets mis-identified.
   if (stage === 'ready' && !hasUsefulText) return 'empty_extraction';
   if (stage === 'ready' && hasUsefulText && !hasAnalysis) return 'missing_analysis';
   if (stage === 'ready' && hasAnalysis && chunkCount === 0) return 'empty_analysis';
   if (stage === 'ready' && hasAnalysis && chunkCount > 0) return 'healthy';
 
-  // Stuck stages (still processing but > 5 min old)
   const stuckStages = ['uploaded', 'validating', 'extracting', 'chunking', 'embedding', 'indexing'];
   if (stuckStages.includes(stage)) return 'stuck';
 
   return 'unknown';
 }
 
-/**
- * Get a human-readable recommended action based on health status.
- */
 function getRecommendedAction(status) {
   const actions = {
     stuck: 'El archivo parece estar atascado en una etapa de procesamiento. Re-analiza el documento.',
@@ -663,16 +717,6 @@ function getRecommendedAction(status) {
 
 /**
  * Full repair pipeline: re-extract text, re-analyze, re-index RAG.
- *
- * Coordinates the entire repair workflow with logging, tracing, and
- * structured status reporting at each step.
- *
- * @param {object} prisma
- * @param {object} ragService - RAG service instance
- * @param {object} opts
- * @param {string} opts.userId
- * @param {string} opts.fileId
- * @returns {Promise<{ok: boolean, result?: object, error?: string, code?: string}>}
  */
 async function repairDocument(prisma, ragService, opts = {}) {
   const { userId, fileId } = opts;
@@ -682,7 +726,6 @@ async function repairDocument(prisma, ragService, opts = {}) {
     span.setAttribute('file.id', fileId);
     span.setAttribute('user.id', userId);
 
-    // 1. Diagnose current state
     const diagnosis = await diagnoseFile(prisma, { userId, fileId });
     if (!diagnosis.ok) {
       span.setStatus({ code: 2, message: 'diagnosis failed' });
@@ -697,7 +740,6 @@ async function repairDocument(prisma, ragService, opts = {}) {
       return { ok: false, error: 'File not found during repair', code: 'file_not_found' };
     }
 
-    // 2. Re-extract text if empty
     if (!hasMeaningfulContent(file.extractedText)) {
       log.info('[document-context] repair: re-extracting text', { fileId, fileName: file.originalName });
       await fileProcessingStatus.setStage(prisma, file.id, 'extracting', { userId });
@@ -708,7 +750,7 @@ async function repairDocument(prisma, ragService, opts = {}) {
         return {
           ok: false,
           error: reExtract.extractionError
-            ? `Re-extraccion fallo: ${reExtract.extractionError}`
+            ? 'Re-extraccion fallo: ' + reExtract.extractionError
             : 'No se pudo re-extraer el texto del archivo',
           code: 're_extraction_failed',
           diagnostics: { reExtractReason: reExtract.reason },
@@ -717,7 +759,6 @@ async function repairDocument(prisma, ragService, opts = {}) {
       file.extractedText = reExtract.text;
     }
 
-    // 3. Re-analyze with retry
     const analysisResult = await analyzeWithRetry(prisma, {
       userId,
       fileRecord: file,
@@ -734,57 +775,50 @@ async function repairDocument(prisma, ragService, opts = {}) {
       };
     }
 
-      // 4. Re-index in RAG (best-effort)
-      if (ragService && file.extractedText) {
-        try {
-          const operationalRag = require('../rag/operational-runtime');
-          const docs = operationalRag.normaliseDocs([file]);
-          if (docs.length > 0) {
-            await operationalRag.ensureIndexed({
-              rag: ragService,
-              userId,
-              collection: operationalRag.DEFAULT_COLLECTION,
-              docs,
-            });
-          }
-        } catch (ragErr) {
-          log.warn('[document-context] RAG re-index non-fatal error', {
-            fileId,
-            error: ragErr.message || String(ragErr),
+    if (ragService && file.extractedText) {
+      try {
+        const operationalRag = require('../rag/operational-runtime');
+        const docs = operationalRag.normaliseDocs([file]);
+        if (docs.length > 0) {
+          await operationalRag.ensureIndexed({
+            rag: ragService,
+            userId,
+            collection: operationalRag.DEFAULT_COLLECTION,
+            docs,
           });
-          // Non-fatal — analysis succeeded even if RAG indexing didn't
         }
+      } catch (ragErr) {
+        log.warn('[document-context] RAG re-index non-fatal error', {
+          fileId,
+          error: ragErr.message || String(ragErr),
+        });
       }
+    }
 
-      // 5. Mark as ready
-      await fileProcessingStatus
-        .setStage(prisma, file.id, 'ready', { userId })
-        .catch(() => null);
+    await fileProcessingStatus
+      .setStage(prisma, file.id, 'ready', { userId })
+      .catch(() => null);
 
-      span.setStatus({ code: 1 });
-      log.info('[document-context] repair complete', {
-        fileId,
+    span.setStatus({ code: 1 });
+    log.info('[document-context] repair complete', {
+      fileId,
+      fileName: file.originalName,
+      status: analysisResult.result?.status,
+    });
+
+    return {
+      ok: true,
+      result: {
         fileName: file.originalName,
-        status: analysisResult.result?.status,
-      });
-
-      return {
-        ok: true,
-        result: {
-          fileName: file.originalName,
-          analysis: analysisResult.result,
-          diagnostics: diagnosis.result.diagnostics,
-        },
-      };
+        analysis: analysisResult.result,
+        diagnostics: diagnosis.result.diagnostics,
+      },
+    };
   });
 }
 
 /**
  * Batch diagnose all files for a user.
- *
- * @param {object} prisma
- * @param {string} userId
- * @returns {Promise<{ok: boolean, result?: object, error?: string}>}
  */
 async function batchDiagnose(prisma, userId) {
   const tracer = getTracer();
@@ -834,25 +868,22 @@ async function batchDiagnose(prisma, userId) {
 
     const summary = {
       total: results.length,
-      healthy: results.filter((r) => r.stage === 'ready' && !r.error).length,
-      stuck: results.filter((r) => r.isStuck).length,
-      failed: results.filter((r) => r.stage === 'failed').length,
-      processing: results.filter((r) => !r.isStuck && ['uploaded', 'validating', 'extracting', 'chunking', 'embedding', 'indexing'].includes(r.stage)).length,
-      missingFromDisk: results.filter((r) => r.stage === 'ready' && !r.fileExistsOnDisk).length,
+      healthy: results.filter(function(r) { return r.stage === 'ready' && !r.error; }).length,
+      stuck: results.filter(function(r) { return r.isStuck; }).length,
+      failed: results.filter(function(r) { return r.stage === 'failed'; }).length,
+      processing: results.filter(function(r) {
+        return !r.isStuck && ['uploaded', 'validating', 'extracting', 'chunking', 'embedding', 'indexing'].includes(r.stage);
+      }).length,
+      missingFromDisk: results.filter(function(r) { return r.stage === 'ready' && !r.fileExistsOnDisk; }).length,
     };
 
     span.setAttribute('results.total', summary.total);
     span.setAttribute('results.healthy', summary.healthy);
-    span.setAttribute('results.stuck', summary.stuck);
-    span.setAttribute('results.failed', summary.failed);
     span.setStatus({ code: 1 });
 
     return {
       ok: true,
-      result: {
-        summary,
-        files: results,
-      },
+      result: { summary, files: results },
     };
   });
 }
@@ -865,7 +896,6 @@ module.exports = {
   repairDocument,
   batchDiagnose,
   hasMeaningfulContent,
-  // Exported for testing
   __test__: {
     backoffDelay,
     isTransientError,

@@ -1,14 +1,33 @@
 const fs = require('fs');
 const ocrEngine = require('./ocr-engine');
 const fileProcessor = require('./fileProcessor');
+const hierarchicalChunker = require('./document/hierarchical-document-chunker');
 
-const MAX_CHUNK_CHARS = 3600;
-const CHUNK_OVERLAP_CHARS = 240;
+const MAX_CHUNK_CHARS = Number.parseInt(
+  process.env.SIRAGPT_DOCINTEL_CHUNK_CHARS || '3600',
+  10
+);
+const CHUNK_OVERLAP_CHARS = Number.parseInt(
+  process.env.SIRAGPT_DOCINTEL_CHUNK_OVERLAP || '240',
+  10
+);
 const MAX_CHUNKS = Math.max(
   80,
   Math.min(Number(process.env.DOCINTEL_MAX_CHUNKS) || 1200, 5000)
 );
 const MAX_TABLE_PREVIEW_ROWS = 30;
+const MAX_TERMS_FOR_EVIDENCE = Number.parseInt(
+  process.env.SIRAGPT_DOCINTEL_MAX_EVIDENCE_TERMS || '24',
+  10
+);
+const MAX_EVIDENCE_CHUNKS = Number.parseInt(
+  process.env.SIRAGPT_DOCINTEL_MAX_EVIDENCE_CHUNKS || '24',
+  10
+);
+const EVIDENCE_CHUNK_NEIGHBORS = Number.parseInt(
+  process.env.SIRAGPT_DOCINTEL_EVIDENCE_NEIGHBORS || '2',
+  10
+);
 
 function compactString(value, max = 1200) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
@@ -50,8 +69,8 @@ function detectLanguage(text) {
 function inferCounts(file = {}, text = '') {
   const name = String(file.originalName || file.filename || '').toLowerCase();
   const mime = String(file.mimeType || '').toLowerCase();
-  const pageMatch = String(text || '').match(/PDF document\s+—\s+(\d+)\s+page/i);
-  const sheetMatch = String(text || '').match(/Excel workbook\s+—\s+(\d+)\s+sheet/i);
+  const pageMatch = String(text || '').match(/PDF document\s+[—–]\s+(\d+)\s+page/i);
+  const sheetMatch = String(text || '').match(/Excel workbook\s+[—–]\s+(\d+)\s+sheet/i);
   const slideMatches = String(text || '').match(/\bSlide\s+\d+\b/gi);
   return {
     pageCount: pageMatch ? Number(pageMatch[1]) : (mime === 'application/pdf' || name.endsWith('.pdf') ? null : null),
@@ -193,9 +212,37 @@ function fallbackChunks(text, file = {}) {
   return chunks;
 }
 
+// ── Primary buildChunks with hierarchical support ──────────────
+
 function buildChunks(file = {}, extractedText = '') {
   const text = cleanText(extractedText);
   if (!hasUsefulText(text)) return [];
+
+  // Try hierarchical chunker first — produces section-aware chunks
+  try {
+    const hierarchy = hierarchicalChunker.buildHierarchicalStructure(file, text);
+    if (hierarchy.chunks && hierarchy.chunks.length > 0) {
+      return hierarchy.chunks.slice(0, MAX_CHUNKS).map((chunk) => ({
+        ordinal: chunk.ordinal,
+        sourceType: chunk.sourceType || sourceKindForFile(file),
+        sourceLabel: chunk.sourceLabel || chunk.sectionTitle || `Fragmento ${chunk.ordinal}`,
+        pageNumber: chunk.pageNumber || null,
+        sheetName: null,
+        slideNumber: null,
+        sectionTitle: chunk.sectionTitle || null,
+        sectionLevel: chunk.sectionLevel || null,
+        sectionPath: chunk.sectionPath || null,
+        text: cleanText(chunk.text),
+        charCount: cleanText(chunk.text).length,
+        metadata: { sectionPath: chunk.sectionPath || null, sectionLevel: chunk.sectionLevel || null },
+      })).filter((chunk) => chunk.text);
+    }
+  } catch (hierarchyErr) {
+    // Fall through to traditional chunking
+    console.warn('[document-intelligence] hierarchical chunking failed, falling back:', hierarchyErr.message);
+  }
+
+  // Fall back: structured splitting by sheets/headings/pages
   const structured = [
     ...splitBySpreadsheetSheets(text),
     ...splitByMarkdownHeadings(text),
@@ -210,6 +257,8 @@ function buildChunks(file = {}, extractedText = '') {
     sheetName: chunk.sheetName || null,
     slideNumber: chunk.slideNumber || null,
     sectionTitle: chunk.sectionTitle || null,
+    sectionLevel: null,
+    sectionPath: null,
     text: cleanText(chunk.text),
     charCount: cleanText(chunk.text).length,
     metadata: chunk.metadata || null,
@@ -232,19 +281,13 @@ function tableToMarkdown(columns, rows) {
 
 function extractSpreadsheetTables(file = {}, extractedText = '') {
   if (!isSpreadsheet(file)) return [];
-  // When the extracted text is empty but a file path exists, read the
-  // workbook directly so the function works both in the async analysis
-  // pipeline (where extractedText is pre-populated) and in direct
-  // calls with a file path (e.g. tests or synchronous contexts).
   if (!extractedText && file.path && fs.existsSync(file.path)) {
     try {
       const workbookText = readXlsxToText(file.path);
       if (workbookText) {
         return extractSpreadsheetTables(file, workbookText);
       }
-    } catch (_) {
-      // fall through to empty extracted text — same as no tables
-    }
+    } catch (_) { /* fall through */ }
   }
   const sheets = splitBySpreadsheetSheets(extractedText);
   return sheets.map((sheet, index) => {
@@ -280,12 +323,6 @@ function extractSpreadsheetTables(file = {}, extractedText = '') {
   }).filter((table) => table.columns.length > 0);
 }
 
-/**
- * Read an XLSX workbook file and produce the same tab-delimited text
- * format that the async extraction pipeline generates. This lets
- * extractSpreadsheetTables work both with pre-extracted text (from
- * the file processor) and directly from a file path.
- */
 function readXlsxToText(filePath) {
   const XLSX = require('xlsx');
   const workbook = XLSX.readFile(filePath, { type: 'file', cellDates: false, raw: true });
@@ -438,9 +475,20 @@ function buildSummary(file = {}, text = '', chunks = [], tables = []) {
     return `No se encontro texto legible en ${file.originalName || file.filename || 'el archivo'}.`;
   }
   const title = file.originalName || file.filename || 'Documento';
+  
+  // Try to include structural information if available
+  const hasSectionInfo = chunks.some(c => c.sectionTitle || c.sectionPath);
+  let structureHint = '';
+  if (hasSectionInfo) {
+    const sections = [...new Set(chunks.filter(c => c.sectionTitle).map(c => c.sectionTitle))];
+    if (sections.length > 0 && sections.length <= 15) {
+      structureHint = ` Estructura: ${sections.slice(0, 8).join(' → ')}${sections.length > 8 ? ` +${sections.length - 8} more` : ''}.`;
+    }
+  }
+  
   const firstChunk = chunks[0]?.text ? compactString(chunks[0].text, 420) : compactString(text, 420);
   const tablePart = tables.length ? ` Incluye ${tables.length} tabla(s) detectada(s).` : '';
-  return `${title}: ${text.length} caracteres extraidos en ${chunks.length} fragmento(s).${tablePart} Vista inicial: ${firstChunk}`;
+  return `${title}: ${text.length} caracteres extraidos en ${chunks.length} fragmento(s).${structureHint}${tablePart} Vista inicial: ${firstChunk}`;
 }
 
 async function reprocessIfNeeded(prisma, file) {
@@ -536,6 +584,7 @@ async function analyzeFile(prisma, {
     size: file.size,
     analyzedAt: new Date().toISOString(),
     extractionSource: extractionResult ? 'upload_pipeline' : (reprocessed.result ? 'reanalyzed' : 'stored_text'),
+    hierarchical: chunks.some(c => c.sectionPath != null),
   };
 
   if (!prisma.documentAnalysis?.upsert) {
@@ -625,6 +674,159 @@ async function analyzeFile(prisma, {
   return serializeAnalysis(analysis, createdChunks, createdTables);
 }
 
+/**
+ * Multi-strategy evidence retrieval for large documents.
+ *
+ * Unlike the old single-strategy keyword match, this searches for:
+ *   1. Exact term match (chunk text contains query terms)
+ *   2. Section path match (queries match section titles for navigation)
+ *   3. Neighbor chunks (context around matched chunks)
+ *   4. Strategy weighting for balanced coverage
+ *
+ * Returns ranked evidence with cross-references.
+ */
+async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVIDENCE_CHUNKS } = {}) {
+  if (!userId || !fileId || !query) {
+    return { evidence: [], totalChunks: 0 };
+  }
+
+  const file = await prisma.file.findFirst({ where: { id: fileId, userId } });
+  if (!file) return { evidence: [], totalChunks: 0 };
+
+  const text = cleanText(file.extractedText || '');
+  if (!hasUsefulText(text)) return { evidence: [], totalChunks: 0 };
+
+  // Build chunks (use hierarchical if available)
+  const chunks = buildChunks(file, text);
+  const totalChunks = chunks.length;
+
+  if (chunks.length === 0) return { evidence: [], totalChunks: 0 };
+
+  // Extract query terms — both original and normalized
+  const queryLower = String(query || '').toLowerCase().trim();
+  if (!queryLower || queryLower.length < 3) {
+    return {
+      evidence: chunks.slice(0, limit).map((chunk, idx) => ({
+        ...chunk,
+        relevanceScore: 0,
+        matchedTerms: [],
+        contextChunks: [],
+      })),
+      totalChunks,
+    };
+  }
+
+  // Extract significant terms from query (words 4+ chars, skip common words)
+  const stopWords = new Set([
+    'dame', 'para', 'como', 'este', 'esta', 'esto', 'con', 'por', 'que', 'del',
+    'las', 'los', 'una', 'uno', 'mas', 'pero', 'sino', 'todo', 'entre', 'sobre',
+    'cada', 'años', 'tiene', 'puede', 'hasta', 'desde', 'donde', 'análisis',
+    'resumen', 'documento', 'archivo', 'adjunto', 'quiere', 'necesito', 'sobre',
+    'también', 'tambien', 'información', 'informacion', 'requiere',
+    'página', 'pagina', 'buscar', 'encontrar', 'mostrar', 'decir', 'hacer',
+    'the', 'this', 'that', 'with', 'from', 'have', 'which', 'their', 'about',
+    'would', 'could', 'should', 'other', 'there', 'analysis', 'summary',
+    'document', 'information', 'search', 'find', 'show', 'tell', 'make',
+  ]);
+
+  const terms = Array.from(new Set(
+    (queryLower.match(/[a-záéíóúñ0-9]{4,}/g) || [])
+      .filter((t) => !stopWords.has(t))
+  )).slice(0, MAX_TERMS_FOR_EVIDENCE);
+
+  // Strategy 1: Exact term match in chunk text
+  const scored = chunks.map((chunk) => {
+    const chunkLower = (chunk.text || '').toLowerCase();
+    const chunkTitle = (chunk.sectionTitle || chunk.sourceLabel || '').toLowerCase();
+
+    let score = 0;
+    const matchedTerms = [];
+
+    for (const term of terms) {
+      // Title match is weighted higher
+      if (chunkTitle.includes(term)) {
+        score += 8;
+        matchedTerms.push(term);
+      }
+      // Content match
+      if (chunkLower.includes(term)) {
+        score += 3;
+        if (!matchedTerms.includes(term)) matchedTerms.push(term);
+      }
+    }
+
+    // Section path match (parent section relevance)
+    const sectionPath = String(chunk.sectionPath || '').toLowerCase();
+    for (const term of terms) {
+      if (sectionPath.includes(term) && !matchedTerms.includes(term)) {
+        score += 5;
+        matchedTerms.push(term);
+      }
+    }
+
+    // Strategy 2: Term frequency bonus (denser matches = more relevant)
+    if (matchedTerms.length >= 2) {
+      score += matchedTerms.length * 2;
+    }
+
+    return { ...chunk, relevanceScore: score, matchedTerms };
+  });
+
+  // Sort by relevance score descending
+  const ranked = scored.sort((a, b) => b.relevanceScore - a.relevanceScore);
+
+  // Strategy 3: Top-K selection + neighbor expansion
+  const topK = Math.min(8, Math.max(3, Math.floor(limit / 2)));
+  const topMatches = ranked.slice(0, topK);
+
+  // Strategy 4: Add neighbor chunks for context continuity
+  const neighborSet = new Set(topMatches.map((c) => c.ordinal));
+  const neighbors = [];
+  for (const match of topMatches) {
+    for (let offset = 1; offset <= EVIDENCE_CHUNK_NEIGHBORS; offset++) {
+      const before = chunks.find((c) => c.ordinal === match.ordinal - offset);
+      const after = chunks.find((c) => c.ordinal === match.ordinal + offset);
+      for (const candidate of [before, after]) {
+        if (candidate && !neighborSet.has(candidate.ordinal)) {
+          neighborSet.add(candidate.ordinal);
+          neighbors.push({ ...candidate, relevanceScore: 1, matchedTerms: ['context'] });
+        }
+      }
+    }
+  }
+
+  // Strategy 5: First/last chunks (for overview context)
+  if (chunks.length > topK && chunks.length > EVIDENCE_CHUNK_NEIGHBORS * 2) {
+    const firstChunk = chunks[0];
+    const lastChunk = chunks[chunks.length - 1];
+    if (!neighborSet.has(firstChunk.ordinal)) {
+      neighborSet.add(firstChunk.ordinal);
+      neighbors.push({ ...firstChunk, relevanceScore: 1, matchedTerms: ['overview'] });
+    }
+    if (!neighborSet.has(lastChunk.ordinal)) {
+      neighborSet.add(lastChunk.ordinal);
+      neighbors.push({ ...lastChunk, relevanceScore: 1, matchedTerms: ['overview'] });
+    }
+  }
+
+  // Merge and deduplicate
+  const allEvidence = [...topMatches, ...neighbors];
+  const seen = new Set();
+  const deduped = [];
+  for (const item of allEvidence) {
+    const key = item.ordinal || item.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+  }
+
+  // Restore original ordinal order for final output
+  const sorted = deduped.sort((a, b) => (a.ordinal || 0) - (b.ordinal || 0));
+  const finalEvidence = sorted.slice(0, limit);
+
+  return { evidence: finalEvidence, totalChunks };
+}
+
 async function getAnalysisForFile(prisma, { userId, fileId } = {}) {
   if (!prisma?.documentAnalysis) return null;
   const analysis = await prisma.documentAnalysis.findFirst({
@@ -637,284 +839,13 @@ async function getAnalysisForFile(prisma, { userId, fileId } = {}) {
   return serializeAnalysis(analysis, analysis?.chunks || [], analysis?.tables || []);
 }
 
-function tokenizeQuery(query) {
-  return Array.from(new Set(String(query || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z0-9]{3,}/g) || []))
-    .filter((term) => ![
-      'para', 'como', 'que', 'del', 'con', 'una', 'uno', 'unos', 'unas', 'los', 'las', 'por', 'sobre',
-      'dame', 'darme', 'hazme', 'realiza', 'profesional', 'profesionales', 'documento', 'archivo',
-      'the', 'and', 'from', 'this',
-    ].includes(term));
-}
-
-function topTerms(text, limit = 20) {
-  const stop = new Set([
-    'para', 'como', 'que', 'del', 'con', 'una', 'uno', 'los', 'las', 'por', 'sobre', 'esta', 'este', 'esas', 'esos',
-    'the', 'and', 'from', 'this', 'that', 'with', 'into', 'document', 'archivo', 'documento',
-  ]);
-  const counts = new Map();
-  String(text || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .match(/[a-z0-9]{4,}/g)
-    ?.forEach((term) => {
-      if (!stop.has(term)) counts.set(term, (counts.get(term) || 0) + 1);
-    });
-  return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, Math.max(1, Math.min(Number(limit) || 20, 50)))
-    .map(([term, count]) => ({ term, count }));
-}
-
-function detectQueryIntent(query) {
-  const normalized = String(query || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-  return {
-    wantsConclusions: /\b(conclusion|conclusiones|concluir|concluye|cierre|hallazgos?)\b/.test(normalized),
-    wantsSummary: /\b(resumen|resume|resumir|sintesis|sintetiza)\b/.test(normalized),
-    wantsAnalysis: /\b(analiza|analisis|segun|explica|interpreta|evalua)\b/.test(normalized),
-    wantsResults: /\b(resultado|resultados|discusion|discusion|recomendacion|recomendaciones|objetivo|objetivos)\b/.test(normalized),
-  };
-}
-
-const CONCLUSION_SECTION_TERMS = [
-  'conclusion',
-  'conclusiones',
-  'discusion',
-  'discusion de resultados',
-  'resultados',
-  'hallazgos',
-  'recomendacion',
-  'recomendaciones',
-  'objetivo',
-  'objetivos',
-  'propuesta',
-];
-
-const COVER_SECTION_TERMS = [
-  'facultad',
-  'universidad',
-  'bachiller',
-  'asesor',
-  'autor',
-  'autores',
-  'carrera',
-  'titulo del articulo',
-  'ano de publicacion',
-  'portada',
-  'dedicatoria',
-  'agradecimiento',
-  'indice',
-];
-
-function normalizeSearchText(value) {
-  return String(value || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-}
-
-function phraseHit(text, terms) {
-  return terms.some((term) => text.includes(term));
-}
-
-function countTermHits(haystack, terms) {
-  return terms.reduce((score, term) => {
-    if (!term || !haystack.includes(term)) return score;
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const occurrences = (haystack.match(new RegExp(`\\b${escaped}\\b`, 'g')) || []).length;
-    return score + 2 + Math.min(4, Math.max(0, occurrences - 1));
-  }, 0);
-}
-
-function isLikelyCoverChunk(chunk = {}) {
-  const label = normalizeSearchText(`${chunk.sectionTitle || ''} ${chunk.sourceLabel || ''}`);
-  const text = normalizeSearchText(chunk.text || '').slice(0, 1600);
-  const ordinal = Number(chunk.ordinal || 0);
-  const coverHits = COVER_SECTION_TERMS.filter((term) => label.includes(term) || text.includes(term)).length;
-  return coverHits >= 2 && (!ordinal || ordinal <= 4);
-}
-
-function expandTermsForIntent(terms, intent) {
-  const expanded = new Set(terms);
-  if (intent.wantsConclusions || intent.wantsResults) {
-    CONCLUSION_SECTION_TERMS.forEach((term) => expanded.add(term));
-  }
-  if (intent.wantsSummary || intent.wantsAnalysis) {
-    ['resumen', 'introduccion', 'metodologia', 'resultados', 'discusion', 'conclusiones', 'objetivos'].forEach((term) => expanded.add(term));
-  }
-  return Array.from(expanded);
-}
-
-function scoreChunk(chunk, terms, intent = {}) {
-  const label = normalizeSearchText(`${chunk.sectionTitle || ''} ${chunk.sourceLabel || ''}`);
-  const text = normalizeSearchText(chunk.text || '');
-  const haystack = `${label} ${text}`;
-  const expandedTerms = expandTermsForIntent(terms, intent);
-  let score = expandedTerms.length ? countTermHits(haystack, expandedTerms) : 1 / Math.max(1, chunk.ordinal || 1);
-  if (intent.wantsConclusions || intent.wantsResults) {
-    if (phraseHit(label, CONCLUSION_SECTION_TERMS)) score += 14;
-    if (phraseHit(text.slice(0, 1200), CONCLUSION_SECTION_TERMS)) score += 7;
-    if (isLikelyCoverChunk(chunk)) score -= 18;
-  }
-  if (intent.wantsAnalysis || intent.wantsSummary) {
-    if (phraseHit(label, ['resultados', 'discusion', 'metodologia', 'conclusiones', 'recomendaciones'])) score += 6;
-  }
-  score += Math.min(1.5, String(chunk.text || '').length / MAX_CHUNK_CHARS);
-  return score;
-}
-
-async function retrieveEvidence(prisma, { userId, fileId, query = '', limit = 8 } = {}) {
-  if (!prisma?.documentChunk) return { evidence: [], analysis: null };
-  const analysis = await prisma.documentAnalysis.findFirst({ where: { userId, fileId } });
-  if (!analysis) return { evidence: [], analysis: null };
-  const chunks = await prisma.documentChunk.findMany({
-    where: { analysisId: analysis.id },
-    orderBy: { ordinal: 'asc' },
-  });
-  const terms = tokenizeQuery(query);
-  const intent = detectQueryIntent(query);
-  const evidence = chunks
-    .map((chunk) => ({
-      id: chunk.id,
-      analysisId: analysis.id,
-      fileId: chunk.fileId,
-      ordinal: chunk.ordinal,
-      sourceType: chunk.sourceType,
-      sourceLabel: chunk.sourceLabel,
-      pageNumber: chunk.pageNumber,
-      sheetName: chunk.sheetName,
-      slideNumber: chunk.slideNumber,
-      sectionTitle: chunk.sectionTitle,
-      text: chunk.text,
-      score: scoreChunk(chunk, terms, intent),
-    }))
-    .filter((item) => item.score > 0 || !terms.length)
-    .sort((a, b) => b.score - a.score || a.ordinal - b.ordinal)
-    .slice(0, Math.max(1, Math.min(Number(limit) || 8, 50)));
-  return { evidence, analysis: serializeAnalysis(analysis, [], []) };
-}
-
-async function getTablesForFile(prisma, { userId, fileId } = {}) {
-  if (!prisma?.documentTable) return [];
-  const analysis = await prisma.documentAnalysis.findFirst({ where: { userId, fileId } });
-  if (!analysis) return [];
-  return prisma.documentTable.findMany({
-    where: { analysisId: analysis.id },
-    orderBy: { ordinal: 'asc' },
-  });
-}
-
-async function compareDocuments(prisma, { userId, fileIds = [], query = '', limit = 6 } = {}) {
-  if (!prisma?.documentAnalysis || !userId) {
-    return { comparisons: [], documents: [], sharedTerms: [], warnings: [{ code: 'docintel_unavailable', message: 'Document Intelligence no esta disponible.' }] };
-  }
-
-  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 6);
-  if (ids.length < 2) {
-    return { comparisons: [], documents: [], sharedTerms: [], warnings: [{ code: 'insufficient_documents', message: 'Se requieren al menos dos documentos para comparar.' }] };
-  }
-
-  const documents = [];
-  for (const fileId of ids) {
-    const analysis = await analyzeFile(prisma, { userId, fileId });
-    const evidenceResult = await retrieveEvidence(prisma, {
-      userId,
-      fileId,
-      query: query || analysis?.summary || '',
-      limit,
-    });
-    const tables = await getTablesForFile(prisma, { userId, fileId });
-    const evidence = (evidenceResult.evidence || []).slice(0, Math.max(1, Math.min(Number(limit) || 6, 12)));
-    const termSource = [
-      analysis?.summary || '',
-      ...evidence.map((item) => item.text || ''),
-    ].join('\n');
-    documents.push({
-      fileId,
-      analysisId: analysis?.id || null,
-      status: analysis?.status || 'unknown',
-      summary: analysis?.summary || null,
-      charCount: analysis?.charCount || 0,
-      chunkCount: analysis?.chunkCount || 0,
-      tableCount: analysis?.tableCount || 0,
-      warnings: analysis?.warnings || [],
-      evidence: evidence.map((item) => ({
-        id: item.id,
-        sourceType: item.sourceType,
-        sourceLabel: item.sourceLabel,
-        pageNumber: item.pageNumber,
-        sheetName: item.sheetName,
-        slideNumber: item.slideNumber,
-        sectionTitle: item.sectionTitle,
-        text: compactString(item.text, 900),
-        score: item.score,
-      })),
-      tables: tables.slice(0, 5).map((table) => ({
-        id: table.id,
-        title: table.title,
-        sourceLabel: table.sourceLabel,
-        sheetName: table.sheetName,
-        columns: table.columns,
-        rowCount: table.rowCount,
-        preview: Array.isArray(table.preview) ? table.preview.slice(0, 5) : table.preview,
-      })),
-      terms: topTerms(termSource, 25),
-    });
-  }
-
-  const termSets = documents.map((doc) => new Set(doc.terms.map((item) => item.term)));
-  const sharedTerms = Array.from(termSets[0] || [])
-    .filter((term) => termSets.every((set) => set.has(term)))
-    .slice(0, 20);
-
-  const comparisons = [];
-  for (let i = 0; i < documents.length; i += 1) {
-    for (let j = i + 1; j < documents.length; j += 1) {
-      const a = documents[i];
-      const b = documents[j];
-      const aTerms = new Set(a.terms.map((item) => item.term));
-      const bTerms = new Set(b.terms.map((item) => item.term));
-      comparisons.push({
-        pair: [a.fileId, b.fileId],
-        sharedTerms: Array.from(aTerms).filter((term) => bTerms.has(term)).slice(0, 20),
-        onlyInFirst: Array.from(aTerms).filter((term) => !bTerms.has(term)).slice(0, 15),
-        onlyInSecond: Array.from(bTerms).filter((term) => !aTerms.has(term)).slice(0, 15),
-        charDelta: a.charCount - b.charCount,
-        tableDelta: a.tableCount - b.tableCount,
-        evidenceDelta: a.evidence.length - b.evidence.length,
-      });
-    }
-  }
-
-  return {
-    documents,
-    comparisons,
-    sharedTerms,
-    warnings: documents.flatMap((doc) => (doc.warnings || []).map((warning) => ({ fileId: doc.fileId, ...warning }))),
-  };
-}
-
 module.exports = {
   analyzeFile,
-  buildChunks,
-  buildSummary,
-  buildTables,
-  compareDocuments,
   getAnalysisForFile,
-  getTablesForFile,
-  hasUsefulText,
   retrieveEvidence,
-  INTERNAL: {
-    cleanText,
-    detectLanguage,
-    extractCsvTable,
-    extractMarkdownTables,
-    extractSpreadsheetTables,
-    inferCounts,
-    tokenizeQuery,
-    topTerms,
-  },
+  buildChunks,
+  buildTables,
+  hasUsefulText,
+  cleanText,
+  inferCounts,
 };

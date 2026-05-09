@@ -2,6 +2,8 @@
 // to answer with confidence. Used by the agent task runner to short-circuit
 // the LLM call and ask the user for more context, instead of silently
 // producing an unhelpful "no se pudo determinar" response.
+//
+// Updated to support hierarchical document context format.
 
 const SCAFFOLDING_PREFIXES = [
   '### Archivo adjunto',
@@ -16,6 +18,14 @@ const SCAFFOLDING_PREFIXES = [
   'resumen tecnico:',
   'fragmentos analizados:',
   'pregunta del usuario:',
+  // New hierarchical context prefixes
+  '[', // chunk labels like "[1] Introduction"
+  'Esquema del documento:',
+  'Resumen progresivo:',
+  'Estrategia:',
+  '---',
+  'Tamano:',
+  'Documento cargado:',
 ];
 
 const SCAFFOLDING_NEEDLES = [
@@ -30,6 +40,11 @@ const SCAFFOLDING_NEEDLES = [
   '[Extracto truncado',
   '[Extracto balanceado',
   '[La evidencia fue recuperada',
+  // New
+  'Tablas (',
+  'Esquema del documento:',
+  'Resumen progresivo:',
+  'Estrategia:',
 ];
 
 function stripEvidenceLabel(line) {
@@ -67,7 +82,7 @@ function countUsefulWords(rawText) {
   return matches.length;
 }
 
-const ATTACHMENT_REFERENCE_RE = /\b(est[aeo]s?|aqu[ií]|el documento|el archivo|la imagen|la foto|la captura|el pdf|el word|el excel|el texto|esto|esta|este|que dice|qu[eé] dice|qu[eé] es|qu[eé] son|qu[eé] trata|qu[eé] significa|qu[eé] aparece|de qu[eé]|cu[aá]l|cu[aá]ntos|d[oó]nde|cu[aá]ndo|por qu[eé]|c[oó]mo|qui[eé]n|analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|conclusi[oó]n|conclusiones|concluye|p[aá]rrafos?|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|seg[uú]n)\b/i;
+const ATTACHMENT_REFERENCE_RE = /\b(est[aeo]s?|aqu[ií]|el documento|el archivo|la imagen|la foto|la captura|el pdf|el word|el excel|el texto|esto|esta|este|que dice|qu[eé] dice|qu[eé] es|qu[eé] son|qu[eé] trata|qu[eé] significa|qu[eé] aparece|de qu[eé]|cu[aá]l|cu[aá]ntos|d[oó]nde|cu[aá]ndo|por qu[eé]|c[oó]mo|qui[eé]n|analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|conclusi[oó]n|conclusiones|concluye|p[aá]rrafos?|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|seg[uú]n|qu[eé] contiene|qu[eé] dice|qu[eé] menciona|qu[eé] informacion|qu[eé] datos|qu[eé] secciones|qu[eé] paginas|estructura|tabla|seccion|secci[oó]n|cap[ií]tulo|resume|res[úu]men|s[ií]ntesis)\b/i;
 
 function referencesAttachment(text) {
   return ATTACHMENT_REFERENCE_RE.test(String(text || ''));

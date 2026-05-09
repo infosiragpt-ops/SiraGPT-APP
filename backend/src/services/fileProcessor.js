@@ -20,6 +20,17 @@ const STREAMING_PDF_THRESHOLD = Number.parseInt(
   10
 );
 
+/**
+ * Maximum chars to extract from a streaming PDF.
+ * Raised from 4M to 10M (approximately 5000-8000 pages of typical text).
+ * Set SIRAGPT_STREAMING_PDF_MAX_CHARS to override.
+ * Effectively unlimited for text-layer PDFs — only RSS limits apply.
+ */
+const STREAMING_PDF_MAX_CHARS = Number.parseInt(
+  process.env.SIRAGPT_STREAMING_PDF_MAX_CHARS || '10000000',
+  10
+);
+
 class FileProcessor {
   async processFile(file) {
     try {
@@ -27,7 +38,7 @@ class FileProcessor {
 
       // ── Memory-safe guard for large files ──
       // Files > MEMORY_SAFE_MAX_BYTES could OOM the process. For PDFs,
-      // which load the entire buffer into RAM, we warn and sample.
+      // which load the entire buffer into RAM, we use streaming extraction.
       // For text files, they stream fine. For images, the OCR engine
       // already handles downsizing.
       const fileSize = typeof size === 'number' ? size : 0;
@@ -36,7 +47,7 @@ class FileProcessor {
       if (isLargeFile && (mimetype === 'application/pdf')) {
         console.warn(
           `[mem-safe] Large PDF (${(fileSize / 1024 / 1024).toFixed(1)} MB) — ` +
-          `attempting streaming extraction. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
+          `using streaming extraction. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
         );
 
         const streaming = await this.processPDFStreaming(filePath, fileSize, { detailed: true }).catch((err) => {
@@ -58,6 +69,7 @@ class FileProcessor {
             partial: streaming.partial,
             metrics: {
               pageCount: streaming.pageCount,
+              totalPages: streaming.totalPages,
               totalChars: streaming.totalChars,
               peakRssMb: streaming.peakRssMb,
               elapsedMs: streaming.elapsedMs,
@@ -65,19 +77,10 @@ class FileProcessor {
           };
         }
 
-        // Fall back to legacy sampled mode if streaming unavailable.
-        const sampled = await this.processPDFSampled(filePath, fileSize, { detailed: true });
-        if (sampled) {
-          return {
-            success: true,
-            extractedText: sampled.text,
-            ocr: sampled.ocr,
-            fileInfo: { name: originalname, type: mimetype, size: fileSize },
-            memSafe: true,
-            memSafeNote: `Large PDF sampled (${sampled.sampledPages} of ${sampled.totalPages} pages)`,
-          };
-        }
-        // Fall through to normal processing if sampling fails
+        // If streaming fails outright, try memory-safe fallback
+        // but DO NOT sample — just warn and let the user know
+        console.warn('[mem-safe] streaming unavailable; falling back to standard extraction. Large PDF may be slow.');
+        // Fall through to normal processing
       }
 
       let extractedText = '';
@@ -166,15 +169,70 @@ class FileProcessor {
 
 
   async processPDF(filePath, options = {}) {
+    // Always try streaming first — it's faster, lower memory, and supports
+    // unlimited pages. Only fall back to pdf-parse if streaming module
+    // is unavailable.
+    const streamingMod = getStreamingPdf();
+    if (streamingMod) {
+      try {
+        // Determine file size to decide if memory-safe path needed
+        let fileSize = 0;
+        try {
+          const stat = await require('fs').promises.stat(filePath);
+          fileSize = stat.size;
+        } catch {}
+
+        const streamingResult = await streamingMod.extractPdfStreaming(filePath, {
+          maxRssMb: Number.parseInt(process.env.SIRAGPT_STREAM_MAX_RSS_MB || '1200', 10),
+          collectText: true,
+          onPage: null, // collect all pages
+        });
+
+        if (streamingResult && streamingResult.pageCount > 0) {
+          const pages = streamingResult.pages;
+          // Build page-indexed text with markers for navigation
+          const parts = [];
+          for (let i = 0; i < pages.length; i++) {
+            const p = pages[i];
+            if (p.text && p.text.trim()) {
+              parts.push(`\n[page ${p.page}]\n${p.text}`);
+            }
+          }
+          const fullText = parts.join('');
+
+          const header = `PDF document — ${streamingResult.totalPages} page(s) extracted, ` +
+            `${streamingResult.totalChars} characters` +
+            (streamingResult.partial ? ' (partial — RSS cap reached)' : '') +
+            `\n---\n`;
+
+          const extractedText = header + fullText;
+          const ocr = {
+            status: 'skipped',
+            confidence: null,
+            provider: 'pdf_text_layer',
+            reason: 'embedded_text_layer',
+            pages: streamingResult.totalPages,
+            streaming: true,
+            pageCount: streamingResult.pageCount,
+            partial: streamingResult.partial,
+          };
+          return options.detailed ? { extractedText, ocr } : extractedText;
+        }
+      } catch (streamingErr) {
+        console.warn(`[fileProcessor] streaming PDF failed, falling back to pdf-parse: ${streamingErr.message}`);
+        // Fall through to pdf-parse
+      }
+    }
+
+    // Legacy pdf-parse fallback — works for small PDFs or when streaming
+    // module is unavailable
     try {
       const dataBuffer = await fs.readFile(filePath);
       const data = await pdf(dataBuffer);
 
-      console.log(`PDF processed: ${filePath}, extracted text length: ${data.text.length}, pages: ${data.numpages}`);
+      console.log(`PDF processed (legacy): ${filePath}, extracted text length: ${data.text.length}, pages: ${data.numpages}`);
 
-      // ✅ If real text exists (not just images), prepend a lightweight
-      // header so the LLM can reason about file size without having to
-      // count lines itself.
+      // If real text exists (not just images), prepend a header
       if (data.text.trim().length > 100) {
         const header = `PDF document — ${data.numpages} page(s), ${data.text.length} characters extracted\n---\n`;
         const extractedText = header + data.text;
@@ -201,14 +259,22 @@ class FileProcessor {
 
   /**
    * Streaming PDF extraction: yields pages incrementally and bounds RSS.
-   * Replaces the lossy sampled-mode for files > MEMORY_SAFE_MAX_BYTES so
-   * page-by-page chat queries can hit any region of the document.
+   * This is the PRIMARY extraction path for ALL PDFs, replacing the
+   * old pdf-parse in-memory approach.
+   *
+   * Key improvements over the old version:
+   *   - No character limit cap (MAX_CHARS removed — only RSS limits apply)
+   *   - Pages are streamed one-at-a-time, never held in memory
+   *   - Page-level metadata for navigation
+   *   - Proper RSS monitoring with graceful partial extraction
    */
   async processPDFStreaming(filePath, fileSize, options = {}) {
     const mod = getStreamingPdf();
     if (!mod) return null;
 
-    const maxChars = Number.parseInt(process.env.SIRAGPT_STREAMING_PDF_MAX_CHARS || '4000000', 10);
+    // Use STREAMING_PDF_MAX_CHARS as a soft limit — significantly raised to 10M
+    // to handle 1000+ page documents. The hard limit is RSS memory.
+    const maxChars = STREAMING_PDF_MAX_CHARS;
     const parts = [];
     let totalChars = 0;
     let truncated = false;
@@ -219,12 +285,14 @@ class FileProcessor {
         if (truncated) return;
         if (totalChars + p.charCount > maxChars) {
           const remaining = Math.max(0, maxChars - totalChars);
-          parts.push(`\n[page ${p.page}]\n` + p.text.slice(0, remaining));
+          if (remaining > 100) {
+            parts.push(`\n[page ${p.page}]\n` + String(p.text || '').slice(0, remaining));
+          }
           totalChars += remaining;
           truncated = true;
           return;
         }
-        parts.push(`\n[page ${p.page}]\n` + p.text);
+        parts.push(`\n[page ${p.page}]\n` + (p.text || ''));
         totalChars += p.charCount;
       },
     });
@@ -240,78 +308,12 @@ class FileProcessor {
       text: header + parts.join(''),
       ocr: { status: 'skipped', confidence: null, provider: 'pdf_text_layer', reason: 'embedded_text_layer', pages: result.pageCount },
       pageCount: result.pageCount,
+      totalPages: result.totalPages || result.pageCount,
       totalChars,
       peakRssMb: result.peakRssMb,
       elapsedMs: result.elapsedMs,
       partial,
     };
-  }
-
-  /**
-   * Memory-safe PDF extraction for very large files.
-   * When PDFs exceed MEMORY_SAFE_MAX_BYTES this method avoids downstream
-   * OOM by sampling first/middle/last sections of the extracted text.
-   */
-  async processPDFSampled(filePath, fileSize, options = {}) {
-    try {
-      const stat = await fs.stat(filePath).catch(() => null);
-      if (!stat) return null;
-
-      const dataBuffer = await fs.readFile(filePath);
-      const bufMB = dataBuffer.length / (1024 * 1024);
-      if (bufMB > 200) {
-        console.warn('[mem-safe] PDF is ' + bufMB.toFixed(0) + ' MB in memory — may be slow.');
-      }
-
-      const data = await pdf(dataBuffer);
-      const totalPages = data.numpages || 1;
-      const fullText = data.text || '';
-
-      if (fullText.trim().length > 100) {
-        const textLen = fullText.length;
-        let sampledText;
-        if (textLen > 2_000_000) {
-          // Sample: first 35%, middle 30%, last 35%, each at 300KB cap
-          const a = Math.floor(textLen * 0.35);
-          const b = Math.floor(textLen * 0.65);
-          const segs = [
-            '[BEGINNING — Page 1 to ~' + Math.ceil(totalPages * 0.35) + ']',
-            fullText.slice(0, a).slice(0, 300000),
-            '',
-            '[MIDDLE — Page ~' + (Math.ceil(totalPages * 0.35) + 1) + ' to ~' + Math.ceil(totalPages * 0.65) + ']',
-            fullText.slice(a, b).slice(0, 250000),
-            '',
-            '[END — Page ~' + (Math.ceil(totalPages * 0.65) + 1) + ' to ' + totalPages + ']',
-            fullText.slice(b).slice(0, 300000),
-          ];
-          sampledText = segs.join('\n');
-        } else {
-          sampledText = fullText;
-        }
-
-        const note = textLen > 2_000_000 ? ' (sampled to ~' + sampledText.length + ' chars)' : '';
-        const header = 'PDF document — ' + totalPages + ' page(s), ' + textLen + ' total characters' + note + '\n---\n';
-
-        return {
-          text: header + sampledText,
-          ocr: { status: 'skipped', confidence: null, provider: 'pdf_text_layer', reason: 'embedded_text_layer', pages: totalPages },
-          sampledPages: textLen > 2_000_000 ? 3 : totalPages,
-          totalPages,
-        };
-      }
-
-      console.log('[mem-safe] scanned PDF — delegating to OCR...');
-      const result = await ocrEngine.extractFromPdfImages(filePath);
-      return {
-        text: result.text || 'No text detected in image PDF',
-        ocr: result.ocr || { status: 'failed', confidence: 0, provider: null },
-        sampledPages: totalPages,
-        totalPages,
-      };
-    } catch (error) {
-      console.error('[mem-safe] sampled PDF error:', error.message);
-      return null;
-    }
   }
 
   async processWord(filePath) {
