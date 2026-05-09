@@ -166,6 +166,24 @@ function getCache(options = {}) {
     l1TtlMs: Number(env.SIRA_CACHE_L1_TTL_MS) || DEFAULT_CHAT_TTL_MS,
     defaultTtlMs: Number(env.SIRA_CACHE_TTL_MS) || DEFAULT_CHAT_TTL_MS,
   });
+  // Optional wiring: under SIRA_RELIABILITY_WIRINGS=1, subscribe the L1
+  // tier to the central context-invalidator. We deliberately do NOT clear
+  // L2 (Redis) on local invalidation events because that would produce a
+  // fan-out blast across replicas; cluster-wide L2 clears are an
+  // ops-level concern. Default OFF — degrades silently on errors.
+  try {
+    const { wireSubscribeIfEnabled } = require('./wireup');
+    const cache = _singleton;
+    wireSubscribeIfEnabled({
+      name: 'llm-cache-l1',
+      patterns: ['context.*', 'user.*'],
+      handler: () => {
+        if (cache && cache.l1 && typeof cache.l1.clear === 'function') cache.l1.clear();
+      },
+      holder: cache,
+      env,
+    });
+  } catch { /* defensive */ }
   return _singleton;
 }
 

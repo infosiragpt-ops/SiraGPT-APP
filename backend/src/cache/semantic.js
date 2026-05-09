@@ -320,6 +320,21 @@ function getSemanticCache(options = {}) {
     embed: options.embed || null,
     setEmbed(fn) { this.embed = fn; },
   };
+  // Optional wiring: when SIRA_RELIABILITY_WIRINGS=1, subscribe this cache
+  // to the central context-invalidator so explicit invalidation events
+  // (chat updates, RAG re-index, etc.) clear stale entries. Default OFF —
+  // existing production behavior unchanged. wireup degrades silently if
+  // the invalidator can't load.
+  try {
+    const { wireSubscribeIfEnabled } = require('./wireup');
+    wireSubscribeIfEnabled({
+      name: 'semantic-cache',
+      patterns: ['context.*', 'user.*'],
+      handler: () => store.clear(),
+      holder: _singleton,
+      env,
+    });
+  } catch { /* defensive: never block cache initialization */ }
   return _singleton;
 }
 

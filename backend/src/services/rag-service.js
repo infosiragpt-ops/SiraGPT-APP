@@ -113,9 +113,14 @@ function getOpenAI() {
 /**
  * Embed an array of strings. Returns parallel array of Float32 vectors.
  * Batches large inputs so we stay under OpenAI's per-request limit.
+ *
+ * Under SIRA_RELIABILITY_WIRINGS=1, concurrent identical embed() calls
+ * are coalesced via single-flight so a popular chunk hitting N callers
+ * simultaneously (during ingest spikes or RAG retrieval bursts) only
+ * makes ONE upstream embeddings request. Default OFF — production
+ * behavior is identical to pre-flag main.
  */
-async function embed(texts) {
-  if (!Array.isArray(texts) || texts.length === 0) return [];
+async function _embedRaw(texts) {
   const openai = getOpenAI();
   if (!openai) throw new Error('OPENAI_API_KEY not configured — RAG embed() unavailable');
 
@@ -131,6 +136,21 @@ async function embed(texts) {
     }
   }
   return out;
+}
+
+async function embed(texts) {
+  if (!Array.isArray(texts) || texts.length === 0) return [];
+  if (process.env.SIRA_RELIABILITY_WIRINGS === '1' || process.env.SIRA_RELIABILITY_WIRINGS === 'true') {
+    try {
+      const { getSingleFlight } = require('../cache/single-flight');
+      const { argsHash } = require('./agents/speculative-executor');
+      const key = `embed:${argsHash(texts)}`;
+      return await getSingleFlight().do(key, () => _embedRaw(texts));
+    } catch {
+      return _embedRaw(texts);
+    }
+  }
+  return _embedRaw(texts);
 }
 
 /**
