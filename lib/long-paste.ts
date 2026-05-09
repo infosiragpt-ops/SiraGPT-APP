@@ -2,7 +2,7 @@ export const LONG_PASTE_MIN_CHARS = 1200
 export const LONG_PASTE_MIN_WORDS = 200
 export const LONG_PASTE_MIN_LINES = 20
 // Lower threshold for research/academic content with strong structure
-export const LONG_PASTE_STRUCTURAL_MIN_CHARS = 700
+export const LONG_PASTE_STRUCTURAL_MIN_CHARS = 350
 export const LONG_PASTE_STRUCTURAL_SIGNALS = 2
 
 export type LongPasteMetadata = {
@@ -122,8 +122,8 @@ export function shouldCompilePastedTextAsDocument(input: string): boolean {
   // Structural threshold (academic/research/code content with fewer chars)
   if (charCount >= LONG_PASTE_STRUCTURAL_MIN_CHARS && structuralSignals >= LONG_PASTE_STRUCTURAL_SIGNALS) return true
 
-  // High-signal short content (very structured, e.g. code + comments, reference lists)
-  if (charCount >= 500 && structuralSignals >= 4) return true
+  // High-signal short content (very structured, e.g. academic abstracts, code + comments, reference lists)
+  if (charCount >= 300 && structuralSignals >= 4) return true
 
   return false
 }

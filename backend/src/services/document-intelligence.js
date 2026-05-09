@@ -696,8 +696,32 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
   const text = cleanText(file.extractedText || '');
   if (!hasUsefulText(text)) return { evidence: [], totalChunks: 0 };
 
-  // Build chunks (use hierarchical if available)
-  const chunks = buildChunks(file, text);
+  // Prefer stored document chunks (fine-grained, with section titles)
+  // over rebuilding from scratch. Stored chunks preserve the original
+  // document structure (chapter/section labels) for accurate term matching.
+  let chunks = [];
+  try {
+    const analysis = await prisma.documentAnalysis.findFirst({
+      where: { fileId, userId, status: 'ready' },
+      select: { id: true },
+    });
+    if (analysis?.id) {
+      const stored = await prisma.documentChunk.findMany({
+        where: { analysisId: analysis.id },
+        orderBy: { ordinal: 'asc' },
+      });
+      if (stored && stored.length > 0) {
+        chunks = stored;
+      }
+    }
+  } catch (_) {
+    // Fall through to rebuild below
+  }
+
+  // Fall back to building chunks from extracted text if no stored chunks
+  if (chunks.length === 0) {
+    chunks = buildChunks(file, text);
+  }
   const totalChunks = chunks.length;
 
   if (chunks.length === 0) return { evidence: [], totalChunks: 0 };
@@ -775,9 +799,12 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
   // Sort by relevance score descending
   const ranked = scored.sort((a, b) => b.relevanceScore - a.relevanceScore);
 
-  // Strategy 3: Top-K selection + neighbor expansion
+  // Strategy 3: Top-K selection + neighbor expansion. If there are real
+  // matches, do not pad with zero-score chunks (often cover/metadata) before
+  // adding neighbor context.
   const topK = Math.min(8, Math.max(3, Math.floor(limit / 2)));
-  const topMatches = ranked.slice(0, topK);
+  const positiveMatches = ranked.filter((chunk) => chunk.relevanceScore > 0);
+  const topMatches = (positiveMatches.length ? positiveMatches : ranked).slice(0, topK);
 
   // Strategy 4: Add neighbor chunks for context continuity
   const neighborSet = new Set(topMatches.map((c) => c.ordinal));
@@ -795,15 +822,21 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
     }
   }
 
-  // Strategy 5: First/last chunks (for overview context)
+  // Strategy 5: Include first/last chunks only when they have non-zero
+  // relevance to the query. This ensures that document covers, title pages,
+  // or boilerplate headers aren't injected as evidence when the user is
+  // asking a deep document question about specific content.
   if (chunks.length > topK && chunks.length > EVIDENCE_CHUNK_NEIGHBORS * 2) {
-    const firstChunk = chunks[0];
-    const lastChunk = chunks[chunks.length - 1];
-    if (!neighborSet.has(firstChunk.ordinal)) {
+    const firstChunk = scored.find((chunk) => chunk.ordinal === chunks[0]?.ordinal) || chunks[0];
+    const lastChunk = scored.find((chunk) => chunk.ordinal === chunks[chunks.length - 1]?.ordinal) || chunks[chunks.length - 1];
+    // Only include first/last if they carry relevance to the query
+    const firstRelevant = firstChunk.relevanceScore > 0;
+    const lastRelevant = lastChunk.relevanceScore > 0;
+    if (firstRelevant && !neighborSet.has(firstChunk.ordinal)) {
       neighborSet.add(firstChunk.ordinal);
       neighbors.push({ ...firstChunk, relevanceScore: 1, matchedTerms: ['overview'] });
     }
-    if (!neighborSet.has(lastChunk.ordinal)) {
+    if (lastRelevant && !neighborSet.has(lastChunk.ordinal)) {
       neighborSet.add(lastChunk.ordinal);
       neighbors.push({ ...lastChunk, relevanceScore: 1, matchedTerms: ['overview'] });
     }
