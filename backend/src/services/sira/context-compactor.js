@@ -52,11 +52,50 @@
  * clean contract.
  */
 
-const { fitMessagesToContext, estimateTokens } = require("../context-window");
+const {
+  fitMessagesToContext,
+  estimateTokens,
+  getCompletionLimit,
+  normalizeReservedCompletionTokens,
+} = require("../context-window");
 
 const DEFAULT_MAX_CHUNKS = 8;
 const DEFAULT_MAX_GISTS = 12;
 const DEFAULT_RESERVED_COMPLETION_TOKENS = 1024;
+// Share of the model's completion limit that summarizer output may consume.
+// Keeps the model's response budget free even on long-history compactions.
+const DEFAULT_SUMMARY_OUTPUT_SHARE = 0.25;
+// Floor below which summarizer output is no longer useful.
+const MIN_SUMMARY_OUTPUT_TOKENS = 256;
+
+/**
+ * Clamp the requested reserve for a summarizer's output to what the
+ * target model can actually emit in a single response. Mirrors the
+ * fix openclaw v2026.5.7 shipped: high-context compaction must not
+ * request `max_tokens` greater than the model's output ceiling.
+ *
+ * The result is the minimum of:
+ *   - the caller's requested reserve,
+ *   - `share * getCompletionLimit(model)` (default 25%),
+ *   - the model's hard completion ceiling.
+ *
+ * Floored at MIN_SUMMARY_OUTPUT_TOKENS unless the model's own ceiling
+ * is even smaller (in which case the model wins).
+ */
+function clampSummaryReserve(reservedCompletionTokens, model, share = DEFAULT_SUMMARY_OUTPUT_SHARE) {
+  const requested = Number(reservedCompletionTokens);
+  const safeRequested = Number.isFinite(requested) && requested > 0
+    ? Math.floor(requested)
+    : DEFAULT_RESERVED_COMPLETION_TOKENS;
+  const ceiling = getCompletionLimit(model);
+  const safeShare = Number.isFinite(share) && share > 0 && share <= 1
+    ? share
+    : DEFAULT_SUMMARY_OUTPUT_SHARE;
+  const shareCap = Math.max(1, Math.floor(ceiling * safeShare));
+  const capped = Math.min(safeRequested, shareCap, ceiling);
+  if (ceiling < MIN_SUMMARY_OUTPUT_TOKENS) return Math.max(1, capped);
+  return Math.max(MIN_SUMMARY_OUTPUT_TOKENS, capped);
+}
 
 /**
  * Stable content hash for dedup. Cheap and content-only — no role,
@@ -166,6 +205,7 @@ async function compactContext({
   maxChunks = DEFAULT_MAX_CHUNKS,
   maxGists = DEFAULT_MAX_GISTS,
   summarizer = null,
+  summaryOutputShare = DEFAULT_SUMMARY_OUTPUT_SHARE,
 } = {}) {
   const originalCount = Array.isArray(messages) ? messages.length : 0;
 
@@ -176,8 +216,16 @@ async function compactContext({
 
   // 2. Fit to the model's context window. Reuses the existing module
   //    so all of its head/tail/breadcrumb behaviour stays canonical.
-  const fitted = fitMessagesToContext(deduped, model, { reservedCompletionTokens });
+  //    Reserve is normalized against both completion-limit and safe
+  //    context-budget so we never request more than the model can emit.
+  const normalizedReserve = normalizeReservedCompletionTokens(reservedCompletionTokens, model);
+  const fitted = fitMessagesToContext(deduped, model, { reservedCompletionTokens: normalizedReserve });
   const droppedCount = fitted.droppedCount || 0;
+  // Clamp the summarizer's output budget to a fraction of the model's
+  // completion ceiling. This is the openclaw v2026.5.7 fix: callers
+  // can pass arbitrary reserves, but the summarizer must never exceed
+  // what the model is allowed to emit in a single response.
+  const summaryMaxOutputTokens = clampSummaryReserve(normalizedReserve, model, summaryOutputShare);
 
   // 3. Summarize the dropped middle if a summarizer is wired AND
   //    something was dropped. The summarizer signature is
@@ -191,7 +239,7 @@ async function compactContext({
   if (droppedCount > 0 && typeof summarizer === "function") {
     const droppedMessages = sliceDroppedMiddle(deduped, fitted.messages);
     try {
-      const result = await summarizer({ droppedMessages, model });
+      const result = await summarizer({ droppedMessages, model, maxOutputTokens: summaryMaxOutputTokens });
       if (typeof result === "string" && result.trim()) {
         summary = result.trim();
         summarized = true;
@@ -224,6 +272,8 @@ async function compactContext({
       gists_in: Array.isArray(memoryGists) ? memoryGists.length : 0,
       gists_kept: cappedGists.length,
       summarized,
+      reserved_completion_tokens: normalizedReserve,
+      summary_max_output_tokens: summaryMaxOutputTokens,
     },
   };
 }
@@ -256,9 +306,12 @@ module.exports = {
   rankGists,
   contentHash,
   estimateTokens,
+  clampSummaryReserve,
   // Defaults kept exported so callers / docs reference the canonical
   // numbers.
   DEFAULT_MAX_CHUNKS,
   DEFAULT_MAX_GISTS,
   DEFAULT_RESERVED_COMPLETION_TOKENS,
+  DEFAULT_SUMMARY_OUTPUT_SHARE,
+  MIN_SUMMARY_OUTPUT_TOKENS,
 };
