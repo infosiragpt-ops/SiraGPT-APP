@@ -155,6 +155,10 @@ describe("message attachments · agent task persistence", () => {
     ]
     const prisma = {
       file: {
+        async findFirst() {
+          const all = await this.findMany();
+          return all[0] || null;
+        },
         async findMany() {
           return [
             {
