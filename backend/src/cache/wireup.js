@@ -29,11 +29,19 @@
  */
 
 let _wiredHolders = new WeakSet();
+let _wiredCount = 0;
+
+const KILL_SWITCH_VALUES = new Set(['0', 'false', 'no', 'off', 'disabled']);
 
 function parseFlag(value) {
-  if (value === undefined || value === null || value === '') return false;
+  // Default ON: unset / empty / unknown values enable wirings. Only the
+  // explicit kill-switch literals turn the wirings off — this matches
+  // the openclaw v2026.5.7 posture (cache-invalidation always live,
+  // operators flip a single env var to disable in an incident).
+  if (value === undefined || value === null || value === '') return true;
   const s = String(value).trim().toLowerCase();
-  return s === '1' || s === 'true' || s === 'yes' || s === 'on';
+  if (KILL_SWITCH_VALUES.has(s)) return false;
+  return true;
 }
 
 function isReliabilityWiringsEnabled(env = process.env) {
@@ -79,15 +87,22 @@ function wireSubscribeIfEnabled({ name, patterns, handler, holder, env = process
     return null;
   }
   if (holder) _wiredHolders.add(holder);
+  _wiredCount += 1;
   return handle;
+}
+
+function getWiredHoldersCount() {
+  return _wiredCount;
 }
 
 function resetWiringStateForTests() {
   _wiredHolders = new WeakSet();
+  _wiredCount = 0;
 }
 
 module.exports = {
   isReliabilityWiringsEnabled,
   wireSubscribeIfEnabled,
+  getWiredHoldersCount,
   resetWiringStateForTests,
 };
