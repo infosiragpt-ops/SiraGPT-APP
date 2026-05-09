@@ -18,20 +18,26 @@ test("long paste classifier compiles dense pasted content into a document", () =
   assert.equal(shouldCompilePastedTextAsDocument(pasted), true)
 })
 
-test("long paste classifier triggers strictly above 30 non-empty lines", () => {
-  const thirtyLines = Array.from({ length: 30 }, (_, i) => `linea ${i + 1}`).join("\n")
-  const thirtyOneLines = Array.from({ length: 31 }, (_, i) => `linea ${i + 1}`).join("\n")
+test("long paste classifier compiles content above the MIN_LINES threshold", () => {
+  const twentyLines = Array.from({ length: 20 }, (_, i) => `linea ${i + 1}`).join("\n")
+  const twentyOneLines = Array.from({ length: 21 }, (_, i) => `linea ${i + 1}`).join("\n")
 
-  assert.equal(shouldCompilePastedTextAsDocument(thirtyLines), false, "30 líneas deben pegarse como texto plano")
-  assert.equal(shouldCompilePastedTextAsDocument(thirtyOneLines), true, "31 líneas deben convertirse en documento")
+  assert.equal(shouldCompilePastedTextAsDocument(twentyLines), true, "20 líneas alcanzan el umbral (MIN_LINES=20)")
+  assert.equal(shouldCompilePastedTextAsDocument(twentyOneLines), true, "21 líneas deben convertirse en documento")
 })
 
 test("long paste classifier ignores blank lines when counting", () => {
-  // 30 non-empty lines separated by blanks → still under the threshold even
-  // though raw line count is higher. Prevents accidental triggers from
-  // double-spaced short messages.
-  const padded = Array.from({ length: 30 }, (_, i) => `linea ${i + 1}`).join("\n\n")
+  // 19 non-empty lines separated by blanks → under the threshold (20).
+  // Prevents accidental triggers from double-spaced short messages.
+  const padded = Array.from({ length: 19 }, (_, i) => `linea ${i + 1}`).join("\n\n")
   assert.equal(shouldCompilePastedTextAsDocument(padded), false)
+})
+
+test("long paste classifier detects structural content (academic/research)", () => {
+  // Academic content with strong structure but under the character threshold
+  const academic = `ABSTRACT\n\nThis study examines the relationship between X and Y.\n\nINTRODUCTION\n\nThe field has grown significantly in recent years.\n\nMETHODOLOGY\n\nWe employed a mixed-methods approach.\n\nRESULTS\n\nTable 1 shows the correlation.\n\nDISCUSSION\n\nThese findings suggest...\n\nREFERENCES\n\n[1] Smith, J. (2020). Title. Journal.\n[2] Doe, A. (2021). Another study. Conference.`
+
+  assert.equal(shouldCompilePastedTextAsDocument(academic), true, "contenido academico con estructura debe ser detectado")
 })
 
 test("long paste metadata derives a safe title and filename", () => {
