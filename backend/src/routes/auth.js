@@ -32,9 +32,18 @@ const isGoogleOAuthConfigured = () => (
 
 const requireGoogleOAuth = (req, res, next) => {
   if (isGoogleOAuthConfigured()) return next();
-  return res.status(503).json({
-    error: 'Google OAuth is not configured for this environment'
-  });
+  // Browser hits like /api/auth/google should not see raw JSON; bounce
+  // them back to the login page with a soft notice so the user can pick
+  // email/password instead. API clients (Accept: application/json) still
+  // get the structured 503.
+  const wantsJson = (req.get('accept') || '').toLowerCase().includes('application/json');
+  if (wantsJson) {
+    return res.status(503).json({
+      error: 'Google OAuth is not configured for this environment'
+    });
+  }
+  const base = (getFrontendUrl && getFrontendUrl()) || process.env.FRONTEND_URL || 'http://localhost:3000';
+  return res.redirect(`${base.replace(/\/$/, '')}/auth/login?notice=google_unavailable`);
 };
 
 const requireGoogleIntegrations = (req, res, next) => {

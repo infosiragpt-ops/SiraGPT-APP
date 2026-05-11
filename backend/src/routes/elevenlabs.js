@@ -35,10 +35,15 @@ const upload = multer({
 // ElevenLabs API configuration
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 
-// Initialize ElevenLabs client
-const elevenlabs = new ElevenLabsClient({
-  apiKey: ELEVENLABS_API_KEY
-});
+// Lazy ElevenLabs client init — instantiating at module load crashes the
+// whole backend when ELEVENLABS_API_KEY is missing in dev. Defer until
+// the first request actually needs it.
+let elevenlabsClient = null;
+function elevenlabs() {
+  if (!ELEVENLABS_API_KEY) return null;
+  if (!elevenlabsClient) elevenlabsClient = new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY });
+  return elevenlabsClient;
+}
 
 // Get available voices
 router.get('/voices', authenticateToken, async (req, res) => {
@@ -50,7 +55,7 @@ router.get('/voices', authenticateToken, async (req, res) => {
     }
 
     console.log('Fetching voices from ElevenLabs...');
-    const voices = await elevenlabs.voices.getAll();
+    const voices = await elevenlabs().voices.getAll();
 
     // ElevenLabs API might return { voices: [...] } or just [...]
     // Ensure we always return { voices: [...] } format
@@ -68,7 +73,7 @@ router.get('/models', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'ElevenLabs API key not configured' });
     }
     console.log('Fetching models from ElevenLabs...');
-    const models = await elevenlabs.models.list();
+    const models = await elevenlabs().models.list();
     console.log('Models fetched:', models?.length || 0);
 
     // API seedha array return karti hai, hum use object mein wrap kar rahe hain
@@ -117,7 +122,7 @@ router.post('/text-to-speech', [
 
     // Generate audio using ElevenLabs client
     console.log('Calling ElevenLabs TTS API...');
-    const audioStream = await elevenlabs.textToSpeech.convert(voice_id, {
+    const audioStream = await elevenlabs().textToSpeech.convert(voice_id, {
       text,
       model_id,
       voice_settings
@@ -217,7 +222,7 @@ router.post('/speech-to-text', upload.single('audio'), authenticateToken, async 
       });
 
       // Use the official ElevenLabs client method
-      const transcription = await elevenlabs.speechToText.convert({
+      const transcription = await elevenlabs().speechToText.convert({
         file: audioBlob,
         modelId: model, // Only "scribe_v1" is supported currently
         tagAudioEvents: tagAudioEvents, // Tag audio events like laughter, applause, etc.
@@ -351,7 +356,7 @@ router.get('/voices/:voice_id/settings', authenticateToken, async (req, res) => 
     }
 
     const { voice_id } = req.params;
-    const voice = await elevenlabs.voices.get(voice_id);
+    const voice = await elevenlabs().voices.get(voice_id);
 
     res.json(voice.settings || {
       stability: 0.5,
