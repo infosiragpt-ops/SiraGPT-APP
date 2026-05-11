@@ -9,6 +9,7 @@ const documentIntelligence = require('../services/document-intelligence');
 const documentContext = require('../services/agents/document-context');
 const documentSummarizer = require('../services/document-summarizer');
 const anthropicCitations = require('../services/providers/anthropic-citations');
+const queryDecomposer = require('../services/rag/query-decomposer');
 const { validateUploadPolicy } = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
@@ -921,6 +922,69 @@ router.post('/:id/cite', authenticateToken, async (req, res) => {
       anthropic_citations_llm_failed: 502,
     })[code] || 500;
     if (status >= 500 && status !== 503) console.warn('[files] /:id/cite failed:', code, err && err.message);
+    return res.status(status).json({ error: err && err.message, code });
+  }
+});
+
+/**
+ * POST /api/files/:id/decompose-query — split a multi-hop question
+ * about THIS file into atomic sub-queries via the query-decomposer.
+ *
+ * Body: { question: string, options?: { languageHint? } }
+ *
+ * Why per-file: the frontend's "ask the document" flow already has a
+ * fileId in scope, so this stays consistent with the sibling
+ * /:id/summary and /:id/cite endpoints. The fileId is also used to
+ * verify ownership AND to pass the file's MIME type as a language /
+ * domain hint that biases the decomposer toward the right vocabulary
+ * (e.g. legal vs financial vs research). The decomposer does NOT
+ * read the file body — that's the retrieval step's job, run
+ * separately by the frontend per sub-query.
+ *
+ * Errors:
+ *   400  query_decomposer_empty            blank question
+ *   404  anthropic_citations_file_not_found wrong fileId / owner
+ *                                            (reused for symmetry with /:id/cite)
+ *   500  query_decomposer_no_client        server misconfig
+ *   502  query_decomposer_llm_failed       OpenAI error
+ *   502  query_decomposer_invalid_json     model returned non-JSON
+ */
+router.post('/:id/decompose-query', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      select: { id: true, originalName: true, mimeType: true },
+    });
+    if (!file) {
+      return res.status(404).json({
+        error: 'file not found or not owned by user',
+        code: 'anthropic_citations_file_not_found',
+      });
+    }
+
+    const { question, options } = req.body || {};
+    const out = await queryDecomposer.decomposeQuery({
+      openai,
+      question,
+      options: {
+        ...(options && typeof options === 'object' ? options : {}),
+        languageHint: options?.languageHint || (file.mimeType ? `mime=${file.mimeType}` : ''),
+      },
+    });
+    return res.json({
+      fileId: file.id,
+      fileTitle: file.originalName || `file-${file.id.slice(0, 8)}`,
+      ...out,
+    });
+  } catch (err) {
+    const code = err && err.code ? err.code : 'query_decomposer_unknown';
+    const status = ({
+      query_decomposer_empty: 400,
+      query_decomposer_no_client: 500,
+      query_decomposer_llm_failed: 502,
+      query_decomposer_invalid_json: 502,
+    })[code] || 500;
+    if (status >= 500) console.warn('[files] /:id/decompose-query failed:', code, err && err.message);
     return res.status(status).json({ error: err && err.message, code });
   }
 });
