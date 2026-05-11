@@ -10,6 +10,7 @@ const documentContext = require('../services/agents/document-context');
 const documentSummarizer = require('../services/document-summarizer');
 const anthropicCitations = require('../services/providers/anthropic-citations');
 const queryDecomposer = require('../services/rag/query-decomposer');
+const deepAsk = require('../services/rag/deep-ask');
 const { validateUploadPolicy } = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
@@ -995,6 +996,80 @@ router.post('/:id/decompose-query', authenticateToken, async (req, res) => {
       query_decomposer_invalid_json: 502,
     })[code] || 500;
     if (status >= 500) console.warn('[files] /:id/decompose-query failed:', code, err && err.message);
+    return res.status(status).json({ error: err && err.message, code });
+  }
+});
+
+/**
+ * POST /api/files/:id/deep-ask — multi-hop Q&A in one call.
+ *
+ * Composes:
+ *   1. Query decomposer (OpenAI Structured Outputs strict)
+ *   2. Anthropic Citations API (verified char_location offsets)
+ *   3. (optional) NLI faithfulness verification on every citation
+ *
+ * Body: { question: string, verify?: boolean, options? }
+ *
+ * Why a separate endpoint: /:id/cite handles single-shot Q&A; this
+ * endpoint handles questions the model should DECOMPOSE first
+ * ("compare X and Y", "what does the report say about A and B"). The
+ * frontend can route to either based on the question shape or expose
+ * both as user-facing modes ("simple ask" vs "deep ask").
+ *
+ * Errors map to the same codes as /:id/cite plus:
+ *   400  deep_ask_bad_args            missing prisma / userId / fileId / question
+ *   500  deep_ask_no_openai           server openai client missing
+ *   500  deep_ask_no_anthropic_module wiring bug (should be caught in CI)
+ */
+router.post('/:id/deep-ask', authenticateToken, async (req, res) => {
+  try {
+    const { question, verify, options } = req.body || {};
+    const opts = options && typeof options === 'object' ? { ...options } : {};
+    if (verify) opts.verify = true;
+
+    const out = await deepAsk.deepAskFile({
+      prisma,
+      openai,
+      anthropicCitations,
+      userId: req.user.id,
+      fileId: req.params.id,
+      question,
+      options: opts,
+    });
+
+    return res.json({
+      fileId: out.fileId,
+      fileTitle: out.fileTitle,
+      decomposition: out.decomposition,
+      answer: out.answer,
+      blocks: out.blocks,
+      citations: out.citations,
+      usage: out.usage,
+      ...(out.verification ? { verification: out.verification } : {}),
+    });
+  } catch (err) {
+    const code = err && err.code ? err.code : 'deep_ask_unknown';
+    const status = ({
+      // deep-ask own codes
+      deep_ask_bad_args: 400,
+      deep_ask_no_openai: 500,
+      deep_ask_no_anthropic_module: 500,
+      // bubbled from decomposer
+      query_decomposer_empty: 400,
+      query_decomposer_no_client: 500,
+      query_decomposer_llm_failed: 502,
+      query_decomposer_invalid_json: 502,
+      // bubbled from citations / file ownership
+      anthropic_citations_no_prisma: 500,
+      anthropic_citations_bad_args: 400,
+      anthropic_citations_empty_question: 400,
+      anthropic_citations_no_documents: 400,
+      anthropic_citations_file_not_found: 404,
+      anthropic_citations_empty_text: 422,
+      anthropic_citations_disabled: 503,
+      anthropic_citations_llm_failed: 502,
+    })[code] || 500;
+    if (status >= 500 && status !== 503) console.warn('[files] /:id/deep-ask failed:', code, err && err.message);
     return res.status(status).json({ error: err && err.message, code });
   }
 });
