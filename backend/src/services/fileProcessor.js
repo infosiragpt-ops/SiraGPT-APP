@@ -445,9 +445,35 @@ class FileProcessor {
 
   async processImage(filePath, options = {}) {
     try {
-      const result = await ocrEngine.extractFromImage(filePath, {
+      let result = await ocrEngine.extractFromImage(filePath, {
         mimeType: options.mimeType || 'image/png',
       });
+
+      // Optional GPT-4o-vision fallback. Off by default; switched on
+      // via env SIRAGPT_VISION_FALLBACK_ENABLED=1. Triggers ONLY when
+      // Tesseract produced little text OR low-confidence output —
+      // those are the cases where a vision LLM that understands
+      // layout, tables, equations beats a pure OCR engine. Failures
+      // are swallowed so a flaky vision call never tears down upload.
+      if (this._shouldApplyVisionFallback(result, options)) {
+        try {
+          const visionText = await this._extractWithVision(filePath, options.mimeType, options.openai);
+          if (visionText && visionText.length > (result.text?.length || 0)) {
+            result = {
+              text: visionText,
+              ocr: {
+                ...(result.ocr || {}),
+                visionFallback: true,
+                originalProvider: result.ocr?.provider || null,
+                provider: 'gpt-4o-vision',
+              },
+            };
+          }
+        } catch (err) {
+          console.warn('[fileProcessor] vision fallback failed:', err && err.message);
+        }
+      }
+
       if (options.detailed) {
         return {
           extractedText: result.text || '',
@@ -458,6 +484,87 @@ class FileProcessor {
     } catch (error) {
       throw new Error(`Image OCR processing failed: ${error.message}`);
     }
+  }
+
+  /**
+   * Decide whether the GPT-4o-vision fallback should run on top of
+   * the Tesseract result. Pure-ish — reads env once and the supplied
+   * ocr result; no side effects.
+   *
+   * Triggers when ALL of the following are true:
+   *   - SIRAGPT_VISION_FALLBACK_ENABLED=1
+   *   - OPENAI_API_KEY is set (either in env OR via options.openai)
+   *   - Tesseract text is shorter than SIRAGPT_VISION_FALLBACK_MIN_CHARS
+   *     (default 100) OR confidence < SIRAGPT_VISION_FALLBACK_MIN_CONFIDENCE
+   *     (default 0.5)
+   *
+   * Override via options.forceVisionFallback=true / =false for tests.
+   */
+  _shouldApplyVisionFallback(result, options = {}) {
+    if (typeof options.forceVisionFallback === 'boolean') return options.forceVisionFallback;
+    if (process.env.SIRAGPT_VISION_FALLBACK_ENABLED !== '1') return false;
+    if (!options.openai && !process.env.OPENAI_API_KEY) return false;
+    const text = String(result?.text || '');
+    const confidence = typeof result?.ocr?.confidence === 'number' ? result.ocr.confidence : 1;
+    const minChars = Number.parseInt(process.env.SIRAGPT_VISION_FALLBACK_MIN_CHARS, 10) || 100;
+    const minConf = Number.parseFloat(process.env.SIRAGPT_VISION_FALLBACK_MIN_CONFIDENCE) || 0.5;
+    return text.length < minChars || confidence < minConf;
+  }
+
+  /**
+   * Run the vision-doc-parser against the file and flatten the
+   * resulting layout into a single text string suitable for
+   * downstream indexing. Markdown structure is preserved so chunking
+   * + Anthropic Citations downstream see headings / tables / lists
+   * instead of a single wall of text.
+   *
+   * `openaiClient` is injectable for tests. In production, callers
+   * pass nothing and we lazily build a client from OPENAI_API_KEY.
+   */
+  async _extractWithVision(filePath, mimeType, openaiClient) {
+    const fs = require('fs');
+    const visionParser = require('./rag/vision-doc-parser');
+
+    let openai = openaiClient;
+    if (!openai) {
+      const OpenAI = require('openai');
+      openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    }
+
+    const buf = await fs.promises.readFile(filePath);
+    const base64 = buf.toString('base64');
+    const layout = await visionParser.parseDocumentPage({
+      openai,
+      image: { base64, mediaType: mimeType || 'image/png' },
+    });
+    return this._flattenLayoutToText(layout);
+  }
+
+  /**
+   * Turn a DocumentLayout into a plain-text representation that
+   * preserves heading levels (as Markdown), keeps tables verbatim
+   * (vision parser emits markdown tables), and joins elements with
+   * blank lines so downstream chunkers see logical block boundaries.
+   *
+   * Pure — no I/O. Easy to unit-test in isolation.
+   */
+  _flattenLayoutToText(layout) {
+    const elements = Array.isArray(layout?.elements) ? layout.elements : [];
+    const lines = [];
+    for (const el of elements) {
+      if (!el || typeof el.text !== 'string' || !el.text) continue;
+      if (el.type === 'heading') {
+        const level = Math.min(6, Math.max(1, el.level || 1));
+        lines.push(`${'#'.repeat(level)} ${el.text}`);
+      } else if (el.type === 'figure') {
+        lines.push(`[figure] ${el.text}`);
+      } else if (el.type === 'caption') {
+        lines.push(`*${el.text}*`);
+      } else {
+        lines.push(el.text);
+      }
+    }
+    return lines.join('\n\n').trim();
   }
 
   _normalizeOcrText(text) {
