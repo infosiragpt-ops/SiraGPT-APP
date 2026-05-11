@@ -35,6 +35,32 @@ const DEFAULT_RECALL_K = 5;
 const MIN_CONFIDENCE = 0.6;
 const MAX_FACTS_PER_TURN = 8;
 
+// ─── Active toggle + bounded memory (added 2026-05) ───────────────────────
+//
+// Two operational guards on top of the existing scoring:
+//
+//   1. SIRAGPT_MEMORY_DISABLED=1 turns extraction off entirely. Useful
+//      for privacy-sensitive deployments and tests that don't want
+//      background fire-and-forget side effects polluting state.
+//      Recall still returns whatever was previously stored — flipping
+//      the flag does not delete history.
+//
+//   2. SIRAGPT_MEMORY_MAX_FACTS_PER_USER caps per-user factMeta map
+//      size. Without it, a long-running user could grow the in-memory
+//      map indefinitely (a slow leak). At the cap, upsertFactMeta drops
+//      the least-recently-seen fact before adding a new one. This is
+//      LRU-by-lastSeen, which biases retention toward facts the user
+//      has recently reinforced — exactly what the importance score
+//      already values.
+//
+// Both knobs are env-driven so deploys can tune them per-environment
+// without code changes.
+const MEMORY_DISABLED = process.env.SIRAGPT_MEMORY_DISABLED === '1';
+const MAX_FACTS_PER_USER = Math.max(
+  10,
+  Number.parseInt(process.env.SIRAGPT_MEMORY_MAX_FACTS_PER_USER, 10) || 1000,
+);
+
 // ─── Importance + decay ───────────────────────────────────────────────────────
 //
 // We layer two per-fact signals on top of plain cosine similarity:
@@ -74,7 +100,7 @@ function getUserMeta(userId) {
   return m;
 }
 
-function upsertFactMeta(userId, factText) {
+function upsertFactMeta(userId, factText, capOverride) {
   const norm = normalizeFact(factText);
   if (!norm) return { mentions: 1, ageDays: 0 };
   const meta = getUserMeta(userId);
@@ -88,8 +114,79 @@ function upsertFactMeta(userId, factText) {
       ageDays: (now - existing.firstSeen) / (1000 * 60 * 60 * 24),
     };
   }
+  // Bounded map: when the user is at the cap, evict the
+  // least-recently-seen fact before inserting. This is the same LRU
+  // signal the importance score already weights against, so eviction
+  // tracks what the recall ranker would deprioritise anyway. The
+  // optional capOverride lets tests exercise the eviction path
+  // without inserting MAX_FACTS_PER_USER (1000 by default) entries.
+  const cap = Number.isFinite(capOverride) && capOverride > 0
+    ? Math.floor(capOverride)
+    : MAX_FACTS_PER_USER;
+  if (meta.size >= cap) {
+    let oldestKey = null;
+    let oldestSeen = Infinity;
+    for (const [k, v] of meta) {
+      if (v.lastSeen < oldestSeen) {
+        oldestSeen = v.lastSeen;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey !== null) meta.delete(oldestKey);
+  }
   meta.set(norm, { mentions: 1, firstSeen: now, lastSeen: now });
   return { mentions: 1, ageDays: 0 };
+}
+
+/**
+ * Drop facts that are both stale (lastSeen older than maxAgeDays) and
+ * unreinforced (mentions <= minMentions). Returns the number of meta
+ * entries pruned. Note: does NOT touch the RAG store — the embedded
+ * fact text remains in the user's collection. Pruning meta only
+ * removes the importance/decay weighting, which means recall falls
+ * back to plain cosine for the affected facts. A future deletion path
+ * through `rag.delete()` can hook in here without breaking callers.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.userId]       prune one user; omit to prune all
+ * @param {number} [opts.maxAgeDays=90]
+ * @param {number} [opts.minMentions=1]
+ */
+function pruneFactMeta(opts = {}) {
+  const { userId, maxAgeDays = 90, minMentions = 1 } = opts;
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+  let pruned = 0;
+  const userIds = userId ? [userId] : Array.from(factMeta.keys());
+  for (const uid of userIds) {
+    const meta = factMeta.get(uid);
+    if (!meta) continue;
+    for (const [k, v] of meta) {
+      if (v.lastSeen < cutoff && v.mentions <= minMentions) {
+        meta.delete(k);
+        pruned += 1;
+      }
+    }
+    if (meta.size === 0) factMeta.delete(uid);
+  }
+  return pruned;
+}
+
+/**
+ * Snapshot of a user's in-memory fact metadata. Useful for diagnostics
+ * (e.g. an `/admin/memory/:userId` endpoint) and for tests asserting
+ * cap/eviction behavior without poking at module internals.
+ */
+function listFactMeta(userId) {
+  const meta = factMeta.get(userId);
+  if (!meta) return [];
+  const now = Date.now();
+  return Array.from(meta, ([norm, v]) => ({
+    norm,
+    mentions: v.mentions,
+    firstSeen: v.firstSeen,
+    lastSeen: v.lastSeen,
+    ageDays: (now - v.firstSeen) / (1000 * 60 * 60 * 24),
+  }));
 }
 
 function getFactMeta(userId, factText) {
@@ -185,6 +282,11 @@ async function extractFacts(openai, userMessage, assistantMessage) {
  */
 function extractFactsAsync({ openai, userId, userMessage, assistantMessage }) {
   if (!userId) return;
+  // Privacy/ops guard: SIRAGPT_MEMORY_DISABLED=1 short-circuits the
+  // extraction pipeline. We DON'T touch the RAG store here, so any
+  // facts already learned for this user remain recallable until a
+  // separate clearUserMemory call is made.
+  if (MEMORY_DISABLED) return;
   // setImmediate defers to the next tick so the caller returns to the
   // user as fast as possible; the extraction runs afterwards.
   setImmediate(async () => {
@@ -288,4 +390,9 @@ module.exports = {
   normalizeFact,
   HALF_LIFE_DAYS,
   EXTRACTION_SYSTEM_PROMPT,
+  // lifecycle / ops (added 2026-05)
+  pruneFactMeta,
+  listFactMeta,
+  MAX_FACTS_PER_USER,
+  MEMORY_DISABLED,
 };
