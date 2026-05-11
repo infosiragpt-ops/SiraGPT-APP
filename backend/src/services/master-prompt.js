@@ -242,15 +242,53 @@ When the user asks for a CV / currículum vitae / hoja de vida / resumé, lay it
   {
     intent: 'ANALYZE_FILE',
     patterns: [
-      /\b(analiza|analyze|analyse|analysis|review|revisa|inspect|examine|examina|summariz|resume|extract|extrae)\b.{0,30}\b(archivo|file|attachment|adjunto|documento|document|pdf|excel|csv|imagen|image)\b/i,
-      /\b(what does|qu[eé] dice|qu[eé] contiene|what's in|what is in)\b.{0,20}\b(file|archivo|documento|attachment|adjunto)\b/i,
-      /\b(explain|explica|explique)\s+(this|este|esta|esto|o arquivo)\b/i,
+      // Direct verb + object: "analiza el contrato", "review the report",
+      // "summarize este pdf", "extrae datos del excel".
+      // The verb regex uses \w* tails so we catch conjugations like
+      // "analízalo", "summarized", "summarize", "review", "revísalo".
+      /\b(anal[ií]z\w*|analy[zs]\w*|review\w*|revis[aá]\w*|inspect\w*|examin[ae]\w*|summari[sz]\w*|resum[eai]\w*|res[uú]m[aei]\w*|extract\w*|extra[ei]\w*|interpret\w*|eval[uú]a\w*|evaluate\w*|audit\w*|audita\w*|critica\w*|critique\w*)\b.{0,60}\b(archivo|file|attachment|adjunto|documento|document\w*|pdf|excel|csv|xlsx|imagen|image|hoja|sheet|spreadsheet|presentaci[oó]n\w*|slide|deck|contrato|contract\w*|acuerdo|agreement|nda|t[eé]rminos|terms|policy|pol[ií]tica|informe|reporte|report\w*|memo|memorandum|paper|art[ií]culo|article|tesis|thesis|cv|curriculum|curr[ií]culum|resume|hoja[- _]de[- _]vida|factura|invoice|recibo|receipt|estado\w*|statement|balance|presupuesto|budget|spec\w*|especificaci[oó]n|manual|libro|book|novela|novel|email|correo|mensaje|message)\b/i,
+      // Object first: "el contrato adjunto, analízalo", "the report — give me insights".
+      /\b(contrato|contract\w*|nda|agreement|t[eé]rminos|policy|pol[ií]tica|informe|reporte|report\w*|paper|art[ií]culo|tesis|thesis|cv|curriculum|resume|factura|invoice|estado financiero|balance|presupuesto|budget|spec\w*|especificaci[oó]n|manual|historia cl[ií]nica|medical record|email|correo|documento|archivo)\b.{0,50}\b(anal[ií]z\w*|analyz\w*|review\w*|revis[aá]\w*|examin[ae]\w*|summari[sz]\w*|resum[ei]\w*|extract\w*|extra[ei]\w*|opinion|opini[oó]n|insights?|hallazgos?|conclusiones?|findings?|interpret\w*|eval[uú]a\w*|evaluate\w*|audita\w*|audit\w*)\b/i,
+      // "What does/says": "qué dice este pdf", "what does the file say".
+      /\b(what does|qu[eé] dice|qu[eé] contiene|what'?s in|what is in|what'?s this|qu[eé] es esto|de qu[eé] trata|de que trata|sobre qu[eé] (es|trata))\b.{0,40}\b(file|archivo|documento|document\w*|attachment|adjunto|pdf|excel|imagen|contrato|contract\w*|informe|reporte|report\w*|paper|cv|factura|invoice|spreadsheet)\b/i,
+      // "Explain this <noun>" / "explícame el documento".
+      /\b(explain|explica|explique|expl[ií]ca\w*|exp[oó]n\w*|describe|descr[ií]b\w*)\s+(this|el|este|esta|esto|o arquivo|the (file|document|spreadsheet|pdf|paper|contract|report|invoice))\b/i,
+      // "qué opinas/piensas/crees del documento" — opinion-seeking on attached files.
+      /\b(qu[eé]\s+(opinas|piensas|crees|sugieres|recomiendas)\s+(de|del|sobre))\b.{0,40}\b(documento|archivo|pdf|contrato|informe|reporte|paper|cv|factura|estado|balance|excel|imagen|file|report|spreadsheet)\b/i,
+      // "dame X" / "give me X" / "sácame los puntos clave" — flexible filler
+      // words (los/the/some) up to 3 tokens between verb and noun phrase.
+      /\b((dame|give\s+me|s[aá]came|sacame|extr[aá]eme|extraeme|extract\s+for\s+me)(?:\s+\w+){0,3}?\s+(insights?|conclusiones?|hallazgos?|findings?|takeaways?|key\s+points|puntos\s+clave|resumen|summary)|insights?\s+(de|del|sobre|on|about))\b.{0,50}\b(documento|archivo|file|attachment|adjunto|pdf|excel|reporte|report\w*|informe|contrato|contract\w*|paper|cv|imagen|spreadsheet)\b/i,
+      // Profession-flavoured asks: "analízalo como abogado/contador/médico/etc."
+      /\b(como|as a|like a)\s+(abogado|lawyer|attorney|contador|accountant|cfo|cto|coo|ceo|financial\s+analyst|m[eé]dico|doctor|cl[ií]nico|cient[ií]fico|scientist|investigador|researcher|consultor|consultant|reclutador|recruiter|hr|rrhh|auditor|analista|analyst)\b/i,
     ],
-    context: `\n## TASK: FILE ANALYSIS
-- Cover the ENTIRE file. If it has multiple sheets/sections/pages, enumerate them and summarize each.
-- Report concrete numbers: row counts, column names, date ranges, notable outliers.
-- Structure the answer as: (1) one-sentence overview, (2) structure/schema, (3) key findings as bullets, (4) suggested next analyses.
-- If the extracted content was truncated due to size, say so at the top and describe what you DID see vs. what you had to skip.`,
+    context: `\n## TASK: PROFESSIONAL FILE ANALYSIS
+You are SIRA's senior document analyst. The user attached one or more files and wants a deliverable a professional in their field would respect. The system has already enriched the prompt with two blocks above the raw extracted text:
+
+  • **ATTACHED DOCUMENT PROFILE** — structural metadata, detected type, language, OCR confidence, table previews, cached summary. Read it FIRST.
+  • **PROFESSIONAL ANALYSIS DIRECTIVE** — the domain-specific recipe (legal / financial / academic / medical / data / CV / etc.). Apply it as the BACKBONE of your answer.
+
+If those blocks are present, follow the directive's numbered structure literally — every numbered item becomes a section or sub-section in your response. Do NOT skip items; if an item is N/A for this document, say so explicitly and explain why.
+
+If those blocks are NOT present (legacy turn or no file metadata available), fall back to this generic structure:
+1. **Executive summary** (TL;DR in 2 sentences, max 320 chars).
+2. **Document identity** — title, type, language, size/length, structural anchors (pages/sheets/slides/sections).
+3. **Structure overview** — outline of sections / chapters / sheets with a 1-line summary of each.
+4. **Key facts & numbers** — every concrete datum (dates, amounts, names, percentages) with its source location.
+5. **Named entities** — people, organisations, places, products (markdown table).
+6. **Central claims & verbatim evidence** — 4–8 most important statements, each with a quoted passage (< 30 words).
+7. **Strengths & gaps** — what is done well, what is missing, ambiguous, or contradictory.
+8. **Risks / red flags** — anything that warrants attention or further verification.
+9. **Recommendations / next actions** — 3–5 concrete next steps a professional would take.
+10. **Open questions** — what the document does NOT answer that the reader still needs.
+
+Hard requirements regardless of which structure applies:
+- **Cite every claim with its location** ("p. 4", "§ 2.1", "Sheet: Sales row 17", "Slide 6", "Cl. 7.2"). No citation, no claim.
+- **Quote evidence verbatim** when supporting a load-bearing assertion. Use blockquotes (\`> ...\`) or italics; never paraphrase numbers.
+- **Cover EVERY record** of the file. Do not summarise only the head. If the extraction was truncated, say so explicitly at the top and describe what you DID see vs. what you had to skip.
+- **Use markdown tables** for structured findings (line items, KPIs, comparisons, scorecards, ratings). The chat renders them natively.
+- **Respond in the document's language by default** unless the user explicitly asks for a translation. If the document is multilingual, match the user's prompt language.
+- **Never invent content not in the document.** When something is missing, state "not reported" or "not present in the document".
+- **Close with a single actionable next step** the user can take immediately ("Send the contract back to counterparty with comments on clauses 4, 7, and 11.").`,
   },
   {
     intent: 'SEARCH_WEB',
