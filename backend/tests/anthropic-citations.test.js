@@ -382,6 +382,110 @@ test('answerFileQuestionWithCitations end-to-end with fake prisma + SDK', async 
   });
 });
 
+test('answerFileQuestionWithCitations with verify=true attaches NLI verdicts onto citations', async () => {
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-ant-test', HUGGINGFACE_API_TOKEN: undefined }, async () => {
+    mod._setClientForTests({
+      messages: {
+        create: async () => ({
+          content: [{
+            type: 'text',
+            text: 'El documento dice que el clima cambió.',
+            citations: [{
+              type: 'char_location',
+              cited_text: 'el clima en CDMX cambió',
+              document_index: 0,
+              document_title: 'doc.pdf',
+              start_char_index: 0,
+              end_char_index: 22,
+            }],
+          }],
+          usage: { input_tokens: 80, output_tokens: 12 },
+        }),
+      },
+    });
+
+    // Fake openai for the NLI LLM-judge backend. The cite call itself
+    // uses Anthropic; only the verification step hits OpenAI.
+    const nliOpenai = {
+      chat: {
+        completions: {
+          create: async () => ({
+            choices: [{
+              message: { content: JSON.stringify({ label: 'entailment', score: 0.91, reason: 'evidence supports the claim' }) },
+            }],
+          }),
+        },
+      },
+    };
+
+    try {
+      const prisma = fakePrisma({
+        file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: 'el clima en CDMX cambió en 2026.' },
+      });
+      const out = await mod.answerFileQuestionWithCitations({
+        prisma,
+        userId: 'u1',
+        fileId: 'f1',
+        question: '¿De qué trata?',
+        options: { verify: true, nli: { openai: nliOpenai } },
+      });
+
+      // Per-block citation gets a verification verdict
+      assert.equal(out.blocks.length, 1);
+      assert.equal(out.blocks[0].citations[0].verification.label, 'entailment');
+      assert.ok(out.blocks[0].citations[0].verification.score >= 0.9);
+      assert.equal(out.blocks[0].citations[0].verification.backend, 'llm');
+      // Flat citations list shares the SAME reference, so the verdict
+      // is visible through both views without a second pass.
+      assert.equal(out.citations[0].verification.label, 'entailment');
+    } finally {
+      mod._resetClientForTests();
+    }
+  });
+});
+
+test('answerFileQuestionWithCitations without verify leaves citations unannotated', async () => {
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' }, async () => {
+    mod._setClientForTests({
+      messages: {
+        create: async () => ({
+          content: [{
+            type: 'text',
+            text: 'Trata sobre el clima.',
+            citations: [{
+              type: 'char_location',
+              cited_text: 'el clima en CDMX',
+              document_index: 0,
+              document_title: 'doc.pdf',
+              start_char_index: 0,
+              end_char_index: 16,
+            }],
+          }],
+          usage: { input_tokens: 80, output_tokens: 12 },
+        }),
+      },
+    });
+    try {
+      const prisma = fakePrisma({
+        file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: 'el clima en CDMX cambió.' },
+      });
+      const out = await mod.answerFileQuestionWithCitations({
+        prisma, userId: 'u1', fileId: 'f1', question: '¿de qué trata?',
+      });
+      assert.equal(out.citations[0].verification, undefined);
+    } finally {
+      mod._resetClientForTests();
+    }
+  });
+});
+
+test('attachCitationVerifications is a no-op when there are no citations', async () => {
+  await mod.attachCitationVerifications([{ text: 'hi', citations: [] }, { text: 'world', citations: [] }], {});
+  // No throw, no side effects beyond what we already verified above —
+  // the assertion here is that the function returns cleanly.
+  assert.ok(true);
+});
+
 test('answerFileQuestionWithCitations rejects with typed code on bad inputs', async () => {
   await withEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' }, async () => {
     mod._setClientForTests({ messages: { create: async () => ({}) } });

@@ -893,13 +893,23 @@ router.get('/:id/summary', authenticateToken, async (req, res) => {
  */
 router.post('/:id/cite', authenticateToken, async (req, res) => {
   try {
-    const { question, options } = req.body || {};
+    const { question, options, verify } = req.body || {};
+    const opts = options && typeof options === 'object' ? { ...options } : {};
+    if (verify) {
+      // Opt-in NLI faithfulness verification. The NLI module picks the
+      // HuggingFace backend automatically when HUGGINGFACE_API_TOKEN is
+      // set in env; otherwise it falls back to LLM-as-judge with our
+      // existing OpenAI client. Either way the caller gets
+      // citation.verification = { label, score, reason, backend }.
+      opts.verify = true;
+      opts.nli = { openai };
+    }
     const out = await anthropicCitations.answerFileQuestionWithCitations({
       prisma,
       userId: req.user.id,
       fileId: req.params.id,
       question,
-      options: options && typeof options === 'object' ? options : {},
+      options: opts,
     });
     return res.json({
       fileId: out.fileId,

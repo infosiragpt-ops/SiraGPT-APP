@@ -427,6 +427,16 @@ async function answerFileQuestionWithCitations({ prisma, userId, fileId, questio
     options,
   });
 
+  // Optional NLI verification — verifies each (block.text, citation.cited)
+  // pair via the faithfulness verifier and attaches `verification` onto
+  // every citation in-place. The flat out.citations list reflects the
+  // same updates since normalizeCitations returns shared references.
+  // Off by default; caller opts in via options.verify=true and supplies
+  // an NLI backend in options.nli (openai, huggingfaceToken, etc.).
+  if (options.verify) {
+    await attachCitationVerifications(out.blocks, options.nli || {});
+  }
+
   return {
     fileId: file.id,
     fileTitle: title,
@@ -437,6 +447,52 @@ async function answerFileQuestionWithCitations({ prisma, userId, fileId, questio
   };
 }
 
+/**
+ * Run NLI verification on every (block.text, citation.cited) pair and
+ * attach a `verification: { label, score, reason, backend, error? }`
+ * onto each citation in-place. Mutates `blocks` because the citations
+ * the caller sees in both the per-block view AND the flat out.citations
+ * list are SHARED references — one pass updates both views.
+ *
+ * Per-citation failures fall through to a `backend: 'error'` verdict
+ * (label: neutral, score: 0) from verifyClaimsBatch so partial-success
+ * renders cleanly without branching on rejected promises.
+ *
+ * @param {Array<{text:string, citations:Array<object>}>} blocks
+ * @param {object} nliOptions  forwarded verbatim to verifyClaimsBatch.options
+ */
+async function attachCitationVerifications(blocks, nliOptions) {
+  // Lazy-require so this file does not pay for the NLI module unless
+  // a caller actually opts in. Mirrors the lazy chokidar pattern in
+  // backend/src/skills/registry.ts.
+  const nli = require('../rag/nli-faithfulness');
+
+  const items = [];
+  const refs = [];
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const block = blocks[bi];
+    if (!block || !Array.isArray(block.citations)) continue;
+    for (let ci = 0; ci < block.citations.length; ci++) {
+      items.push({ claim: block.text, evidence: block.citations[ci].cited });
+      refs.push([bi, ci]);
+    }
+  }
+  if (items.length === 0) return;
+
+  const verdicts = await nli.verifyClaimsBatch({ items, options: nliOptions });
+  for (let i = 0; i < verdicts.length; i++) {
+    const [bi, ci] = refs[i];
+    const v = verdicts[i];
+    blocks[bi].citations[ci].verification = {
+      label: v.label,
+      score: v.score,
+      reason: v.reason,
+      backend: v.backend,
+      ...(v.error ? { error: v.error } : {}),
+    };
+  }
+}
+
 // ── Test seams ────────────────────────────────────────────────────────────
 function _setClientForTests(client) { _client = client; }
 function _resetClientForTests() { _client = null; _SdkClass = null; }
@@ -444,6 +500,7 @@ function _resetClientForTests() { _client = null; _SdkClass = null; }
 module.exports = {
   callAnthropicWithCitations,
   answerFileQuestionWithCitations,
+  attachCitationVerifications,
   normalizeCitations,
   normalizeOneCitation,
   buildDocumentBlocks,

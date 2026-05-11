@@ -304,6 +304,14 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     mmrLambda = 0.7,
     rerank = false,
     rerankOpenAI = null,
+    // Cohere Rerank 3.5 cross-encoder (added 2026-05). Drop-in
+    // replacement for the LLM reranker: ~10× cheaper, 4-6× lower
+    // latency, comparable nDCG@10 — see services/rag/cohere-rerank.js
+    // header. Activated by setting useCohereRerank=true; requires
+    // COHERE_API_KEY in env. Composable with `rerank` (LLM judge
+    // first, cross-encoder second) but most callers should pick one.
+    useCohereRerank = false,
+    cohereRerankModel,        // override services/rag/cohere-rerank DEFAULT_MODEL
     overfetchK,
     useHybrid = false,
     rrfK = 60,
@@ -334,7 +342,7 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
   // Overfetch a pool to feed downstream MMR/reranker/RRF with real choice.
   // When all post-processing is off, we still cap the pool at k to match
   // the old behaviour byte-for-byte.
-  const needsPool = useMMR || rerank || useHybrid;
+  const needsPool = useMMR || rerank || useCohereRerank || useHybrid;
   const poolSize = needsPool
     ? (overfetchK || Math.max(k * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR))
     : k;
@@ -448,6 +456,45 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
   if (rerank) {
     // Reranker may drop candidates below its cutoff — we still honour k.
     pool = await llmReranker.rerank(rerankOpenAI, query, pool, { k: pool.length });
+  }
+
+  if (useCohereRerank && pool.length > 1) {
+    // Cohere Rerank 3.5 cross-encoder pass. Documents are pulled from
+    // the chunk.text field; on success we reorder the pool by Cohere's
+    // relevance_score and write that score into chunk.rerankScore so
+    // downstream MMR / diagnostics can still see it. On failure we
+    // swallow the error — a degraded ranker is better than a 5xx for
+    // the whole retrieve call.
+    try {
+      const cohereRerank = require('./rag/cohere-rerank');
+      const ranked = await cohereRerank.rerank({
+        query,
+        documents: pool.map((p) => p.text || ''),
+        topN: pool.length,
+        model: cohereRerankModel,
+      });
+      if (Array.isArray(ranked) && ranked.length > 0) {
+        const byIndex = new Map(ranked.map((r) => [r.index, r]));
+        // Stable rebuild: preserve any pool entries not mentioned by
+        // Cohere (defensive — shouldn't happen since topN === pool.length)
+        // by placing them at the end in original order.
+        const next = [];
+        for (const r of ranked) {
+          const original = pool[r.index];
+          if (!original) continue;
+          next.push({ ...original, rerankScore: r.score, cohereScore: r.score });
+        }
+        for (let i = 0; i < pool.length; i++) {
+          if (!byIndex.has(i)) next.push(pool[i]);
+        }
+        pool = next;
+      }
+    } catch (err) {
+      // Surface in diagnostics if requested; otherwise log once.
+      if (typeof console.warn === 'function') {
+        console.warn('[rag-service] cohere rerank failed, falling back to prior ranking:', err && err.message);
+      }
+    }
   }
 
   if (useGraph) {
