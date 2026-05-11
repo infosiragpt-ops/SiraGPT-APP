@@ -169,6 +169,44 @@ test('capabilities.assertKnown catches typos at validation time', () => {
   assert.doesNotThrow(() => capabilities.assertKnown([CAPABILITIES.LLM, CAPABILITIES.FS_READ], 'test'));
 });
 
+test('manifest with timeoutMs accepts valid integer in [100, 600000]', () => {
+  const dir = mkFixture({
+    bounded: {
+      manifest: validManifest({ id: 'bounded', timeoutMs: 5_000 }),
+      handler: validHandler,
+    },
+  });
+  const { skills, errors } = registry.load({ dir });
+  assert.equal(errors.length, 0, `expected no errors, got: ${errors.join('; ')}`);
+  assert.ok(skills.has('bounded'));
+  assert.equal(skills.get('bounded').timeoutMs, 5_000);
+});
+
+test('manifest with out-of-range timeoutMs is rejected loudly', () => {
+  const dir = mkFixture({
+    too_long: {
+      manifest: validManifest({ id: 'too_long', timeoutMs: 999_999 }),
+      handler: validHandler,
+    },
+  });
+  const { skills, errors } = registry.load({ dir });
+  assert.equal(skills.size, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /timeoutMs.*\[100, 600000\]/);
+});
+
+test('manifest with non-integer timeoutMs is rejected', () => {
+  const dir = mkFixture({
+    fractional: {
+      manifest: validManifest({ id: 'fractional', timeoutMs: 5.5 }),
+      handler: validHandler,
+    },
+  });
+  const { skills, errors } = registry.load({ dir });
+  assert.equal(skills.size, 0);
+  assert.match(errors[0], /timeoutMs/);
+});
+
 test('bundled skills load cleanly from the real skills dir', () => {
   // Smoke test: every bundled skill in backend/src/skills/ should
   // load without errors. New skills should be added to the assertion

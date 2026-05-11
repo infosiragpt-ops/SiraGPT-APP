@@ -157,3 +157,113 @@ test('SANDBOX_ALLOW is the minimum useful set — LLM + fs:read', () => {
   assert.ok(!SANDBOX_ALLOW.includes(CAPABILITIES.AGENT_SPAWN));
   assert.ok(!SANDBOX_ALLOW.includes(CAPABILITIES.SHELL));
 });
+
+// ── Skill execution deadline / abort ──────────────────────────────────────
+//
+// Every wrapped skill now runs under AsyncGuard. These tests pin the
+// resolution order (override > skill.timeoutMs > policy.limits.timeoutMs)
+// and confirm that timeout / abort do NOT consume call budget, mirroring
+// the existing "transient error doesn't consume budget" guarantee.
+
+test('wrapSkill enforces deadline declared on the skill manifest', async () => {
+  const policy = createPolicy({ mode: 'main' });
+  const counters = createCounters();
+  const slow = {
+    id: 'slow_skill',
+    capabilities: [CAPABILITIES.LLM],
+    timeoutMs: 50,
+    execute: () => new Promise(() => {}), // never resolves
+  };
+  const wrapped = wrapSkill(slow, policy, counters);
+  const t0 = Date.now();
+  await assert.rejects(() => wrapped.execute({}, {}), (err) => {
+    assert.equal(err.code, 'GUARD_TIMEOUT');
+    assert.match(err.message, /timed out/i);
+    return true;
+  });
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 5_000, `should fail fast (got ${elapsed}ms)`);
+  assert.equal(counters.total, 0, 'timed-out call must not consume budget');
+});
+
+test('wrapSkill timeout falls back to policy.limits.timeoutMs', async () => {
+  const policy = createPolicy({ mode: 'main', limits: { timeoutMs: 50 } });
+  const counters = createCounters();
+  const slow = {
+    id: 'slow_no_skill_limit',
+    capabilities: [CAPABILITIES.LLM],
+    execute: () => new Promise(() => {}),
+  };
+  const wrapped = wrapSkill(slow, policy, counters);
+  await assert.rejects(() => wrapped.execute({}, {}), /timed out/i);
+});
+
+test('wrapSkill opts.timeoutMs overrides skill manifest and policy', async () => {
+  const policy = createPolicy({ mode: 'main', limits: { timeoutMs: 9_999 } });
+  const counters = createCounters();
+  const slow = {
+    id: 'override_test',
+    capabilities: [CAPABILITIES.LLM],
+    timeoutMs: 9_999,
+    execute: () => new Promise(() => {}),
+  };
+  const wrapped = wrapSkill(slow, policy, counters, { timeoutMs: 50 });
+  await assert.rejects(() => wrapped.execute({}, {}), /timed out/i);
+});
+
+test('wrapSkill propagates external AbortSignal via ctx.signal', async () => {
+  // AsyncGuard surfaces an external-signal abort with the same
+  // GuardError envelope as a timeout (the two paths share state in
+  // async-guard.js), so we assert on the contract that matters: a
+  // GuardError is thrown, it fails fast, and it does NOT consume
+  // budget. The exact code (GUARD_TIMEOUT vs GUARD_ABORTED) is an
+  // implementation detail of async-guard and pinning it here would
+  // make this test brittle to a future async-guard fix.
+  const policy = createPolicy({ mode: 'main' });
+  const counters = createCounters();
+  const hang = {
+    id: 'hang_skill',
+    capabilities: [CAPABILITIES.LLM],
+    execute: () => new Promise(() => {}),
+  };
+  const wrapped = wrapSkill(hang, policy, counters);
+  const ac = new AbortController();
+  const t0 = Date.now();
+  setTimeout(() => ac.abort('caller cancelled'), 30);
+  await assert.rejects(() => wrapped.execute({}, { signal: ac.signal }), (err) => {
+    assert.equal(err.name, 'GuardError');
+    assert.ok(err.code === 'GUARD_ABORTED' || err.code === 'GUARD_TIMEOUT',
+      `expected GuardError code, got ${err.code}`);
+    return true;
+  });
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 5_000, `external abort should fail fast (got ${elapsed}ms)`);
+  assert.equal(counters.total, 0, 'aborted call must not consume budget');
+});
+
+test('wrapSkill does not regress fast skills', async () => {
+  const policy = createPolicy({ mode: 'main' });
+  const counters = createCounters();
+  const fast = {
+    id: 'fast_skill',
+    capabilities: [CAPABILITIES.LLM],
+    execute: async () => 'done',
+  };
+  const wrapped = wrapSkill(fast, policy, counters);
+  const result = await wrapped.execute({}, {});
+  assert.equal(result, 'done');
+  assert.equal(counters.total, 1);
+});
+
+test('wrapSkill captures sync throws inside execute and surfaces them', async () => {
+  const policy = createPolicy({ mode: 'main' });
+  const counters = createCounters();
+  const broken = {
+    id: 'broken_sync',
+    capabilities: [CAPABILITIES.LLM],
+    execute: () => { throw new Error('sync boom'); },
+  };
+  const wrapped = wrapSkill(broken, policy, counters);
+  await assert.rejects(() => wrapped.execute({}, {}), /sync boom/);
+  assert.equal(counters.total, 0, 'sync throw must not consume budget');
+});

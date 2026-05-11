@@ -65,6 +65,16 @@ function validateManifest(manifest, where) {
   if (!manifest.params || typeof manifest.params !== 'object') {
     throw new Error(`${where}: params must be a JSON Schema object`);
   }
+  // Optional per-skill execution deadline (ms). Range bounds match
+  // services/skills/policy.js wrapSkill() expectations: short enough
+  // to recover from a stuck call, long enough to permit slow web
+  // searches / RAG retrieves.
+  if (manifest.timeoutMs !== undefined) {
+    const t = Number(manifest.timeoutMs);
+    if (!Number.isInteger(t) || t < 100 || t > 600_000) {
+      throw new Error(`${where}: timeoutMs (${manifest.timeoutMs}) must be an integer in [100, 600000] ms`);
+    }
+  }
 }
 
 function validateHandler(mod, where) {

@@ -24,6 +24,7 @@
  */
 
 const { CAPABILITIES, ALL_CAPABILITIES, isKnown } = require('./capabilities');
+const { AsyncGuard } = require('../../utils/async-guard');
 
 class PolicyError extends Error {
   constructor(message, code) {
@@ -32,6 +33,28 @@ class PolicyError extends Error {
     this.code = code || 'policy_denied';
   }
 }
+
+// ── Skill execution deadline (added 2026-05) ──────────────────────────────
+//
+// Without a per-call deadline, a buggy or hung skill execution can pin an
+// entire agent loop indefinitely. wrapSkill now races every userExecute()
+// against a timeout via AsyncGuard. On expiry, the underlying promise is
+// abandoned (cooperative skills should observe ctx.signal and stop; the
+// guard's timeout aborts regardless so the agent loop is freed).
+//
+// Resolution priority for the deadline of a single call (first wins):
+//   1. opts.timeoutMs explicitly passed to wrapSkill (test/special use)
+//   2. skill.timeoutMs declared in the skill manifest
+//   3. policy.limits.timeoutMs from createPolicy({ limits: { timeoutMs } })
+//   4. DEFAULT_SKILL_TIMEOUT_MS — generous default; per-skill overrides
+//      tighten where safe.
+//
+// External AbortSignal: if ctx.signal is provided to execute(), we wire it
+// into AsyncGuard so a caller-driven cancel races the timeout and either
+// rejects with code 'GUARD_TIMEOUT' or 'GUARD_ABORTED'. Both are surfaced
+// to the agent loop the same way as a normal tool error.
+const DEFAULT_SKILL_TIMEOUT_MS = 5 * 60_000;
+const _moduleGuard = new AsyncGuard({ defaultTimeoutMs: DEFAULT_SKILL_TIMEOUT_MS });
 
 // ─── Defaults ──────────────────────────────────────────────────────────────
 //
@@ -172,9 +195,28 @@ function checkSkill(policy, skill, counters) {
  * Errors thrown from inside execute() are re-thrown — react-agent and
  * agent-core turn them into observations. A denied call raises
  * PolicyError; the loop sees the error string and can adapt.
+ *
+ * Deadline: every userExecute() runs under AsyncGuard with a timeout
+ * resolved from opts.timeoutMs → skill.timeoutMs → policy.limits.timeoutMs
+ * → DEFAULT_SKILL_TIMEOUT_MS. Timeouts and external aborts surface as
+ * GuardError (codes GUARD_TIMEOUT / GUARD_ABORTED) and DO NOT consume
+ * the per-skill or per-session call budget — same robustness rationale
+ * as transient tool errors.
+ *
+ * @param {Skill} skill
+ * @param {Policy} policy
+ * @param {Counters} counters
+ * @param {object} [opts]
+ * @param {number} [opts.timeoutMs]   per-call deadline override
+ * @param {AsyncGuard} [opts.guard]   inject a custom guard (tests)
  */
-function wrapSkill(skill, policy, counters) {
+function wrapSkill(skill, policy, counters, opts = {}) {
   const userExecute = skill.execute;
+  const guard = opts.guard || _moduleGuard;
+  const skillTimeoutMs = Number.isFinite(skill.timeoutMs) ? skill.timeoutMs : null;
+  const policyTimeoutMs = Number.isFinite(policy.limits.timeoutMs) ? policy.limits.timeoutMs : null;
+  const overrideTimeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : null;
+
   return {
     ...skill,
     async execute(args, ctx) {
@@ -182,7 +224,23 @@ function wrapSkill(skill, policy, counters) {
       if (!decision.ok) {
         throw new PolicyError(decision.reason, decision.code);
       }
-      const result = await userExecute(args, ctx);
+
+      const timeoutMs = overrideTimeoutMs
+        || skillTimeoutMs
+        || policyTimeoutMs
+        || DEFAULT_SKILL_TIMEOUT_MS;
+      const externalSignal = ctx && typeof ctx === 'object' ? ctx.signal : undefined;
+
+      // (async () => …)() captures sync throws inside userExecute too,
+      // so guard.run() can race them against the deadline instead of
+      // letting them escape past the guard.
+      const promise = (async () => userExecute(args, ctx))();
+
+      const result = await guard.run(promise, {
+        label: `skill:${skill.id}`,
+        timeoutMs,
+        signal: externalSignal,
+      });
       counters.incr(skill.id);
       return result;
     },
@@ -231,4 +289,5 @@ module.exports = {
   SANDBOX_LIMITS,
   MAIN_ALLOW,
   SANDBOX_ALLOW,
+  DEFAULT_SKILL_TIMEOUT_MS,
 };
