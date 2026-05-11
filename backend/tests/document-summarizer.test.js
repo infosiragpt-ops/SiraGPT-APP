@@ -87,6 +87,34 @@ test('summarizeDocumentStructured forwards hint + truncation note in the prompt'
 
 // ── error mapping ─────────────────────────────────────────────────────────
 
+test('summarizeDocumentStructured sends response_format=json_schema with strict=true by default', async () => {
+  const openai = fakeOpenai(sampleSummary);
+  await summarizeDocumentStructured({ openai, text: 'doc body' });
+  const req = openai.__calls[0];
+  assert.equal(req.response_format.type, 'json_schema');
+  assert.equal(req.response_format.json_schema.strict, true);
+  assert.equal(req.response_format.json_schema.name, 'document_summary');
+  // Top-level object must be locked down with additionalProperties: false
+  assert.equal(req.response_format.json_schema.schema.additionalProperties, false);
+  // Every top-level field must be in required[] (strict-mode constraint).
+  const required = req.response_format.json_schema.schema.required;
+  assert.deepEqual(
+    new Set(required),
+    new Set(['language', 'tldr', 'keyPoints', 'entities', 'claims', 'structure', 'complexity', 'estimatedReadTimeMin']),
+  );
+});
+
+test('summarizeDocumentStructured opts out to json_object when useStrictSchema=false', async () => {
+  const openai = fakeOpenai(sampleSummary);
+  await summarizeDocumentStructured({
+    openai,
+    text: 'doc body',
+    options: { useStrictSchema: false },
+  });
+  const req = openai.__calls[0];
+  assert.equal(req.response_format.type, 'json_object');
+});
+
 test('summarizeDocumentStructured throws doc_summarizer_no_client without openai', async () => {
   await assert.rejects(
     () => summarizeDocumentStructured({ text: 'x' }),

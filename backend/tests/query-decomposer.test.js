@@ -119,6 +119,30 @@ test('normalizeDecomposition collapses + clips rationale at 280 chars', () => {
 
 // ── error mapping ─────────────────────────────────────────────────────────
 
+test('decomposeQuery sends response_format=json_schema with strict=true by default', async () => {
+  const openai = fakeOpenai(sample);
+  await dq.decomposeQuery({ openai, question: 'q' });
+  const req = openai.__calls[0];
+  assert.equal(req.response_format.type, 'json_schema');
+  assert.equal(req.response_format.json_schema.strict, true);
+  assert.equal(req.response_format.json_schema.name, 'query_decomposition');
+  // combine must be an enum, subqueries an array of strings.
+  const props = req.response_format.json_schema.schema.properties;
+  assert.deepEqual(props.combine.enum, ['concat', 'intersect', 'sequence']);
+  assert.equal(props.subqueries.type, 'array');
+});
+
+test('decomposeQuery opts out to json_object when useStrictSchema=false', async () => {
+  const openai = fakeOpenai(sample);
+  await dq.decomposeQuery({
+    openai,
+    question: 'q',
+    options: { useStrictSchema: false },
+  });
+  const req = openai.__calls[0];
+  assert.equal(req.response_format.type, 'json_object');
+});
+
 test('decomposeQuery throws query_decomposer_no_client when openai is missing', async () => {
   await assert.rejects(
     () => dq.decomposeQuery({ question: 'q' }),

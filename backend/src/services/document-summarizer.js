@@ -33,6 +33,69 @@ const DEFAULT_MODEL = process.env.SIRAGPT_DOC_SUMMARIZER_MODEL || 'gpt-4o-mini';
 const DEFAULT_MAX_TOKENS = Number.parseInt(process.env.SIRAGPT_DOC_SUMMARIZER_MAX_TOKENS, 10) || 1400;
 const DEFAULT_LANGUAGE_HINT = ''; // empty = autodetect from text
 
+// OpenAI Structured Outputs JSON Schema (response_format: json_schema, strict: true).
+// Token-level enforcement so the model PHYSICALLY cannot emit a non-conforming
+// payload — no more parse-then-coerce dance for fields the schema can validate.
+// Constraints we have to honour (OpenAI docs, May 2026):
+//   - Every property must appear in `required`
+//   - Every object must have `additionalProperties: false`
+//   - max 100 properties, max 5 nesting levels
+//   - enums are allowed; min/max length / numeric constraints are NOT
+// We still pipe through normalizeSummary() afterwards as a defence-in-depth:
+//   - older models that don't support strict mode fall back to the old
+//     json_object path (handled by useStrictSchema flag)
+//   - the schema can't enforce e.g. "keyPoints between 5–10 items", so
+//     normalizeSummary still clips lengths.
+const STRICT_SCHEMA = Object.freeze({
+  name: 'document_summary',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      language: { type: 'string', enum: ['es', 'en', 'fr', 'pt', 'de', 'other'] },
+      tldr: { type: 'string' },
+      keyPoints: { type: 'array', items: { type: 'string' } },
+      entities: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          people: { type: 'array', items: { type: 'string' } },
+          organizations: { type: 'array', items: { type: 'string' } },
+          places: { type: 'array', items: { type: 'string' } },
+          dates: { type: 'array', items: { type: 'string' } },
+          concepts: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['people', 'organizations', 'places', 'dates', 'concepts'],
+      },
+      claims: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            claim: { type: 'string' },
+            evidence: { type: 'string' },
+          },
+          required: ['claim', 'evidence'],
+        },
+      },
+      structure: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          type: { type: 'string', enum: ['article', 'report', 'email', 'spec', 'code', 'prose', 'academic', 'legal', 'financial', 'other'] },
+          sections: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['type', 'sections'],
+      },
+      complexity: { type: 'string', enum: ['low', 'medium', 'high'] },
+      estimatedReadTimeMin: { type: 'integer' },
+    },
+    required: ['language', 'tldr', 'keyPoints', 'entities', 'claims', 'structure', 'complexity', 'estimatedReadTimeMin'],
+  },
+});
+
 const SYSTEM_PROMPT = `You are a professional document analyst. Given the text of a document or excerpt, produce a STRUCTURED analysis in JSON. Be objective, specific, and ground every claim in the supplied text — never your prior knowledge.
 
 OUTPUT FORMAT (STRICT JSON; no prose, no code fences):
@@ -252,13 +315,23 @@ async function summarizeDocumentStructured({ openai, text, hint = '', options = 
     bounded,
   ].filter(Boolean).join('\n');
 
+  // Strict schema requires gpt-4o-mini / gpt-4o-2024-08-06 / gpt-4o or
+  // newer. Caller can opt out via options.useStrictSchema=false for
+  // older models or self-hosted endpoints that don't implement strict
+  // mode. On opt-out we fall back to the plain json_object format —
+  // normalizeSummary() catches anything the model gets wrong.
+  const useStrictSchema = options.useStrictSchema !== false;
+  const responseFormat = useStrictSchema
+    ? { type: 'json_schema', json_schema: STRICT_SCHEMA }
+    : { type: 'json_object' };
+
   let resp;
   try {
     resp = await openai.chat.completions.create({
       model,
       temperature: 0.1,
       max_tokens: maxTokens,
-      response_format: { type: 'json_object' },
+      response_format: responseFormat,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
@@ -415,6 +488,7 @@ module.exports = {
   smartTruncate,
   getOrComputeFileSummary,
   SYSTEM_PROMPT,
+  STRICT_SCHEMA,
   DEFAULT_MAX_INPUT_CHARS,
   DEFAULT_MODEL,
 };

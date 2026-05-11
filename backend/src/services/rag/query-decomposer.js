@@ -38,6 +38,27 @@ const DEFAULT_MODEL = process.env.SIRAGPT_DECOMPOSER_MODEL || 'gpt-4o-mini';
 const DEFAULT_MAX_TOKENS = Number.parseInt(process.env.SIRAGPT_DECOMPOSER_MAX_TOKENS, 10) || 600;
 const MAX_SUBQUERIES = 5;
 
+// OpenAI Structured Outputs strict schema — token-level enforcement of
+// the decomposition envelope. Same constraints apply as in the summarizer:
+// every property in `required`, `additionalProperties: false` on every
+// object, enums for closed sets. We don't constrain subquery COUNT here
+// because OpenAI's schema dialect can't enforce `minItems/maxItems` —
+// clampSubqueries() still bounds the output post-parse.
+const STRICT_SCHEMA = Object.freeze({
+  name: 'query_decomposition',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      subqueries: { type: 'array', items: { type: 'string' } },
+      rationale: { type: 'string' },
+      combine: { type: 'string', enum: ['concat', 'intersect', 'sequence'] },
+    },
+    required: ['subqueries', 'rationale', 'combine'],
+  },
+});
+
 const SYSTEM_PROMPT = `You decompose a single user question into atomic sub-questions for retrieval-augmented generation. Each sub-question retrieves separately; the answer is then synthesised across sub-queries.
 
 OUTPUT FORMAT (STRICT JSON; no prose, no code fences):
@@ -148,13 +169,21 @@ async function decomposeQuery({ openai, question, options = {} } = {}) {
     original,
   ].filter(Boolean).join('\n');
 
+  // Strict schema mode requires gpt-4o-mini / gpt-4o-2024-08-06+. Older
+  // models / self-hosted endpoints fall back to json_object via
+  // options.useStrictSchema=false.
+  const useStrictSchema = options.useStrictSchema !== false;
+  const responseFormat = useStrictSchema
+    ? { type: 'json_schema', json_schema: STRICT_SCHEMA }
+    : { type: 'json_object' };
+
   let resp;
   try {
     resp = await openai.chat.completions.create({
       model,
       temperature: 0.1,
       max_tokens: maxTokens,
-      response_format: { type: 'json_object' },
+      response_format: responseFormat,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
@@ -187,6 +216,7 @@ module.exports = {
   normalizeDecomposition,
   clampSubqueries,
   SYSTEM_PROMPT,
+  STRICT_SCHEMA,
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
   MAX_SUBQUERIES,
