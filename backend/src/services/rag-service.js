@@ -178,6 +178,18 @@ function cosine(a, b) {
 async function ingest(userId, collection, docs, opts = {}) {
   if (!Array.isArray(docs) || docs.length === 0) return { chunksAdded: 0, totalChunks: 0 };
 
+  // Contextual Retrieval (Anthropic, Sept 2024). When opts.useContextualChunking
+  // is true AND opts.anthropic is provided, each chunk is enriched with a
+  // 50–100-token context block generated against the FULL document via
+  // Claude Haiku with prompt caching. The enriched string is what we
+  // embed AND store under `text`, so both cosine retrieval and the
+  // downstream LLM benefit from the contextual prefix. Failed chunks
+  // fall back to their original text — the per-chunk failures[] from
+  // contextualizeChunks is surfaced on the return envelope for telemetry.
+  const useContextual = !!opts.useContextualChunking && opts.anthropic;
+  const contextualFailures = [];
+  const contextualUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+
   // Chunking and embedding are pure / API-bounded — no shared state, safe
   // outside the lock. We only hold the lock across the read-modify-write
   // of `store` itself, where a concurrent ingester could otherwise see
@@ -186,8 +198,29 @@ async function ingest(userId, collection, docs, opts = {}) {
   for (const d of docs) {
     if (!d || typeof d.text !== 'string') continue;
     const pieces = chunk(d.text, opts);
-    for (const p of pieces) {
-      allChunks.push({ text: p, source: d.source || null, title: d.title || null });
+    if (pieces.length === 0) continue;
+
+    if (useContextual) {
+      const contextual = require('./rag/contextual-chunking');
+      const ctxResult = await contextual.contextualizeChunks({
+        document: d.text,
+        chunks: pieces,
+        anthropic: opts.anthropic,
+        options: opts.contextualOptions || {},
+      });
+      for (const f of ctxResult.failures) contextualFailures.push(f);
+      contextualUsage.input_tokens += ctxResult.usage.input_tokens;
+      contextualUsage.output_tokens += ctxResult.usage.output_tokens;
+      contextualUsage.cache_read_input_tokens += ctxResult.usage.cache_read_input_tokens;
+      contextualUsage.cache_creation_input_tokens += ctxResult.usage.cache_creation_input_tokens;
+      for (let i = 0; i < pieces.length; i++) {
+        const enriched = ctxResult.contextualized[i] || pieces[i];
+        allChunks.push({ text: enriched, source: d.source || null, title: d.title || null });
+      }
+    } else {
+      for (const p of pieces) {
+        allChunks.push({ text: p, source: d.source || null, title: d.title || null });
+      }
     }
   }
   if (allChunks.length === 0) return { chunksAdded: 0, totalChunks: 0 };
@@ -202,7 +235,13 @@ async function ingest(userId, collection, docs, opts = {}) {
       allChunks.map((c, i) => ({ ...c, embedding: vectors[i] })),
     );
     const { totalChunks } = await evictAndCleanOrphans(userId, collection);
-    return { chunksAdded: allChunks.length, totalChunks };
+    const result = { chunksAdded: allChunks.length, totalChunks };
+    if (useContextual) {
+      result.contextualized = true;
+      result.contextualFailures = contextualFailures;
+      result.contextualUsage = contextualUsage;
+    }
+    return result;
   });
 }
 
