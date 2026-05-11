@@ -15,6 +15,7 @@ const {
   renderSummaryAsMarkdown,
   normalizeSummary,
   smartTruncate,
+  getOrComputeFileSummary,
   DEFAULT_MAX_INPUT_CHARS,
 } = require('../src/services/document-summarizer');
 
@@ -238,4 +239,122 @@ test('renderSummaryAsMarkdown handles minimal summary without crashing', () => {
   assert.match(md, /Tipo[^]*prose/);
   assert.match(md, /Complejidad[^]*low/);
   assert.ok(!md.includes('TL;DR'));
+});
+
+// ── getOrComputeFileSummary ───────────────────────────────────────────────
+//
+// Backs the GET /api/files/:id/summary endpoint. Tests use a fake
+// prisma + fake openai so they are hermetic — no DB, no network.
+
+function fakePrisma({ file = null, analysis = null, updateError = null } = {}) {
+  let storedAnalysis = analysis ? { ...analysis } : null;
+  return {
+    file: {
+      findFirst: async ({ where }) => {
+        if (!file) return null;
+        if (file.userId && where?.userId && file.userId !== where.userId) return null;
+        if (where?.id && file.id !== where.id) return null;
+        return file;
+      },
+    },
+    documentAnalysis: {
+      findUnique: async () => storedAnalysis,
+      update: async ({ data }) => {
+        if (updateError) throw updateError;
+        storedAnalysis = { ...storedAnalysis, ...data };
+        return storedAnalysis;
+      },
+    },
+    __getStoredAnalysis: () => storedAnalysis,
+  };
+}
+
+test('getOrComputeFileSummary returns cached summary when present and !refresh', async () => {
+  const cached = { ...sampleSummary, cachedAt: '2026-01-01T00:00:00Z' };
+  const prisma = fakePrisma({
+    file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: 'hello' },
+    analysis: { id: 'a1', metadata: { llmSummary: cached } },
+  });
+  const openai = fakeOpenai(sampleSummary);
+  const out = await getOrComputeFileSummary({ prisma, openai, userId: 'u1', fileId: 'f1' });
+  assert.equal(out.fromCache, true);
+  assert.equal(out.summary.tldr, cached.tldr);
+  assert.equal(openai.__calls.length, 0, 'cache hit must not call the LLM');
+});
+
+test('getOrComputeFileSummary computes + caches on miss', async () => {
+  const prisma = fakePrisma({
+    file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: 'a longer doc body' },
+    analysis: { id: 'a1', metadata: {} },
+  });
+  const openai = fakeOpenai(sampleSummary);
+  const out = await getOrComputeFileSummary({ prisma, openai, userId: 'u1', fileId: 'f1' });
+  assert.equal(out.fromCache, false);
+  assert.equal(out.summary.tldr, sampleSummary.tldr);
+  assert.equal(openai.__calls.length, 1);
+  // Cache write happened
+  const stored = prisma.__getStoredAnalysis();
+  assert.ok(stored.metadata.llmSummary);
+  assert.ok(stored.metadata.llmSummary.cachedAt);
+});
+
+test('getOrComputeFileSummary refresh=true bypasses cache and recomputes', async () => {
+  const cached = { ...sampleSummary, tldr: 'OLD TLDR', cachedAt: '2025-01-01T00:00:00Z' };
+  const prisma = fakePrisma({
+    file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: 'new content' },
+    analysis: { id: 'a1', metadata: { llmSummary: cached } },
+  });
+  const openai = fakeOpenai({ ...sampleSummary, tldr: 'NEW TLDR' });
+  const out = await getOrComputeFileSummary({ prisma, openai, userId: 'u1', fileId: 'f1', refresh: true });
+  assert.equal(out.fromCache, false);
+  assert.equal(out.summary.tldr, 'NEW TLDR');
+});
+
+test('getOrComputeFileSummary throws doc_summarizer_no_prisma without prisma', async () => {
+  await assert.rejects(
+    () => getOrComputeFileSummary({ openai: fakeOpenai(sampleSummary), userId: 'u', fileId: 'f' }),
+    (err) => err.code === 'doc_summarizer_no_prisma',
+  );
+});
+
+test('getOrComputeFileSummary throws doc_summarizer_bad_args without userId/fileId', async () => {
+  const prisma = fakePrisma({});
+  await assert.rejects(
+    () => getOrComputeFileSummary({ prisma, openai: fakeOpenai(sampleSummary), userId: '', fileId: 'f' }),
+    (err) => err.code === 'doc_summarizer_bad_args',
+  );
+});
+
+test('getOrComputeFileSummary throws doc_summarizer_file_not_found when file missing or wrong owner', async () => {
+  const prisma = fakePrisma({});
+  await assert.rejects(
+    () => getOrComputeFileSummary({ prisma, openai: fakeOpenai(sampleSummary), userId: 'u1', fileId: 'missing' }),
+    (err) => err.code === 'doc_summarizer_file_not_found',
+  );
+});
+
+test('getOrComputeFileSummary throws doc_summarizer_empty_text on blank extraction', async () => {
+  const prisma = fakePrisma({
+    file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: '   ' },
+    analysis: null,
+  });
+  await assert.rejects(
+    () => getOrComputeFileSummary({ prisma, openai: fakeOpenai(sampleSummary), userId: 'u1', fileId: 'f1' }),
+    (err) => err.code === 'doc_summarizer_empty_text',
+  );
+});
+
+test('getOrComputeFileSummary returns computed summary even when cache write fails', async () => {
+  const prisma = fakePrisma({
+    file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: 'body text' },
+    analysis: { id: 'a1', metadata: {} },
+    updateError: new Error('db down'),
+  });
+  const openai = fakeOpenai(sampleSummary);
+  const out = await getOrComputeFileSummary({ prisma, openai, userId: 'u1', fileId: 'f1' });
+  assert.equal(out.fromCache, false);
+  assert.equal(out.summary.tldr, sampleSummary.tldr);
+  // The function should swallow the cache-write error; the summary
+  // is still a valid response — the next call simply won't see a cache
+  // hit until the DB recovers.
 });

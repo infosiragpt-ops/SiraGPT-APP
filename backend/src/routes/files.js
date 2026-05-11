@@ -7,6 +7,7 @@ const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
 const documentIntelligence = require('../services/document-intelligence');
 const documentContext = require('../services/agents/document-context');
+const documentSummarizer = require('../services/document-summarizer');
 const { validateUploadPolicy } = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
@@ -809,6 +810,59 @@ router.get('/diagnostics/batch', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('[files] batch diagnostics error:', err.message || err);
     return res.status(500).json({ error: 'Failed to scan documents', detail: err.message });
+  }
+});
+
+/**
+ * GET /api/files/:id/summary — on-demand structured LLM analysis of a
+ * single file the caller owns.
+ *
+ * Pipeline:
+ *   1. Verify ownership via the userId from the JWT.
+ *   2. Hit the cache in DocumentAnalysis.metadata.llmSummary unless
+ *      ?refresh=true.
+ *   3. On miss, call summarizeDocumentStructured and persist the
+ *      result back into metadata for the next reader.
+ *
+ * Why on-demand instead of post-upload: most uploaded files are never
+ * opened in the analysis view. Running the LLM pass on every upload
+ * burns tokens for documents the user never reads. Computing on first
+ * request keeps token spend proportional to actual interest.
+ *
+ * Errors:
+ *   404  doc_summarizer_file_not_found     wrong fileId / wrong owner
+ *   422  doc_summarizer_empty_text         extraction yielded no text
+ *   502  doc_summarizer_llm_failed         upstream OpenAI failure
+ *   502  doc_summarizer_invalid_json       model returned non-JSON
+ */
+router.get('/:id/summary', authenticateToken, async (req, res) => {
+  try {
+    const refresh = String(req.query?.refresh || '').toLowerCase() === 'true';
+    const result = await documentSummarizer.getOrComputeFileSummary({
+      prisma,
+      openai,
+      userId: req.user.id,
+      fileId: req.params.id,
+      refresh,
+    });
+    return res.json({
+      fileId: req.params.id,
+      fromCache: result.fromCache,
+      summary: result.summary,
+    });
+  } catch (err) {
+    const code = err && err.code ? err.code : 'doc_summarizer_unknown';
+    const status = ({
+      doc_summarizer_no_prisma: 500,
+      doc_summarizer_bad_args: 400,
+      doc_summarizer_file_not_found: 404,
+      doc_summarizer_empty_text: 422,
+      doc_summarizer_no_client: 500,
+      doc_summarizer_llm_failed: 502,
+      doc_summarizer_invalid_json: 502,
+    })[code] || 500;
+    if (status >= 500) console.warn('[files] /:id/summary failed:', code, err && err.message);
+    return res.status(status).json({ error: err && err.message, code });
   }
 });
 

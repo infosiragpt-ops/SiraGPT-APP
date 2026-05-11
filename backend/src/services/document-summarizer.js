@@ -326,11 +326,94 @@ function renderSummaryAsMarkdown(summary) {
   return lines.join('\n').trim();
 }
 
+/**
+ * Return the cached LLM summary for a user's file, computing + caching
+ * it on demand. Designed to back an on-demand `/api/files/:id/summary`
+ * route so the upload path stays cheap and we only pay for the LLM
+ * pass when the user actually opens the file's analysis view.
+ *
+ * Caching: the summary lives inside `DocumentAnalysis.metadata.llmSummary`
+ * (no schema migration needed). The cache key is implicit — one summary
+ * per file, replaced on `refresh=true`. We also store
+ * `llmSummary.cachedAt` so a future TTL-based invalidation hook is easy
+ * to plug in.
+ *
+ * @param {object} args
+ * @param {object} args.prisma         Prisma client
+ * @param {object} args.openai         OpenAI SDK client
+ * @param {string} args.userId
+ * @param {string} args.fileId
+ * @param {boolean} [args.refresh=false]
+ * @param {object} [args.options]      forwarded to summarizeDocumentStructured
+ * @returns {Promise<{ summary: DocumentSummary, fromCache: boolean }>}
+ */
+async function getOrComputeFileSummary({ prisma, openai, userId, fileId, refresh = false, options = {} } = {}) {
+  if (!prisma) {
+    const err = new Error('getOrComputeFileSummary: prisma is required');
+    err.code = 'doc_summarizer_no_prisma';
+    throw err;
+  }
+  if (!userId || !fileId) {
+    const err = new Error('getOrComputeFileSummary: userId and fileId are required');
+    err.code = 'doc_summarizer_bad_args';
+    throw err;
+  }
+
+  // Verify ownership + load extracted text in one round-trip.
+  const file = await prisma.file.findFirst({
+    where: { id: fileId, userId },
+    select: { id: true, originalName: true, mimeType: true, extractedText: true },
+  });
+  if (!file) {
+    const err = new Error('getOrComputeFileSummary: file not found or not owned by user');
+    err.code = 'doc_summarizer_file_not_found';
+    throw err;
+  }
+
+  // Look up the existing analysis row (if any) to read the cached summary.
+  const analysis = await prisma.documentAnalysis.findUnique({
+    where: { fileId },
+    select: { id: true, metadata: true },
+  });
+
+  const cached = analysis?.metadata?.llmSummary;
+  if (!refresh && cached && cached.tldr) {
+    return { summary: cached, fromCache: true };
+  }
+
+  const text = String(file.extractedText || '').trim();
+  if (!text) {
+    const err = new Error('getOrComputeFileSummary: file has no extracted text');
+    err.code = 'doc_summarizer_empty_text';
+    throw err;
+  }
+
+  const hint = `${file.originalName || 'file'} (${file.mimeType || 'unknown'})`;
+  const summary = await summarizeDocumentStructured({ openai, text, hint, options });
+
+  // Persist into metadata.llmSummary if we have an analysis row to attach
+  // it to. If not (first analysis hasn't run yet), still return the
+  // computed summary — the next analyzeFile run will pick up the file
+  // and an explicit `refresh=true` call after that will populate the
+  // cache. Persisting without an analysis row would require an upsert,
+  // which is out of scope for this read-mostly endpoint.
+  if (analysis?.id) {
+    const nextMetadata = { ...(analysis.metadata || {}), llmSummary: { ...summary, cachedAt: new Date().toISOString() } };
+    await prisma.documentAnalysis.update({
+      where: { id: analysis.id },
+      data: { metadata: nextMetadata },
+    }).catch(() => { /* best-effort cache write — non-fatal */ });
+  }
+
+  return { summary, fromCache: false };
+}
+
 module.exports = {
   summarizeDocumentStructured,
   renderSummaryAsMarkdown,
   normalizeSummary,
   smartTruncate,
+  getOrComputeFileSummary,
   SYSTEM_PROMPT,
   DEFAULT_MAX_INPUT_CHARS,
   DEFAULT_MODEL,
