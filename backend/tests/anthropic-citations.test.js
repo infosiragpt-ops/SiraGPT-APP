@@ -313,6 +313,114 @@ test('callAnthropicWithCitations rejects when no documents are supplied', async 
   });
 });
 
+// ─── answerFileQuestionWithCitations ──────────────────────────────────────
+//
+// Backs POST /api/files/:id/cite. Uses fake prisma + fake SDK client.
+
+function fakePrisma({ file = null } = {}) {
+  return {
+    file: {
+      findFirst: async ({ where }) => {
+        if (!file) return null;
+        if (file.userId && where?.userId && file.userId !== where.userId) return null;
+        if (where?.id && file.id !== where.id) return null;
+        return file;
+      },
+    },
+  };
+}
+
+test('answerFileQuestionWithCitations end-to-end with fake prisma + SDK', async () => {
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' }, async () => {
+    mod._setClientForTests({
+      messages: {
+        create: async (req) => {
+          // Verify the document was attached and the question is the trailing text.
+          const lastMsg = req.messages[req.messages.length - 1];
+          assert.equal(lastMsg.content[0].type, 'document');
+          assert.equal(lastMsg.content[0].title, 'doc.pdf');
+          assert.equal(lastMsg.content[0].context, 'mimeType=application/pdf');
+          assert.equal(lastMsg.content[1].type, 'text');
+          assert.equal(lastMsg.content[1].text, '¿De qué trata?');
+          return {
+            content: [{
+              type: 'text',
+              text: 'Trata sobre el clima.',
+              citations: [{
+                type: 'char_location',
+                cited_text: 'el clima en CDMX',
+                document_index: 0,
+                document_title: 'doc.pdf',
+                start_char_index: 5,
+                end_char_index: 21,
+              }],
+            }],
+            usage: { input_tokens: 80, output_tokens: 12 },
+          };
+        },
+      },
+    });
+    try {
+      const prisma = fakePrisma({
+        file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: 'sobre el clima en CDMX 2026.' },
+      });
+      const out = await mod.answerFileQuestionWithCitations({
+        prisma,
+        userId: 'u1',
+        fileId: 'f1',
+        question: '¿De qué trata?',
+      });
+      assert.equal(out.fileId, 'f1');
+      assert.equal(out.fileTitle, 'doc.pdf');
+      assert.equal(out.text, 'Trata sobre el clima.');
+      assert.equal(out.citations.length, 1);
+      assert.equal(out.citations[0].cited, 'el clima en CDMX');
+      assert.equal(out.citations[0].start, 5);
+    } finally {
+      mod._resetClientForTests();
+    }
+  });
+});
+
+test('answerFileQuestionWithCitations rejects with typed code on bad inputs', async () => {
+  await withEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' }, async () => {
+    mod._setClientForTests({ messages: { create: async () => ({}) } });
+    try {
+      const prisma = fakePrisma({});
+      // Missing prisma
+      await assert.rejects(
+        () => mod.answerFileQuestionWithCitations({ userId: 'u', fileId: 'f', question: 'q' }),
+        (err) => err.code === 'anthropic_citations_no_prisma',
+      );
+      // Missing question
+      await assert.rejects(
+        () => mod.answerFileQuestionWithCitations({ prisma, userId: 'u', fileId: 'f', question: '   ' }),
+        (err) => err.code === 'anthropic_citations_empty_question',
+      );
+      // Missing userId/fileId
+      await assert.rejects(
+        () => mod.answerFileQuestionWithCitations({ prisma, userId: '', fileId: 'f', question: 'q' }),
+        (err) => err.code === 'anthropic_citations_bad_args',
+      );
+      // File not found / wrong owner
+      await assert.rejects(
+        () => mod.answerFileQuestionWithCitations({ prisma, userId: 'u1', fileId: 'missing', question: 'q' }),
+        (err) => err.code === 'anthropic_citations_file_not_found',
+      );
+      // File present but no extracted text
+      const emptyTextPrisma = fakePrisma({
+        file: { id: 'f1', userId: 'u1', originalName: 'doc.pdf', mimeType: 'application/pdf', extractedText: '   ' },
+      });
+      await assert.rejects(
+        () => mod.answerFileQuestionWithCitations({ prisma: emptyTextPrisma, userId: 'u1', fileId: 'f1', question: 'q' }),
+        (err) => err.code === 'anthropic_citations_empty_text',
+      );
+    } finally {
+      mod._resetClientForTests();
+    }
+  });
+});
+
 test('callAnthropicWithCitations wraps SDK throws as anthropic_citations_llm_failed', async () => {
   await withEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' }, async () => {
     mod._setClientForTests({

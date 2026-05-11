@@ -8,6 +8,7 @@ const documentRenderer = require('../services/documentRenderer');
 const documentIntelligence = require('../services/document-intelligence');
 const documentContext = require('../services/agents/document-context');
 const documentSummarizer = require('../services/document-summarizer');
+const anthropicCitations = require('../services/providers/anthropic-citations');
 const { validateUploadPolicy } = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
@@ -862,6 +863,64 @@ router.get('/:id/summary', authenticateToken, async (req, res) => {
       doc_summarizer_invalid_json: 502,
     })[code] || 500;
     if (status >= 500) console.warn('[files] /:id/summary failed:', code, err && err.message);
+    return res.status(status).json({ error: err && err.message, code });
+  }
+});
+
+/**
+ * POST /api/files/:id/cite — answer a question against a single file
+ * the caller owns, returning the answer with NATIVE Anthropic citations
+ * (char_location offsets back into the file's extracted text).
+ *
+ * Body: { question: string, options?: { model?, maxTokens?, temperature? } }
+ *
+ * Why a dedicated endpoint vs. the chat path:
+ *   The native Citations API gives us verified character offsets that
+ *   the existing post-hoc citation-engine.js cannot guarantee. Surfacing
+ *   it on its own endpoint lets the frontend render a "doc Q&A" view
+ *   with click-to-jump-to-source without changing the broader chat
+ *   pipeline. A future commit can wire this into the chat path behind
+ *   a feature flag once the UX for inline citation pointers is stable.
+ *
+ * Errors:
+ *   400  anthropic_citations_bad_args / anthropic_citations_empty_question
+ *   404  anthropic_citations_file_not_found
+ *   422  anthropic_citations_empty_text
+ *   500  anthropic_citations_no_prisma
+ *   502  anthropic_citations_llm_failed
+ *   503  anthropic_citations_disabled (no ANTHROPIC_API_KEY)
+ */
+router.post('/:id/cite', authenticateToken, async (req, res) => {
+  try {
+    const { question, options } = req.body || {};
+    const out = await anthropicCitations.answerFileQuestionWithCitations({
+      prisma,
+      userId: req.user.id,
+      fileId: req.params.id,
+      question,
+      options: options && typeof options === 'object' ? options : {},
+    });
+    return res.json({
+      fileId: out.fileId,
+      fileTitle: out.fileTitle,
+      answer: out.text,
+      citations: out.citations,
+      blocks: out.blocks,
+      usage: out.usage,
+    });
+  } catch (err) {
+    const code = err && err.code ? err.code : 'anthropic_citations_unknown';
+    const status = ({
+      anthropic_citations_no_prisma: 500,
+      anthropic_citations_bad_args: 400,
+      anthropic_citations_empty_question: 400,
+      anthropic_citations_no_documents: 400,
+      anthropic_citations_file_not_found: 404,
+      anthropic_citations_empty_text: 422,
+      anthropic_citations_disabled: 503,
+      anthropic_citations_llm_failed: 502,
+    })[code] || 500;
+    if (status >= 500 && status !== 503) console.warn('[files] /:id/cite failed:', code, err && err.message);
     return res.status(status).json({ error: err && err.message, code });
   }
 });

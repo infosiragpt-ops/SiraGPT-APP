@@ -348,12 +348,102 @@ async function callAnthropicWithCitations({ system = null, messages = [], docume
   };
 }
 
+/**
+ * Answer a single question against ONE file the caller owns, returning
+ * the answer + native citations with character offsets back into the
+ * file's extracted text.
+ *
+ * Pipeline:
+ *   1. Verify ownership via prisma.file.findFirst (id + userId).
+ *   2. Pull the extracted text we already have on disk; refuse if blank.
+ *   3. Call callAnthropicWithCitations with one text-document block
+ *      and the user's question as the trailing user-turn text.
+ *   4. Return the normalised envelope plus the file's id/title.
+ *
+ * Designed to back a thin route handler (POST /api/files/:id/cite) so
+ * the route stays a few lines and the testable behaviour lives here.
+ *
+ * @param {object} args
+ * @param {object} args.prisma
+ * @param {string} args.userId
+ * @param {string} args.fileId
+ * @param {string} args.question
+ * @param {object} [args.options] forwarded to callAnthropicWithCitations
+ * @returns {Promise<{
+ *   fileId: string,
+ *   fileTitle: string,
+ *   text: string,
+ *   blocks: Array,
+ *   citations: Array,
+ *   usage: object,
+ * }>}
+ */
+async function answerFileQuestionWithCitations({ prisma, userId, fileId, question, options = {} } = {}) {
+  if (!prisma) {
+    const err = new Error('answerFileQuestionWithCitations: prisma is required');
+    err.code = 'anthropic_citations_no_prisma';
+    throw err;
+  }
+  if (!userId || !fileId) {
+    const err = new Error('answerFileQuestionWithCitations: userId and fileId are required');
+    err.code = 'anthropic_citations_bad_args';
+    throw err;
+  }
+  const cleanQuestion = String(question || '').trim();
+  if (!cleanQuestion) {
+    const err = new Error('answerFileQuestionWithCitations: question is required');
+    err.code = 'anthropic_citations_empty_question';
+    throw err;
+  }
+
+  const file = await prisma.file.findFirst({
+    where: { id: fileId, userId },
+    select: { id: true, originalName: true, mimeType: true, extractedText: true },
+  });
+  if (!file) {
+    const err = new Error('answerFileQuestionWithCitations: file not found or not owned by user');
+    err.code = 'anthropic_citations_file_not_found';
+    throw err;
+  }
+
+  const text = String(file.extractedText || '').trim();
+  if (!text) {
+    const err = new Error('answerFileQuestionWithCitations: file has no extracted text');
+    err.code = 'anthropic_citations_empty_text';
+    throw err;
+  }
+
+  const title = file.originalName || `file-${file.id.slice(0, 8)}`;
+
+  const out = await callAnthropicWithCitations({
+    system: options.system || 'Responde basándote ÚNICAMENTE en el documento adjunto. Cita cada afirmación con la evidencia textual exacta.',
+    messages: [{ role: 'user', content: cleanQuestion }],
+    documents: [{
+      type: 'text',
+      title,
+      data: text,
+      context: `mimeType=${file.mimeType || 'unknown'}`,
+    }],
+    options,
+  });
+
+  return {
+    fileId: file.id,
+    fileTitle: title,
+    text: out.text,
+    blocks: out.blocks,
+    citations: out.citations,
+    usage: out.usage,
+  };
+}
+
 // ── Test seams ────────────────────────────────────────────────────────────
 function _setClientForTests(client) { _client = client; }
 function _resetClientForTests() { _client = null; _SdkClass = null; }
 
 module.exports = {
   callAnthropicWithCitations,
+  answerFileQuestionWithCitations,
   normalizeCitations,
   normalizeOneCitation,
   buildDocumentBlocks,
