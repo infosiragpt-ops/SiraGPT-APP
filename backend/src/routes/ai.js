@@ -44,6 +44,7 @@ const {
 } = require('../services/agents/agentic-operating-core');
 const { buildSemanticIntentAnalysis } = require('../services/agents/semantic-intent-router');
 const ciraEngine = require('../services/sira/engine');
+const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -1546,6 +1547,30 @@ router.post(
           } catch (memErr) {
             console.warn('[ai] memory extract schedule failed:', memErr.message);
           }
+        }
+
+        // Shadow-mode brain pipeline audit. Fire-and-forget. Logs a
+        // structured verdict (decision, blocking_flags, latency_ms,
+        // reasons) so we can validate enforcement BEFORE flipping the
+        // env flag SIRAGPT_BRAIN_ENFORCE=1. Never blocks delivery.
+        if (userId && fullResponseContent) {
+          const documentClassification = documentEnrichment?.perFileProfile?.[0]
+            ? { type: documentEnrichment.perFileProfile[0].type, confidence: documentEnrichment.perFileProfile[0].confidence }
+            : null;
+          postResponseBrainHook.runShadowModeBrainPipeline({
+            envelope: universalTaskContract || null,
+            answer: fullResponseContent,
+            evidence: processedFiles,
+            classification: documentClassification,
+            insights: null,
+            quality: null,
+            retrieval: operationalRagContext ? { score: operationalRagContext.score, has_evidence: true } : { has_evidence: false },
+            intentConfidence: semanticIntentAnalysis?.primary_intent?.confidence ?? null,
+            modelScore: null,
+            toolRegistry: null,
+            userId,
+            chatId: canPersist ? chatId : null,
+          }).catch(() => { /* fully swallowed inside the hook */ });
         }
       } catch (apiError) {
         if (cacheHandle) cacheHandle.fail(apiError && apiError.message ? apiError.message : 'stream failed');
