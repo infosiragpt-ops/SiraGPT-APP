@@ -193,11 +193,53 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
     ? `\n\n(The user has ${fileIds.length} uploaded file${fileIds.length === 1 ? "" : "s"} attached to this conversation.)`
     : "";
 
+  // Pick the right (client, model) tuple for Structured Outputs. The
+  // caller often hands us a generic provider client (DeepSeek,
+  // OpenRouter, Anthropic-shim, Gemini-shim) that does NOT accept
+  // OpenAI model identifiers. Calling `openai.chat.completions.create({ model: "gpt-4o-mini" })`
+  // against the DeepSeek base URL fails fast with HTTP 400 ("the
+  // supported API model names are deepseek-v4-pro or deepseek-v4-flash").
+  //
+  // Strategy, in priority order:
+  //   1. If the caller's client looks like DeepSeek's baseURL, remap
+  //      the model to deepseek-v4-flash (cheap, structured-outputs
+  //      compatible, same JSON-schema mode).
+  //   2. If we have OPENAI_API_KEY in the environment AND the caller's
+  //      client is NOT OpenAI-native, build a lightweight OpenAI
+  //      client just for the contract resolver and use gpt-4o-mini.
+  //      This decouples the resolver from whatever provider the chat
+  //      flow happens to be routing through.
+  //   3. Otherwise honor whatever (client, model) the caller passed.
+  let effectiveOpenai = openai;
+  let effectiveModel = model;
+  try {
+    const baseURL = openai?.baseURL || openai?.client?.baseURL || openai?._options?.baseURL || '';
+    const isDeepseek = /(^|\.)deepseek\.com/i.test(String(baseURL));
+    const isOpenAINative = !baseURL || /(^|\.)openai\.com/i.test(String(baseURL));
+    if (isDeepseek) {
+      // Remap to a DeepSeek model the API will accept.
+      effectiveModel = /pro/i.test(String(model)) ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
+    } else if (!isOpenAINative && process.env.OPENAI_API_KEY) {
+      // Try to spin up a side-channel OpenAI client. If `openai`
+      // package isn't installed (unlikely — it's used elsewhere) or
+      // construction fails, fall back to the caller's client.
+      try {
+        const OpenAI = require('openai');
+        effectiveOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        effectiveModel = model || 'gpt-4o-mini';
+      } catch (_e) {
+        // Keep caller's client + model — last resort.
+      }
+    }
+  } catch (_e) {
+    // Defensive: never abort the resolver because of introspection.
+  }
+
   // Try LLM with Structured Outputs first.
-  if (openai && typeof openai.chat?.completions?.create === "function" && typeof goal === "string" && goal.trim().length > 0) {
+  if (effectiveOpenai && typeof effectiveOpenai.chat?.completions?.create === "function" && typeof goal === "string" && goal.trim().length > 0) {
     try {
-      const resp = await openai.chat.completions.create({
-        model,
+      const resp = await effectiveOpenai.chat.completions.create({
+        model: effectiveModel,
         temperature: 0,
         max_tokens: 1400,
         messages: [

@@ -51,6 +51,13 @@ export default function LoginPage() {
       console.log("Login success:", success);
       if (success) {
         toast.success(t("signIn"))
+        // Explicit redirect — don't rely solely on the useEffect that
+        // watches `user`. In dev mode, state updates can race with the
+        // setIsLoading(false) and leave the user stuck on the login
+        // screen even though the auth context has the user. A direct
+        // push guarantees navigation immediately after a successful
+        // login, regardless of when the AuthContext re-renders.
+        router.push("/chat")
       } else {
         toast.error(t("invalidCreds"))
       }

@@ -609,10 +609,32 @@ class ApiClient {
       ...(signal && { signal }),
     };
 
-    const MAX_CONNECT_ATTEMPTS = 2;
-    const RECONNECT_DELAY_MS = 1000;
+    // Robustness contract for /api/ai/generate streaming:
+    //  - Up to 5 reconnect attempts before surfacing an error to the UI
+    //  - Exponential backoff with jitter: ~1s, 2s, 4s, 8s, 16s (cap 20s)
+    //  - Retriable: HTTP 429, HTTP 5xx, transport errors ("Failed to
+    //    fetch", ECONNRESET, ETIMEDOUT, socket dropped), AND
+    //    "no se recibió respuesta" (the model stream ended dry — usually
+    //    a provider-side hiccup that resolves on retry)
+    //  - Honor Retry-After header on 429 if provided
+    //  - Never retry after content has reached the user (no duplicates)
+    //  - Never retry on AbortError (user clicked stop)
+    //  - Per-attempt timing is logged so we can audit recovery cost
+    const MAX_CONNECT_ATTEMPTS = 5;
+    const BASE_RECONNECT_DELAY_MS = 1000;
+    const MAX_RECONNECT_DELAY_MS = 20000;
     let hasDeliveredAnyContent = false;
     let lastError: any = null;
+
+    const computeBackoff = (attempt: number, retryAfterSeconds?: number) => {
+      if (typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0) {
+        return Math.min(retryAfterSeconds * 1000, MAX_RECONNECT_DELAY_MS);
+      }
+      // 2^(attempt-1) * base + 0..250ms jitter
+      const exp = Math.min(BASE_RECONNECT_DELAY_MS * Math.pow(2, attempt - 1), MAX_RECONNECT_DELAY_MS);
+      const jitter = Math.floor(Math.random() * 250);
+      return Math.min(exp + jitter, MAX_RECONNECT_DELAY_MS);
+    };
 
     for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt++) {
       if (signal?.aborted) { onError(new Error('Request aborted')); return; }
@@ -638,16 +660,22 @@ class ApiClient {
           err.status = response.status;
           if (details.code) err.code = details.code;
 
-          // Retriable transport failures: 429 (rate-limit) and 5xx
-          // (server error) — only BEFORE any content has reached the
-          // user, and only once per turn. Anything else bubbles up
-          // (auth/validation/quota-exhaustion are terminal).
+          // Retriable transport failures: 429 (rate-limit), 5xx server
+          // errors, 408 timeout — only BEFORE any content has reached
+          // the user. Anything else bubbles up (401/403 auth, 422
+          // validation, monthly quota exhausted).
           const retriable = !hasDeliveredAnyContent
-            && (response.status === 429 || response.status >= 500)
+            && (response.status === 429 || response.status >= 500 || response.status === 408)
             && attempt < MAX_CONNECT_ATTEMPTS;
           if (retriable) {
-            console.warn(`[ai-stream] HTTP ${response.status} on attempt ${attempt} — auto-reconnecting in ${RECONNECT_DELAY_MS}ms`);
-            await new Promise(r => setTimeout(r, RECONNECT_DELAY_MS));
+            // Honor Retry-After header if the server set one (RFC 7231
+            // §7.1.3). Value can be either an integer seconds or an
+            // HTTP-date; we only parse the integer form here, the
+            // server-side rate limiter always emits seconds.
+            const retryAfter = parseInt(response.headers.get('retry-after') || '', 10);
+            const delay = computeBackoff(attempt, Number.isFinite(retryAfter) ? retryAfter : undefined);
+            console.warn(`[ai-stream] HTTP ${response.status} on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
+            await new Promise(r => setTimeout(r, delay));
             lastError = err;
             continue;
           }
@@ -689,6 +717,17 @@ class ApiClient {
           if (done) {
             flushBatch();
             if (!hasDeliveredAnyContent) {
+              // The stream ended before producing any token. Treat as
+              // retriable transport failure if we still have attempts
+              // left — provider may have rate-limited mid-handshake or
+              // hit a transient 5xx that the reverse-proxy swallowed.
+              if (attempt < MAX_CONNECT_ATTEMPTS) {
+                const delay = computeBackoff(attempt);
+                console.warn(`[ai-stream] empty stream on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
+                await new Promise(r => setTimeout(r, delay));
+                lastError = new Error('Empty model stream');
+                break; // jump to outer `for` to retry
+              }
               onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
               return;
             }
@@ -764,26 +803,44 @@ class ApiClient {
         }
 
         // Transport-layer network failure BEFORE any content reached
-        // the user? Reconnect once. The backend already retried + fell
-        // back at the provider level, so this reconnect layer only
-        // matters for things like dropped sockets between client and
-        // our own edge.
+        // the user? Reconnect with exponential backoff. "Failed to
+        // fetch" (TypeError) is the most common one — happens when the
+        // backend SSE socket drops mid-handshake, the wifi/network
+        // hiccups, or a reverse proxy returns nothing.
         const isNetworkError = error?.name === 'TypeError'
-          || /fetch failed|network|socket|ECONN|ETIMEDOUT|ENOTFOUND/i.test(error?.message || '');
+          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream/i.test(error?.message || '');
         if (!hasDeliveredAnyContent && isNetworkError && attempt < MAX_CONNECT_ATTEMPTS) {
-          console.warn(`[ai-stream] network error on attempt ${attempt}: "${error.message}" — auto-reconnecting in ${RECONNECT_DELAY_MS}ms`);
-          await new Promise(r => setTimeout(r, RECONNECT_DELAY_MS));
+          const delay = computeBackoff(attempt);
+          console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — auto-reconnecting in ${delay}ms`);
+          await new Promise(r => setTimeout(r, delay));
           continue;
         }
 
         console.error('API stream failed:', error);
+        // Convert raw "Failed to fetch" into a human-friendly message.
+        // The model wasn't able to reply after every retry — surface
+        // an actionable hint instead of a meaningless browser error.
+        if (isNetworkError && !hasDeliveredAnyContent) {
+          onError(new Error('No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
+          return;
+        }
         onError(error);
         return;
       }
     }
 
-    // Fallthrough: loop exited without a successful return.
-    if (lastError) onError(lastError);
+    // Fallthrough: loop exited without a successful return. This path
+    // is taken when all attempts ended in retriable HTTP errors or
+    // empty streams — surface the last captured error to the UI with
+    // a clean message.
+    if (lastError) {
+      const msg = lastError?.message || 'Stream failed';
+      const isQuota = /429|too many|rate/i.test(msg);
+      const friendly = isQuota
+        ? 'El servidor está procesando muchas solicitudes. Reintenta en unos segundos.'
+        : `No se pudo completar la respuesta después de ${MAX_CONNECT_ATTEMPTS} intentos. ${msg}`;
+      onError(new Error(friendly));
+    }
   }
   async generateImage(
     data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: string; imageCount?: number },

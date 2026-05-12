@@ -29,8 +29,18 @@ function resolveRateLimitConfig(env = process.env) {
   return {
     windowMs: parsePositiveInt(env.RATE_LIMIT_WINDOW_MS, FIFTEEN_MINUTES_MS),
     auth: parsePositiveInt(env.RATE_LIMIT_AUTH_MAX, 30),
-    expensive: parsePositiveInt(env.RATE_LIMIT_EXPENSIVE_MAX, 60),
-    api: parsePositiveInt(env.RATE_LIMIT_API_MAX, 1000),
+    // Background-task creation, RAG indexing, doc generation. Bumped
+    // from 60 → 180 per 15 min because real users iterating on a
+    // document analysis can easily exceed 60 requests/window (regen,
+    // follow-up questions, re-uploads). At 180/15min that's 12/min
+    // sustained — still hard to abuse, generous enough not to bite.
+    expensive: parsePositiveInt(env.RATE_LIMIT_EXPENSIVE_MAX, 180),
+    // General `/api/*` surface: model lists, plan status, history,
+    // chat generation. Bumped 1000 → 3000 per 15 min so a long
+    // document analysis session (which can chain dozens of file
+    // polls + chat regenerations) never trips the limiter for a
+    // legitimate user.
+    api: parsePositiveInt(env.RATE_LIMIT_API_MAX, 3000),
   };
 }
 
@@ -96,9 +106,39 @@ function makeJwtAwareKeyGenerator(jwtSecret) {
   };
 }
 
+/**
+ * makeSuperAdminBypass — returns a function suitable as the express-
+ * rate-limit `skip` option. Decodes the bearer token with the supplied
+ * JWT secret and returns true (i.e. SKIP the limiter) when the
+ * verified claims include `isSuperAdmin: true`.
+ *
+ * Rationale: super admins are the operators of the platform; rate-
+ * limiting them prevents them from debugging issues that other users
+ * report. The signature is verified just like in keyGenerator so an
+ * attacker cannot bypass the limiter with a forged claim. Forged or
+ * non-super-admin tokens fall through to the limiter normally.
+ *
+ * If `jwtSecret` is missing/empty, the function returns `() => false`
+ * so a misconfigured deploy stays rate-limited (defense in depth).
+ */
+function makeSuperAdminBypass(jwtSecret) {
+  if (!jwtSecret) return () => false;
+  return function skipForSuperAdmin(req) {
+    const token = extractBearerToken(req);
+    if (!token) return false;
+    try {
+      const decoded = jwt.verify(token, jwtSecret);
+      return Boolean(decoded && decoded.isSuperAdmin === true);
+    } catch (_err) {
+      return false;
+    }
+  };
+}
+
 module.exports = {
   resolveRateLimitConfig,
   makeJwtAwareKeyGenerator,
+  makeSuperAdminBypass,
   extractBearerToken,
   FIFTEEN_MINUTES_MS,
 };

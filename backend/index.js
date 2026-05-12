@@ -187,10 +187,17 @@ const idempotency = idempotencyMiddleware();
 const {
     resolveRateLimitConfig,
     makeJwtAwareKeyGenerator,
+    makeSuperAdminBypass,
 } = require('./src/middleware/rate-limit-policy');
 const { createRateLimitStore } = require('./src/middleware/rate-limit-store');
 const rateLimitCfg = resolveRateLimitConfig(process.env);
 const rateLimitKeyGenerator = makeJwtAwareKeyGenerator(process.env.JWT_SECRET);
+// Super admins (verified via JWT claim `isSuperAdmin: true`) are
+// exempt from every limiter. Operators need to investigate user
+// reports without being throttled by the very protection they
+// designed for end users. The bypass function is shared by all
+// three tiers (auth / expensive / api) so the policy is uniform.
+const skipForSuperAdmin = makeSuperAdminBypass(process.env.JWT_SECRET);
 
 // Redis-backed shared counters when REDIS_URL is set; in-memory
 // fallback for local dev / single-instance deploys. See
@@ -232,6 +239,7 @@ const authLimiter = rateLimit({
     ...makeLimiterCommon('auth'),
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.auth,
+    skip: skipForSuperAdmin,
     message: 'Too many auth attempts, please try again later.',
 });
 
@@ -241,6 +249,7 @@ const expensiveLimiter = rateLimit({
     ...makeLimiterCommon('expensive'),
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.expensive,
+    skip: skipForSuperAdmin,
     message: 'Too many expensive operations, please slow down.',
 });
 
@@ -256,7 +265,10 @@ const apiLimiter = rateLimit({
     ...makeLimiterCommon('api'),
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.api,
-    skip: (req) => apiLimiterSpecificPrefixes.some((prefix) => req.originalUrl.startsWith(prefix)),
+    skip: (req) => {
+        if (skipForSuperAdmin(req)) return true;
+        return apiLimiterSpecificPrefixes.some((prefix) => req.originalUrl.startsWith(prefix));
+    },
     message: 'Too many requests, please try again later.',
 });
 

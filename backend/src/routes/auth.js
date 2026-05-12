@@ -482,9 +482,11 @@ router.post('/register', [
       }
     });
 
-    // Create session
+    // Create session — embed isSuperAdmin claim so the rate-limit
+    // bypass + downstream policy checks can use it without a DB
+    // lookup on the hot path.
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, isAdmin: Boolean(user.isAdmin), isSuperAdmin: Boolean(user.isSuperAdmin) },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -547,9 +549,11 @@ router.post('/login', [
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Create session
+    // Create session — embed admin / super-admin claims so the
+    // rate-limit bypass + admin route guards can read them without
+    // hitting the DB on every authenticated request.
     const token = jwt.sign(
-      { userId: user.id },
+      { userId: user.id, isAdmin: Boolean(user.isAdmin), isSuperAdmin: Boolean(user.isSuperAdmin) },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
