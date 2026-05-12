@@ -267,9 +267,11 @@ function scanAnswerForHallucinations({ answer = '', evidence = null, options = {
     + citationDrift.length;
 
   let overallRisk = 'low';
-  // Numbers and quotes are strict; entities are advisory only
+  // Numbers and quotes are strict; entities are advisory only. Threshold
+  // tuned so 4+ hard flags = high (any combination of fabricated number,
+  // quote, or out-of-range citation that adds to 4 is unambiguous abuse).
   const hardFlags = unsupportedNumbers.length + fabricatedQuotes.length + citationDrift.length;
-  if (hardFlags >= 5) overallRisk = 'high';
+  if (hardFlags >= 4) overallRisk = 'high';
   else if (hardFlags >= 2) overallRisk = 'medium';
   else if (totalFlags >= 4 && hardFlags >= 1) overallRisk = 'medium';
 

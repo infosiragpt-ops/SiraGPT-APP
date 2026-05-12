@@ -191,9 +191,13 @@ function deriveRetryable({ category, status, code, attempts, maxAttempts }) {
 
 function deriveStrategy({ category, severity, retryable, status, attempts, hasFallbackModel, hasFallbackTool }) {
   if (category === 'rate_limit' || category === 'upstream_5xx' || category === 'timeout' || category === 'network') {
-    if (retryable && attempts <= 1) return 'retry_with_backoff';
+    // First failure: always try a simple backoff retry
+    if (attempts <= 1 && retryable) return 'retry_with_backoff';
+    // Subsequent failures: prefer fallback paths when available
     if (hasFallbackModel) return 'retry_with_fallback_model';
     if (hasFallbackTool) return 'retry_with_different_tool';
+    // No fallback: keep retrying as long as we have attempts left
+    if (retryable) return 'retry_with_backoff';
     return 'abort_and_surface_error';
   }
   if (category === 'quota') {
