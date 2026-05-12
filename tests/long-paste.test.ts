@@ -225,3 +225,281 @@ test("natural language: detects English from common stopwords", () => {
 test("natural language: returns undefined for short or ambiguous samples", () => {
   assert.equal(detectNaturalLanguage("hola"), undefined)
 })
+
+test("natural language: detects German from common stopwords", () => {
+  const text = "Das künstliche Intelligenzsystem verarbeitet die Dokumente mit sehr hoher Genauigkeit und liefert Ergebnisse in Sekunden für die Benutzer, die sie benötigen."
+  assert.equal(detectNaturalLanguage(text), "de")
+})
+
+test("natural language: detects Russian via Cyrillic script", () => {
+  const text = "Система искусственного интеллекта обрабатывает документы с очень высокой точностью и возвращает результаты за секунды."
+  assert.equal(detectNaturalLanguage(text), "ru")
+})
+
+test("natural language: detects Japanese via hiragana/katakana", () => {
+  const text = "人工知能システムは、非常に高い精度で文書を処理し、必要なユーザーに数秒で結果を返します。これはとても便利です。"
+  assert.equal(detectNaturalLanguage(text), "ja")
+})
+
+test("natural language: detects Korean via Hangul", () => {
+  const text = "인공 지능 시스템은 매우 높은 정확도로 문서를 처리하고 필요한 사용자에게 몇 초 만에 결과를 반환합니다. 이것은 매우 유용합니다."
+  assert.equal(detectNaturalLanguage(text), "ko")
+})
+
+test("natural language: detects Chinese via CJK ideographs without kana", () => {
+  const text = "人工智能系统以非常高的准确度处理文档，并在几秒钟内为需要的用户返回结果。这非常有用，对于研究人员特别重要。"
+  assert.equal(detectNaturalLanguage(text), "zh")
+})
+
+// ─── New content kinds ───────────────────────────────────────────────
+
+test("content kind: detects JSON Lines (JSONL)", () => {
+  const jsonl = [
+    JSON.stringify({ id: 1, name: "Ada" }),
+    JSON.stringify({ id: 2, name: "Bob" }),
+    JSON.stringify({ id: 3, name: "Cleo" }),
+    JSON.stringify({ id: 4, name: "Dee" }),
+  ].join("\n")
+  const d = detectPastedContentKind(jsonl)
+  assert.equal(d.kind, "jsonl")
+  assert.equal(d.extension, "jsonl")
+})
+
+test("content kind: detects Jupyter notebook ahead of plain JSON", () => {
+  const notebook = JSON.stringify({
+    nbformat: 4,
+    nbformat_minor: 5,
+    metadata: { kernelspec: { name: "python3" } },
+    cells: [
+      { cell_type: "code", source: ["print('hello')"], outputs: [] },
+      { cell_type: "markdown", source: ["# Title"] },
+    ],
+  })
+  const d = detectPastedContentKind(notebook)
+  assert.equal(d.kind, "jupyter_notebook")
+  assert.equal(d.extension, "ipynb")
+})
+
+test("content kind: detects Mermaid diagram", () => {
+  const mmd = `sequenceDiagram\n    participant Alice\n    participant Bob\n    Alice->>Bob: Hello\n    Bob-->>Alice: Hi`
+  const d = detectPastedContentKind(mmd)
+  assert.equal(d.kind, "mermaid_diagram")
+})
+
+test("content kind: detects flowchart Mermaid", () => {
+  const mmd = `flowchart TD\n    A[Start] --> B{Decision}\n    B -->|Yes| C[OK]\n    B -->|No| D[Fail]`
+  const d = detectPastedContentKind(mmd)
+  assert.equal(d.kind, "mermaid_diagram")
+})
+
+test("content kind: detects OpenAPI spec (YAML)", () => {
+  const yaml = `openapi: 3.0.3
+info:
+  title: Sira API
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      summary: List users
+      responses:
+        '200':
+          description: ok`
+  const d = detectPastedContentKind(yaml)
+  assert.equal(d.kind, "openapi_spec")
+})
+
+test("content kind: detects Kubernetes manifest", () => {
+  const k8s = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.27
+        ports:
+        - containerPort: 80`
+  const d = detectPastedContentKind(k8s)
+  assert.equal(d.kind, "kubernetes_manifest")
+})
+
+test("content kind: detects GraphQL schema", () => {
+  const gql = `type User {
+  id: ID!
+  name: String!
+  email: String!
+  posts: [Post!]!
+}
+
+type Post {
+  id: ID!
+  title: String!
+  author: User!
+}
+
+type Query {
+  users: [User!]!
+  post(id: ID!): Post
+}`
+  const d = detectPastedContentKind(gql)
+  assert.equal(d.kind, "graphql_schema")
+  assert.equal(d.extension, "graphql")
+})
+
+test("content kind: detects BibTeX bibliography", () => {
+  const bib = `@article{smith2020attention,
+  title={Attention is all you need},
+  author={Smith, John and Doe, Jane},
+  journal={NeurIPS},
+  year={2020}
+}
+
+@book{knuth1973art,
+  title={The Art of Computer Programming},
+  author={Knuth, Donald E.},
+  year={1973},
+  publisher={Addison-Wesley}
+}`
+  const d = detectPastedContentKind(bib)
+  assert.equal(d.kind, "bibtex")
+  assert.equal(d.extension, "bib")
+})
+
+test("content kind: detects LaTeX documents", () => {
+  const tex = `\\documentclass{article}
+\\usepackage{amsmath}
+\\begin{document}
+\\section{Introduction}
+We propose a new method for $f(x) = \\sqrt{x^2 + 1}$.
+\\end{document}`
+  const d = detectPastedContentKind(tex)
+  assert.equal(d.kind, "latex")
+})
+
+test("content kind: detects Makefile", () => {
+  const make = `CC=gcc
+CFLAGS=-Wall -O2
+
+.PHONY: all clean
+
+all: app
+
+app: main.o util.o
+\tgcc -o app main.o util.o
+
+main.o: main.c
+\tgcc -c main.c
+
+clean:
+\trm -f *.o app`
+  const d = detectPastedContentKind(make)
+  assert.equal(d.kind, "makefile")
+})
+
+test("content kind: detects .env files", () => {
+  const env = `# App config
+DATABASE_URL=postgres://user:pass@localhost:5432/mydb
+REDIS_URL=redis://localhost:6379
+JWT_SECRET=supersecret
+NODE_ENV=production
+PORT=3000`
+  const d = detectPastedContentKind(env)
+  assert.equal(d.kind, "env_file")
+})
+
+test("content kind: still treats plain JSON as JSON when not a notebook", () => {
+  // Regression — ensure new jupyter detector doesn't false-positive on JSON
+  // without nbformat/cells keys.
+  const json = JSON.stringify({ users: [{ id: 1 }, { id: 2 }] }, null, 2)
+  assert.equal(detectPastedContentKind(json).kind, "json")
+})
+
+// ─── New programming languages ───────────────────────────────────────
+
+test("content kind: detects Scala code", () => {
+  const scala = `object HelloWorld extends App {
+  case class User(name: String, age: Int)
+  trait Greeter {
+    def greet(u: User): String = s"Hello, \${u.name}!"
+  }
+  val u = User("Ada", 36)
+  println(new Greeter {}.greet(u))
+}`
+  const d = detectPastedContentKind(scala)
+  assert.equal(d.kind, "code")
+  assert.equal(d.language, "scala")
+  assert.equal(d.extension, "scala")
+})
+
+test("content kind: detects Elixir code", () => {
+  const elixir = `defmodule Sira.Greeter do
+  @spec greet(String.t()) :: String.t()
+  def greet(name) do
+    "Hello, " <> name <> "!"
+  end
+
+  def loud(name), do: String.upcase(greet(name))
+end`
+  const d = detectPastedContentKind(elixir)
+  assert.equal(d.kind, "code")
+  assert.equal(d.language, "elixir")
+})
+
+test("content kind: detects Solidity code", () => {
+  const sol = `pragma solidity ^0.8.20;
+
+contract Token {
+    mapping(address => uint256) public balances;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    function transfer(address to, uint256 amount) public {
+        require(balances[msg.sender] >= amount, "insufficient");
+        balances[msg.sender] -= amount;
+        balances[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+    }
+}`
+  const d = detectPastedContentKind(sol)
+  assert.equal(d.kind, "code")
+  assert.equal(d.language, "solidity")
+})
+
+test("content kind: detects Lua code", () => {
+  const lua = `local M = {}
+
+function M.greet(name)
+  return "Hello, " .. name
+end
+
+function M.shout(name)
+  return string.upper(M.greet(name))
+end
+
+return M`
+  const d = detectPastedContentKind(lua)
+  assert.equal(d.kind, "code")
+  assert.equal(d.language, "lua")
+})
+
+test("content kind: detects R code", () => {
+  const r = `library(ggplot2)
+library(dplyr)
+
+data <- read.csv("data.csv")
+summary_data <- data %>% group_by(category) %>% summarise(mean_val = mean(value))
+
+ggplot(summary_data, aes(x = category, y = mean_val)) + geom_bar(stat = "identity")`
+  const d = detectPastedContentKind(r)
+  assert.equal(d.kind, "code")
+  assert.equal(d.language, "r")
+})

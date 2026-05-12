@@ -11,6 +11,7 @@ export type PastedContentKind =
   | "prose"
   | "markdown"
   | "json"
+  | "jsonl"
   | "yaml"
   | "csv"
   | "tsv"
@@ -28,6 +29,15 @@ export type PastedContentKind =
   | "pem_certificate"
   | "transcript"
   | "email_thread"
+  | "jupyter_notebook"
+  | "mermaid_diagram"
+  | "kubernetes_manifest"
+  | "openapi_spec"
+  | "graphql_schema"
+  | "bibtex"
+  | "latex"
+  | "makefile"
+  | "env_file"
 
 export type ContentKindDetection = {
   kind: PastedContentKind
@@ -191,7 +201,21 @@ export function shouldCompilePastedTextAsDocument(input: string): boolean {
 // The detection is deterministic, dependency-free, and runs in <1 ms
 // for typical clipboard payloads.
 
+// Order matters — very specific anchors come FIRST, otherwise generic
+// `function …` / `def …` patterns from Python/JS would shadow Scala/Elixir/
+// Solidity etc. The list is checked top-down; first match wins.
 const PROGRAMMING_LANGUAGE_HINTS: Array<{ lang: string; pattern: RegExp }> = [
+  // Tier 1: highly distinctive anchors
+  { lang: "solidity", pattern: /(^|\n)\s*pragma\s+solidity\s+[\^~]?\d|(^|\n)\s*contract\s+\w+(?:\s+is\s+[\w,\s]+)?\s*\{|(^|\n)\s*(?:event|modifier)\s+\w+\s*\(/ },
+  { lang: "scala", pattern: /(^|\n)\s*(object\s+\w+\s+extends\s+\w+|case\s+class\s+\w+\s*\(|trait\s+\w+\s*\{|sealed\s+(?:trait|class)\s+\w+|implicit\s+(?:val|def)\s+\w+|object\s+\w+\s*\{)/ },
+  { lang: "elixir", pattern: /(^|\n)\s*(defmodule\s+[A-Z]\w*(?:\.[A-Z]\w*)*\s+do\b|defp?\s+\w+\s*(?:\([^)]*\))?\s+do\b|@spec\s+\w+|use\s+[A-Z]\w*\s|@moduledoc\s)/ },
+  { lang: "haskell", pattern: /(^|\n)\s*(module\s+[A-Z]\w*(?:\.[A-Z]\w*)*\s+where\b|import\s+(?:qualified\s+)?[A-Z]\w*(?:\.[A-Z]\w*)*\s|data\s+[A-Z]\w*\s*=\s+[A-Z]|instance\s+\w+\s+[A-Z]|\w+\s*::\s+[A-Z]\w*\s*->)/ },
+  { lang: "dart", pattern: /(^|\n)\s*(import\s+['"](?:dart:|package:)[^'"]+['"];|class\s+\w+\s+extends\s+(?:Stateless|Stateful)Widget|Widget\s+build\s*\(BuildContext|@override\b\s+Widget\b)/ },
+  { lang: "julia", pattern: /(^|\n)\s*(using\s+\w+(?:,\s*\w+)+|function\s+\w+\s*\([^)]*\)(?:::\w+)?\s*$|struct\s+\w+\s*$|module\s+\w+\s*$|@inline\s+|@inbounds\s+)/m },
+  { lang: "lua", pattern: /(^|\n)\s*(local\s+(?:function\s+)?\w+\s*[=(]|function\s+\w+(?:[.:]\w+)+\s*\(|require\s*\(?["'][\w.]+["']\)?|\.\.\s*["']|--\[\[|--\s*@\w+)/ },
+  { lang: "r", pattern: /(^|\n)\s*(library\s*\(\s*\w+\s*\)|\w+\s*<-\s+(?:function|\w)|ggplot\s*\(|data\.frame\s*\(|setwd\s*\(|install\.packages\s*\()/ },
+  { lang: "perl", pattern: /(^|\n)\s*(#!\/usr\/bin\/(?:env\s+)?perl|use\s+strict;|sub\s+\w+\s*\{|my\s+[\$@%]\w+\s*=)/ },
+  // Tier 2: well-known mainstream languages
   { lang: "typescript", pattern: /(^|\n)\s*(import\s+.+\s+from\s+["'][^"']+["']|export\s+(default\s+)?(?:async\s+)?(?:function|class|const|interface|type)\b|interface\s+\w+\s*\{|: \s*(?:string|number|boolean|Promise<))/ },
   { lang: "javascript", pattern: /(^|\n)\s*(const|let|var|function|class|require\(|module\.exports|console\.log|export\s+(default|const|function))\b/ },
   { lang: "python", pattern: /(^|\n)\s*(def\s+\w+\s*\(|class\s+\w+(?:\s*\([^)]*\))?\s*:|import\s+\w+|from\s+\w+\s+import|if __name__\s*==\s*['"]__main__['"]|print\()/ },
@@ -225,6 +249,116 @@ function looksLikeJson(text: string): boolean {
   } catch {
     return false
   }
+}
+
+function looksLikeJsonl(text: string): boolean {
+  // JSON Lines: each non-empty line is independently valid JSON.
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean)
+  if (lines.length < 3) return false
+  // Cap parsing cost — only check first 30 lines but require all to be valid
+  const sample = lines.slice(0, 30)
+  let parsed = 0
+  for (const line of sample) {
+    if (!/^[{[]/.test(line) || !/[}\]]$/.test(line)) return false
+    try { JSON.parse(line); parsed++ } catch { return false }
+  }
+  return parsed === sample.length
+}
+
+function looksLikeJupyterNotebook(text: string): boolean {
+  // .ipynb is a JSON document with required top-level keys.
+  const trimmed = text.trim()
+  if (!trimmed.startsWith("{")) return false
+  // Cheap pre-check before JSON.parse
+  if (!/"nbformat"\s*:\s*\d/.test(trimmed) || !/"cells"\s*:\s*\[/.test(trimmed)) return false
+  try {
+    const obj = JSON.parse(trimmed)
+    return Boolean(obj && typeof obj === "object" && Array.isArray(obj.cells) && typeof obj.nbformat === "number")
+  } catch {
+    return false
+  }
+}
+
+function looksLikeKubernetesManifest(text: string): boolean {
+  // Detect K8s manifests by apiVersion + kind YAML structure. Must NOT
+  // already match a more specific YAML purpose (helm values, kustomize, etc).
+  if (!/^apiVersion:\s*[\w.\/-]+/m.test(text)) return false
+  if (!/^kind:\s*\w+/m.test(text)) return false
+  // Common K8s kinds — having one boosts confidence
+  const kinds = /(?:^kind:\s*(?:Pod|Deployment|Service|ConfigMap|Secret|Ingress|StatefulSet|DaemonSet|Job|CronJob|Namespace|ServiceAccount|Role|RoleBinding|ClusterRole|ClusterRoleBinding|PersistentVolumeClaim|HorizontalPodAutoscaler|NetworkPolicy|CustomResourceDefinition))/m
+  return kinds.test(text) || /^metadata:\s*$/m.test(text)
+}
+
+function looksLikeOpenApiSpec(text: string): boolean {
+  // YAML or JSON OpenAPI/Swagger spec
+  if (!/(?:^openapi:\s*["']?[23]\.|"openapi"\s*:\s*"[23]\.|^swagger:\s*["']?2\.0|"swagger"\s*:\s*"2\.0")/m.test(text)) return false
+  // Need "paths" key as well
+  return /(?:^paths:|"paths"\s*:)/m.test(text)
+}
+
+function looksLikeGraphqlSchema(text: string): boolean {
+  // GraphQL SDL: type/interface/enum/scalar/union/input declarations
+  const types = (text.match(/^\s*(?:type|interface|enum|scalar|union|input)\s+\w+/gm) || []).length
+  const fieldArrows = (text.match(/^\s+\w+(?:\([^)]*\))?\s*:\s*\w+!?\s*$/gm) || []).length
+  // Must have at least 1 type declaration and several field lines
+  return types >= 1 && fieldArrows >= 3
+}
+
+function looksLikeBibtex(text: string): boolean {
+  // @article{key, ...} or @book{key, ...} patterns
+  const entries = (text.match(/@(?:article|book|inproceedings|proceedings|incollection|inbook|conference|manual|techreport|phdthesis|mastersthesis|misc|unpublished|booklet)\s*\{[^,}]+,/gi) || []).length
+  return entries >= 1
+}
+
+function looksLikeLatex(text: string): boolean {
+  // LaTeX docs have \documentclass or \begin{document}; intermediate snippets
+  // may have multiple \begin/\end pairs or LaTeX math/macros.
+  if (/\\documentclass\b/.test(text)) return true
+  if (/\\begin\{document\}/.test(text)) return true
+  const beginEnd = (text.match(/\\begin\{[\w*]+\}/g) || []).length
+  const macros = (text.match(/\\(?:section|subsection|chapter|paragraph|emph|textbf|textit|cite|ref|label|item|usepackage|newcommand|renewcommand|frac|sqrt|sum|int)\b/g) || []).length
+  return beginEnd >= 2 || macros >= 5
+}
+
+function looksLikeMakefile(text: string): boolean {
+  // Targets: dependencies followed by tab-indented recipe lines
+  const lines = text.split("\n")
+  let targets = 0
+  let tabRecipes = 0
+  let prevWasTarget = false
+  for (const line of lines) {
+    if (/^[A-Za-z_][\w.-]*\s*:(?!\s*=)/.test(line) && !line.trim().endsWith(":")) {
+      targets++
+      prevWasTarget = true
+      continue
+    }
+    // Allow target lines with no deps too
+    if (/^[A-Za-z_][\w.-]*:\s*$/.test(line)) { targets++; prevWasTarget = true; continue }
+    if (prevWasTarget && /^\t\S/.test(line)) { tabRecipes++ }
+    if (line.trim() === "") prevWasTarget = false
+  }
+  // Need both: at least 2 targets and at least 1 tab-indented recipe line
+  if (targets >= 2 && tabRecipes >= 1) return true
+  // Or special variable assignments common in Makefiles
+  if (targets >= 1 && /^(?:CC|CXX|CFLAGS|CXXFLAGS|LDFLAGS|LIBS|PREFIX|DESTDIR|MAKEFLAGS|\.PHONY)\s*[:?+]?=/m.test(text)) return true
+  return false
+}
+
+function looksLikeMermaidDiagram(text: string): boolean {
+  const trimmed = text.trim()
+  // First non-comment line must be a diagram type
+  const firstLine = trimmed.split("\n").find(l => l.trim() && !l.trim().startsWith("%%"))
+  if (!firstLine) return false
+  return /^(?:graph\s+[A-Z]{2}|flowchart\s+[A-Z]{2}|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|pie(?:\s+title)?|mindmap|journey|gitGraph|requirementDiagram|C4Context|timeline)\b/.test(firstLine.trim())
+}
+
+function looksLikeEnvFile(text: string): boolean {
+  // KEY=value with allowed shell-style export prefix; usually short lines.
+  const lines = text.split("\n").filter(l => l.trim() && !l.trim().startsWith("#"))
+  if (lines.length < 3) return false
+  const envLines = lines.filter(l => /^\s*(?:export\s+)?[A-Z_][A-Z0-9_]*\s*=(?:["']?[^=]*["']?)?\s*$/.test(l)).length
+  // At least 80% of non-comment lines must be KEY=value
+  return envLines >= 3 && envLines / lines.length >= 0.8
 }
 
 function looksLikeYaml(text: string): boolean {
@@ -402,6 +536,7 @@ const KIND_TO_EXT: Record<PastedContentKind, { extension: string; mime: string }
   prose: { extension: "txt", mime: "text/plain" },
   markdown: { extension: "md", mime: "text/markdown" },
   json: { extension: "json", mime: "application/json" },
+  jsonl: { extension: "jsonl", mime: "application/x-ndjson" },
   yaml: { extension: "yaml", mime: "text/yaml" },
   csv: { extension: "csv", mime: "text/csv" },
   tsv: { extension: "tsv", mime: "text/tab-separated-values" },
@@ -419,6 +554,15 @@ const KIND_TO_EXT: Record<PastedContentKind, { extension: string; mime: string }
   pem_certificate: { extension: "pem", mime: "application/x-pem-file" },
   transcript: { extension: "txt", mime: "text/plain" },
   email_thread: { extension: "eml", mime: "message/rfc822" },
+  jupyter_notebook: { extension: "ipynb", mime: "application/x-ipynb+json" },
+  mermaid_diagram: { extension: "mmd", mime: "text/vnd.mermaid" },
+  kubernetes_manifest: { extension: "yaml", mime: "text/yaml" },
+  openapi_spec: { extension: "yaml", mime: "text/yaml" },
+  graphql_schema: { extension: "graphql", mime: "application/graphql" },
+  bibtex: { extension: "bib", mime: "application/x-bibtex" },
+  latex: { extension: "tex", mime: "application/x-latex" },
+  makefile: { extension: "Makefile", mime: "text/plain" },
+  env_file: { extension: "env", mime: "text/plain" },
 }
 
 const LANGUAGE_TO_EXT: Record<string, string> = {
@@ -430,6 +574,15 @@ const LANGUAGE_TO_EXT: Record<string, string> = {
   java: "java",
   csharp: "cs",
   cpp: "cpp",
+  scala: "scala",
+  elixir: "ex",
+  haskell: "hs",
+  lua: "lua",
+  dart: "dart",
+  r: "R",
+  julia: "jl",
+  solidity: "sol",
+  perl: "pl",
   php: "php",
   ruby: "rb",
   swift: "swift",
@@ -463,9 +616,19 @@ export function detectPastedContentKind(input: string): ContentKindDetection {
     signals.push("dockerfile-verbs")
     return { kind: "dockerfile", confidence: 0.95, ...KIND_TO_EXT.dockerfile, signals }
   }
+  // Jupyter notebook must be checked before JSON — both are valid JSON, but
+  // a notebook gets a richer kind label that downstream parsers can use.
+  if (looksLikeJupyterNotebook(text)) {
+    signals.push("ipynb-cells-nbformat")
+    return { kind: "jupyter_notebook", confidence: 0.97, ...KIND_TO_EXT.jupyter_notebook, signals }
+  }
   if (looksLikeJson(text)) {
     signals.push("json-parse-ok")
     return { kind: "json", confidence: 0.99, ...KIND_TO_EXT.json, signals }
+  }
+  if (looksLikeJsonl(text)) {
+    signals.push("jsonl-lines-parse")
+    return { kind: "jsonl", confidence: 0.92, ...KIND_TO_EXT.jsonl, signals }
   }
   if (looksLikeDiff(text)) {
     signals.push("diff-hunks")
@@ -474,6 +637,16 @@ export function detectPastedContentKind(input: string): ContentKindDetection {
   if (looksLikeStackTrace(text)) {
     signals.push("stack-frames")
     return { kind: "stack_trace", confidence: 0.9, ...KIND_TO_EXT.stack_trace, signals }
+  }
+  // BibTeX: highly specific @article{...} structure, check before XML/HTML.
+  if (looksLikeBibtex(text)) {
+    signals.push("bibtex-entries")
+    return { kind: "bibtex", confidence: 0.95, ...KIND_TO_EXT.bibtex, signals }
+  }
+  // LaTeX: \documentclass / \begin{document} are very specific anchors.
+  if (looksLikeLatex(text)) {
+    signals.push("latex-macros")
+    return { kind: "latex", confidence: 0.9, ...KIND_TO_EXT.latex, signals }
   }
   if (looksLikeXml(text)) {
     signals.push("xml-decl-or-namespace")
@@ -488,6 +661,30 @@ export function detectPastedContentKind(input: string): ContentKindDetection {
   if (looksLikeEmailThread(text)) {
     signals.push("email-headers")
     return { kind: "email_thread", confidence: 0.78, ...KIND_TO_EXT.email_thread, signals }
+  }
+  // Mermaid diagrams: keyword-anchored. Check before generic yaml/code paths.
+  if (looksLikeMermaidDiagram(text)) {
+    signals.push("mermaid-diagram-type")
+    return { kind: "mermaid_diagram", confidence: 0.93, ...KIND_TO_EXT.mermaid_diagram, signals }
+  }
+  // OpenAPI / Kubernetes are YAML subspecies — match BEFORE plain yaml.
+  if (looksLikeOpenApiSpec(text)) {
+    signals.push("openapi-paths")
+    return { kind: "openapi_spec", confidence: 0.93, ...KIND_TO_EXT.openapi_spec, signals }
+  }
+  if (looksLikeKubernetesManifest(text)) {
+    signals.push("k8s-apiversion-kind")
+    return { kind: "kubernetes_manifest", confidence: 0.9, ...KIND_TO_EXT.kubernetes_manifest, signals }
+  }
+  // GraphQL SDL & Makefile must come BEFORE generic YAML — both have lots of
+  // `field: Type` lines that would otherwise trigger YAML's key/value detector.
+  if (looksLikeGraphqlSchema(text)) {
+    signals.push("graphql-types")
+    return { kind: "graphql_schema", confidence: 0.88, ...KIND_TO_EXT.graphql_schema, signals }
+  }
+  if (looksLikeMakefile(text)) {
+    signals.push("makefile-targets")
+    return { kind: "makefile", confidence: 0.85, ...KIND_TO_EXT.makefile, signals }
   }
   if (looksLikeYaml(text)) {
     signals.push("yaml-keys")
@@ -506,6 +703,13 @@ export function detectPastedContentKind(input: string): ContentKindDetection {
   if (looksLikeTsv(text)) {
     signals.push("tsv-columns")
     return { kind: "tsv", confidence: 0.86, ...KIND_TO_EXT.tsv, signals }
+  }
+  // .env files — KEY=VALUE on every non-comment line. Must come BEFORE INI
+  // because INI's "key=value" branch also matches plain .env files. INI is
+  // only the canonical answer when explicit [sections] are present.
+  if (looksLikeEnvFile(text)) {
+    signals.push("env-key-value")
+    return { kind: "env_file", confidence: 0.82, ...KIND_TO_EXT.env_file, signals }
   }
   if (looksLikeIni(text)) {
     signals.push("ini-sections")
@@ -566,10 +770,44 @@ const LANGUAGE_STOPWORDS: Record<string, RegExp> = {
   pt: /\b(?:o|a|os|as|de|que|e|em|um|uma|por|com|para|é|são|do|da|dos|das|este|esta|como|mas|porque|quando|onde|também|mais|sem|sobre|até)\b/gi,
   fr: /\b(?:le|la|les|de|et|à|un|une|que|en|dans|pour|sur|avec|est|sont|du|des|au|aux|ce|cette|ces|comme|mais|pourquoi|quand|où|aussi|plus|sans)\b/gi,
   it: /\b(?:il|la|i|gli|le|di|che|e|in|un|una|per|con|sono|è|del|della|dei|delle|al|alla|come|ma|perché|quando|dove|anche|più|senza|su|fino)\b/gi,
+  de: /\b(?:der|die|das|den|dem|des|und|in|zu|auf|von|für|mit|ist|sind|war|waren|wird|werden|sein|hat|haben|nicht|ein|eine|einen|dass|wenn|aber|als|auch|nur|noch|sehr|über|durch|zwischen|gegen|sich|nach|vor)\b/gi,
+  ru: /\b(?:и|в|не|на|я|быть|он|с|что|а|по|это|она|к|но|они|мы|как|из|у|вы|за|для|то|так|же|от|или|до|если|или|когда|уже|еще|был|есть|очень|такой|который|при|без|над|после)\b/gi,
 }
+
+// Character-class detectors for non-Latin scripts. These do not need
+// stopwords because the script itself is a near-perfect language signal.
+const SCRIPT_DETECTORS: Array<{ lang: string; pattern: RegExp; minRatio: number }> = [
+  // Hiragana + Katakana strongly imply Japanese. Even with kanji-only text,
+  // typical Japanese prose has hiragana particles within 200 chars.
+  { lang: "ja", pattern: /[぀-ゟ゠-ヿ]/g, minRatio: 0.04 },
+  // Hangul → Korean
+  { lang: "ko", pattern: /[가-힯ᄀ-ᇿ㄰-㆏]/g, minRatio: 0.05 },
+  // CJK Unified Ideographs → Chinese (fallback after Japanese check)
+  { lang: "zh", pattern: /[一-鿿]/g, minRatio: 0.05 },
+  // Cyrillic → Russian / Ukrainian / etc. (heuristic, ru is most common)
+  { lang: "ru", pattern: /[Ѐ-ӿ]/g, minRatio: 0.05 },
+  // Arabic
+  { lang: "ar", pattern: /[؀-ۿݐ-ݿ]/g, minRatio: 0.05 },
+  // Hebrew
+  { lang: "he", pattern: /[֐-׿]/g, minRatio: 0.05 },
+  // Devanagari (Hindi/Sanskrit/Marathi)
+  { lang: "hi", pattern: /[ऀ-ॿ]/g, minRatio: 0.05 },
+]
 
 export function detectNaturalLanguage(text: string): string | undefined {
   const sample = text.slice(0, 4000)
+
+  // Script-based detection runs first for non-Latin alphabets. Japanese must
+  // win over Chinese when both ideographs and kana coexist.
+  const printable = sample.replace(/\s/g, "")
+  if (printable.length >= 16) {
+    for (const { lang, pattern, minRatio } of SCRIPT_DETECTORS) {
+      const matches = sample.match(pattern)
+      const count = matches ? matches.length : 0
+      if (count / printable.length >= minRatio) return lang
+    }
+  }
+
   if (countWords(sample) < 12) return undefined
   let best: { lang: string; score: number } = { lang: "", score: 0 }
   for (const [lang, pattern] of Object.entries(LANGUAGE_STOPWORDS)) {
@@ -747,6 +985,7 @@ const KIND_TO_HUMAN: Record<PastedContentKind, string> = {
   prose: "documento de texto",
   markdown: "documento markdown",
   json: "documento JSON",
+  jsonl: "dataset JSON Lines",
   yaml: "documento YAML",
   csv: "dataset CSV",
   tsv: "dataset TSV",
@@ -764,6 +1003,15 @@ const KIND_TO_HUMAN: Record<PastedContentKind, string> = {
   pem_certificate: "certificado PEM",
   transcript: "transcripción",
   email_thread: "hilo de correo",
+  jupyter_notebook: "Jupyter notebook",
+  mermaid_diagram: "diagrama Mermaid",
+  kubernetes_manifest: "manifiesto Kubernetes",
+  openapi_spec: "especificación OpenAPI",
+  graphql_schema: "esquema GraphQL",
+  bibtex: "bibliografía BibTeX",
+  latex: "documento LaTeX",
+  makefile: "Makefile",
+  env_file: "archivo .env",
 }
 
 export function buildFileOnlyPrompt(files: any[]): string {

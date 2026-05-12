@@ -170,3 +170,229 @@ test('extractor caps results to per-type maximums', () => {
   const r = extractDocumentInsights(text);
   assert.ok(r.numbers.money.length <= 16, `expected ≤16 money entries (cap), got ${r.numbers.money.length}`);
 });
+
+// ─── Technical identifiers ──────────────────────────────────────────────
+
+test('extractIdentifiers: detects IPv4 addresses', () => {
+  const text = 'The router at 192.168.1.1 forwards to 10.0.0.42. Avoid pinging 8.8.8.8 from production.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.identifiers.ipv4.includes('192.168.1.1'));
+  assert.ok(r.identifiers.ipv4.includes('10.0.0.42'));
+  assert.ok(r.identifiers.ipv4.includes('8.8.8.8'));
+});
+
+test('extractIdentifiers: rejects invalid IPv4 octets', () => {
+  const text = 'Version 1.2.3.4-rc.5 was released. 999.999.999.999 is not a valid IP.';
+  const r = extractDocumentInsights(text);
+  // 1.2.3.4 is technically a valid IP and will be detected — that's expected.
+  // The strict check is that 999.999.999.999 should NOT be detected.
+  assert.ok(!r.identifiers.ipv4.includes('999.999.999.999'));
+});
+
+test('extractIdentifiers: detects MAC addresses', () => {
+  const text = 'Device MAC: 00:1A:2B:3C:4D:5E reported online. Backup: aa-bb-cc-dd-ee-ff.';
+  const r = extractDocumentInsights(text);
+  assert.equal(r.identifiers.macAddresses.length, 2);
+  assert.ok(r.identifiers.macAddresses.some(m => /00:1A:2B:3C:4D:5E/i.test(m)));
+});
+
+test('extractIdentifiers: detects UUIDs', () => {
+  const text = 'Order id 550e8400-e29b-41d4-a716-446655440000 created. Trace 6BA7B810-9DAD-11D1-80B4-00C04FD430C8.';
+  const r = extractDocumentInsights(text);
+  assert.equal(r.identifiers.uuids.length, 2);
+});
+
+test('extractIdentifiers: detects MD5/SHA-1/SHA-256 hashes by length', () => {
+  const md5 = 'd41d8cd98f00b204e9800998ecf8427e';
+  const sha1 = 'da39a3ee5e6b4b0d3255bfef95601890afd80709';
+  const sha256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+  const text = `Files matched: MD5=${md5}, SHA-1=${sha1}, SHA-256=${sha256}.`;
+  const r = extractDocumentInsights(text);
+  assert.ok(r.identifiers.hashes.md5.includes(md5));
+  assert.ok(r.identifiers.hashes.sha1.includes(sha1));
+  assert.ok(r.identifiers.hashes.sha256.includes(sha256));
+});
+
+test('extractIdentifiers: detects JWT tokens', () => {
+  const text = 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+  const r = extractDocumentInsights(text);
+  assert.equal(r.identifiers.jwts.length, 1);
+});
+
+test('extractIdentifiers: detects IBAN codes', () => {
+  const text = 'Transfer to DE89 3704 0044 0532 0130 00 with reference 42. Backup IBAN: GB82WEST12345698765432.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.identifiers.ibans.length >= 2, `got ${JSON.stringify(r.identifiers.ibans)}`);
+});
+
+test('extractIdentifiers: detects AWS ARNs', () => {
+  const text = 'Lambda arn:aws:lambda:us-east-1:123456789012:function:my-fn invoked S3 bucket arn:aws:s3:::my-bucket.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.identifiers.awsArns.length >= 1, `got ${JSON.stringify(r.identifiers.awsArns)}`);
+});
+
+// ─── Bibliographic references ───────────────────────────────────────────
+
+test('extractBibliographic: detects DOIs', () => {
+  const text = 'See Smith et al. 10.1038/nature12373 and Jones 2024 (10.1109/TCS.2024.1234567).';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.bibliographic.dois.some(d => /nature12373/.test(d)), `got ${JSON.stringify(r.bibliographic.dois)}`);
+  assert.ok(r.bibliographic.dois.some(d => /1234567/.test(d)));
+});
+
+test('extractBibliographic: detects ISBNs', () => {
+  const text = 'The book (ISBN: 978-3-16-148410-0) is foundational. Cf. ISBN 0-306-40615-2.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.bibliographic.isbns.length >= 2, `got ${JSON.stringify(r.bibliographic.isbns)}`);
+});
+
+test('extractBibliographic: detects arXiv identifiers', () => {
+  const text = 'Recent work arXiv:2401.12345 and earlier results arXiv:1706.03762v5.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.bibliographic.arxivIds.includes('2401.12345'));
+  assert.ok(r.bibliographic.arxivIds.some(a => /1706\.03762/.test(a)));
+});
+
+test('extractBibliographic: detects RFC numbers and PubMed IDs', () => {
+  const text = 'See RFC 7231 for the spec and PMID: 12345678 for the trial.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.bibliographic.rfcs.includes('RFC 7231'));
+  assert.ok(r.bibliographic.pubmedIds.some(p => /12345678/.test(p)));
+});
+
+// ─── Geographic ──────────────────────────────────────────────────────────
+
+test('extractGeographic: detects decimal-degree GPS coordinates', () => {
+  const text = 'The site is located at -12.046374, -77.042793 near the coast.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.geographic.coordinatesDecimal.length >= 1, `got ${JSON.stringify(r.geographic.coordinatesDecimal)}`);
+});
+
+test('extractGeographic: detects postal codes (US/CA/UK formats)', () => {
+  const text = 'Ship to 10001 (NYC), backup to SW1A 1AA (London) or K1A 0B1 (Ottawa).';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.geographic.postalCodes.length >= 2);
+});
+
+// ─── Statistical claims ──────────────────────────────────────────────────
+
+test('extractStatisticalClaims: detects sample sizes', () => {
+  const text = 'The cohort study (n=1,247) found significant differences. A pilot with n=42 confirmed feasibility.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.statistical.sampleSizes.length >= 2, `got ${JSON.stringify(r.statistical.sampleSizes)}`);
+});
+
+test('extractStatisticalClaims: detects p-values', () => {
+  const text = 'The effect was significant (p < 0.001) and replicated (p-value = 0.03).';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.statistical.pValues.length >= 2);
+});
+
+test('extractStatisticalClaims: detects correlation coefficients', () => {
+  const text = 'A strong positive correlation r = 0.82 was observed. The R² = 0.67 indicates good fit.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.statistical.correlations.length >= 2, `got ${JSON.stringify(r.statistical.correlations)}`);
+});
+
+test('extractStatisticalClaims: detects mean ± SD pairs', () => {
+  const text = 'Group A averaged 12.5 ± 3.2 mg/dL; Group B 8.1 ± 1.7.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.statistical.meansAndSd.length >= 2);
+});
+
+// ─── Acronyms ────────────────────────────────────────────────────────────
+
+test('extractAcronyms: detects "Term (TLA)" patterns and verifies initials', () => {
+  const text = 'The Health Insurance Portability and Accountability Act (HIPAA) governs PHI. The General Data Protection Regulation (GDPR) applies in the EU.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.acronyms.some(a => a.acronym === 'HIPAA'));
+  assert.ok(r.acronyms.some(a => a.acronym === 'GDPR'));
+});
+
+test('extractAcronyms: detects "TLA (Term)" patterns', () => {
+  const text = 'HTTP (Hypertext Transfer Protocol) is stateless. TCP (Transmission Control Protocol) provides reliability.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.acronyms.some(a => a.acronym === 'HTTP'));
+  assert.ok(r.acronyms.some(a => a.acronym === 'TCP'));
+});
+
+test('extractAcronyms: rejects mismatched acronym/definition', () => {
+  const text = 'The cat sat on the mat (XYZ). Should not match.';
+  const r = extractDocumentInsights(text);
+  assert.equal(r.acronyms.length, 0);
+});
+
+// ─── Trends ──────────────────────────────────────────────────────────────
+
+test('extractTrends: detects "increased by X%" phrasing', () => {
+  const text = 'Revenue increased 12.5% YoY. Costs grew by 4 percentage points.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.trends.length >= 2, `got ${JSON.stringify(r.trends)}`);
+});
+
+test('extractTrends: detects "decreased" phrasing', () => {
+  const text = 'Customer churn dropped 30% after the redesign. Latency fell by 8 ms.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.trends.length >= 1, `got ${JSON.stringify(r.trends)}`);
+});
+
+test('extractTrends: detects "from X to Y" range', () => {
+  const text = 'Conversion rose from 2.3% to 4.1% over the quarter.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.trends.length >= 1);
+});
+
+// ─── Cross-references ────────────────────────────────────────────────────
+
+test('extractCrossReferences: detects "see section X.Y" patterns', () => {
+  const text = 'Refer to Section 3.2 for the proof. As shown in Figure 4, the trend reverses.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.crossReferences.length >= 2, `got ${JSON.stringify(r.crossReferences)}`);
+});
+
+// ─── Sentiment ───────────────────────────────────────────────────────────
+
+test('extractSentimentSignals: detects strong positive/negative phrases', () => {
+  const text = 'The launch was an outstanding success. The data leak was a catastrophic failure.';
+  const r = extractDocumentInsights(text);
+  assert.ok(r.sentiment.positive.length >= 1, `positive: ${JSON.stringify(r.sentiment.positive)}`);
+  assert.ok(r.sentiment.negative.length >= 1, `negative: ${JSON.stringify(r.sentiment.negative)}`);
+});
+
+// ─── Render integration ──────────────────────────────────────────────────
+
+test('renderInsightsBlock: surfaces new sections when data is present', () => {
+  const text = `
+The system at 10.0.0.42 logs to SHA-256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.
+See Smith 10.1038/nature12373 (n=1,247, p < 0.001, r = 0.82).
+The Health Insurance Portability and Accountability Act (HIPAA) is referenced in Section 3.2.
+Revenue increased 12.5% YoY after the launch — an outstanding success.
+`.trim();
+  const report = extractDocumentInsights(text);
+  const block = renderInsightsBlock(report);
+  assert.match(block, /Technical identifiers/);
+  assert.match(block, /Bibliographic references/);
+  assert.match(block, /Statistical claims/);
+  assert.match(block, /Acronyms/);
+  assert.match(block, /Quantified trends/);
+  assert.match(block, /Internal cross-references/);
+  assert.match(block, /Sentiment signals/);
+});
+
+test('renderInsightsBlock: empty report still has no new sections', () => {
+  const report = extractDocumentInsights('');
+  const block = renderInsightsBlock(report);
+  assert.doesNotMatch(block, /Technical identifiers/);
+  assert.doesNotMatch(block, /Bibliographic references/);
+  assert.doesNotMatch(block, /Statistical claims/);
+});
+
+test('extractor caps: identifiers respect MAX_IDENTIFIERS_PER_TYPE', () => {
+  // 30 distinct UUIDs
+  const uuids = Array.from({ length: 30 }, (_, i) =>
+    `550e8400-e29b-41d4-a716-44665544${String(i).padStart(4, '0')}`.toLowerCase()
+  );
+  const text = uuids.map(u => `id=${u}`).join(' ');
+  const r = extractDocumentInsights(text);
+  assert.ok(r.identifiers.uuids.length <= 10, `got ${r.identifiers.uuids.length}`);
+});
