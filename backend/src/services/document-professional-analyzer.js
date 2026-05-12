@@ -85,6 +85,24 @@ function getPiiEngine() {
   try { piiEngineCache = require('./document-pii-detector'); } catch { piiEngineCache = null; }
   return piiEngineCache;
 }
+let consistencyCheckerCache = null;
+function getConsistencyChecker() {
+  if (consistencyCheckerCache) return consistencyCheckerCache;
+  try { consistencyCheckerCache = require('./document-consistency-checker'); } catch { consistencyCheckerCache = null; }
+  return consistencyCheckerCache;
+}
+let outlineGeneratorCache = null;
+function getOutlineGenerator() {
+  if (outlineGeneratorCache) return outlineGeneratorCache;
+  try { outlineGeneratorCache = require('./document-outline-generator'); } catch { outlineGeneratorCache = null; }
+  return outlineGeneratorCache;
+}
+let readabilityAnalyzerCache = null;
+function getReadabilityAnalyzer() {
+  if (readabilityAnalyzerCache) return readabilityAnalyzerCache;
+  try { readabilityAnalyzerCache = require('./document-readability-analyzer'); } catch { readabilityAnalyzerCache = null; }
+  return readabilityAnalyzerCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1040,6 +1058,9 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const comparisonBlock = buildComparisonBlock(files, profiles);
   const glossaryBlock = buildGlossaryBlock(files);
   const piiSafetyBlock = buildPiiSafetyBlock(files);
+  const consistencyBlock = buildConsistencyBlock(files);
+  const outlineBlock = buildOutlineBlock(files);
+  const readabilityBlock = buildReadabilityBlock(files);
 
   return {
     profileBlock,
@@ -1048,6 +1069,9 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     comparisonBlock,
     glossaryBlock,
     piiSafetyBlock,
+    consistencyBlock,
+    outlineBlock,
+    readabilityBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -1055,6 +1079,50 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
       confidence: p.classification.confidence,
     })),
   };
+}
+
+/**
+ * Internal-consistency block — fires whenever the checker finds at least
+ * one intra-document inconsistency (label/value conflict, total mismatch,
+ * inverted date range, polar contradiction, percentage overflow, tense
+ * conflict). Empty string when nothing fires.
+ */
+function buildConsistencyBlock(files) {
+  const engine = getConsistencyChecker();
+  if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildConsistencyForFiles(list);
+  return engine.renderConsistencyBlock(report);
+}
+
+/**
+ * Document outline block — emits the dominant file's table of contents so
+ * the model can cite sections by number/title. Multi-file uploads get the
+ * outline of the file with the most sections.
+ */
+function buildOutlineBlock(files) {
+  const engine = getOutlineGenerator();
+  if (!engine || typeof engine.buildOutlineForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const result = engine.buildOutlineForFiles(list);
+  if (!result.primary) return '';
+  return engine.renderOutlineBlock(result.primary.report, { fileLabel: result.primary.file });
+}
+
+/**
+ * Readability block — surfaces the document's reading level and tone so
+ * the model can mirror the register (or rewrite for plain language when
+ * the source is too dense).
+ */
+function buildReadabilityBlock(files) {
+  const engine = getReadabilityAnalyzer();
+  if (!engine || typeof engine.buildReadabilityForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildReadabilityForFiles(list);
+  return engine.renderReadabilityBlock(report);
 }
 
 /**

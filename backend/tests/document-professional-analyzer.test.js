@@ -194,6 +194,89 @@ test('buildEnrichedFileContext: piiSafetyBlock empty for clean documents', async
   assert.equal(out.piiSafetyBlock, '');
 });
 
+test('buildEnrichedFileContext: consistencyBlock fires when intra-doc conflict present', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'cc',
+      name: 'inv.txt',
+      originalName: 'inv.txt',
+      mimeType: 'text/plain',
+      extractedText: 'Plazo desde 2026-12-15 hasta 2026-03-01. El cronograma se ajustará si es necesario.',
+    }],
+  });
+  assert.match(out.consistencyBlock, /## INTERNAL CONSISTENCY CHECK/);
+  assert.match(out.consistencyBlock, /inverted date range/);
+});
+
+test('buildEnrichedFileContext: consistencyBlock empty for coherent documents', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'cd',
+      name: 'plain.txt',
+      originalName: 'plain.txt',
+      mimeType: 'text/plain',
+      extractedText: 'Este documento describe un proceso lineal sin contradicciones internas.',
+    }],
+  });
+  assert.equal(out.consistencyBlock, '');
+});
+
+test('buildEnrichedFileContext: outlineBlock includes detected sections', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'oo',
+      name: 'spec.md',
+      originalName: 'spec.md',
+      mimeType: 'text/markdown',
+      extractedText: '# Introduction\nIntro body here.\n\n# Methods\nMethods body here.\n\n## Sampling\nSampling description.\n\n# Results\nResults body.',
+    }],
+  });
+  assert.match(out.outlineBlock, /## DOCUMENT OUTLINE/);
+  assert.match(out.outlineBlock, /Introduction/);
+  assert.match(out.outlineBlock, /Methods/);
+});
+
+test('buildEnrichedFileContext: outlineBlock empty when no headings', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'oe',
+      name: 'plain.txt',
+      originalName: 'plain.txt',
+      mimeType: 'text/plain',
+      extractedText: 'A flat paragraph with no structural markers at all.',
+    }],
+  });
+  assert.equal(out.outlineBlock, '');
+});
+
+test('buildEnrichedFileContext: readabilityBlock surfaces verdict and CEFR', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'rr',
+      name: 'plain.md',
+      originalName: 'plain.md',
+      mimeType: 'text/markdown',
+      extractedText: 'The cat sat on the mat. It looked at me. I gave it food. The cat ate fast. Then it slept happily on the warm rug.',
+    }],
+  });
+  assert.match(out.readabilityBlock, /## READABILITY/);
+  assert.match(out.readabilityBlock, /CEFR/);
+  assert.match(out.readabilityBlock, /Tone hint/);
+});
+
+test('buildEnrichedFileContext: readabilityBlock empty for empty extracted text', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{ id: 're', name: 're.txt', originalName: 're.txt', mimeType: 'text/plain' }],
+  });
+  assert.equal(out.readabilityBlock, '');
+});
+
 // ──────────────────────────────────────────────────────────────────────────
 // Original test suite
 // ──────────────────────────────────────────────────────────────────────────
