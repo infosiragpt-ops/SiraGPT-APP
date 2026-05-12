@@ -338,13 +338,21 @@ function isAuthoritativeDomain(urlOrDoi) {
 
 function round3(n) { return Math.round(n * 1000) / 1000; }
 
+// ── Answer-validator family (sixth family, in answer-validator.js) ──
+// Re-exported here so callers can `require("./validator-engine")` and
+// get the full vocabulary in one place. Kept in its own module to keep
+// validator-engine.js bounded and reviewable.
+const answerValidator = require('./answer-validator');
+const { validateAnswer, ANSWER_CHECKS } = answerValidator;
+
 module.exports = {
   validateArtifact,
   validateSources,
   validateCode,
   validateDocument,
   validateSafety,
+  validateAnswer,
   composeValidationFrame,
-  ALL_CHECKS,
-  ARTIFACT_CHECKS, SOURCE_CHECKS, CODE_CHECKS, DOCUMENT_CHECKS, SAFETY_CHECKS,
+  ALL_CHECKS: Object.freeze({ ...ALL_CHECKS, answer: ANSWER_CHECKS }),
+  ARTIFACT_CHECKS, SOURCE_CHECKS, CODE_CHECKS, DOCUMENT_CHECKS, SAFETY_CHECKS, ANSWER_CHECKS,
 };
