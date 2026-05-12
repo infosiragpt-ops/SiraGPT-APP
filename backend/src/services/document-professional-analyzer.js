@@ -55,6 +55,22 @@ const MAX_PROFILE_CHARS = Number.parseInt(process.env.SIRAGPT_DOC_PROFILE_MAX_CH
 const MAX_TABLES_INJECTED = Number.parseInt(process.env.SIRAGPT_DOC_TABLES_INJECTED || '4', 10);
 const MAX_TABLE_ROWS_PREVIEW = Number.parseInt(process.env.SIRAGPT_DOC_TABLE_ROWS_PREVIEW || '8', 10);
 const MAX_SECTIONS_LISTED = Number.parseInt(process.env.SIRAGPT_DOC_SECTIONS_LISTED || '14', 10);
+const MAX_INSIGHTS_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_DOC_INSIGHTS_MAX_CHARS || '4500', 10);
+
+// document-insights-engine is a sibling pure module; we lazy-require to keep
+// startup cost off the hot path of routes that don't enrich attachments.
+let insightsEngineCache = null;
+function getInsightsEngine() {
+  if (insightsEngineCache) return insightsEngineCache;
+  try {
+    insightsEngineCache = require('./document-insights-engine');
+  } catch {
+    // The engine is optional at runtime — if missing, callers get an empty
+    // block instead of an exception. Tests still validate via direct require.
+    insightsEngineCache = null;
+  }
+  return insightsEngineCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -234,6 +250,100 @@ const TYPE_SIGNALS = [
     mime: /^image\//i,
     body: [],
     bodyMin: 0,
+  },
+  // ── Extended catalogue (added v2026.5.x) ──────────────────────────
+  // Source code / scripts pasted as text or attached as a code file.
+  {
+    type: 'source_code',
+    weight: 4,
+    mime: /(javascript|typescript|x-python|x-go|x-rust|x-java|x-csharp|x-c|x-c\+\+|x-php|x-ruby|x-swift|x-kotlin|x-shellscript|x-sh|x-sql)/i,
+    name: /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|rs|go|java|cs|cpp|c|h|hpp|php|swift|kt|kts|sh|bash|zsh|sql|graphql|gql|scala|hs|elm|ml|lua|r)$/i,
+    body: [
+      /(^|\n)\s*(import\s+.+\s+from\s+["'][^"']+["']|const\s+\w+\s*=|export\s+(default\s+)?(function|class|const|interface|type)|require\(['"][^'"]+['"]\))/,
+      /(^|\n)\s*(def\s+\w+\s*\(|class\s+\w+\s*[:(]|from\s+\w+\s+import|if __name__\s*==\s*['"]__main__['"])/,
+      /(^|\n)\s*(public\s+(static\s+)?(class|interface|enum|void)|@Override\b|System\.out\.println)/,
+      /(^|\n)\s*(fn\s+\w+\s*\(|let\s+(mut\s+)?\w+\s*[:=]|use\s+\w+::|impl\s+\w+|#\[derive\()/,
+      /(^|\n)\s*(package\s+\w+\s*;|func\s+\w+\s*\(|type\s+\w+\s+struct\s*\{)/,
+      /(^|\n)\s*(?:#include\s*<[^>]+>|namespace\s+\w+|template\s*<)/,
+    ],
+    bodyMin: 1,
+  },
+  // YAML / JSON / TOML / INI / Dockerfile / .env style configuration files.
+  {
+    type: 'configuration_file',
+    weight: 4,
+    mime: /(yaml|json|toml|ini|x-properties|x-dockerfile|x-shellscript)/i,
+    name: /(\.(ya?ml|json|jsonc|toml|ini|cfg|conf|properties|env|dockerfile)|^Dockerfile$|docker-compose\.ya?ml$|tsconfig\.json$|package\.json$|requirements\.txt$|pyproject\.toml$|cargo\.toml$|gemfile$)/i,
+    body: [
+      /(^|\n)\s*[\w.-]+\s*:\s+\S/,
+      /(^|\n)\s*\[[^\]]+\]\s*$/,
+      /(^|\n)\s*[\w.-]+\s*=\s*\S/,
+      /(^|\n)\s*FROM\s+\S+(:[\w.-]+)?/i,
+      /(^|\n)\s*(image|version|services|environment|volumes|ports|networks|stages|jobs|steps):/i,
+      /(^|\n)\s*"[^"]+"\s*:\s*("|\d|true|false|null|\{|\[)/,
+    ],
+    bodyMin: 2,
+  },
+  // Application logs, audit trails, or stack traces. We deliberately do
+  // NOT match text/plain in the mime — that would catch every .txt file.
+  // Detection relies on the filename extension or strong body signals.
+  {
+    type: 'log_file',
+    weight: 4,
+    mime: /x-log/i,
+    name: /\.(log|out|err|trace|stacktrace)$/i,
+    body: [
+      /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/m,
+      /\b(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL|TRACE)\b/i,
+      /\bTraceback \(most recent call last\):/,
+      /^\s*at\s+[\w.<>$]+\s*\([^)]+:\d+:\d+\)/m,
+      /^\s+at\s+[\w$.]+\([\w$]+\.\w+:\d+\)/m,
+      /\bcaused by:?\s+\w/i,
+      /\b(?:status|http)\s*[:=]\s*[1-5]\d{2}\b/i,
+    ],
+    bodyMin: 2,
+  },
+  // Meeting / interview / call transcripts with explicit speaker labels.
+  {
+    type: 'meeting_transcript',
+    weight: 3,
+    name: /(transcript|transcripci[oó]n|minutes?|acta|reuni[oó]n|meeting|interview|entrevista|call)/i,
+    body: [
+      /^(?:\[\d{1,2}:\d{2}(?::\d{2})?\]\s+)?[A-ZÁÉÍÓÚÑ][\w\s]{0,30}:\s+/m,
+      /\b(?:00|01|02):\d{2}:\d{2}\s+[-—]\s+/,
+      /\b(speaker\s+\d+|hablante\s+\d+|moderator|moderador|host|presenter)\b/i,
+      /\b(action\s+item|todo|next\s+steps?|agenda|minutes?|attendees?|asistentes?)\b/i,
+      /\b(thank\s+you|gracias|let'?s\s+|let\s+us|next\s+slide|moving\s+on)\b/i,
+    ],
+    bodyMin: 2,
+  },
+  // Regulatory / compliance / policy / audit documents (GDPR, SOC 2, HIPAA, ISO).
+  {
+    type: 'regulatory_compliance',
+    weight: 3,
+    name: /(compliance|cumplimiento|regulato|normativ|policy|pol[ií]tica|gdpr|hipaa|sox|iso\s*\d|pci\s*dss|soc\s*\d)/i,
+    body: [
+      /\b(GDPR|HIPAA|SOC\s*[12]|ISO\s*\d{4,5}|PCI\s*DSS|CCPA|NIST|CIS\s+benchmark)\b/i,
+      /\b(data\s+subject|titular|controller|processor|encargado|responsable)\b/i,
+      /\b(audit(or)?\b|auditor[ií]a|attestation|assessment|evaluaci[oó]n)\b/i,
+      /\b(control(s)?\s+\d+(\.\d+)?|requirement\s+\d+|requisito\s+\d+|salvaguarda)\b/i,
+      /\b(risk\s+register|matriz\s+de\s+riesgos|treatment\s+plan|plan\s+de\s+tratamiento)\b/i,
+    ],
+    bodyMin: 2,
+  },
+  // Research / grant / project proposals (RFC, RFP, RFI, call for proposals).
+  {
+    type: 'research_proposal',
+    weight: 3,
+    name: /(proposal|propuesta|grant|beca|rfc|rfp|rfi|tender|licitaci[oó]n)/i,
+    body: [
+      /\b(problem\s+statement|planteamiento\s+del\s+problema|objectives?|objetivos?)\b/i,
+      /\b(deliverables?|entregables?|milestones?|hitos?|timeline|cronograma)\b/i,
+      /\b(budget|presupuesto|funding|financiaci[oó]n|cost(s)?|costos?)\b/i,
+      /\b(team|equipo|principal\s+investigator|investigador\s+principal|ki|pm)\b/i,
+      /\b(success\s+criteria|criterios\s+de\s+[ée]xito|expected\s+outcomes?|resultados\s+esperados)\b/i,
+    ],
+    bodyMin: 2,
   },
 ];
 
@@ -488,6 +598,90 @@ The attached file is an image (photograph or scanned page). Treat the OCR output
 7. **Privacy red flags** — visible PII (full name, ID number, address, signature). Recommend redaction before sharing.
 8. **Suggested action** — what the user most likely wants to do next: extract data, file it, redact and resend, run through an OCR-improvement step, etc.
 For mathematical or scientific images, transcribe equations with $...$ inline / $$...$$ display LaTeX and explain the equation's meaning briefly.`,
+
+  source_code: `### SOURCE CODE ANALYSIS RECIPE
+You are reading source code (a file, snippet, or pasted excerpt). Produce a senior-engineer review the author can act on. Cover:
+1. **File identity** — language, file purpose (entry point / library module / test / config / migration / script), top-level exports.
+2. **Public surface** — list every exported function, class, type, constant — signature + 1-line purpose. Markdown table.
+3. **Dependencies** — imports / requires used, grouped by stdlib vs first-party vs third-party. Note any with known security or maintenance concerns.
+4. **Control flow & complexity** — entry points, key branches, recursive/iterative structures. Flag functions >50 lines or with cyclomatic complexity >8 estimated by branch count.
+5. **Type safety & correctness** — null-safety holes, missing exhaustive checks, unhandled promise rejections, swallowed errors, mutation of shared state, off-by-one, race conditions.
+6. **Security review** — injection vectors (SQL/HTML/shell/path), unsafe deserialization, hard-coded secrets, weak crypto, missing authentication/authorization, unsafe \`eval\` / \`new Function\` / \`exec\`, insecure http calls, missing input validation, unsafe regex (catastrophic backtracking).
+7. **Performance hotspots** — quadratic loops, unbounded recursion, missing memoization, sync I/O in hot path, allocations inside loops, redundant DB queries (N+1), missing indices implied by query patterns.
+8. **Test coverage signal** — does the file have an obvious test counterpart? Is the code structured to be testable (pure functions, dependency injection)?
+9. **Refactor opportunities** — duplication, deep nesting, large parameter lists, primitive obsession, god functions, circular deps, naming clarity. Prioritise top 5.
+10. **Concrete patches** — for the top 3 issues, write the actual replacement code as a unified diff (\`\`\`diff fenced block\`\`\`). Include before/after.
+Always quote line ranges or symbol names ("\`server.ts\` L120-145", "\`UserService.create\`"). End with a "Ship-readiness verdict": ready / needs review / needs rework + 1 sentence why.`,
+
+  configuration_file: `### CONFIGURATION FILE ANALYSIS RECIPE
+You are reading a configuration file (YAML / JSON / TOML / INI / Dockerfile / .env / docker-compose / etc.). Produce a DevOps-grade review. Cover:
+1. **Config identity** — exact format, what tool/system it configures, version/schema if declarable.
+2. **Top-level structure** — list every top-level key with 1-line purpose. Markdown table.
+3. **Effective values** — for each setting, the literal value + any inferred default if absent. Highlight environment-variable interpolations (\`\${VAR}\`).
+4. **Cross-section dependencies** — settings whose validity depends on another (port + service, secret + provider, network alias + reference).
+5. **Security posture** — exposed ports, world-readable secrets, hard-coded credentials, weak TLS settings (TLS 1.0/1.1, ANY cipher), permissive CORS, debug-mode flags in production, default admin passwords, unrestricted SSH/management endpoints, missing health probes, image tags pinned to \`latest\`.
+6. **Reliability / availability** — replica counts, restart policies, health/liveness/readiness probes, resource requests/limits, retry/backoff, graceful shutdown, log rotation.
+7. **Cost & efficiency** — oversized resources, missing autoscaling, unbounded caches, log verbosity in production, large image sizes, unnecessary services/sidecars.
+8. **Compliance & governance** — data residency hints (region pinning), audit logging, key rotation period, encryption-at-rest, encryption-in-transit, secret-management indirection (vault, AWS SM, KMS).
+9. **Schema / lint issues** — invalid types, unknown keys (relative to known schemas), missing required fields, deprecated keys, inconsistent indentation, duplicate keys.
+10. **Recommended diff** — present the top 5 fixes as a single \`\`\`diff fenced block\`\`\` patch the user can apply directly.
+Cite each finding with the exact key path ("\`services.web.image\`", "\`spec.containers[0].resources\`"). End with a 1-line "Production-readiness rating" (🟢 ready / 🟡 needs hardening / 🔴 do not deploy) + 1 reason.`,
+
+  log_file: `### LOG / STACK TRACE ANALYSIS RECIPE
+You are reading a log file, audit trail, or stack trace. Produce an SRE-grade incident analysis. Cover:
+1. **Log identity** — source system / framework hint (NGINX, syslog, Spring, Node winston, Python logging, custom JSON), time range, total lines, time-zone if visible.
+2. **Severity distribution** — count of TRACE / DEBUG / INFO / WARN / ERROR / FATAL events. Markdown table.
+3. **Error timeline** — chronological list of unique ERROR/FATAL events with timestamp, count, first/last seen, exemplary message. Coalesce duplicates.
+4. **Stack-trace dissection** — for every distinct exception: exception class, message, top 3 frames in user code (skip framework noise), root cause hypothesis, likely fix.
+5. **Slow / latency markers** — requests > 1s, GC pauses, DB queries > 200ms, retries, circuit-breaker openings.
+6. **Correlation hints** — recurring trace IDs, request IDs, user IDs, IPs, hosts, pods, container restarts, deployment markers — group related events.
+7. **Patterns & anomalies** — bursts of 5xx errors, ramp-up of timeouts, sudden silence (process crash), repeated auth failures (possible attack), connection pool exhaustion, OOM signatures, disk-full hints.
+8. **Probable root cause** — single best hypothesis with the evidence chain (line numbers / timestamps that support it).
+9. **Recommended next actions** — specific commands / dashboards / queries the on-call should run next (kubectl logs, metrics URL, jstack, /proc/, etc.).
+10. **Mitigation patch (if root cause is in code)** — sketch the fix as a code change (\`\`\`diff\`\`\` block) with rationale.
+Cite log lines by their original timestamp + an excerpt ("at 10:00:01Z: 'connection refused'"). Never speculate beyond what the log shows. End with a 1-line "Incident severity": SEV1/2/3 + 1 sentence justification.`,
+
+  meeting_transcript: `### MEETING / INTERVIEW TRANSCRIPT ANALYSIS RECIPE
+You are reading a transcript of a meeting, interview, call, or workshop. Produce a chief-of-staff-grade synthesis. Cover:
+1. **Meeting metadata** — inferred title, date/time if visible, duration estimate, attendees (from speaker labels), facilitator/host.
+2. **One-paragraph summary** — what was decided + why this meeting happened, in plain language.
+3. **Topic timeline** — markdown table: Time/Span · Topic · Driver (who proposed) · Outcome (decided / parked / unresolved).
+4. **Decisions reached** — bulleted list, each with the decision-maker and the trigger that confirmed it. Quote verbatim if a clean sentence exists.
+5. **Action items table** — Owner · Action · Due date · Source quote ("[10:23] Speaker B said …"). Capture every commitment.
+6. **Open questions / unresolved threads** — items raised but not closed; note who needs to follow up.
+7. **Risks / concerns surfaced** — operational, financial, legal, people. One bullet per risk + who raised it.
+8. **Tone & engagement read** — energetic / cautious / divided / aligned; flag tense moments with timestamps.
+9. **Quotable insights** — 3-5 short verbatim quotes that capture key insights, each tagged with speaker + timestamp.
+10. **Suggested follow-up email** — draft a concise post-meeting recap email (~120 words) the host could send today, in the meeting's language.
+Cite every claim with [timestamp] + speaker name ("[14:02] Carla:"). Never paraphrase decisions or commitments — quote them verbatim. End with "If you read only one line: …" — the single most important takeaway.`,
+
+  regulatory_compliance: `### REGULATORY / COMPLIANCE DOCUMENT ANALYSIS RECIPE
+You are reading a compliance, audit, regulatory, or governance document (GDPR DPA, HIPAA BAA, SOC 2, ISO 27001 ISMS, PCI DSS RoC, internal policy). Produce an auditor-grade review. Cover:
+1. **Document identity** — framework (GDPR / HIPAA / SOC 2 / ISO 27001 / PCI DSS / NIST CSF / CCPA / sector-specific), version, effective date, scope statement, owning function.
+2. **Applicability** — entity / system / data classification covered, geographies, exclusions, third parties in scope.
+3. **Control inventory** — markdown table: Control ID · Title · Implementation summary · Owner · Evidence reference · Status (implemented / partial / not implemented / N/A).
+4. **Roles & responsibilities** — controller / processor / sub-processor / data subject (GDPR), covered entity / business associate (HIPAA), service organisation / user entity (SOC 2). Map to internal roles.
+5. **Data flows & lawful basis** — categories of data, purpose, legal basis (consent / contract / legitimate interest / legal obligation), retention period, cross-border transfer mechanism (SCCs, adequacy decision).
+6. **Risk treatment** — risks identified, risk rating, mitigation, residual risk acceptance, owner. Flag anything unmitigated.
+7. **Gap analysis** — controls listed by the framework that are missing or weakly implemented in this document. Reference specific clause numbers ("ISO 27001 A.5.7", "GDPR Art. 32").
+8. **Subject rights / data-subject procedures** — access / rectification / erasure / portability / objection / breach notification — verify each is documented with a SLA.
+9. **Audit & evidence readiness** — what evidence would an auditor request, and which is referenced vs missing? List specific artefacts (policy doc, system config, training log, pen-test report).
+10. **Remediation plan** — top 5 prioritised fixes with effort estimate, target date, and the control they close.
+Quote every clause/article with its exact reference ("§3.2", "Art. 28(3)(a)", "AC-2(1)"). Use the document's language. End with "Audit verdict": Pass / Pass with observations / Conditional / Fail + 1-line justification.`,
+
+  research_proposal: `### RESEARCH / GRANT / RFP PROPOSAL ANALYSIS RECIPE
+You are reading a research proposal, grant application, RFP / RFI / RFQ response, or project pitch. Produce a reviewer-grade evaluation. Cover:
+1. **Proposal identity** — title, funding body / customer, programme, submitter, requested amount/scope, deadline if visible.
+2. **Problem statement** — what problem is being solved, why it matters now, who suffers without a solution. Quote the strongest framing line.
+3. **State of the art** — prior work cited, gaps identified, differentiation. Note suspiciously thin literature reviews.
+4. **Objectives & hypotheses** — list each objective + measurable success criterion. Flag vague or unfalsifiable goals.
+5. **Methodology / approach** — design, data, tools, partners, ethical considerations, risk-mitigation plan.
+6. **Deliverables & milestones** — markdown table: # · Deliverable · Owner · Due · Acceptance criterion. Verify total spans the project window.
+7. **Team & capacity** — PI/lead, key personnel, FTE allocation, prior track record relevant to the work, sub-contractors.
+8. **Budget plausibility** — major cost lines, % allocation (personnel / equipment / travel / overhead / sub-contracts), match-funding, value-for-money cues. Flag implausibly low or high numbers.
+9. **Risks & assumptions** — explicit risk register? Plausibility of mitigations? Any risk you'd add that they missed?
+10. **Reviewer scorecard** — markdown table: Criterion (Significance · Innovation · Approach · Team · Feasibility · Cost) · Score 1-5 · Justification. End with a final "Fund / Negotiate / Decline" recommendation + 1 sentence why.
+Cite every claim with the section heading ("§Methods", "§Budget"). End with "Top 3 questions to ask the proposer before deciding." Use the proposal's language.`,
 
   general_document: `### PROFESSIONAL DOCUMENT ANALYSIS RECIPE
 You are reading a document whose specific category could not be classified with confidence. Apply this general professional-analyst recipe. Cover:
@@ -824,10 +1018,12 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const primaryDocType = pickPrimaryType(classifications);
   const profileBlock = renderProfileBlock(profiles);
   const directiveBlock = renderDirectiveBlock(primaryDocType, classifications.length);
+  const insightsBlock = buildInsightsBlock(files);
 
   return {
     profileBlock,
     directiveBlock,
+    insightsBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -835,6 +1031,62 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
       confidence: p.classification.confidence,
     })),
   };
+}
+
+/**
+ * Build the markdown EXTRACTED INSIGHTS block by running the insights
+ * engine over the processed files. Returns an empty string when the engine
+ * is unavailable or no files have extractable text — callers can splice it
+ * unconditionally without checking.
+ *
+ * The block emphasises aggregate insights for multi-file uploads and falls
+ * back to a single per-file report when only one file is present. The total
+ * size is bounded by MAX_INSIGHTS_BLOCK_CHARS so the prompt stays compact.
+ */
+function buildInsightsBlock(files) {
+  const engine = getInsightsEngine();
+  if (!engine || typeof engine.buildInsightsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files.filter((f) => f && typeof f === 'object') : [];
+  if (list.length === 0) return '';
+  const { perFile, aggregate } = engine.buildInsightsForFiles(list);
+  if (perFile.length === 0) return '';
+
+  const sections = [];
+  if (perFile.length === 1) {
+    const only = perFile[0];
+    sections.push(engine.renderInsightsBlock(only.report, {
+      title: 'EXTRACTED INSIGHTS',
+      fileLabel: only.file,
+    }));
+  } else {
+    // Multi-file: aggregate first (cross-doc highlights), then a compact
+    // per-file mini-summary for context.
+    sections.push(engine.renderInsightsBlock(aggregate, {
+      title: 'EXTRACTED INSIGHTS — AGGREGATE',
+      fileLabel: `${perFile.length} files`,
+    }));
+    const perFileLines = ['### Per-file highlights'];
+    for (const item of perFile) {
+      const m = item.report.metrics;
+      const persons = item.report.entities.persons.slice(0, 3).join(', ');
+      const orgs = item.report.entities.organizations.slice(0, 3).join(', ');
+      const money = item.report.numbers.money.slice(0, 3).join(', ');
+      const summary = [
+        `**${item.file}** — ${m.words.toLocaleString()} words · ~${m.readingMinutes} min`,
+        persons ? `people: ${persons}` : null,
+        orgs ? `orgs: ${orgs}` : null,
+        money ? `money: ${money}` : null,
+      ].filter(Boolean).join(' · ');
+      perFileLines.push(`- ${summary}`);
+    }
+    sections.push(perFileLines.join('\n'));
+  }
+
+  let combined = sections.join('\n\n');
+  if (combined.length > MAX_INSIGHTS_BLOCK_CHARS) {
+    combined = `${combined.slice(0, MAX_INSIGHTS_BLOCK_CHARS - 80)}\n\n[...insights block truncated to stay within token budget]`;
+  }
+  return combined;
 }
 
 function renderProfileBlock(profiles) {
@@ -864,6 +1116,7 @@ module.exports = {
   detectDocumentType,
   getProfessionalAnalysisDirective,
   buildEnrichedFileContext,
+  buildInsightsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   // Exposed for unit tests

@@ -9,6 +9,126 @@ const analyzer = require('../src/services/document-professional-analyzer');
 // detectDocumentType — type classifier
 // ──────────────────────────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────────────────
+// Extended catalogue — new types added in v2026.5.x
+// ──────────────────────────────────────────────────────────────────────────
+
+test('detectDocumentType: source code TypeScript file', () => {
+  const file = { originalName: 'service.ts', mimeType: 'text/x-typescript' };
+  const text = `import { z } from "zod"\n\nexport interface User { id: string; name: string }\n\nexport const userSchema = z.object({ id: z.string(), name: z.string() })\n\nexport function parseUser(input: unknown): User {\n  return userSchema.parse(input)\n}`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'source_code');
+});
+
+test('detectDocumentType: source code Python file', () => {
+  const file = { originalName: 'compute.py', mimeType: 'text/x-python' };
+  const text = `import json\n\ndef compute_total(items):\n    return sum(i["price"] for i in items)\n\nclass Service:\n    def run(self):\n        return compute_total([])\n\nif __name__ == "__main__":\n    Service().run()`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'source_code');
+});
+
+test('detectDocumentType: configuration file (docker-compose YAML)', () => {
+  const file = { originalName: 'docker-compose.yml', mimeType: 'application/yaml' };
+  const text = `version: "3.9"\nservices:\n  web:\n    image: nginx:alpine\n    ports:\n      - "80:80"\n  db:\n    image: postgres:15\n    environment:\n      POSTGRES_PASSWORD: example\nvolumes:\n  data:`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'configuration_file');
+});
+
+test('detectDocumentType: configuration file (Dockerfile)', () => {
+  const file = { originalName: 'Dockerfile', mimeType: 'text/plain' };
+  const text = `FROM node:20-alpine\nWORKDIR /app\nCOPY package.json ./\nRUN npm ci --only=production\nCOPY . .\nEXPOSE 3000\nCMD ["node", "server.js"]`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'configuration_file');
+});
+
+test('detectDocumentType: log file by body content', () => {
+  const file = { originalName: 'app.log', mimeType: 'text/plain' };
+  const text = `2026-05-12T10:00:01Z [INFO] startup complete\n2026-05-12T10:00:02Z [INFO] listening on :3000\n2026-05-12T10:00:05Z [WARN] slow query 1240ms\n2026-05-12T10:00:09Z [ERROR] db connection lost\n2026-05-12T10:00:10Z [INFO] reconnecting...`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'log_file');
+});
+
+test('detectDocumentType: log file with stack trace', () => {
+  const file = { originalName: 'crash.txt', mimeType: 'text/plain' };
+  const text = `Traceback (most recent call last):\n  File "/app/main.py", line 42, in handle\n    result = compute(payload)\n  File "/app/svc.py", line 17, in compute\n    return data["missing"]\nKeyError: 'missing'\nCaused by: Connection refused\n  at module.connect (server.js:120:5)\n  at module.start (server.js:200:8)`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'log_file');
+});
+
+test('detectDocumentType: meeting transcript with speaker labels', () => {
+  const file = { originalName: 'transcript-q3-review.txt', mimeType: 'text/plain' };
+  const text = `[00:00:05] Carla: Buenos días, comencemos con la revisión del Q3.\n[00:00:18] Marco: De acuerdo. Los KPIs muestran un crecimiento del 22%.\n[00:01:02] Carla: Action item: Marco prepara el deck para el viernes.\n[00:02:15] Marco: Next steps: alinear con el equipo de marketing.\nAttendees: Carla, Marco, Sofia.\nMinutes prepared by Sofia.`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'meeting_transcript');
+});
+
+test('detectDocumentType: regulatory compliance document (GDPR DPA)', () => {
+  const file = { originalName: 'gdpr-dpa.pdf', mimeType: 'application/pdf' };
+  const text = `DATA PROCESSING ADDENDUM (GDPR)\nThis Addendum forms part of the Agreement between the Controller and the Processor.\nArticle 28(3) of the GDPR requires the following terms.\nThe data subject shall have the right to access, rectification, and erasure.\nControl 5.7 — Personal data is encrypted in transit using TLS 1.2.\nAudit attestation under SOC 2 Type II is provided annually.\nRisk register updated quarterly.`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'regulatory_compliance');
+});
+
+test('detectDocumentType: research proposal', () => {
+  const file = { originalName: 'grant-proposal-2026.pdf', mimeType: 'application/pdf' };
+  const text = `RESEARCH PROPOSAL — IA APLICADA A EDUCACIÓN\n\nProblem statement: Los estudiantes carecen de retroalimentación inmediata.\n\nObjectives:\n1. Desarrollar un asistente que evalúe redacciones.\n2. Validar la mejora de aprendizaje en un grupo piloto.\n\nDeliverables: Prototipo, dataset, reporte final.\nMilestones: M1 (mes 3), M2 (mes 6), M3 (mes 9).\nBudget: $250,000 USD distribuido entre personal, equipo y viajes.\n\nExpected outcomes: 15% mejora en métricas de aprendizaje.\nTeam: PI Dr. Ana López, 2 investigadores asociados.`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'research_proposal');
+});
+
+test('getProfessionalAnalysisDirective: returns recipe for new types', () => {
+  const newTypes = ['source_code', 'configuration_file', 'log_file', 'meeting_transcript', 'regulatory_compliance', 'research_proposal'];
+  for (const t of newTypes) {
+    const directive = analyzer.getProfessionalAnalysisDirective(t);
+    assert.ok(directive && directive.length > 200, `directive for ${t} should be substantial`);
+    assert.match(directive, /RECIPE/i, `directive for ${t} should mention RECIPE`);
+  }
+});
+
+test('buildEnrichedFileContext: emits insightsBlock with detected entities', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'fa',
+      name: 'memo.txt',
+      originalName: 'memo.txt',
+      mimeType: 'text/plain',
+      extractedText: 'La Dra. Ana López revisará el contrato con Acme Corp el 2026-06-01. Presupuesto: $50,000 USD. ¿Quién aprobará el cambio? Riesgo crítico: vendor lock-in.',
+    }],
+  });
+  assert.ok(out.insightsBlock && typeof out.insightsBlock === 'string', 'insightsBlock present');
+  assert.match(out.insightsBlock, /EXTRACTED INSIGHTS/);
+  assert.match(out.insightsBlock, /Ana López/);
+  assert.match(out.insightsBlock, /\$50,000/);
+  assert.match(out.insightsBlock, /2026-06-01/);
+});
+
+test('buildEnrichedFileContext: insightsBlock has aggregate + per-file for multi-file', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [
+      { id: 'a', name: 'a.txt', originalName: 'a.txt', mimeType: 'text/plain', extractedText: 'Acme Corp contractó a Dr. Juan Pérez. Presupuesto $10,000 USD. Fecha: 2026-05-10.' },
+      { id: 'b', name: 'b.txt', originalName: 'b.txt', mimeType: 'text/plain', extractedText: 'Globex Inc colaboró con Dr. Ana López. Presupuesto $20,000 USD. Fecha: 2026-05-20.' },
+    ],
+  });
+  assert.match(out.insightsBlock, /AGGREGATE/);
+  assert.match(out.insightsBlock, /Per-file highlights/);
+  assert.match(out.insightsBlock, /a\.txt/);
+  assert.match(out.insightsBlock, /b\.txt/);
+});
+
+test('buildEnrichedFileContext: insightsBlock empty when no extracted text', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{ id: 'x', name: 'x.txt', originalName: 'x.txt', mimeType: 'text/plain' }],
+  });
+  assert.equal(out.insightsBlock, '');
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Original test suite
+// ──────────────────────────────────────────────────────────────────────────
+
 test('detectDocumentType: legal contract by name+body', () => {
   const file = { originalName: 'NDA-MutualConfidentiality.pdf', mimeType: 'application/pdf' };
   const text = `

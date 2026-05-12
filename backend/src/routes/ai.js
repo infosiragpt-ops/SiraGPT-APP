@@ -1061,9 +1061,13 @@ router.post(
             prisma,
             processedFiles,
           });
-          if (documentEnrichment?.profileBlock || documentEnrichment?.directiveBlock) {
+          if (documentEnrichment?.profileBlock || documentEnrichment?.directiveBlock || documentEnrichment?.insightsBlock) {
             const parts = [];
             if (documentEnrichment.profileBlock) parts.push(documentEnrichment.profileBlock);
+            // The insights block goes BETWEEN the profile (identity / structure)
+            // and the directive (recipe). The model sees: what the docs are →
+            // pre-extracted facts the docs contain → recipe to follow.
+            if (documentEnrichment.insightsBlock) parts.push(documentEnrichment.insightsBlock);
             if (documentEnrichment.directiveBlock) parts.push(documentEnrichment.directiveBlock);
             documentEnrichmentBlock = `\n\n${parts.join('\n\n')}`;
           }
