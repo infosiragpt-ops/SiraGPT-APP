@@ -57,19 +57,33 @@ const MAX_TABLE_ROWS_PREVIEW = Number.parseInt(process.env.SIRAGPT_DOC_TABLE_ROW
 const MAX_SECTIONS_LISTED = Number.parseInt(process.env.SIRAGPT_DOC_SECTIONS_LISTED || '14', 10);
 const MAX_INSIGHTS_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_DOC_INSIGHTS_MAX_CHARS || '4500', 10);
 
-// document-insights-engine is a sibling pure module; we lazy-require to keep
-// startup cost off the hot path of routes that don't enrich attachments.
+// Sibling pure modules — lazy-require pattern keeps startup cost off the
+// hot path of routes that don't enrich attachments. Each module is optional
+// at runtime: if missing, callers receive an empty block instead of an
+// exception. Direct unit tests import the modules without going through here.
 let insightsEngineCache = null;
 function getInsightsEngine() {
   if (insightsEngineCache) return insightsEngineCache;
-  try {
-    insightsEngineCache = require('./document-insights-engine');
-  } catch {
-    // The engine is optional at runtime — if missing, callers get an empty
-    // block instead of an exception. Tests still validate via direct require.
-    insightsEngineCache = null;
-  }
+  try { insightsEngineCache = require('./document-insights-engine'); } catch { insightsEngineCache = null; }
   return insightsEngineCache;
+}
+let comparisonEngineCache = null;
+function getComparisonEngine() {
+  if (comparisonEngineCache) return comparisonEngineCache;
+  try { comparisonEngineCache = require('./document-comparison-engine'); } catch { comparisonEngineCache = null; }
+  return comparisonEngineCache;
+}
+let glossaryEngineCache = null;
+function getGlossaryEngine() {
+  if (glossaryEngineCache) return glossaryEngineCache;
+  try { glossaryEngineCache = require('./document-glossary-extractor'); } catch { glossaryEngineCache = null; }
+  return glossaryEngineCache;
+}
+let piiEngineCache = null;
+function getPiiEngine() {
+  if (piiEngineCache) return piiEngineCache;
+  try { piiEngineCache = require('./document-pii-detector'); } catch { piiEngineCache = null; }
+  return piiEngineCache;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1019,11 +1033,21 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const profileBlock = renderProfileBlock(profiles);
   const directiveBlock = renderDirectiveBlock(primaryDocType, classifications.length);
   const insightsBlock = buildInsightsBlock(files);
+  // Comparison only fires when 2+ files have extractable text. Glossary fires
+  // for any file count. PII detector also fires for any file count and is the
+  // most security-sensitive — surfaces upfront so the model gets a safety
+  // frame before it sees the raw extracted text downstream.
+  const comparisonBlock = buildComparisonBlock(files, profiles);
+  const glossaryBlock = buildGlossaryBlock(files);
+  const piiSafetyBlock = buildPiiSafetyBlock(files);
 
   return {
     profileBlock,
     directiveBlock,
     insightsBlock,
+    comparisonBlock,
+    glossaryBlock,
+    piiSafetyBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -1031,6 +1055,50 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
       confidence: p.classification.confidence,
     })),
   };
+}
+
+/**
+ * Cross-document comparison block — only emitted when ≥2 files have text.
+ * Decorates each file with its classification so the comparison engine can
+ * report kind coverage without re-running detectDocumentType.
+ */
+function buildComparisonBlock(files, profiles) {
+  const engine = getComparisonEngine();
+  if (!engine || typeof engine.compareDocuments !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length < 2) return '';
+  const decorated = list.map((f, i) => ({ ...f, classification: profiles[i]?.classification || null }));
+  const report = engine.compareDocuments(decorated);
+  if (!report) return '';
+  return engine.renderComparisonBlock(report);
+}
+
+/**
+ * Domain glossary block — emitted whenever the glossary engine finds at
+ * least one acronym, proper term or jargon entry across the file set.
+ */
+function buildGlossaryBlock(files) {
+  const engine = getGlossaryEngine();
+  if (!engine || typeof engine.buildGlossaryForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGlossaryForFiles(list);
+  return engine.renderGlossaryBlock(report);
+}
+
+/**
+ * PII / sensitive-data safety block — emitted whenever any sensitive
+ * identifier is detected across the file set. This is the most prompt-critical
+ * block: it instructs the model to never echo PII verbatim and to flag
+ * leaked credentials as immediate-rotation incidents.
+ */
+function buildPiiSafetyBlock(files) {
+  const engine = getPiiEngine();
+  if (!engine || typeof engine.buildPiiReportForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPiiReportForFiles(list);
+  return engine.renderPiiSafetyBlock(report);
 }
 
 /**

@@ -125,6 +125,75 @@ test('buildEnrichedFileContext: insightsBlock empty when no extracted text', asy
   assert.equal(out.insightsBlock, '');
 });
 
+test('buildEnrichedFileContext: comparisonBlock fires only with 2+ files', async () => {
+  const single = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{ id: 'a', name: 'a.txt', originalName: 'a.txt', mimeType: 'text/plain', extractedText: 'Acme Corp pagó $100,000 USD el 2026-05-10.' }],
+  });
+  assert.equal(single.comparisonBlock, '', 'single file should produce no comparison block');
+
+  const multi = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [
+      { id: 'a', name: 'a.txt', originalName: 'a.txt', mimeType: 'text/plain', extractedText: 'Acme Corp pagó $100,000 USD el 2026-05-10.' },
+      { id: 'b', name: 'b.txt', originalName: 'b.txt', mimeType: 'text/plain', extractedText: 'Acme Corp pagó $150,000 USD el 2026-06-15.' },
+    ],
+  });
+  assert.match(multi.comparisonBlock, /CROSS-DOCUMENT SYNTHESIS/);
+});
+
+test('buildEnrichedFileContext: glossaryBlock includes detected acronyms', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'g',
+      name: 'spec.md',
+      originalName: 'spec.md',
+      mimeType: 'text/markdown',
+      extractedText: 'The Service Level Agreement (SLA) defines the Recovery Time Objective (RTO). The SLA also specifies the Recovery Point Objective (RPO).',
+    }],
+  });
+  assert.match(out.glossaryBlock, /## DOCUMENT GLOSSARY/);
+  assert.match(out.glossaryBlock, /SLA/);
+  assert.match(out.glossaryBlock, /RTO/);
+});
+
+test('buildEnrichedFileContext: piiSafetyBlock fires on credit card detection', async () => {
+  // Constructed at runtime so source code does not contain the literal
+  // string GitHub's secret-scanning push protection flags as a Stripe key.
+  const fakeStripeKey = ['sk', 'live', 'abcdefghijklmnopqrstuvwx'].join('_');
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'p',
+      name: 'leak.txt',
+      originalName: 'leak.txt',
+      mimeType: 'text/plain',
+      extractedText: `Customer card on file: 4111 1111 1111 1111. Stripe key: ${fakeStripeKey}`,
+    }],
+  });
+  assert.match(out.piiSafetyBlock, /## PII & SECURITY FLAGS/);
+  assert.match(out.piiSafetyBlock, /credit_card/);
+  assert.match(out.piiSafetyBlock, /stripe_secret/);
+  // Critical guarantee: raw card or key MUST NOT appear in the rendered block
+  assert.doesNotMatch(out.piiSafetyBlock, /4111111111111111/);
+  assert.doesNotMatch(out.piiSafetyBlock, new RegExp(fakeStripeKey));
+});
+
+test('buildEnrichedFileContext: piiSafetyBlock empty for clean documents', async () => {
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: null,
+    processedFiles: [{
+      id: 'q',
+      name: 'clean.txt',
+      originalName: 'clean.txt',
+      mimeType: 'text/plain',
+      extractedText: 'Este es un documento narrativo sin datos sensibles, solo prosa.',
+    }],
+  });
+  assert.equal(out.piiSafetyBlock, '');
+});
+
 // ──────────────────────────────────────────────────────────────────────────
 // Original test suite
 // ──────────────────────────────────────────────────────────────────────────

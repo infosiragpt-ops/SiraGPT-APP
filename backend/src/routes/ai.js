@@ -1061,13 +1061,30 @@ router.post(
             prisma,
             processedFiles,
           });
-          if (documentEnrichment?.profileBlock || documentEnrichment?.directiveBlock || documentEnrichment?.insightsBlock) {
+          if (
+            documentEnrichment?.profileBlock
+            || documentEnrichment?.directiveBlock
+            || documentEnrichment?.insightsBlock
+            || documentEnrichment?.comparisonBlock
+            || documentEnrichment?.glossaryBlock
+            || documentEnrichment?.piiSafetyBlock
+          ) {
             const parts = [];
+            // PII safety frame goes FIRST so the model reads "do not echo
+            // these" before any other context — defence in depth even if a
+            // later instruction tries to override it.
+            if (documentEnrichment.piiSafetyBlock) parts.push(documentEnrichment.piiSafetyBlock);
             if (documentEnrichment.profileBlock) parts.push(documentEnrichment.profileBlock);
-            // The insights block goes BETWEEN the profile (identity / structure)
-            // and the directive (recipe). The model sees: what the docs are →
-            // pre-extracted facts the docs contain → recipe to follow.
+            // Glossary primes the vocabulary BEFORE the model sees facts —
+            // anchors acronyms and proper terms so insights don't get
+            // paraphrased away.
+            if (documentEnrichment.glossaryBlock) parts.push(documentEnrichment.glossaryBlock);
+            // Insights = pre-extracted facts (entities, dates, numbers, risks).
             if (documentEnrichment.insightsBlock) parts.push(documentEnrichment.insightsBlock);
+            // Cross-document synthesis only fires for ≥2 files; sits next to
+            // insights so the model sees aggregate truth before per-file detail.
+            if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
+            // Directive = recipe the model should follow when answering.
             if (documentEnrichment.directiveBlock) parts.push(documentEnrichment.directiveBlock);
             documentEnrichmentBlock = `\n\n${parts.join('\n\n')}`;
           }
