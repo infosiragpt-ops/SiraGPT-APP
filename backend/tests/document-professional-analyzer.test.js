@@ -756,3 +756,298 @@ test('buildEnrichedFileContext: each file profile lists size, identity, structur
   assert.match(out.profileBlock, /size=5\.0 KB/);
   assert.match(out.profileBlock, /Extraction: 11 chars/);
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// New document types — v2026.5.12
+// ──────────────────────────────────────────────────────────────────────────
+
+test('detectDocumentType: patent application', () => {
+  const file = { originalName: 'US20240123456-patent.pdf', mimeType: 'application/pdf' };
+  const text = `UNITED STATES PATENT APPLICATION
+Patent No. US 11,123,456 B2
+Inventor: John Smith
+Applicant: Acme Corp.
+
+ABSTRACT
+A system and method for processing requests…
+
+BACKGROUND
+The prior art teaches a method of X, however it fails to handle Y. The present invention addresses these shortcomings.
+
+CLAIMS:
+1. A method comprising:
+   receiving a request;
+   processing said request using a hardware processor;
+   returning a result.
+2. The method of claim 1, wherein the processor is an FPGA.
+
+DRAWINGS
+FIG. 1 shows a block diagram of the preferred embodiment.`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'patent', `got ${out.type} with signals ${out.signals}`);
+});
+
+test('detectDocumentType: employment contract', () => {
+  const file = { originalName: 'employment-agreement.pdf', mimeType: 'application/pdf' };
+  const text = `EMPLOYMENT AGREEMENT
+This Employment Agreement is made between Acme Corp. ("Employer") and Jane Doe ("Employee").
+
+1. POSITION. Employee shall serve as Senior Software Engineer and report to the VP of Engineering.
+2. COMPENSATION. Employer shall pay Employee a base salary of $150,000 per year, payable in bi-weekly installments.
+3. VACATION. Employee shall be entitled to twenty (20) days of paid vacation per year.
+4. PROBATIONARY PERIOD. The first 90 days shall be probationary.
+5. TERMINATION. Either party may terminate this agreement with 30 days written notice.
+6. NON-COMPETE. Employee agrees not to engage in competing business for 12 months after termination.
+7. CONFIDENTIALITY. Employee shall keep all proprietary information confidential.`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'employment_contract');
+});
+
+test('detectDocumentType: bank statement', () => {
+  const file = { originalName: 'bank_statement_april_2026.pdf', mimeType: 'application/pdf' };
+  const text = `BANK STATEMENT
+Account Number: ****1234
+Statement Period: April 1 - April 30, 2026
+
+Opening Balance: $5,200.00
+Closing Balance: $4,875.42
+
+TRANSACTIONS:
+04/02  DEPOSIT - Salary               +$3,500.00
+04/05  WITHDRAWAL - ATM                 -$200.00
+04/08  TRANSFER - Rent                -$1,800.00
+04/15  CARD PURCHASE - Grocery          -$245.30
+04/22  CARD PURCHASE - Restaurant        -$78.50
+04/28  INTEREST CREDIT                   +$0.22
+04/30  FEE - Monthly maintenance         -$5.00`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'bank_statement');
+});
+
+test('detectDocumentType: insurance policy', () => {
+  const file = { originalName: 'auto-insurance-policy.pdf', mimeType: 'application/pdf' };
+  const text = `AUTO INSURANCE POLICY
+Policy Number: AUTO-2026-12345
+Insurer: SafeDrive Insurance Co.
+Insured: John Doe
+Policy Period: 01/01/2026 - 12/31/2026
+
+PREMIUM: $1,200 annual, payable monthly.
+DEDUCTIBLE: $500 per claim.
+
+COVERAGE:
+- Liability: $100,000/$300,000 bodily injury
+- Property damage: $50,000 per accident
+- Comprehensive: actual cash value, minus deductible
+
+EXCLUSIONS:
+- Acts of war
+- Intentional damage
+- Use in commercial activities (rideshare)
+
+CLAIM PROCESS:
+Report claims within 30 days of incident. Call 1-800-CLAIM-IT.`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'insurance_policy');
+});
+
+test('detectDocumentType: incident postmortem', () => {
+  const file = { originalName: 'postmortem-2026-04-12-api-outage.md', mimeType: 'text/markdown' };
+  const text = `# Incident Postmortem — API Outage (SEV-2)
+
+## Timeline (UTC)
+- 14:32 — p99 latency alert fires
+- 14:35 — on-call engineer paged
+- 14:38 — root cause identified: deploy script regression
+- 14:42 — rollback initiated
+- 14:51 — service restored
+
+## Root Cause
+The deploy script set MAX_CONNECTIONS to 0 due to an environment variable typo, causing all connection pools to reject requests.
+
+## Impact
+- Customer impact: 12% of requests failed for 19 minutes
+- SLO breach: yes, monthly error budget consumed
+
+## Action Items
+1. Fix env-var validation in deploy pipeline (Owner: Platform team, Due: 2026-04-19)
+2. Add MAX_CONNECTIONS to canary smoke test (Owner: SRE, Due: 2026-04-26)
+3. Update runbook with rollback procedure (Owner: On-call lead, Due: 2026-04-22)
+
+## 5 Whys
+1. Why did the API fail? → Connection pools rejected all requests.
+2. Why? → MAX_CONNECTIONS was 0.
+3. Why? → Env-var typo in deploy script.
+4. Why? → No validation step in pipeline.
+5. Why? → Pipeline was never audited for env-var sanity.`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'incident_postmortem');
+});
+
+test('detectDocumentType: pitch deck content', () => {
+  const file = { originalName: 'siraGPT-seed-pitch.pdf', mimeType: 'application/pdf' };
+  const text = `siraGPT — Seed Round Pitch Deck
+Founders: Luis Carrera, Ada Martínez
+
+TAM: $50B (global AI document workflows)
+SAM: $8B (LATAM + SMB segment)
+SOM: $400M (first 5 years)
+
+TRACTION:
+- MRR: $25K, growing 30% MoM
+- 1,200 active users
+- 92% net dollar retention
+
+BUSINESS MODEL: SaaS, $99/seat/month
+GTM: Product-led growth + outbound to SMB
+
+COMPETITION: ChatGPT, Claude, Codex.
+Our moat: domain-tuned document analysis for LATAM Spanish + regulatory compliance.
+
+THE ASK: $2M seed round at $15M pre-money valuation.
+USE OF FUNDS: 60% engineering, 30% GTM, 10% runway extension.
+Runway after round: 22 months.`;
+  const out = analyzer.detectDocumentType(file, text);
+  assert.equal(out.type, 'pitch_deck');
+});
+
+test('getProfessionalAnalysisDirective: new types return their recipes', () => {
+  for (const t of ['patent', 'employment_contract', 'bank_statement', 'insurance_policy', 'incident_postmortem', 'pitch_deck']) {
+    const directive = analyzer.getProfessionalAnalysisDirective(t);
+    assert.ok(typeof directive === 'string' && directive.length > 200, `${t}: missing or short directive`);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Table column profiling
+// ──────────────────────────────────────────────────────────────────────────
+
+test('profileTableColumns: infers types for date / currency / text columns', () => {
+  const table = {
+    columns: ['Date', 'Amount', 'Description'],
+    preview: [
+      ['2026-04-02', '$3,500.00', 'Salary deposit'],
+      ['2026-04-05', '-$200.00', 'ATM withdrawal'],
+      ['2026-04-08', '-$1,800.00', 'Rent transfer'],
+      ['2026-04-15', '-$245.30', 'Grocery purchase'],
+      ['2026-04-22', '-$78.50', 'Restaurant'],
+    ],
+  };
+  const profile = analyzer.profileTableColumns(table);
+  assert.ok(profile, 'profile should not be null');
+  assert.equal(profile.types[0].type, 'date');
+  assert.equal(profile.types[1].type, 'currency');
+  assert.equal(profile.types[2].type, 'text');
+});
+
+test('profileTableColumns: computes numeric summary stats (sum, mean, min, max)', () => {
+  const table = {
+    columns: ['Quarter', 'Revenue'],
+    preview: [
+      ['Q1', '120000'],
+      ['Q2', '145000'],
+      ['Q3', '162000'],
+      ['Q4', '188000'],
+    ],
+  };
+  const profile = analyzer.profileTableColumns(table);
+  const revSum = profile.columnSummaries.find(c => c.column === 'Revenue').summary;
+  assert.equal(revSum.sum, 615000);
+  assert.equal(revSum.min, 120000);
+  assert.equal(revSum.max, 188000);
+  assert.equal(revSum.count, 4);
+});
+
+test('profileTableColumns: detects labelled totals row and excludes it from stats', () => {
+  const table = {
+    columns: ['Item', 'Qty', 'Price', 'Subtotal'],
+    preview: [
+      ['Widget A', '2', '50.00', '100.00'],
+      ['Widget B', '3', '30.00', '90.00'],
+      ['Widget C', '1', '120.00', '120.00'],
+      ['TOTAL', '', '', '310.00'],
+    ],
+  };
+  const profile = analyzer.profileTableColumns(table);
+  assert.ok(profile.totalsRow, 'totals row should be detected');
+  assert.equal(profile.totalsRow.rowIndex, 3);
+  const subtotal = profile.columnSummaries.find(c => c.column === 'Subtotal').summary;
+  assert.equal(subtotal.sum, 310);
+  assert.equal(subtotal.count, 3);
+});
+
+test('profileTableColumns: detects arithmetic-verified totals row without explicit label', () => {
+  const table = {
+    columns: ['Month', 'Revenue', 'Expense'],
+    preview: [
+      ['Jan', '100', '50'],
+      ['Feb', '120', '60'],
+      ['Mar', '140', '70'],
+      ['Apr', '160', '80'],
+      ['',    '520', '260'],
+    ],
+  };
+  const profile = analyzer.profileTableColumns(table);
+  assert.ok(profile.totalsRow);
+  assert.equal(profile.totalsRow.basis, 'arithmetic');
+});
+
+test('profileTableColumns: date column yields earliest/latest range', () => {
+  const table = {
+    columns: ['Date', 'Event'],
+    preview: [
+      ['2026-01-15', 'Kickoff'],
+      ['2026-03-22', 'Beta launch'],
+      ['2026-04-05', 'GA'],
+    ],
+  };
+  const profile = analyzer.profileTableColumns(table);
+  const dateSummary = profile.columnSummaries.find(c => c.column === 'Date').summary;
+  assert.equal(dateSummary.earliest, '2026-01-15');
+  assert.equal(dateSummary.latest, '2026-04-05');
+});
+
+test('profileTableColumns: returns null for empty or column-less tables', () => {
+  assert.equal(analyzer.profileTableColumns(null), null);
+  assert.equal(analyzer.profileTableColumns({ columns: [], preview: [] }), null);
+  assert.equal(analyzer.profileTableColumns({ columns: ['a'], preview: [] }), null);
+});
+
+test('table preview footer is appended under tables in per-file profile', async () => {
+  const fakePrisma = {
+    documentAnalysis: {
+      findMany: async () => ([{
+        id: 'a1',
+        fileId: 'f1',
+        status: 'ready',
+        language: 'en',
+        mimeType: 'application/pdf',
+        pageCount: 1,
+        textCoverage: null,
+      }]),
+    },
+    documentTable: {
+      findMany: async () => ([{
+        id: 't1',
+        analysisId: 'a1',
+        fileId: 'f1',
+        ordinal: 1,
+        title: 'Monthly revenue',
+        columns: ['Month', 'Revenue'],
+        rowCount: 3,
+        preview: [
+          ['Jan', '100000'],
+          ['Feb', '120000'],
+          ['Mar', '140000'],
+        ],
+        markdown: '',
+      }]),
+    },
+  };
+  const out = await analyzer.buildEnrichedFileContext({
+    prisma: fakePrisma,
+    processedFiles: [{ id: 'f1', name: 'report.pdf', mimeType: 'application/pdf', extractedText: 'x'.repeat(50) }],
+  });
+  assert.match(out.profileBlock, /Column types:/);
+  assert.match(out.profileBlock, /Summary:/);
+});

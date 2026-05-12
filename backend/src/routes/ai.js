@@ -1071,6 +1071,7 @@ router.post(
             || documentEnrichment?.consistencyBlock
             || documentEnrichment?.outlineBlock
             || documentEnrichment?.readabilityBlock
+            || documentEnrichment?.qualityBlock
           ) {
             const parts = [];
             // PII safety frame goes FIRST so the model reads "do not echo
@@ -1095,6 +1096,11 @@ router.post(
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
+            // Quality assurance scorecard — coverage / breadth / coherence
+            // of the extractor pipeline. Sits before the directive so the
+            // model self-calibrates ("I'm at 38% coverage, here's what I
+            // have evidence for") instead of hallucinating completeness.
+            if (documentEnrichment.qualityBlock) parts.push(documentEnrichment.qualityBlock);
             // Directive = recipe the model should follow when answering.
             if (documentEnrichment.directiveBlock) parts.push(documentEnrichment.directiveBlock);
             documentEnrichmentBlock = `\n\n${parts.join('\n\n')}`;

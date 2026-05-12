@@ -103,6 +103,12 @@ function getReadabilityAnalyzer() {
   try { readabilityAnalyzerCache = require('./document-readability-analyzer'); } catch { readabilityAnalyzerCache = null; }
   return readabilityAnalyzerCache;
 }
+let qualityScorerCache = null;
+function getQualityScorer() {
+  if (qualityScorerCache) return qualityScorerCache;
+  try { qualityScorerCache = require('./document-analysis-quality-scorer'); } catch { qualityScorerCache = null; }
+  return qualityScorerCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -376,6 +382,95 @@ const TYPE_SIGNALS = [
       /\b(success\s+criteria|criterios\s+de\s+[ée]xito|expected\s+outcomes?|resultados\s+esperados)\b/i,
     ],
     bodyMin: 2,
+  },
+  {
+    type: 'patent',
+    weight: 4,
+    name: /(patent|patente|utility[- _]?patent|invention|invenci[oó]n|uspto|wipo|epo|jpo|kipo)/i,
+    body: [
+      /\b(claims?|reivindicaci[oó]nes?)\s*[:\d]/i,
+      /\b(background|antecedentes|prior\s+art|estado\s+(?:del|de\s+la)\s+arte|t[eé]cnica\s+anterior)\b/i,
+      /\b(embodiment|realizaci[oó]n|preferred\s+embodiment|forma\s+de\s+realizaci[oó]n)\b/i,
+      /\b(abstract|resumen|brief\s+description|breve\s+descripci[oó]n)\b/i,
+      /\b(figure?\s+\d|fig\.?\s*\d|drawings?|dibujos?)\b/i,
+      /\b(inventor|inventor(?:a|es|as)|applicant|solicitante)\b/i,
+      /\b(patent\s+(?:no|number|n[uú]mero)|application\s+no|n[uú]mero\s+de\s+aplicaci[oó]n)\b/i,
+    ],
+    bodyMin: 3,
+  },
+  {
+    type: 'employment_contract',
+    weight: 4,
+    name: /(employment|labor|laboral|trabajo|empleo|hire|hiring|onboarding|nda|non[- _]?compete|non[- _]?disclosure|severance|finiquito)/i,
+    body: [
+      /\b(salary|salario|sueldo|remuneration|remuneraci[oó]n|annual\s+compensation|compensaci[oó]n\s+anual)\b/i,
+      /\b(position|cargo|puesto|job\s+title|t[ií]tulo|reports?\s+to|reporta\s+a)\b/i,
+      /\b(probation(?:ary)?(?:\s+period)?|per[ií]odo\s+de\s+prueba)\b/i,
+      /\b(vacation|holiday|paid\s+time\s+off|pto|vacaciones|d[ií]as\s+libres)\b/i,
+      /\b(termination|t[eé]rmino|despido|renuncia|severance|finiquito|notice\s+period|preaviso)\b/i,
+      /\b(non[- _]?compete|non[- _]?solicitation|confidential(?:idad|ity)|ip\s+assignment|cesi[oó]n\s+de\s+propiedad)\b/i,
+      /\b(working\s+hours|jornada|horario\s+(?:laboral|de\s+trabajo))\b/i,
+    ],
+    bodyMin: 3,
+  },
+  {
+    type: 'bank_statement',
+    weight: 4,
+    name: /(bank[- _]?statement|estado[- _]?de[- _]?cuenta|extracto[- _]?bancario|account[- _]?statement|cartilla)/i,
+    body: [
+      /\b(opening\s+balance|saldo\s+(?:inicial|anterior)|previous\s+balance)\b/i,
+      /\b(closing\s+balance|saldo\s+(?:final|actual|al\s+corte))\b/i,
+      /\b(account\s+(?:no|number)|n[uú]mero\s+de\s+cuenta|iban|swift|bic)\b/i,
+      /\b(transaction|movimiento|deposit|dep[oó]sito|withdrawal|retiro|debit|d[eé]bito|credit|cr[eé]dito)\b/i,
+      /\b(statement\s+period|per[ií]odo\s+del\s+estado|fecha\s+de\s+corte)\b/i,
+      /\b(interest|inter[eé]s|fee|comisi[oó]n|overdraft|sobregiro)\b/i,
+    ],
+    bodyMin: 3,
+  },
+  {
+    type: 'insurance_policy',
+    weight: 4,
+    name: /(insurance|seguro|p[oó]liza|policy|coverage|cobertura|aseguradora|insurer)/i,
+    body: [
+      /\b(premium|prima|deductible|deducible|coverage\s+amount|monto\s+(?:de|del)\s+cobertura)\b/i,
+      /\b(insured|asegurado|beneficiary|beneficiari[oa]|policyholder|titular\s+de\s+(?:la|el)\s+p[oó]liza)\b/i,
+      /\b(coverage|cobertura|inclusiones|inclusions|exclusions?|exclusiones)\b/i,
+      /\b(claim|reclamaci[oó]n|siniestro|process|proceso\s+de\s+reclamaci[oó]n)\b/i,
+      /\b(effective\s+date|fecha\s+(?:de\s+)?(?:inicio|vigencia)|expiration|vencimiento)\b/i,
+      /\b(rider|endoso|amendment|enmienda|policy\s+(?:no|number)|n[uú]mero\s+de\s+p[oó]liza)\b/i,
+    ],
+    bodyMin: 3,
+  },
+  {
+    type: 'incident_postmortem',
+    weight: 4,
+    name: /(postmortem|post[- _]?mortem|incident[- _]?(?:report|review)|outage|sev[- _]?[0-9]|incidente|rca|root[- _]?cause)/i,
+    body: [
+      /\b(timeline|cronolog[ií]a|sequence\s+of\s+events|secuencia\s+de\s+eventos)\b/i,
+      /\b(root\s+cause|causa\s+(?:ra[ií]z|principal|fundamental)|rca)\b/i,
+      /\b(impact|impacto|customer[- _]?impact|usuarios?\s+afectados|sla|sli|slo)\b/i,
+      /\b(detection|detecci[oó]n|alert|alerta|on[- _]?call|guardia)\b/i,
+      /\b(mitigation|mitigaci[oó]n|remediation|remediaci[oó]n|rollback|reversi[oó]n)\b/i,
+      /\b(action\s+items?|elementos?\s+de\s+acci[oó]n|follow[- _]?ups?|seguimientos?)\b/i,
+      /\b(5[\s-]?whys?|fishbone|ishikawa|why\s+\d|por\s+qu[eé])\b/i,
+    ],
+    bodyMin: 3,
+  },
+  {
+    type: 'pitch_deck',
+    weight: 4,
+    name: /(pitch[- _]?deck|investor[- _]?deck|fundraising[- _]?deck|seed[- _]?deck|series[- _]?[a-z][- _]?deck|deck\s*(?:investor|seed|fundraise))/i,
+    mime: /presentation|powerpoint|impress|keynote/i,
+    body: [
+      /\b(TAM|SAM|SOM|total\s+addressable\s+market|mercado\s+(?:total|objetivo))\b/i,
+      /\b(traction|tracci[oó]n|MRR|ARR|MoM|YoY|growth\s+rate|tasa\s+de\s+crecimiento)\b/i,
+      /\b(runway|burn\s+rate|tasa\s+de\s+(?:quema|gasto)|cash\s+on\s+hand|caja\s+disponible)\b/i,
+      /\b(founders?|fundador(?:es|as)?|team|equipo|cap\s+table|tabla\s+de\s+capitalizaci[oó]n)\b/i,
+      /\b(round|ronda|seed|series\s+[a-z]|pre-seed|valuation|valoraci[oó]n|raise|levantamiento)\b/i,
+      /\b(go[- _]?to[- _]?market|GTM|product[- _]?market\s+fit|PMF|business\s+model|modelo\s+de\s+negocio)\b/i,
+      /\b(competition|competencia|moat|ventaja\s+competitiva|differentiat\w+|diferenciaci[oó]n)\b/i,
+    ],
+    bodyMin: 3,
   },
 ];
 
@@ -715,6 +810,90 @@ You are reading a research proposal, grant application, RFP / RFI / RFQ response
 10. **Reviewer scorecard** — markdown table: Criterion (Significance · Innovation · Approach · Team · Feasibility · Cost) · Score 1-5 · Justification. End with a final "Fund / Negotiate / Decline" recommendation + 1 sentence why.
 Cite every claim with the section heading ("§Methods", "§Budget"). End with "Top 3 questions to ask the proposer before deciding." Use the proposal's language.`,
 
+  patent: `### PATENT DOCUMENT ANALYSIS RECIPE
+You are reading a patent application, granted patent, or utility filing. Produce a patent examiner-grade analysis. Cover:
+1. **Bibliographic data** — application/publication number, kind code, filing date, priority date, applicant(s), inventor(s), assignee, jurisdiction (USPTO/EPO/WIPO/JPO/KIPO), IPC/CPC classifications.
+2. **Title & abstract** — quote the title verbatim; restate the abstract in one technical sentence.
+3. **Field & background** — what technical problem this addresses, and how the disclosed prior art frames it.
+4. **Independent claims** — list claim 1 and every other independent claim. For each, decompose into preamble · transition (comprising/consisting) · numbered limitations. Quote the limitations verbatim.
+5. **Dependent claims structure** — show which claims depend on which (use an indented tree). Group by feature.
+6. **Embodiments & figures** — summarise each disclosed embodiment with the figure reference (FIG. 1, FIG. 2A …) and note which claim each maps to.
+7. **Novelty & non-obviousness assessment** — based on the cited prior art only, what specifically is presented as new (35 U.S.C. §102) and inventive (§103). Flag any limitation that looks anticipated or obvious.
+8. **Scope concerns** — overly broad functional language, means-plus-function risks (§112 ¶6), antecedent basis issues, indefinite terms.
+9. **File-history hints** — any rejections, amendments, or examiner remarks visible. Note continuations / divisionals / CIPs if mentioned.
+10. **Reviewer verdict** — one of: *Strong (broad and supported) · Moderate (defensible with narrowing) · Weak (likely unenforceable)*. Justify in 2–3 lines, naming the strongest and weakest claim.
+Cite every claim by number ("Cl. 1", "Cl. 7"). Never paraphrase claim language. End with a 3-row freedom-to-operate hint: practitioners who should worry · why · suggested design-around angle.`,
+
+  employment_contract: `### EMPLOYMENT CONTRACT ANALYSIS RECIPE
+You are reading an employment, hire, severance, NDA, or non-compete agreement. Produce an HR-and-labor-law-grade review. Cover:
+1. **Parties & roles** — employer (legal name + registry/tax ID) and employee (name, role, start date, work location, reporting line).
+2. **Position & duties** — quoted job title, scope of duties, exclusivity / outside-activities clause, dedication regime (full-time / part-time / hours per week).
+3. **Compensation** — base salary (amount + frequency + currency), variable comp (bonus / commission / equity), benefits (health, retirement, allowances), payment schedule, jurisdictional withholdings noted.
+4. **Working time** — schedule, overtime rules, time tracking, remote/hybrid policy, on-call expectations.
+5. **Leave & PTO** — vacation days, sick leave, parental leave, public holidays, carry-over rules.
+6. **Probation & termination** — probation duration, notice periods (both sides), grounds for "for cause" termination, severance entitlements, final-pay rules.
+7. **IP, confidentiality & restrictive covenants** — IP assignment scope (work-for-hire, pre-existing IP carve-out), confidentiality duration, non-compete (geographic + temporal scope + consideration), non-solicitation (employees vs customers).
+8. **Compliance with applicable labor law** — flag clauses that are likely **unenforceable** under the contract's stated jurisdiction (e.g. uncompensated non-compete in California, > 1 year non-compete in most LATAM countries, illegal waivers of statutory rights, mandatory arbitration with class-action waivers where banned).
+9. **Asymmetries & negotiation flags** — broad unilateral amendment clauses, "at-will" framing in non-at-will jurisdictions, automatic renewals, choice-of-law shopping, vague "additional duties as assigned".
+10. **Negotiation suggestions** — 5 concrete edits with before/after wording (e.g. *"Reduce non-compete from 24 months to 12 months and limit scope to direct competitors in the same product line"*).
+Cite each clause number ("Cl. 7.2", "§III.B"). Quote restrictive language verbatim in italics. End with a Risk matrix table: Clause · Risk level (🔴/🟡/🟢) · Recommended action.`,
+
+  bank_statement: `### BANK STATEMENT ANALYSIS RECIPE
+You are reading a bank or financial-account statement. Produce a forensic-accounting-grade analysis. Cover:
+1. **Account identity** — institution, account holder, account number (mask all but last 4), currency, statement period (verbatim dates), prior balance, closing balance.
+2. **Cash flow summary** — total inflows · total outflows · net change · average daily balance. Display in a 4-row markdown table.
+3. **Inflow breakdown** — group deposits into categories (Salary / Transfer-in / Refund / Sale / Interest / Other) with count and total amount per category.
+4. **Outflow breakdown** — group debits (Bills / Subscriptions / Cash withdrawals / Transfer-out / Card purchases / Fees / Loan payments / Other) with count and total per category. List recurring charges separately, noting the frequency.
+5. **Top 10 transactions by absolute amount** — markdown table with Date · Description · Amount · Type (debit/credit) · Running balance after.
+6. **Recurring & subscription analysis** — every charge that appears ≥ 2 times with similar amount → flag as recurring (Netflix, gym, insurance, loan, SaaS). Show monthly/annual run-rate.
+7. **Fee audit** — sum of all bank fees, overdraft charges, foreign-transaction fees, ATM fees. Flag anything unusual for that institution.
+8. **Anomalies & red flags** — suspicious round-number transfers, rapid in/out cycling, end-of-period reversals, manual adjustments, "miscellaneous" charges > 1% of period activity, missing days, balance reconciliation errors (opening + inflows - outflows ≠ closing).
+9. **Liquidity & behaviour signal** — average days from inflow to outflow, minimum balance, days at or below zero, savings rate ((inflows − outflows) / inflows).
+10. **Recommendations** — 3–5 concrete actions (cancel subscription X, refinance loan Y to save Z, switch to fee-free product, set up emergency fund).
+Cite every amount with its statement page/row. Never invent dates or values. End with a 1-line health verdict: *"Cash flow is positive/balanced/strained because …"*.`,
+
+  insurance_policy: `### INSURANCE POLICY ANALYSIS RECIPE
+You are reading an insurance policy, certificate of coverage, or insurance contract. Produce an insurance-broker-grade review. Cover:
+1. **Policy identity** — insurer (legal name + regulator), policy number, line of business (life / health / property / auto / liability / D&O / cyber / etc.), insured / policyholder, beneficiaries, effective period (verbatim dates).
+2. **Premium & payment** — premium amount, frequency, grace period, late-payment consequences, premium financing terms if present.
+3. **Coverage limits** — per-occurrence limit, aggregate limit, sub-limits, deductibles, self-insured retention, co-insurance percentages. Display as a markdown table.
+4. **Insuring agreement** — quote the operative coverage clause verbatim. Translate into plain language.
+5. **Definitions** — list and explain the 5–10 most important defined terms (Insured Event, Loss, Property, Bodily Injury, Occurrence, Claim, Retroactive Date, etc.). Definitions often constrain coverage more than exclusions.
+6. **Exclusions** — list every exclusion. Group by type (intentional acts, war, terrorism, nuclear, pre-existing condition, named perils excluded, etc.). Mark which are standard vs aggressive.
+7. **Conditions** — notice requirements (days to report a claim), cooperation duties, subrogation, other-insurance clauses, anti-fraud, examination under oath, audit rights.
+8. **Claim process** — step-by-step, with named contacts, forms, time limits, dispute escalation paths.
+9. **Coverage gaps & adequacy** — given typical exposures for an insured of this profile, what is missing or under-insured? (e.g. no business-interruption add-on on a property policy, retro date too recent, no extended reporting period on claims-made policy).
+10. **Renewal / cancellation** — auto-renewal, notice period, mid-term cancellation rights, return-of-premium rules.
+Quote every limit and exclusion verbatim. End with a Buyer scorecard table: Adequacy · Cost · Clarity · Claim-friendliness · Each 1–5 with a one-line rationale, and a final "Renew / Renegotiate / Replace" verdict.`,
+
+  incident_postmortem: `### INCIDENT POSTMORTEM ANALYSIS RECIPE
+You are reading an SRE / DevOps incident postmortem, outage report, or root-cause analysis. Produce a senior-on-call-engineer-grade review. Cover:
+1. **Incident header** — title, severity (SEV-1/2/3), service(s) affected, start / detect / mitigate / resolve timestamps (UTC), total duration, MTTD, MTTM, MTTR.
+2. **Impact** — customer impact (users affected, requests failed, revenue lost, SLA/SLO breach), internal impact (engineers paged, support tickets, comms required). Quantify wherever the document permits.
+3. **Timeline** — reproduce the timeline as a markdown table: Time (UTC) · Actor · Event · Effect. Highlight the trigger event, detection event, mitigation event, full-resolution event.
+4. **Trigger & root cause** — separate the immediate trigger from the underlying root cause. Walk a clean 5-whys ladder from symptom to root cause; quote the document where it provides the answer at each level.
+5. **Contributing factors** — code defects, missing tests, infrastructure constraints, alert gaps, runbook gaps, deploy practices, capacity headroom, communication lapses.
+6. **Detection quality** — did our monitors fire first or did customers report it? Time-to-page vs time-to-impact. Alert noise / fatigue assessment.
+7. **Response quality** — was the on-call playbook followed? Where did the team improvise? Was incident command established? Comms cadence (status page, internal Slack, exec brief).
+8. **Action items audit** — list every action item with: Owner · Type (prevention / detection / response / mitigation) · Priority · Due date. Flag duplicates from prior incidents (recurring root cause = systemic).
+9. **Risk that this recurs** — given the action items, estimate residual risk (Low / Medium / High) with reasoning.
+10. **Cross-team learnings** — what should other teams (SRE, platform, product, support) take away? Where should the runbook / playbook / on-call training be updated?
+Cite timestamps and metric values verbatim (e.g. *"p99 latency spiked from 120 ms to 4.2 s at 14:32:18 UTC"*). End with a 1-row verdict: *"Postmortem quality: Strong / Adequate / Insufficient — because …"*.`,
+
+  pitch_deck: `### INVESTOR PITCH DECK ANALYSIS RECIPE
+You are reading a startup pitch deck (seed / Series A / B / growth). Produce a VC-partner-grade memo. Cover:
+1. **Deck snapshot** — startup name, stage, sector, geography, deck date, slide count, key contact.
+2. **Problem & opportunity** — what real, urgent, paid pain are they addressing? Who experiences it most acutely? Why now? Quote the problem framing.
+3. **Solution** — what they actually build / sell. Distinguish product from feature. Demo evidence (screenshots, customer logos, case studies).
+4. **Market sizing** — TAM / SAM / SOM with method shown (bottom-up vs top-down). Sanity-check the numbers against public sources and flag inflations.
+5. **Business model** — pricing, revenue type (subscription / transaction / marketplace / ads / licensing), unit economics (CAC, LTV, payback period, gross margin), contract length.
+6. **Traction** — MRR / ARR, growth rate (MoM / YoY), logos, retention (NDR / GRR), pipeline. Distinguish vanity from defensible metrics.
+7. **Go-to-market & competition** — channels, sales motion (PLG / inside sales / partner-led), competitive landscape, moat / defensibility, switching costs.
+8. **Team** — founders' backgrounds, prior exits, depth in the domain, gaps in the team (e.g. no GTM leader at Series A).
+9. **The ask** — round size, valuation (pre/post), use of funds (% to engineering / GTM / runway extension), runway after this round, planned next milestones.
+10. **Diligence checklist** — top 7 questions to validate (cohort retention, sales cycle, churn drivers, regulatory exposure, customer concentration, IP defensibility, hiring plan vs burn).
+Quote every number verbatim with its source slide ("Slide 7: ARR = $1.2 M"). End with a 1-line investment leaning: *"Strong-lean-yes / Lean-yes / Pass — because …"* plus the 2 deal-breaker risks.`,
+
   general_document: `### PROFESSIONAL DOCUMENT ANALYSIS RECIPE
 You are reading a document whose specific category could not be classified with confidence. Apply this general professional-analyst recipe. Cover:
 1. **Document identity** — title, apparent type (article / memo / instructions / notes / report / letter / etc.), language, length, structural anchors visible (headings, pages, sheets, slides).
@@ -894,6 +1073,219 @@ function tableToMiniMarkdown(table) {
   return [headers, sep, ...rows].join('\n');
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Table column inference + summary stats
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Given a Prisma DocumentTable row, infer each column's data type and emit
+// per-column summary statistics the model can quote without recomputing.
+// Pure function, runs in <2 ms for typical 50-row previews.
+
+const CURRENCY_HINT = /^\s*-?\s*(?:[$€£¥]|US\$|S\/\.?|R\$|MX\$|Bs\.?)\s?-?\d|^\s*-?\d+(?:[.,]\d+)?\s*(?:USD|EUR|GBP|JPY|BRL|ARS|MXN|PEN|COP|CLP|CAD|AUD)\b/i;
+const PERCENT_HINT = /^\s*-?\d+(?:[.,]\d+)?\s*%\s*$/;
+const DATE_HINT = /^\s*(?:\d{4}-\d{2}-\d{2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre|january|february|march|april|may|june|july|august|september|october|november|december))/i;
+const BOOL_HINT = /^\s*(?:true|false|yes|no|s[ií]|n[oó]|verdadero|falso|1|0)\s*$/i;
+const NUMERIC_PARSE = /^-?\s*\$?\s*(\d{1,3}(?:[,]\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*[A-Z]{1,4})?\s*%?\s*$/;
+
+function parseNumericCell(value) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (!NUMERIC_PARSE.test(text)) return null;
+  // Strip currency / percent / thousand separators, keep decimal point
+  const cleaned = text
+    .replace(/[$€£¥%]/g, '')
+    .replace(/\s+/g, '')
+    .replace(/^US|R|MX|Bs\.?$/i, '')
+    .replace(/[A-Z]{1,4}$/i, '')
+    .replace(/,/g, '');
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? num : null;
+}
+
+function classifyColumnType(values) {
+  const samples = values.filter((v) => v != null && String(v).trim() !== '').map((v) => String(v).trim());
+  if (samples.length === 0) return { type: 'empty', confidence: 0 };
+
+  let date = 0;
+  let bool = 0;
+  let currency = 0;
+  let percent = 0;
+  let numeric = 0;
+  for (const s of samples) {
+    if (DATE_HINT.test(s)) date++;
+    if (BOOL_HINT.test(s)) bool++;
+    if (CURRENCY_HINT.test(s)) currency++;
+    if (PERCENT_HINT.test(s)) percent++;
+    if (parseNumericCell(s) != null) numeric++;
+  }
+  const n = samples.length;
+  const ratio = (count) => count / n;
+
+  // Priority: currency > percent > date > boolean > numeric > text
+  if (ratio(currency) >= 0.6) return { type: 'currency', confidence: ratio(currency) };
+  if (ratio(percent) >= 0.6) return { type: 'percent', confidence: ratio(percent) };
+  if (ratio(date) >= 0.6) return { type: 'date', confidence: ratio(date) };
+  if (ratio(bool) >= 0.6 && bool >= 2) return { type: 'boolean', confidence: ratio(bool) };
+  if (ratio(numeric) >= 0.6) return { type: 'numeric', confidence: ratio(numeric) };
+  return { type: 'text', confidence: 1 - Math.max(ratio(currency), ratio(percent), ratio(date), ratio(numeric)) };
+}
+
+function summariseNumericColumn(values) {
+  const nums = values
+    .map((v) => parseNumericCell(v))
+    .filter((n) => n != null);
+  if (nums.length === 0) return null;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const sum = nums.reduce((acc, x) => acc + x, 0);
+  const mean = sum / nums.length;
+  const median = sorted.length % 2 === 0
+    ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+    : sorted[Math.floor(sorted.length / 2)];
+  return {
+    count: nums.length,
+    min: sorted[0],
+    max: sorted[sorted.length - 1],
+    sum,
+    mean,
+    median,
+  };
+}
+
+function summariseDateColumn(values) {
+  const parsed = values
+    .map((v) => {
+      if (!v) return null;
+      const t = Date.parse(String(v));
+      return Number.isFinite(t) ? new Date(t) : null;
+    })
+    .filter((d) => d);
+  if (parsed.length === 0) return null;
+  parsed.sort((a, b) => a.getTime() - b.getTime());
+  return {
+    count: parsed.length,
+    earliest: parsed[0].toISOString().slice(0, 10),
+    latest: parsed[parsed.length - 1].toISOString().slice(0, 10),
+  };
+}
+
+function detectTotalsRow(columns, rows, colTypes) {
+  if (rows.length < 3) return null;
+  const lastRow = rows[rows.length - 1];
+  if (!lastRow) return null;
+  const lastCells = Array.isArray(lastRow) ? lastRow : columns.map((c) => lastRow?.[c] ?? '');
+  const firstCell = String(lastCells[0] ?? '').trim().toLowerCase();
+  // "Total", "Subtotal", "Grand Total", "TOTAL", "Suma", "Saldo final"
+  const looksLikeTotalLabel = /^(?:total|subtotal|grand\s*total|gran\s*total|suma|sumatoria|saldo\s+(?:final|al\s+corte)|final\s+(?:total|balance))/i.test(firstCell);
+  if (!looksLikeTotalLabel) {
+    // Also check: in numeric columns, last value == sum of previous
+    let numericMatches = 0;
+    let numericCols = 0;
+    for (let i = 0; i < columns.length; i++) {
+      if (colTypes[i]?.type !== 'numeric' && colTypes[i]?.type !== 'currency') continue;
+      numericCols++;
+      const previous = rows.slice(0, -1)
+        .map((r) => parseNumericCell(Array.isArray(r) ? r[i] : r?.[columns[i]]))
+        .filter((n) => n != null);
+      const claimedTotal = parseNumericCell(lastCells[i]);
+      if (claimedTotal == null || previous.length === 0) continue;
+      const sum = previous.reduce((acc, x) => acc + x, 0);
+      // Allow 0.5% tolerance for rounding
+      const diff = Math.abs(claimedTotal - sum);
+      const tolerance = Math.max(0.01, Math.abs(sum) * 0.005);
+      if (diff <= tolerance) numericMatches++;
+    }
+    // Need at least 60% of numeric columns to match for arithmetic-only detection
+    if (numericCols >= 2 && numericMatches / numericCols >= 0.6) {
+      return { rowIndex: rows.length - 1, basis: 'arithmetic', label: firstCell || null };
+    }
+    return null;
+  }
+  return { rowIndex: rows.length - 1, basis: 'label', label: firstCell };
+}
+
+/**
+ * Produce a structured column-profile summary the chat block can append
+ * under a table to help the model interpret numbers without re-reading
+ * every row.
+ *
+ * @param {object} table — Prisma DocumentTable row with columns + preview
+ * @returns {{ types: object[], totalsRow: object|null, columnSummaries: object[] }|null}
+ */
+function profileTableColumns(table) {
+  if (!table) return null;
+  const columns = Array.isArray(table.columns) ? table.columns : [];
+  const preview = Array.isArray(table.preview) ? table.preview : (safeJsonValue(table.preview) || []);
+  if (columns.length === 0 || preview.length === 0) return null;
+
+  // Build column-wise value lists
+  const columnValues = columns.map((col, i) =>
+    preview.map((row) => Array.isArray(row) ? row[i] : row?.[col]),
+  );
+
+  const types = columnValues.map((vals) => classifyColumnType(vals));
+  const totalsRow = detectTotalsRow(columns, preview, types);
+
+  const columnSummaries = columns.map((col, i) => {
+    const type = types[i]?.type;
+    // Exclude the totals row from per-column stats (it inflates sum/max)
+    const effectiveValues = totalsRow
+      ? columnValues[i].filter((_, idx) => idx !== totalsRow.rowIndex)
+      : columnValues[i];
+    let summary = null;
+    if (type === 'numeric' || type === 'currency' || type === 'percent') {
+      summary = summariseNumericColumn(effectiveValues);
+    } else if (type === 'date') {
+      summary = summariseDateColumn(effectiveValues);
+    }
+    return { column: col, type, confidence: types[i]?.confidence, summary };
+  });
+
+  return { types, totalsRow, columnSummaries };
+}
+
+function formatTableProfileFooter(profile, table) {
+  if (!profile) return '';
+  const lines = [];
+  // Compact type signature, e.g. "types: Date · Currency · Currency · Text"
+  const typeSig = profile.types
+    .map((t) => t.type)
+    .map((t) => t === 'numeric' ? 'Numeric' : t === 'currency' ? 'Currency' : t === 'percent' ? 'Percent' : t === 'date' ? 'Date' : t === 'boolean' ? 'Boolean' : 'Text')
+    .join(' · ');
+  lines.push(`    _Column types:_ ${typeSig}`);
+
+  // Compact per-column stats for numeric/currency columns
+  const stat = [];
+  for (const cs of profile.columnSummaries) {
+    if (!cs.summary) continue;
+    const col = String(cs.column).replace(/\|/g, '\\|');
+    if (cs.type === 'numeric' || cs.type === 'currency' || cs.type === 'percent') {
+      stat.push(`${col}: sum=${formatNumberShort(cs.summary.sum)}, mean=${formatNumberShort(cs.summary.mean)}, min=${formatNumberShort(cs.summary.min)}, max=${formatNumberShort(cs.summary.max)} (n=${cs.summary.count})`);
+    } else if (cs.type === 'date') {
+      stat.push(`${col}: ${cs.summary.earliest} → ${cs.summary.latest} (n=${cs.summary.count})`);
+    }
+  }
+  if (stat.length > 0) lines.push(`    _Summary:_ ${stat.join(' · ')}`);
+
+  if (profile.totalsRow) {
+    const basis = profile.totalsRow.basis === 'label' ? 'labelled' : 'arithmetic-verified';
+    lines.push(`    _Totals row detected (${basis}) at row ${profile.totalsRow.rowIndex + 1}._`);
+  }
+
+  void table;
+  return lines.join('\n');
+}
+
+function formatNumberShort(n) {
+  if (n == null) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${(n / 1e3).toFixed(2)}K`;
+  if (Number.isInteger(n)) return String(n);
+  return n.toFixed(2);
+}
+
 function buildPerFileProfile({ file, classification, hydrated }) {
   const lines = [];
   const analysis = hydrated?.analysis || null;
@@ -967,6 +1359,11 @@ function buildPerFileProfile({ file, classification, hydrated }) {
         // Indent the markdown table 4 spaces so it stays inside the bullet.
         lines.push(md.split('\n').map((l) => `    ${l}`).join('\n'));
       }
+      // Append column-profile footer (types + numeric summaries + totals)
+      // so the model can quote stats without recomputing.
+      const profile = profileTableColumns(t);
+      const footer = formatTableProfileFooter(profile, t);
+      if (footer) lines.push(footer);
     }
   }
 
@@ -1061,6 +1458,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const consistencyBlock = buildConsistencyBlock(files);
   const outlineBlock = buildOutlineBlock(files);
   const readabilityBlock = buildReadabilityBlock(files);
+  const qualityBlock = buildQualityBlock(files, profiles);
 
   return {
     profileBlock,
@@ -1072,6 +1470,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     consistencyBlock,
     outlineBlock,
     readabilityBlock,
+    qualityBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -1079,6 +1478,35 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
       confidence: p.classification.confidence,
     })),
   };
+}
+
+/**
+ * Analysis quality block — pairs the insights-engine output with each file's
+ * professional classification and emits a coverage / breadth / coherence
+ * scorecard. The chat consumes this so the model can self-calibrate ("I have
+ * direct evidence for X but I'm at 38% coverage so Y is unverified"). Empty
+ * string when the scorer module is unavailable or no file has text.
+ */
+function buildQualityBlock(files, profiles) {
+  const scorer = getQualityScorer();
+  const insightsEngine = getInsightsEngine();
+  if (!scorer || typeof scorer.buildQualityForFiles !== 'function') return '';
+  if (!insightsEngine || typeof insightsEngine.buildInsightsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files.filter((f) => f && typeof f === 'object') : [];
+  if (list.length === 0) return '';
+  const { perFile } = insightsEngine.buildInsightsForFiles(list);
+  if (perFile.length === 0) return '';
+  const classifications = (Array.isArray(profiles) ? profiles : []).map((p) => ({
+    file: p.fileId || null,
+    classification: p.classification,
+  }));
+  // Match per-file insights to classifications by index when fileId isn't
+  // present — keeps single-file flows aligned even without DB hydration.
+  const annotated = perFile.map((entry, idx) => {
+    const cls = classifications[idx]?.classification || null;
+    return { file: entry.file, classification: cls };
+  });
+  return scorer.buildQualityForFiles(perFile, annotated);
 }
 
 /**
@@ -1253,8 +1681,10 @@ module.exports = {
   getProfessionalAnalysisDirective,
   buildEnrichedFileContext,
   buildInsightsBlock,
+  buildQualityBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
+  profileTableColumns,
   // Exposed for unit tests
   _internal: {
     TYPE_SIGNALS,
@@ -1264,5 +1694,10 @@ module.exports = {
     buildPerFileProfile,
     renderProfileBlock,
     renderDirectiveBlock,
+    profileTableColumns,
+    classifyColumnType,
+    parseNumericCell,
+    detectTotalsRow,
+    formatTableProfileFooter,
   },
 };
