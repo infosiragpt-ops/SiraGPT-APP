@@ -18,7 +18,7 @@ import {
   Plus,
   Music,
   FileSpreadsheet,
-  File,
+  File as FileIcon,
   ArrowUp,
   Mail,
   Calendar,
@@ -1508,9 +1508,9 @@ const getFileIcon = (file: any) => {
     case 'zip':
     case 'rar':
     case '7z':
-      return wrapIconInSmallSquare(<File className="h-5 w-5 text-white" />, "#eab308"); // yellow
+      return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, "#eab308"); // yellow
     default:
-      return wrapIconInSmallSquare(<File className="h-5 w-5 text-white" />, "#9ca3af"); // gray
+      return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, "#9ca3af"); // gray
   }
 };
 // Active Options Display Component - Renders above the textarea
