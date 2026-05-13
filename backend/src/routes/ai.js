@@ -1135,6 +1135,7 @@ router.post(
             || documentEnrichment?.disclosuresBlock
             || documentEnrichment?.factVsOpinionBlock
             || documentEnrichment?.scenariosBlock
+            || documentEnrichment?.benchmarksBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1372,6 +1373,10 @@ router.post(
             // Scenarios = best / worst / base case + sensitivity.
             // Useful for finance / strategy docs.
             if (documentEnrichment.scenariosBlock) parts.push(documentEnrichment.scenariosBlock);
+            // Benchmarks = "vs X" / "industry average" / "compared
+            // to". Lets the chat answer "how does X compare?" with
+            // citeable trigger sentences.
+            if (documentEnrichment.benchmarksBlock) parts.push(documentEnrichment.benchmarksBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

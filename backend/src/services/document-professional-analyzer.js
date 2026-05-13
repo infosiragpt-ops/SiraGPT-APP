@@ -391,6 +391,12 @@ function getScenarios() {
   try { scenariosCache = require('./document-scenarios'); } catch { scenariosCache = null; }
   return scenariosCache;
 }
+let benchmarksCache = null;
+function getBenchmarks() {
+  if (benchmarksCache) return benchmarksCache;
+  try { benchmarksCache = require('./document-benchmarks'); } catch { benchmarksCache = null; }
+  return benchmarksCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1786,6 +1792,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const disclosuresBlock = buildDisclosuresBlock(files);
   const factVsOpinionBlock = buildFactVsOpinionBlock(files);
   const scenariosBlock = buildScenariosBlock(files);
+  const benchmarksBlock = buildBenchmarksBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1845,6 +1852,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     disclosuresBlock,
     factVsOpinionBlock,
     scenariosBlock,
+    benchmarksBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2613,6 +2621,21 @@ function buildScenariosBlock(files) {
   return engine.renderScenariosBlock(report);
 }
 
+/**
+ * Benchmarks block — comparison / reference points ("vs competitor",
+ * "industry average", "comparado con", "frente al promedio"). Lets
+ * the chat answer "how does X compare to Y?" with citeable trigger
+ * sentences.
+ */
+function buildBenchmarksBlock(files) {
+  const engine = getBenchmarks();
+  if (!engine || typeof engine.buildBenchmarksForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBenchmarksForFiles(list);
+  return engine.renderBenchmarksBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2827,6 +2850,7 @@ module.exports = {
   buildDisclosuresBlock,
   buildFactVsOpinionBlock,
   buildScenariosBlock,
+  buildBenchmarksBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
