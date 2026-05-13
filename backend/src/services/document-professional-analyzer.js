@@ -259,6 +259,12 @@ function getJurisdictionDetector() {
   try { jurisdictionDetectorCache = require('./document-jurisdiction-detector'); } catch { jurisdictionDetectorCache = null; }
   return jurisdictionDetectorCache;
 }
+let definitionsExtractorCache = null;
+function getDefinitionsExtractor() {
+  if (definitionsExtractorCache) return definitionsExtractorCache;
+  try { definitionsExtractorCache = require('./document-definitions-extractor'); } catch { definitionsExtractorCache = null; }
+  return definitionsExtractorCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1632,6 +1638,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const scopeExclusionsBlock = buildScopeExclusionsBlock(files);
   const stakeholderMapBlock = buildStakeholderMapBlock(files);
   const jurisdictionBlock = buildJurisdictionBlock(files);
+  const definitionsBlock = buildDefinitionsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1669,6 +1676,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     scopeExclusionsBlock,
     stakeholderMapBlock,
     jurisdictionBlock,
+    definitionsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2104,6 +2112,22 @@ function buildJurisdictionBlock(files) {
   return engine.renderJurisdictionBlock(report);
 }
 
+/**
+ * Definitions block — captures formal "X means Y" / "X se define como
+ * Y" patterns the document itself emits. Sits next to the glossary so
+ * the model has both vocabulary (terms it should know) and formal
+ * definitions (what those terms mean here) before answering content
+ * questions.
+ */
+function buildDefinitionsBlock(files) {
+  const engine = getDefinitionsExtractor();
+  if (!engine || typeof engine.buildDefinitionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDefinitionsForFiles(list);
+  return engine.renderDefinitionsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2296,6 +2320,7 @@ module.exports = {
   buildScopeExclusionsBlock,
   buildStakeholderMapBlock,
   buildJurisdictionBlock,
+  buildDefinitionsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

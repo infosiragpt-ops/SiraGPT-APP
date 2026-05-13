@@ -1113,6 +1113,7 @@ router.post(
             || documentEnrichment?.scopeExclusionsBlock
             || documentEnrichment?.stakeholderMapBlock
             || documentEnrichment?.jurisdictionBlock
+            || documentEnrichment?.definitionsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1253,6 +1254,11 @@ router.post(
             // scope / stakeholders so the model has the legal frame
             // ready before any cross-document synthesis.
             if (documentEnrichment.jurisdictionBlock) parts.push(documentEnrichment.jurisdictionBlock);
+            // Definitions = formal "X means Y" patterns. Sits next to
+            // jurisdiction / obligations / scope because legal-style
+            // docs lean on definitions; the chat needs them to anchor
+            // every later quote in the document's constrained sense.
+            if (documentEnrichment.definitionsBlock) parts.push(documentEnrichment.definitionsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
