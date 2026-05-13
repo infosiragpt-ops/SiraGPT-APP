@@ -793,6 +793,30 @@ function getReadingTime() {
   try { readingTimeCache = require('./document-reading-time'); } catch { readingTimeCache = null; }
   return readingTimeCache;
 }
+let attributionsCache = null;
+function getAttributions() {
+  if (attributionsCache) return attributionsCache;
+  try { attributionsCache = require('./document-attributions'); } catch { attributionsCache = null; }
+  return attributionsCache;
+}
+let comparativesCache = null;
+function getComparatives() {
+  if (comparativesCache) return comparativesCache;
+  try { comparativesCache = require('./document-comparatives'); } catch { comparativesCache = null; }
+  return comparativesCache;
+}
+let causalCache = null;
+function getCausal() {
+  if (causalCache) return causalCache;
+  try { causalCache = require('./document-causal'); } catch { causalCache = null; }
+  return causalCache;
+}
+let concessionCache = null;
+function getConcession() {
+  if (concessionCache) return concessionCache;
+  try { concessionCache = require('./document-concession'); } catch { concessionCache = null; }
+  return concessionCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2255,6 +2279,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const modalsBlock = buildModalsBlock(files);
   const negationBlock = buildNegationBlock(files);
   const readingTimeBlock = buildReadingTimeBlock(files);
+  const attributionsBlock = buildAttributionsBlock(files);
+  const comparativesBlock = buildComparativesBlock(files);
+  const causalBlock = buildCausalBlock(files);
+  const concessionBlock = buildConcessionBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2381,6 +2409,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     modalsBlock,
     negationBlock,
     readingTimeBlock,
+    attributionsBlock,
+    comparativesBlock,
+    causalBlock,
+    concessionBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4103,6 +4135,46 @@ function buildReadingTimeBlock(files) {
   return engine.renderReadingTimeBlock(report);
 }
 
+/** Attributions block — "According to X" / "Per X" / "Según X" source phrases. */
+function buildAttributionsBlock(files) {
+  const engine = getAttributions();
+  if (!engine || typeof engine.buildAttributionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAttributionsForFiles(list);
+  return engine.renderAttributionsBlock(report);
+}
+
+/** Comparatives block — magnitude / percent / multiplier / vs / Spanish. */
+function buildComparativesBlock(files) {
+  const engine = getComparatives();
+  if (!engine || typeof engine.buildComparativesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildComparativesForFiles(list);
+  return engine.renderComparativesBlock(report);
+}
+
+/** Causal block — because/due to/owing to + Spanish equivalents. */
+function buildCausalBlock(files) {
+  const engine = getCausal();
+  if (!engine || typeof engine.buildCausalForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCausalForFiles(list);
+  return engine.renderCausalBlock(report);
+}
+
+/** Concession block — although/however/sin embargo/no obstante connectives. */
+function buildConcessionBlock(files) {
+  const engine = getConcession();
+  if (!engine || typeof engine.buildConcessionForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildConcessionForFiles(list);
+  return engine.renderConcessionBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4384,6 +4456,10 @@ module.exports = {
   buildModalsBlock,
   buildNegationBlock,
   buildReadingTimeBlock,
+  buildAttributionsBlock,
+  buildComparativesBlock,
+  buildCausalBlock,
+  buildConcessionBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

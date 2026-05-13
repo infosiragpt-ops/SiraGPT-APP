@@ -1203,6 +1203,10 @@ router.post(
             || documentEnrichment?.modalsBlock
             || documentEnrichment?.negationBlock
             || documentEnrichment?.readingTimeBlock
+            || documentEnrichment?.attributionsBlock
+            || documentEnrichment?.comparativesBlock
+            || documentEnrichment?.causalBlock
+            || documentEnrichment?.concessionBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1642,6 +1646,14 @@ router.post(
             if (documentEnrichment.negationBlock) parts.push(documentEnrichment.negationBlock);
             // Reading time = per-file word count + time bands.
             if (documentEnrichment.readingTimeBlock) parts.push(documentEnrichment.readingTimeBlock);
+            // Attributions = "According to X" / "Según X" source phrases.
+            if (documentEnrichment.attributionsBlock) parts.push(documentEnrichment.attributionsBlock);
+            // Comparatives = magnitude/percent/multiplier/vs phrases.
+            if (documentEnrichment.comparativesBlock) parts.push(documentEnrichment.comparativesBlock);
+            // Causal = because/due to/debido a markers.
+            if (documentEnrichment.causalBlock) parts.push(documentEnrichment.causalBlock);
+            // Concession = however/although/sin embargo markers.
+            if (documentEnrichment.concessionBlock) parts.push(documentEnrichment.concessionBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1707,7 +1719,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock', 'attributionsBlock', 'comparativesBlock', 'causalBlock', 'concessionBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
