@@ -1102,6 +1102,7 @@ router.post(
             || documentEnrichment?.riskRegisterBlock
             || documentEnrichment?.factDensityBlock
             || documentEnrichment?.relationshipsBlock
+            || documentEnrichment?.sectionSimilarityBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1187,6 +1188,11 @@ router.post(
             // which pairs deserve side-by-side analysis vs which to
             // analyse independently.
             if (documentEnrichment.relationshipsBlock) parts.push(documentEnrichment.relationshipsBlock);
+            // Section similarity = top section-to-section matches across
+            // files. Sits BEFORE the comparison block so the model has
+            // matching sections anchored by their titles when it
+            // synthesises differences ("compare the scope clauses").
+            if (documentEnrichment.sectionSimilarityBlock) parts.push(documentEnrichment.sectionSimilarityBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

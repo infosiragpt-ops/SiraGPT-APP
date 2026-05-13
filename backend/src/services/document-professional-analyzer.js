@@ -193,6 +193,12 @@ function getRelationshipClassifier() {
   try { relationshipClassifierCache = require('./document-relationship-classifier'); } catch { relationshipClassifierCache = null; }
   return relationshipClassifierCache;
 }
+let sectionSimilarityCache = null;
+function getSectionSimilarity() {
+  if (sectionSimilarityCache) return sectionSimilarityCache;
+  try { sectionSimilarityCache = require('./document-section-similarity'); } catch { sectionSimilarityCache = null; }
+  return sectionSimilarityCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1555,6 +1561,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const riskRegisterBlock = buildRiskRegisterBlock(files);
   const factDensityBlock = buildFactDensityBlock(files);
   const relationshipsBlock = buildRelationshipsBlock(files);
+  const sectionSimilarityBlock = buildSectionSimilarityBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1581,6 +1588,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     riskRegisterBlock,
     factDensityBlock,
     relationshipsBlock,
+    sectionSimilarityBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1843,6 +1851,22 @@ function buildRelationshipsBlock(files) {
   return engine.renderRelationshipsBlock(report);
 }
 
+/**
+ * Cross-document section similarity block — top section-to-section
+ * matches between files by token-set Jaccard. Fires only for 2+ files
+ * with enough body to split into sections. Lets the model anchor
+ * comparison answers ("compare the scope clauses") on actual matching
+ * sections instead of paraphrasing across files.
+ */
+function buildSectionSimilarityBlock(files) {
+  const engine = getSectionSimilarity();
+  if (!engine || typeof engine.buildSimilarityForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length < 2) return '';
+  const report = engine.buildSimilarityForFiles(list);
+  return engine.renderSimilarityBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2024,6 +2048,7 @@ module.exports = {
   buildRiskRegisterBlock,
   buildFactDensityBlock,
   buildRelationshipsBlock,
+  buildSectionSimilarityBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
