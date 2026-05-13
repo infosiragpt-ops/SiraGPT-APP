@@ -433,6 +433,12 @@ function getUrlExtractor() {
   try { urlExtractorCache = require('./document-url-extractor'); } catch { urlExtractorCache = null; }
   return urlExtractorCache;
 }
+let contactInfoCache = null;
+function getContactInfo() {
+  if (contactInfoCache) return contactInfoCache;
+  try { contactInfoCache = require('./document-contact-info'); } catch { contactInfoCache = null; }
+  return contactInfoCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1835,6 +1841,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const approvalWorkflowBlock = buildApprovalWorkflowBlock(files);
   const executiveSummaryBlock = buildExecutiveSummaryBlock(files);
   const urlsBlock = buildUrlsBlock(files);
+  const contactsBlock = buildContactsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1901,6 +1908,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     approvalWorkflowBlock,
     executiveSummaryBlock,
     urlsBlock,
+    contactsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2772,6 +2780,20 @@ function buildUrlsBlock(files) {
   return engine.renderURLsBlock(report);
 }
 
+/**
+ * Contacts block — emails, phones, social handles, addresses. Both
+ * raw + masked variants are shown so the chat can echo the masked
+ * form when the user's question doesn't require the raw value.
+ */
+function buildContactsBlock(files) {
+  const engine = getContactInfo();
+  if (!engine || typeof engine.buildContactsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildContactsForFiles(list);
+  return engine.renderContactsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2993,6 +3015,7 @@ module.exports = {
   buildApprovalWorkflowBlock,
   buildExecutiveSummaryBlock,
   buildUrlsBlock,
+  buildContactsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

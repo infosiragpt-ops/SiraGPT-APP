@@ -1142,6 +1142,7 @@ router.post(
             || documentEnrichment?.approvalWorkflowBlock
             || documentEnrichment?.executiveSummaryBlock
             || documentEnrichment?.urlsBlock
+            || documentEnrichment?.contactsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1410,6 +1411,10 @@ router.post(
             // context. Useful for any document that references
             // external resources.
             if (documentEnrichment.urlsBlock) parts.push(documentEnrichment.urlsBlock);
+            // Contacts = emails / phones / socials / addresses with
+            // both raw + masked variants. The chat respects the
+            // document's data-classification label when echoing.
+            if (documentEnrichment.contactsBlock) parts.push(documentEnrichment.contactsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
