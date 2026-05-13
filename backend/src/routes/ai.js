@@ -1151,6 +1151,10 @@ router.post(
             || documentEnrichment?.checklistsBlock
             || documentEnrichment?.identifiersBlock
             || documentEnrichment?.bulletListsBlock
+            || documentEnrichment?.mermaidBlock
+            || documentEnrichment?.prioritiesBlock
+            || documentEnrichment?.ownershipBlock
+            || documentEnrichment?.timestampsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1448,6 +1452,22 @@ router.post(
             // Bullet lists = markdown bullet / numbered lists grouped
             // under their heading. Surfaces source-structured lists.
             if (documentEnrichment.bulletListsBlock) parts.push(documentEnrichment.bulletListsBlock);
+            // Mermaid diagrams = fenced ```mermaid blocks with type
+            // classification + preview. Routes "what does the diagram
+            // show?" to a structured citeable preview.
+            if (documentEnrichment.mermaidBlock) parts.push(documentEnrichment.mermaidBlock);
+            // Priorities/severity tags = P0..P4, SEV-1..SEV-5, Blocker/
+            // Critical/Major/Minor/Trivial, Urgent, Spanish equivalents.
+            // Routes "what are the critical items?" to a citeable list.
+            if (documentEnrichment.prioritiesBlock) parts.push(documentEnrichment.prioritiesBlock);
+            // Ownership/DRI = Owner / Assignee / Reviewer / Approver /
+            // Stakeholder lines. Routes "who owns this?" to a citeable
+            // list (RACI/DACI/RFC conventions).
+            if (documentEnrichment.ownershipBlock) parts.push(documentEnrichment.ownershipBlock);
+            // Timestamps & durations = ISO 8601 datetimes, epoch s/ms,
+            // HTTP date format, ISO 8601 + human durations. Routes
+            // "when did X happen?" / "what's the SLA?" to a citeable list.
+            if (documentEnrichment.timestampsBlock) parts.push(documentEnrichment.timestampsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1513,7 +1533,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

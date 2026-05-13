@@ -481,6 +481,30 @@ function getBulletLists() {
   try { bulletListsCache = require('./document-bullet-lists'); } catch { bulletListsCache = null; }
   return bulletListsCache;
 }
+let mermaidCache = null;
+function getMermaid() {
+  if (mermaidCache) return mermaidCache;
+  try { mermaidCache = require('./document-mermaid'); } catch { mermaidCache = null; }
+  return mermaidCache;
+}
+let priorityCache = null;
+function getPriority() {
+  if (priorityCache) return priorityCache;
+  try { priorityCache = require('./document-priority'); } catch { priorityCache = null; }
+  return priorityCache;
+}
+let ownershipCache = null;
+function getOwnership() {
+  if (ownershipCache) return ownershipCache;
+  try { ownershipCache = require('./document-ownership'); } catch { ownershipCache = null; }
+  return ownershipCache;
+}
+let timestampsCache = null;
+function getTimestamps() {
+  if (timestampsCache) return timestampsCache;
+  try { timestampsCache = require('./document-timestamps'); } catch { timestampsCache = null; }
+  return timestampsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1891,6 +1915,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const checklistsBlock = buildChecklistsBlock(files);
   const identifiersBlock = buildIdentifiersBlock(files);
   const bulletListsBlock = buildBulletListsBlock(files);
+  const mermaidBlock = buildMermaidBlock(files);
+  const prioritiesBlock = buildPrioritiesBlock(files);
+  const ownershipBlock = buildOwnershipBlock(files);
+  const timestampsBlock = buildTimestampsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1965,6 +1993,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     checklistsBlock,
     identifiersBlock,
     bulletListsBlock,
+    mermaidBlock,
+    prioritiesBlock,
+    ownershipBlock,
+    timestampsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2951,6 +2983,71 @@ function buildBulletListsBlock(files) {
   return engine.renderBulletListsBlock(report);
 }
 
+/**
+ * Mermaid diagrams block — surfaces fenced ```mermaid blocks with
+ * diagram type classification (flowchart / sequence / class / state /
+ * er / gantt / pie / journey / timeline / gitGraph / mindmap /
+ * quadrant / sankey / requirement / c4) plus first-8-line preview.
+ * Routes "what does the diagram show?" / "is there a flowchart?"
+ * to a structured citeable preview.
+ */
+function buildMermaidBlock(files) {
+  const engine = getMermaid();
+  if (!engine || typeof engine.buildMermaidForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMermaidForFiles(list);
+  return engine.renderMermaidBlock(report);
+}
+
+/**
+ * Priorities block — surfaces priority/severity markers (P0–P4,
+ * SEV-1..SEV-5, Critical/Major/Minor/Trivial/Blocker, Urgent,
+ * Spanish equivalents, "Priority: X" labeled lines) with normalised
+ * level (critical/high/medium/low/trivial) and citeable context.
+ * Routes "what are the critical items?" to a structured citeable list.
+ */
+function buildPrioritiesBlock(files) {
+  const engine = getPriority();
+  if (!engine || typeof engine.buildPrioritiesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPrioritiesForFiles(list);
+  return engine.renderPrioritiesBlock(report);
+}
+
+/**
+ * Ownership block — per-document role attributions (Owner/DRI,
+ * Assignee, Reporter, Author/Maintainer, Reviewer, Approver,
+ * Stakeholder, Lead/Driver) including Spanish equivalents.
+ * Routes "who owns this?" / "who's the DRI?" to a citeable list.
+ */
+function buildOwnershipBlock(files) {
+  const engine = getOwnership();
+  if (!engine || typeof engine.buildOwnershipForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOwnershipForFiles(list);
+  return engine.renderOwnershipBlock(report);
+}
+
+/**
+ * Timestamps block — machine-format ISO 8601 datetimes + dates,
+ * epoch s/ms, HTTP date format, ISO 8601 durations + human durations.
+ * Different from temporal-timeline / temporal-expressions by
+ * focusing on parseable timestamps useful for logs / runbooks /
+ * SLAs. Routes "when did X happen?" / "how long is the SLA?" to
+ * a structured citeable list.
+ */
+function buildTimestampsBlock(files) {
+  const engine = getTimestamps();
+  if (!engine || typeof engine.buildTimestampsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTimestampsForFiles(list);
+  return engine.renderTimestampsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3180,6 +3277,10 @@ module.exports = {
   buildChecklistsBlock,
   buildIdentifiersBlock,
   buildBulletListsBlock,
+  buildMermaidBlock,
+  buildPrioritiesBlock,
+  buildOwnershipBlock,
+  buildTimestampsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
