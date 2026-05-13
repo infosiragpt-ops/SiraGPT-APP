@@ -235,6 +235,12 @@ function getKeyPhrases() {
   try { keyPhrasesCache = require('./document-key-phrases'); } catch { keyPhrasesCache = null; }
   return keyPhrasesCache;
 }
+let obligationsCache = null;
+function getObligations() {
+  if (obligationsCache) return obligationsCache;
+  try { obligationsCache = require('./document-obligations-extractor'); } catch { obligationsCache = null; }
+  return obligationsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1604,6 +1610,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const tldrBlock = buildTldrBlock(files);
   const sentimentBlock = buildSentimentBlock(files);
   const keyPhrasesBlock = buildKeyPhrasesBlock(files);
+  const obligationsBlock = buildObligationsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1637,6 +1644,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     tldrBlock,
     sentimentBlock,
     keyPhrasesBlock,
+    obligationsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2010,6 +2018,22 @@ function buildKeyPhrasesBlock(files) {
   return engine.renderKeyPhrasesBlock(report);
 }
 
+/**
+ * Obligations block — binding clauses surfaced from contracts /
+ * policies / SLAs. Different from the deep-analyzer's action bucket
+ * (generic deliverables): this captures BINDING language with modal
+ * verbs ("shall", "must", "deberá") + subject attribution + deadline
+ * detection. Tags each clause as positive obligation or prohibition.
+ */
+function buildObligationsBlock(files) {
+  const engine = getObligations();
+  if (!engine || typeof engine.buildObligationsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildObligationsForFiles(list);
+  return engine.renderObligationsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2198,6 +2222,7 @@ module.exports = {
   buildTldrBlock,
   buildSentimentBlock,
   buildKeyPhrasesBlock,
+  buildObligationsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

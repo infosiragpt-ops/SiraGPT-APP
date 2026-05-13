@@ -1109,6 +1109,7 @@ router.post(
             || documentEnrichment?.tldrBlock
             || documentEnrichment?.sentimentBlock
             || documentEnrichment?.keyPhrasesBlock
+            || documentEnrichment?.obligationsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1229,6 +1230,11 @@ router.post(
             // the comparison block so the model has each document's
             // topical fingerprint when it synthesises across files.
             if (documentEnrichment.keyPhrasesBlock) parts.push(documentEnrichment.keyPhrasesBlock);
+            // Obligations = binding clauses ("shall", "must", "deberá")
+            // with subject attribution + deadlines. Sits BEFORE the
+            // cross-doc comparison so the model has each party's
+            // commitments anchored when synthesising across files.
+            if (documentEnrichment.obligationsBlock) parts.push(documentEnrichment.obligationsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
