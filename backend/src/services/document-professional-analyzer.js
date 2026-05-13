@@ -649,6 +649,30 @@ function getCoupons() {
   try { couponsCache = require('./document-coupons'); } catch { couponsCache = null; }
   return couponsCache;
 }
+let fileSizesCache = null;
+function getFileSizes() {
+  if (fileSizesCache) return fileSizesCache;
+  try { fileSizesCache = require('./document-file-sizes'); } catch { fileSizesCache = null; }
+  return fileSizesCache;
+}
+let vcsRefsCache = null;
+function getVcsRefs() {
+  if (vcsRefsCache) return vcsRefsCache;
+  try { vcsRefsCache = require('./document-vcs-refs'); } catch { vcsRefsCache = null; }
+  return vcsRefsCache;
+}
+let standardsCache = null;
+function getStandards() {
+  if (standardsCache) return standardsCache;
+  try { standardsCache = require('./document-standards'); } catch { standardsCache = null; }
+  return standardsCache;
+}
+let networkCache = null;
+function getNetwork() {
+  if (networkCache) return networkCache;
+  try { networkCache = require('./document-network'); } catch { networkCache = null; }
+  return networkCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2087,6 +2111,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const signoffsBlock = buildSignoffsBlock(files);
   const hashesBlock = buildHashesBlock(files);
   const couponsBlock = buildCouponsBlock(files);
+  const fileSizesBlock = buildFileSizesBlock(files);
+  const vcsRefsBlock = buildVcsRefsBlock(files);
+  const standardsBlock = buildStandardsBlock(files);
+  const networkBlock = buildNetworkBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2189,6 +2217,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     signoffsBlock,
     hashesBlock,
     couponsBlock,
+    fileSizesBlock,
+    vcsRefsBlock,
+    standardsBlock,
+    networkBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3592,6 +3624,59 @@ function buildCouponsBlock(files) {
   return engine.renderCouponsBlock(report);
 }
 
+/**
+ * File sizes block — KB/MB/GB/TB plus IEC binary variants and
+ * bandwidth units. Routes "how big?" / "capacity?" / "throughput?".
+ */
+function buildFileSizesBlock(files) {
+  const engine = getFileSizes();
+  if (!engine || typeof engine.buildFileSizesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFileSizesForFiles(list);
+  return engine.renderFileSizesBlock(report);
+}
+
+/**
+ * VCS refs block — commit SHAs, PR / issue numbers, owner/repo,
+ * branches, tags. Routes "what commit?" / "what PR?" / "what branch?".
+ */
+function buildVcsRefsBlock(files) {
+  const engine = getVcsRefs();
+  if (!engine || typeof engine.buildVcsRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildVcsRefsForFiles(list);
+  return engine.renderVcsRefsBlock(report);
+}
+
+/**
+ * Standards block — ISO / ANSI / IEEE / RFC / NIST / W3C / EN /
+ * DIN / PCI-DSS / SOC 1-3 / compliance abbreviations. Routes
+ * "what standards?" / "is this ISO 27001 compliant?".
+ */
+function buildStandardsBlock(files) {
+  const engine = getStandards();
+  if (!engine || typeof engine.buildStandardsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildStandardsForFiles(list);
+  return engine.renderStandardsBlock(report);
+}
+
+/**
+ * Network block — IPv4 / IPv6 (with CIDR), MAC, ports. Routes
+ * "what IP / port / network?".
+ */
+function buildNetworkBlock(files) {
+  const engine = getNetwork();
+  if (!engine || typeof engine.buildNetworkForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNetworkForFiles(list);
+  return engine.renderNetworkBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3849,6 +3934,10 @@ module.exports = {
   buildSignoffsBlock,
   buildHashesBlock,
   buildCouponsBlock,
+  buildFileSizesBlock,
+  buildVcsRefsBlock,
+  buildStandardsBlock,
+  buildNetworkBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

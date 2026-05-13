@@ -1179,6 +1179,10 @@ router.post(
             || documentEnrichment?.signoffsBlock
             || documentEnrichment?.hashesBlock
             || documentEnrichment?.couponsBlock
+            || documentEnrichment?.fileSizesBlock
+            || documentEnrichment?.vcsRefsBlock
+            || documentEnrichment?.standardsBlock
+            || documentEnrichment?.networkBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1569,6 +1573,15 @@ router.post(
             if (documentEnrichment.hashesBlock) parts.push(documentEnrichment.hashesBlock);
             // Coupons = promo/discount/voucher codes. Routes "promo code?".
             if (documentEnrichment.couponsBlock) parts.push(documentEnrichment.couponsBlock);
+            // File sizes = KB/MB/GB/TB/PB + binary IEC + bandwidth.
+            if (documentEnrichment.fileSizesBlock) parts.push(documentEnrichment.fileSizesBlock);
+            // VCS refs = commit SHAs, PR/issue #, repo, branches, tags.
+            if (documentEnrichment.vcsRefsBlock) parts.push(documentEnrichment.vcsRefsBlock);
+            // Standards = ISO / ANSI / IEEE / RFC / NIST / W3C / EN /
+            // DIN / PCI-DSS / SOC / compliance abbreviations.
+            if (documentEnrichment.standardsBlock) parts.push(documentEnrichment.standardsBlock);
+            // Network = IPv4 / IPv6 (with CIDR) / MAC / ports.
+            if (documentEnrichment.networkBlock) parts.push(documentEnrichment.networkBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1634,7 +1647,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
