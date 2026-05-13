@@ -307,6 +307,12 @@ function getIndemnification() {
   try { indemnificationCache = require('./document-indemnification'); } catch { indemnificationCache = null; }
   return indemnificationCache;
 }
+let acronymExpansionCache = null;
+function getAcronymExpansion() {
+  if (acronymExpansionCache) return acronymExpansionCache;
+  try { acronymExpansionCache = require('./document-acronym-expansion'); } catch { acronymExpansionCache = null; }
+  return acronymExpansionCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1688,6 +1694,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const warrantiesBlock = buildWarrantiesBlock(files);
   const disputeResolutionBlock = buildDisputeResolutionBlock(files);
   const indemnificationBlock = buildIndemnificationBlock(files);
+  const acronymsBlock = buildAcronymsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1733,6 +1740,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     warrantiesBlock,
     disputeResolutionBlock,
     indemnificationBlock,
+    acronymsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2290,6 +2298,21 @@ function buildIndemnificationBlock(files) {
   return engine.renderIndemnificationBlock(report);
 }
 
+/**
+ * Acronyms block — acronym ↔ expanded-form mappings as DECLARED by
+ * the document itself ("Acme Business Corporation (ABC)" etc.).
+ * Overrides external dictionaries when the user asks "what does X
+ * stand for?".
+ */
+function buildAcronymsBlock(files) {
+  const engine = getAcronymExpansion();
+  if (!engine || typeof engine.buildAcronymsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAcronymsForFiles(list);
+  return engine.renderAcronymsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2490,6 +2513,7 @@ module.exports = {
   buildWarrantiesBlock,
   buildDisputeResolutionBlock,
   buildIndemnificationBlock,
+  buildAcronymsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

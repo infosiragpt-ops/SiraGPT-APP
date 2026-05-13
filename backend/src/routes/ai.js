@@ -1121,6 +1121,7 @@ router.post(
             || documentEnrichment?.warrantiesBlock
             || documentEnrichment?.disputeResolutionBlock
             || documentEnrichment?.indemnificationBlock
+            || documentEnrichment?.acronymsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1299,6 +1300,11 @@ router.post(
             // + warranties + dispute resolution + indemnification)
             // before any cross-document synthesis.
             if (documentEnrichment.indemnificationBlock) parts.push(documentEnrichment.indemnificationBlock);
+            // Acronym expansions = document-stated mappings. Pair-wise
+            // with glossary so the model has both (a) the terms it
+            // should expect to encounter and (b) the document's own
+            // expansions when those are present.
+            if (documentEnrichment.acronymsBlock) parts.push(documentEnrichment.acronymsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
