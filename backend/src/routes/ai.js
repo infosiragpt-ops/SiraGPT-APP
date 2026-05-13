@@ -1171,6 +1171,10 @@ router.post(
             || documentEnrichment?.currencyBlock
             || documentEnrichment?.percentagesBlock
             || documentEnrichment?.citationsBlock
+            || documentEnrichment?.colorsBlock
+            || documentEnrichment?.coordinatesBlock
+            || documentEnrichment?.trademarkBlock
+            || documentEnrichment?.hashtagsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1541,6 +1545,16 @@ router.post(
             // author-year, parenthetical, et al. in-text) +
             // References section. Routes "what's cited?".
             if (documentEnrichment.citationsBlock) parts.push(documentEnrichment.citationsBlock);
+            // Colors = hex/RGB/HSL/Tailwind/named CSS colors.
+            // Routes "what colors / palette?".
+            if (documentEnrichment.colorsBlock) parts.push(documentEnrichment.colorsBlock);
+            // Coordinates = decimal lat/lng, DMS, Plus codes.
+            // Routes "where is this?" / "what coordinates?".
+            if (documentEnrichment.coordinatesBlock) parts.push(documentEnrichment.coordinatesBlock);
+            // Trademark = inline TM/®/℠/© + attributions.
+            if (documentEnrichment.trademarkBlock) parts.push(documentEnrichment.trademarkBlock);
+            // Hashtags / handles = social-style #tag and @user references.
+            if (documentEnrichment.hashtagsBlock) parts.push(documentEnrichment.hashtagsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1606,7 +1620,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

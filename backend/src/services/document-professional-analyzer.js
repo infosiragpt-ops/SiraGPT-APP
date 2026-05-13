@@ -601,6 +601,30 @@ function getCitations() {
   try { citationsCache = require('./document-citations'); } catch { citationsCache = null; }
   return citationsCache;
 }
+let colorsCache = null;
+function getColors() {
+  if (colorsCache) return colorsCache;
+  try { colorsCache = require('./document-colors'); } catch { colorsCache = null; }
+  return colorsCache;
+}
+let coordinatesCache = null;
+function getCoordinates() {
+  if (coordinatesCache) return coordinatesCache;
+  try { coordinatesCache = require('./document-coordinates'); } catch { coordinatesCache = null; }
+  return coordinatesCache;
+}
+let trademarkCache = null;
+function getTrademark() {
+  if (trademarkCache) return trademarkCache;
+  try { trademarkCache = require('./document-trademark'); } catch { trademarkCache = null; }
+  return trademarkCache;
+}
+let hashtagsCache = null;
+function getHashtags() {
+  if (hashtagsCache) return hashtagsCache;
+  try { hashtagsCache = require('./document-hashtags'); } catch { hashtagsCache = null; }
+  return hashtagsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2031,6 +2055,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const currencyBlock = buildCurrencyBlock(files);
   const percentagesBlock = buildPercentagesBlock(files);
   const citationsBlock = buildCitationsBlock(files);
+  const colorsBlock = buildColorsBlock(files);
+  const coordinatesBlock = buildCoordinatesBlock(files);
+  const trademarkBlock = buildTrademarkBlock(files);
+  const hashtagsBlock = buildHashtagsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2125,6 +2153,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     currencyBlock,
     percentagesBlock,
     citationsBlock,
+    colorsBlock,
+    coordinatesBlock,
+    trademarkBlock,
+    hashtagsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3418,6 +3450,61 @@ function buildCitationsBlock(files) {
   return engine.renderCitationsBlock(report);
 }
 
+/**
+ * Colors block — hex / RGB / HSL / Tailwind / named CSS colors.
+ * Routes "what colors does this use?" / "what's the brand palette?"
+ * to a citeable inventory.
+ */
+function buildColorsBlock(files) {
+  const engine = getColors();
+  if (!engine || typeof engine.buildColorsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildColorsForFiles(list);
+  return engine.renderColorsBlock(report);
+}
+
+/**
+ * Coordinates block — geographic coordinates (decimal lat/lng,
+ * labeled latitude/longitude, DMS, Open Location Plus codes).
+ * Validated against lat/lng ranges. Routes "where is this?" /
+ * "what coordinates?" to a citeable list.
+ */
+function buildCoordinatesBlock(files) {
+  const engine = getCoordinates();
+  if (!engine || typeof engine.buildCoordinatesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCoordinatesForFiles(list);
+  return engine.renderCoordinatesBlock(report);
+}
+
+/**
+ * Trademark block — inline TM/®/℠/© symbols + attribution lines.
+ * Routes "what trademarks / brand marks?" to a citeable list.
+ */
+function buildTrademarkBlock(files) {
+  const engine = getTrademark();
+  if (!engine || typeof engine.buildTrademarkForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTrademarkForFiles(list);
+  return engine.renderTrademarkBlock(report);
+}
+
+/**
+ * Hashtags block — social-style hashtags + handles (Twitter,
+ * Bluesky, Fediverse). Routes "what hashtags?" / "who's mentioned?".
+ */
+function buildHashtagsBlock(files) {
+  const engine = getHashtags();
+  if (!engine || typeof engine.buildHashtagsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHashtagsForFiles(list);
+  return engine.renderHashtagsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3667,6 +3754,10 @@ module.exports = {
   buildCurrencyBlock,
   buildPercentagesBlock,
   buildCitationsBlock,
+  buildColorsBlock,
+  buildCoordinatesBlock,
+  buildTrademarkBlock,
+  buildHashtagsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
