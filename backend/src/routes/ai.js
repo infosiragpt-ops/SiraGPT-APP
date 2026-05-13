@@ -1129,6 +1129,7 @@ router.post(
             || documentEnrichment?.hypothesesBlock
             || documentEnrichment?.recommendationsBlock
             || documentEnrichment?.assumptionsBlock
+            || documentEnrichment?.conditionalClausesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1345,6 +1346,10 @@ router.post(
             // Assumptions = explicit author premises. Critical for
             // auditability — the chat must condition claims on these.
             if (documentEnrichment.assumptionsBlock) parts.push(documentEnrichment.assumptionsBlock);
+            // Conditional clauses = if/then logic the document declares.
+            // Lets the chat answer "what happens if X?" with citeable
+            // trigger sentences rather than inference from prose.
+            if (documentEnrichment.conditionalClausesBlock) parts.push(documentEnrichment.conditionalClausesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

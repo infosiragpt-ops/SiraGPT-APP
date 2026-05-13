@@ -355,6 +355,12 @@ function getAssumptions() {
   try { assumptionsCache = require('./document-assumptions'); } catch { assumptionsCache = null; }
   return assumptionsCache;
 }
+let conditionalClausesCache = null;
+function getConditionalClauses() {
+  if (conditionalClausesCache) return conditionalClausesCache;
+  try { conditionalClausesCache = require('./document-conditional-clauses'); } catch { conditionalClausesCache = null; }
+  return conditionalClausesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1744,6 +1750,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const hypothesesBlock = buildHypothesesBlock(files);
   const recommendationsBlock = buildRecommendationsBlock(files);
   const assumptionsBlock = buildAssumptionsBlock(files);
+  const conditionalClausesBlock = buildConditionalClausesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1797,6 +1804,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     hypothesesBlock,
     recommendationsBlock,
     assumptionsBlock,
+    conditionalClausesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2476,6 +2484,20 @@ function buildAssumptionsBlock(files) {
   return engine.renderAssumptionsBlock(report);
 }
 
+/**
+ * Conditional clauses block — "if … then", "unless", "provided that",
+ * "in the event of", "subject to", "failing which". Routes
+ * "what happens if X?" questions to citeable trigger sentences.
+ */
+function buildConditionalClausesBlock(files) {
+  const engine = getConditionalClauses();
+  if (!engine || typeof engine.buildConditionalsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildConditionalsForFiles(list);
+  return engine.renderConditionalsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2684,6 +2706,7 @@ module.exports = {
   buildHypothesesBlock,
   buildRecommendationsBlock,
   buildAssumptionsBlock,
+  buildConditionalClausesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
