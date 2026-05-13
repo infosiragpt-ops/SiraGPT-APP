@@ -373,6 +373,12 @@ function getCallToAction() {
   try { callToActionCache = require('./document-call-to-action'); } catch { callToActionCache = null; }
   return callToActionCache;
 }
+let disclosuresCache = null;
+function getDisclosures() {
+  if (disclosuresCache) return disclosuresCache;
+  try { disclosuresCache = require('./document-disclosures'); } catch { disclosuresCache = null; }
+  return disclosuresCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1765,6 +1771,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const conditionalClausesBlock = buildConditionalClausesBlock(files);
   const counterArgumentsBlock = buildCounterArgumentsBlock(files);
   const callsToActionBlock = buildCallsToActionBlock(files);
+  const disclosuresBlock = buildDisclosuresBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1821,6 +1828,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     conditionalClausesBlock,
     counterArgumentsBlock,
     callsToActionBlock,
+    disclosuresBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2542,6 +2550,22 @@ function buildCallsToActionBlock(files) {
   return engine.renderCTAsBlock(report);
 }
 
+/**
+ * Required disclosures block — forward-looking statements, safe-
+ * harbour notices, risk warnings, conflict-of-interest disclosures,
+ * "not financial advice" caveats. Sits in the legal cluster so the
+ * chat has the full set of disclaimers the document carries before
+ * any cross-document synthesis.
+ */
+function buildDisclosuresBlock(files) {
+  const engine = getDisclosures();
+  if (!engine || typeof engine.buildDisclosuresForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDisclosuresForFiles(list);
+  return engine.renderDisclosuresBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2753,6 +2777,7 @@ module.exports = {
   buildConditionalClausesBlock,
   buildCounterArgumentsBlock,
   buildCallsToActionBlock,
+  buildDisclosuresBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
