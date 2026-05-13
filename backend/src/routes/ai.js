@@ -1079,6 +1079,7 @@ router.post(
             || documentEnrichment?.numericCoherenceBlock
             || documentEnrichment?.temporalTimelineBlock
             || documentEnrichment?.discourseBlock
+            || documentEnrichment?.sectionRolesBlock
           ) {
             const parts = [];
             // PII safety frame goes FIRST so the model reads "do not echo
@@ -1141,6 +1142,12 @@ router.post(
             // / "where's the conclusion" navigation questions to this
             // block instead of re-scanning the raw text.
             if (documentEnrichment.discourseBlock) parts.push(documentEnrichment.discourseBlock);
+            // Section roles = rhetorical map of headings (intro,
+            // method, results, conclusion / preamble, obligations,
+            // termination). Sits right before the directive so the
+            // model has the schema-level anchor (academic vs legal)
+            // when it commits to a recipe.
+            if (documentEnrichment.sectionRolesBlock) parts.push(documentEnrichment.sectionRolesBlock);
             // Directive = recipe the model should follow when answering.
             if (documentEnrichment.directiveBlock) parts.push(documentEnrichment.directiveBlock);
             documentEnrichmentBlock = `\n\n${parts.join('\n\n')}`;

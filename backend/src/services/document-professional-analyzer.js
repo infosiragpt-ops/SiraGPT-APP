@@ -127,6 +127,12 @@ function getDiscourseMapper() {
   try { discourseMapperCache = require('./document-discourse-mapper'); } catch { discourseMapperCache = null; }
   return discourseMapperCache;
 }
+let sectionClassifierCache = null;
+function getSectionClassifier() {
+  if (sectionClassifierCache) return sectionClassifierCache;
+  try { sectionClassifierCache = require('./document-section-classifier'); } catch { sectionClassifierCache = null; }
+  return sectionClassifierCache;
+}
 let evidenceMapCache = null;
 function getEvidenceMap() {
   if (evidenceMapCache) return evidenceMapCache;
@@ -1501,6 +1507,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const numericCoherenceBlock = buildNumericCoherenceBlock(files);
   const temporalTimelineBlock = buildTemporalTimelineBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
+  const sectionRolesBlock = buildSectionRolesBlock(files);
 
   return {
     profileBlock,
@@ -1519,6 +1526,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     numericCoherenceBlock,
     temporalTimelineBlock,
     discourseBlock,
+    sectionRolesBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -1618,6 +1626,22 @@ function buildDiscourseBlock(files) {
   if (list.length === 0) return '';
   const report = engine.buildDiscourseForFiles(list);
   return engine.renderDiscourseBlock(report);
+}
+
+/**
+ * Section roles block — maps each heading to a rhetorical role
+ * (academic intro/method/results/discussion/conclusion or legal
+ * preamble/clauses/annex/etc) so the model can route section-scoped
+ * questions directly to the relevant span. Distinct from the outline,
+ * which is purely a literal table of contents.
+ */
+function buildSectionRolesBlock(files) {
+  const engine = getSectionClassifier();
+  if (!engine || typeof engine.buildSectionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSectionsForFiles(list);
+  return engine.renderSectionsBlock(report);
 }
 
 /**
@@ -1821,6 +1845,7 @@ module.exports = {
   buildDeepAnalysisBlock,
   buildQuotesBlock,
   buildDiscourseBlock,
+  buildSectionRolesBlock,
   buildNumericCoherenceBlock,
   buildTemporalTimelineBlock,
   loadAnalysesByFileId,
