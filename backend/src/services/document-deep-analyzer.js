@@ -32,6 +32,21 @@
  *   renderDeepAnalysisBlock(report)      → markdown string ('' when empty)
  */
 
+let attributionEngineCache = null;
+function getAttributionEngine() {
+  if (attributionEngineCache) return attributionEngineCache;
+  try { attributionEngineCache = require('./document-claim-attribution'); }
+  catch { attributionEngineCache = null; }
+  return attributionEngineCache;
+}
+let insightsEngineCache = null;
+function getInsightsEngine() {
+  if (insightsEngineCache) return insightsEngineCache;
+  try { insightsEngineCache = require('./document-insights-engine'); }
+  catch { insightsEngineCache = null; }
+  return insightsEngineCache;
+}
+
 const MAX_BLOCK_CHARS = 4500;
 const MAX_PER_BUCKET = 6;
 const MAX_SENT_CHARS = 240;
@@ -218,6 +233,31 @@ function analyzeText(text, opts = {}) {
  *
  * @param {Array<{ originalName?: string, filename?: string, name?: string, extractedText?: string, text?: string }>} files
  */
+/**
+ * Best-effort claim attribution — feeds the insights-engine entities
+ * (people, organizations, places) extracted from the *same* file into the
+ * attribution analyzer so claims like "according to Acme Corp, …" land
+ * with `source: "Acme Corp", sourceType: "org"`. Falls back gracefully
+ * when either engine is unavailable.
+ */
+function attachAttribution(text, claims) {
+  const attribution = getAttributionEngine();
+  if (!attribution || typeof attribution.annotateClaims !== 'function') return null;
+  let persons = [];
+  let organizations = [];
+  let places = [];
+  const insights = getInsightsEngine();
+  if (insights && typeof insights.extractDocumentInsights === 'function') {
+    try {
+      const report = insights.extractDocumentInsights(text);
+      persons = report?.entities?.persons || [];
+      organizations = report?.entities?.organizations || [];
+      places = report?.entities?.places || [];
+    } catch { /* fallthrough — attribution still useful without entities */ }
+  }
+  return attribution.annotateClaims(claims, { persons, organizations, places });
+}
+
 function buildDeepAnalysisForFiles(files) {
   const list = Array.isArray(files) ? files.filter((f) => f && typeof f === 'object') : [];
   const perFile = [];
@@ -232,6 +272,10 @@ function buildDeepAnalysisForFiles(files) {
     const label = f.originalName || f.filename || f.name || 'archivo';
     const report = analyzeText(text);
     if (report.sentenceCount === 0) continue;
+    // Annotate claims with attribution. Lives alongside `claims` so the
+    // renderer can append a "— source: X" suffix without losing the
+    // plain-string contract callers may already depend on.
+    report.claimAttributions = attachAttribution(text, report.claims);
     perFile.push({ file: label, report });
     for (const k of ['claims', 'actions', 'decisions', 'openQuestions', 'risks']) {
       aggregate[k] = aggregate[k].concat(report[k]);
@@ -249,8 +293,21 @@ function buildDeepAnalysisForFiles(files) {
 
 function renderBuckets(report, opts = {}) {
   const lines = [];
+  const attribution = getAttributionEngine();
+  // Attach the "— persona/organización: X" suffix when we have an
+  // attribution map. Falls back to the plain claim when source is null.
+  const claimsRendered = (() => {
+    if (!attribution || !Array.isArray(report.claimAttributions)) return report.claims;
+    const byClaim = new Map();
+    for (const a of report.claimAttributions) byClaim.set(a.claim, a);
+    return (report.claims || []).map((c) => {
+      const a = byClaim.get(c);
+      const suffix = a ? attribution.renderAttributionSuffix(a) : '';
+      return suffix ? `${c}${suffix}` : c;
+    });
+  })();
   const sections = [
-    ['Key claims', report.claims, 'Each claim is a sentence-level assertion grounded in numbers, dates, or attribution. Verify before quoting.'],
+    ['Key claims', claimsRendered, 'Each claim is a sentence-level assertion grounded in numbers, dates, or attribution. Verify before quoting.'],
     ['Action items', report.actions, 'Imperative / deliverable language. Treat as candidate TODOs, not commitments.'],
     ['Decisions', report.decisions, 'Statements presented as resolutions. The document asserts they happened.'],
     ['Open questions', report.openQuestions, 'Explicitly unresolved. Surface to the user as gaps before answering definitively.'],
