@@ -1155,6 +1155,10 @@ router.post(
             || documentEnrichment?.prioritiesBlock
             || documentEnrichment?.ownershipBlock
             || documentEnrichment?.timestampsBlock
+            || documentEnrichment?.statusBlock
+            || documentEnrichment?.acceptanceCriteriaBlock
+            || documentEnrichment?.apiEndpointsBlock
+            || documentEnrichment?.envVarsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1468,6 +1472,22 @@ router.post(
             // HTTP date format, ISO 8601 + human durations. Routes
             // "when did X happen?" / "what's the SLA?" to a citeable list.
             if (documentEnrichment.timestampsBlock) parts.push(documentEnrichment.timestampsBlock);
+            // Status / lifecycle = Status: Draft/Approved/Deprecated/etc.,
+            // inline [DRAFT] / (DEPRECATED) callouts, Spanish equivalents.
+            // Routes "is this approved?" / "what's the status?" to a signal.
+            if (documentEnrichment.statusBlock) parts.push(documentEnrichment.statusBlock);
+            // Acceptance criteria = Gherkin scenarios (Given-When-Then in
+            // English + Spanish) + labelled AC bullet lists. Routes
+            // "what are the acceptance criteria?" to citeable structure.
+            if (documentEnrichment.acceptanceCriteriaBlock) parts.push(documentEnrichment.acceptanceCriteriaBlock);
+            // API endpoints = HTTP method + path references (inline,
+            // markdown headers, OpenAPI paths blocks). Routes
+            // "what endpoints does this expose?" to a citeable inventory.
+            if (documentEnrichment.apiEndpointsBlock) parts.push(documentEnrichment.apiEndpointsBlock);
+            // Env vars / config flags = SCREAMING_SNAKE_CASE tokens
+            // referenced as env vars (bare, $/env/process.env prefixed,
+            // .env declarations). Routes "what env vars does this need?".
+            if (documentEnrichment.envVarsBlock) parts.push(documentEnrichment.envVarsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1533,7 +1553,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

@@ -505,6 +505,30 @@ function getTimestamps() {
   try { timestampsCache = require('./document-timestamps'); } catch { timestampsCache = null; }
   return timestampsCache;
 }
+let statusCache = null;
+function getStatus() {
+  if (statusCache) return statusCache;
+  try { statusCache = require('./document-status'); } catch { statusCache = null; }
+  return statusCache;
+}
+let acceptanceCriteriaCache = null;
+function getAcceptanceCriteria() {
+  if (acceptanceCriteriaCache) return acceptanceCriteriaCache;
+  try { acceptanceCriteriaCache = require('./document-acceptance-criteria'); } catch { acceptanceCriteriaCache = null; }
+  return acceptanceCriteriaCache;
+}
+let apiEndpointsCache = null;
+function getApiEndpoints() {
+  if (apiEndpointsCache) return apiEndpointsCache;
+  try { apiEndpointsCache = require('./document-api-endpoints'); } catch { apiEndpointsCache = null; }
+  return apiEndpointsCache;
+}
+let envVarsCache = null;
+function getEnvVars() {
+  if (envVarsCache) return envVarsCache;
+  try { envVarsCache = require('./document-env-vars'); } catch { envVarsCache = null; }
+  return envVarsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1919,6 +1943,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const prioritiesBlock = buildPrioritiesBlock(files);
   const ownershipBlock = buildOwnershipBlock(files);
   const timestampsBlock = buildTimestampsBlock(files);
+  const statusBlock = buildStatusBlock(files);
+  const acceptanceCriteriaBlock = buildAcceptanceCriteriaBlock(files);
+  const apiEndpointsBlock = buildApiEndpointsBlock(files);
+  const envVarsBlock = buildEnvVarsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1997,6 +2025,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     prioritiesBlock,
     ownershipBlock,
     timestampsBlock,
+    statusBlock,
+    acceptanceCriteriaBlock,
+    apiEndpointsBlock,
+    envVarsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3048,6 +3080,71 @@ function buildTimestampsBlock(files) {
   return engine.renderTimestampsBlock(report);
 }
 
+/**
+ * Status / lifecycle block — Status / Stage / Lifecycle / State lines
+ * plus inline [DRAFT] / (DEPRECATED) / SUPERSEDED: callouts. Normalised
+ * into buckets (draft/review/approved/active/rejected/deprecated/archived/
+ * pre-release). Routes "is this approved?" / "what's the status?" to
+ * a citeable signal.
+ */
+function buildStatusBlock(files) {
+  const engine = getStatus();
+  if (!engine || typeof engine.buildStatusForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildStatusForFiles(list);
+  return engine.renderStatusBlock(report);
+}
+
+/**
+ * Acceptance criteria block — Gherkin scenarios (Scenario / Background
+ * with Given–When–Then–And–But steps in English and Spanish) plus
+ * labelled "Acceptance Criteria:" bullet lists. Routes "what are the
+ * acceptance criteria?" / "what are the test scenarios?" to a citeable
+ * structure.
+ */
+function buildAcceptanceCriteriaBlock(files) {
+  const engine = getAcceptanceCriteria();
+  if (!engine || typeof engine.buildAcceptanceCriteriaForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAcceptanceCriteriaForFiles(list);
+  return engine.renderAcceptanceCriteriaBlock(report);
+}
+
+/**
+ * API endpoints block — HTTP method + path references surfaced from
+ * inline mentions, markdown headers, OpenAPI paths blocks. Groups by
+ * method, dedupes by canonical METHOD path. Routes "what endpoints
+ * does this expose?" / "is there a POST /api/x?" to a citeable
+ * inventory.
+ */
+function buildApiEndpointsBlock(files) {
+  const engine = getApiEndpoints();
+  if (!engine || typeof engine.buildApiEndpointsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildApiEndpointsForFiles(list);
+  return engine.renderApiEndpointsBlock(report);
+}
+
+/**
+ * Env vars block — SCREAMING_SNAKE_CASE tokens referenced as
+ * environment variables / config flags (bare, prefixed via $/env/
+ * process.env, or .env-style declarations). Stopword-filtered to
+ * exclude common acronyms (HTTP / JSON / CVE / etc.). Routes
+ * "what env vars does this need?" / "what config does it expect?"
+ * to a citeable inventory.
+ */
+function buildEnvVarsBlock(files) {
+  const engine = getEnvVars();
+  if (!engine || typeof engine.buildEnvVarsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildEnvVarsForFiles(list);
+  return engine.renderEnvVarsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3281,6 +3378,10 @@ module.exports = {
   buildPrioritiesBlock,
   buildOwnershipBlock,
   buildTimestampsBlock,
+  buildStatusBlock,
+  buildAcceptanceCriteriaBlock,
+  buildApiEndpointsBlock,
+  buildEnvVarsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
