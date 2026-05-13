@@ -181,6 +181,12 @@ function getRiskRegister() {
   try { riskRegisterCache = require('./document-risk-register'); } catch { riskRegisterCache = null; }
   return riskRegisterCache;
 }
+let factDensityCache = null;
+function getFactDensity() {
+  if (factDensityCache) return factDensityCache;
+  try { factDensityCache = require('./document-fact-density'); } catch { factDensityCache = null; }
+  return factDensityCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1541,6 +1547,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const semanticGraphBlock = buildSemanticGraphBlock(files);
   const kpisBlock = buildKpisBlock(files);
   const riskRegisterBlock = buildRiskRegisterBlock(files);
+  const factDensityBlock = buildFactDensityBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1565,6 +1572,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     semanticGraphBlock,
     kpisBlock,
     riskRegisterBlock,
+    factDensityBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1797,6 +1805,22 @@ function buildRiskRegisterBlock(files) {
   return engine.renderRegisterBlock(report);
 }
 
+/**
+ * Fact-density block — ranks sections by verifiable-anchor density
+ * (numbers / dates / monies / percents / entities / acronyms /
+ * citations per KB). Lets the chat cite the densest sections first
+ * when answering numeric or evidentiary questions instead of treating
+ * every section uniformly.
+ */
+function buildFactDensityBlock(files) {
+  const engine = getFactDensity();
+  if (!engine || typeof engine.buildDensityForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDensityForFiles(list);
+  return engine.renderDensityBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -1976,6 +2000,7 @@ module.exports = {
   buildSemanticGraphBlock,
   buildKpisBlock,
   buildRiskRegisterBlock,
+  buildFactDensityBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

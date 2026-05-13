@@ -1083,6 +1083,7 @@ router.post(
             || documentEnrichment?.semanticGraphBlock
             || documentEnrichment?.kpisBlock
             || documentEnrichment?.riskRegisterBlock
+            || documentEnrichment?.factDensityBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1156,6 +1157,12 @@ router.post(
             // sorted register when answering "what should we worry
             // about?".
             if (documentEnrichment.riskRegisterBlock) parts.push(documentEnrichment.riskRegisterBlock);
+            // Fact-density map = sections ranked by verifiable-anchor
+            // density. Sits AFTER the operational axes (KPIs + risks)
+            // and BEFORE cross-doc comparison so the model knows
+            // WHERE the densest evidence lives before deciding which
+            // section to cite.
+            if (documentEnrichment.factDensityBlock) parts.push(documentEnrichment.factDensityBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
