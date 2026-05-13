@@ -817,6 +817,30 @@ function getConcession() {
   try { concessionCache = require('./document-concession'); } catch { concessionCache = null; }
   return concessionCache;
 }
+let hedgingCache = null;
+function getHedging() {
+  if (hedgingCache) return hedgingCache;
+  try { hedgingCache = require('./document-hedging'); } catch { hedgingCache = null; }
+  return hedgingCache;
+}
+let intensifiersCache = null;
+function getIntensifiers() {
+  if (intensifiersCache) return intensifiersCache;
+  try { intensifiersCache = require('./document-intensifiers'); } catch { intensifiersCache = null; }
+  return intensifiersCache;
+}
+let reportingCache = null;
+function getReporting() {
+  if (reportingCache) return reportingCache;
+  try { reportingCache = require('./document-reporting'); } catch { reportingCache = null; }
+  return reportingCache;
+}
+let examplesCache = null;
+function getExamples() {
+  if (examplesCache) return examplesCache;
+  try { examplesCache = require('./document-examples'); } catch { examplesCache = null; }
+  return examplesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2283,6 +2307,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const comparativesBlock = buildComparativesBlock(files);
   const causalBlock = buildCausalBlock(files);
   const concessionBlock = buildConcessionBlock(files);
+  const hedgingBlock = buildHedgingBlock(files);
+  const intensifiersBlock = buildIntensifiersBlock(files);
+  const reportingBlock = buildReportingBlock(files);
+  const examplesBlock = buildExamplesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2413,6 +2441,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     comparativesBlock,
     causalBlock,
     concessionBlock,
+    hedgingBlock,
+    intensifiersBlock,
+    reportingBlock,
+    examplesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4175,6 +4207,46 @@ function buildConcessionBlock(files) {
   return engine.renderConcessionBlock(report);
 }
 
+/** Hedging block — epistemic softeners (perhaps/possibly/quizás). */
+function buildHedgingBlock(files) {
+  const engine = getHedging();
+  if (!engine || typeof engine.buildHedgingForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHedgingForFiles(list);
+  return engine.renderHedgingBlock(report);
+}
+
+/** Intensifiers block — very/extremely/muy/extremadamente. */
+function buildIntensifiersBlock(files) {
+  const engine = getIntensifiers();
+  if (!engine || typeof engine.buildIntensifiersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildIntensifiersForFiles(list);
+  return engine.renderIntensifiersBlock(report);
+}
+
+/** Reporting block — said/stated/dijo/afirmó verbs. */
+function buildReportingBlock(files) {
+  const engine = getReporting();
+  if (!engine || typeof engine.buildReportingForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildReportingForFiles(list);
+  return engine.renderReportingBlock(report);
+}
+
+/** Examples block — for example/e.g./por ejemplo/es decir. */
+function buildExamplesBlock(files) {
+  const engine = getExamples();
+  if (!engine || typeof engine.buildExamplesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildExamplesForFiles(list);
+  return engine.renderExamplesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4460,6 +4532,10 @@ module.exports = {
   buildComparativesBlock,
   buildCausalBlock,
   buildConcessionBlock,
+  buildHedgingBlock,
+  buildIntensifiersBlock,
+  buildReportingBlock,
+  buildExamplesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
