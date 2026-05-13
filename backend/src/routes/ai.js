@@ -1137,6 +1137,7 @@ router.post(
             || documentEnrichment?.scenariosBlock
             || documentEnrichment?.benchmarksBlock
             || documentEnrichment?.goalsTargetsBlock
+            || documentEnrichment?.slaTermsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1382,6 +1383,11 @@ router.post(
             // Sits next to recommendations / actions so the chat
             // distinguishes aspirations from operational TODOs.
             if (documentEnrichment.goalsTargetsBlock) parts.push(documentEnrichment.goalsTargetsBlock);
+            // SLA terms = quantitative service commitments (uptime /
+            // response / resolution / credit / RPO / RTO). Sits in
+            // the operational cluster so the chat has the firm
+            // numerical commitments ready.
+            if (documentEnrichment.slaTermsBlock) parts.push(documentEnrichment.slaTermsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

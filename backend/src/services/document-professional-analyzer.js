@@ -403,6 +403,12 @@ function getGoalsTargets() {
   try { goalsTargetsCache = require('./document-goals-targets'); } catch { goalsTargetsCache = null; }
   return goalsTargetsCache;
 }
+let slaTermsCache = null;
+function getSLATerms() {
+  if (slaTermsCache) return slaTermsCache;
+  try { slaTermsCache = require('./document-sla-terms'); } catch { slaTermsCache = null; }
+  return slaTermsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1800,6 +1806,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const scenariosBlock = buildScenariosBlock(files);
   const benchmarksBlock = buildBenchmarksBlock(files);
   const goalsTargetsBlock = buildGoalsTargetsBlock(files);
+  const slaTermsBlock = buildSLATermsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1861,6 +1868,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     scenariosBlock,
     benchmarksBlock,
     goalsTargetsBlock,
+    slaTermsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2658,6 +2666,21 @@ function buildGoalsTargetsBlock(files) {
   return engine.renderGoalsBlock(report);
 }
 
+/**
+ * SLA terms block — service-level commitments (uptime / response /
+ * resolution / credit policy / RPO / RTO). Lets the chat answer
+ * "what's the uptime SLA?" / "what's the credit policy?" with
+ * quantitative source sentences.
+ */
+function buildSLATermsBlock(files) {
+  const engine = getSLATerms();
+  if (!engine || typeof engine.buildSLATermsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSLATermsForFiles(list);
+  return engine.renderSLATermsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2874,6 +2897,7 @@ module.exports = {
   buildScenariosBlock,
   buildBenchmarksBlock,
   buildGoalsTargetsBlock,
+  buildSLATermsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
