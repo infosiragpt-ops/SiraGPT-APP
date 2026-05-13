@@ -295,6 +295,12 @@ function getWarrantiesExtractor() {
   try { warrantiesExtractorCache = require('./document-warranties-extractor'); } catch { warrantiesExtractorCache = null; }
   return warrantiesExtractorCache;
 }
+let disputeResolutionCache = null;
+function getDisputeResolution() {
+  if (disputeResolutionCache) return disputeResolutionCache;
+  try { disputeResolutionCache = require('./document-dispute-resolution'); } catch { disputeResolutionCache = null; }
+  return disputeResolutionCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1674,6 +1680,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const metadataBlock = buildMetadataBlock(files);
   const complianceBlock = buildComplianceBlock(files);
   const warrantiesBlock = buildWarrantiesBlock(files);
+  const disputeResolutionBlock = buildDisputeResolutionBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1717,6 +1724,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     metadataBlock,
     complianceBlock,
     warrantiesBlock,
+    disputeResolutionBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2243,6 +2251,21 @@ function buildWarrantiesBlock(files) {
   return engine.renderWarrantiesBlock(report);
 }
 
+/**
+ * Dispute resolution block — arbitration / mediation / litigation /
+ * escalation / waiver clauses with seat / forum when present.
+ * Completes the legal cluster (obligations + scope + warranties +
+ * compliance + jurisdiction) by surfacing how disputes are handled.
+ */
+function buildDisputeResolutionBlock(files) {
+  const engine = getDisputeResolution();
+  if (!engine || typeof engine.buildDisputesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDisputesForFiles(list);
+  return engine.renderDisputesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2441,6 +2464,7 @@ module.exports = {
   buildMetadataBlock,
   buildComplianceBlock,
   buildWarrantiesBlock,
+  buildDisputeResolutionBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

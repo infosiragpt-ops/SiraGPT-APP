@@ -1119,6 +1119,7 @@ router.post(
             || documentEnrichment?.metadataBlock
             || documentEnrichment?.complianceBlock
             || documentEnrichment?.warrantiesBlock
+            || documentEnrichment?.disputeResolutionBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1288,6 +1289,10 @@ router.post(
             // legal cluster so the model has the full risk-allocation
             // frame before answering "what does each party warrant?".
             if (documentEnrichment.warrantiesBlock) parts.push(documentEnrichment.warrantiesBlock);
+            // Dispute resolution = mechanism + seat / forum. Completes
+            // the legal cluster so the model knows how disagreements
+            // get resolved before any cross-document synthesis.
+            if (documentEnrichment.disputeResolutionBlock) parts.push(documentEnrichment.disputeResolutionBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
