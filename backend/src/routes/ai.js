@@ -1103,6 +1103,7 @@ router.post(
             || documentEnrichment?.factDensityBlock
             || documentEnrichment?.relationshipsBlock
             || documentEnrichment?.sectionSimilarityBlock
+            || documentEnrichment?.numericStatisticsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1193,6 +1194,12 @@ router.post(
             // matching sections anchored by their titles when it
             // synthesises differences ("compare the scope clauses").
             if (documentEnrichment.sectionSimilarityBlock) parts.push(documentEnrichment.sectionSimilarityBlock);
+            // Numeric statistics = distribution-shape language
+            // (mean / median / std dev / percentile / CI / p-value).
+            // Sits next to KPIs in spirit but lives later in the
+            // sequence so the model has KPIs + relationships first
+            // and treats this block as the statistical-claim register.
+            if (documentEnrichment.numericStatisticsBlock) parts.push(documentEnrichment.numericStatisticsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

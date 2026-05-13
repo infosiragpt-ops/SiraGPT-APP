@@ -199,6 +199,12 @@ function getSectionSimilarity() {
   try { sectionSimilarityCache = require('./document-section-similarity'); } catch { sectionSimilarityCache = null; }
   return sectionSimilarityCache;
 }
+let numericStatisticsCache = null;
+function getNumericStatistics() {
+  if (numericStatisticsCache) return numericStatisticsCache;
+  try { numericStatisticsCache = require('./document-numeric-statistics'); } catch { numericStatisticsCache = null; }
+  return numericStatisticsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1562,6 +1568,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const factDensityBlock = buildFactDensityBlock(files);
   const relationshipsBlock = buildRelationshipsBlock(files);
   const sectionSimilarityBlock = buildSectionSimilarityBlock(files);
+  const numericStatisticsBlock = buildNumericStatisticsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1589,6 +1596,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     factDensityBlock,
     relationshipsBlock,
     sectionSimilarityBlock,
+    numericStatisticsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1867,6 +1875,23 @@ function buildSectionSimilarityBlock(files) {
   return engine.renderSimilarityBlock(report);
 }
 
+/**
+ * Numeric statistics block — captures the SHAPE of distributions
+ * (mean / median / std dev / variance / range / percentile / quartile
+ * / skew / kurtosis / CI / p-value / correlation / effect size).
+ * Different from the KPI extractor (operational metrics) — this
+ * surfaces statistical claims the model can cite directly when the
+ * user asks "what's the average / median / spread?".
+ */
+function buildNumericStatisticsBlock(files) {
+  const engine = getNumericStatistics();
+  if (!engine || typeof engine.buildStatisticsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildStatisticsForFiles(list);
+  return engine.renderStatisticsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2049,6 +2074,7 @@ module.exports = {
   buildFactDensityBlock,
   buildRelationshipsBlock,
   buildSectionSimilarityBlock,
+  buildNumericStatisticsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
