@@ -1118,6 +1118,7 @@ router.post(
             || documentEnrichment?.pricingBlock
             || documentEnrichment?.metadataBlock
             || documentEnrichment?.complianceBlock
+            || documentEnrichment?.warrantiesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1282,6 +1283,11 @@ router.post(
             // with a short summary. Sits next to jurisdiction so the
             // model has the full regulatory frame ready.
             if (documentEnrichment.complianceBlock) parts.push(documentEnrichment.complianceBlock);
+            // Warranties = statements of fact a party asserts (vs
+            // obligations which compel future action). Sits in the
+            // legal cluster so the model has the full risk-allocation
+            // frame before answering "what does each party warrant?".
+            if (documentEnrichment.warrantiesBlock) parts.push(documentEnrichment.warrantiesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

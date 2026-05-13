@@ -289,6 +289,12 @@ function getComplianceMatcher() {
   try { complianceMatcherCache = require('./document-compliance-matcher'); } catch { complianceMatcherCache = null; }
   return complianceMatcherCache;
 }
+let warrantiesExtractorCache = null;
+function getWarrantiesExtractor() {
+  if (warrantiesExtractorCache) return warrantiesExtractorCache;
+  try { warrantiesExtractorCache = require('./document-warranties-extractor'); } catch { warrantiesExtractorCache = null; }
+  return warrantiesExtractorCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1667,6 +1673,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const pricingBlock = buildPricingBlock(files);
   const metadataBlock = buildMetadataBlock(files);
   const complianceBlock = buildComplianceBlock(files);
+  const warrantiesBlock = buildWarrantiesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1709,6 +1716,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     pricingBlock,
     metadataBlock,
     complianceBlock,
+    warrantiesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2220,6 +2228,21 @@ function buildComplianceBlock(files) {
   return engine.renderComplianceBlock(report);
 }
 
+/**
+ * Warranties block — express warranties / representations and
+ * warranty disclaimers. Different from obligations: warranties are
+ * STATEMENTS OF FACT a party is asserting, vs obligations which
+ * compel future action. Helpful for risk allocation analysis.
+ */
+function buildWarrantiesBlock(files) {
+  const engine = getWarrantiesExtractor();
+  if (!engine || typeof engine.buildWarrantiesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWarrantiesForFiles(list);
+  return engine.renderWarrantiesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2417,6 +2440,7 @@ module.exports = {
   buildPricingBlock,
   buildMetadataBlock,
   buildComplianceBlock,
+  buildWarrantiesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
