@@ -325,6 +325,12 @@ function getCrossNumeric() {
   try { crossNumericCache = require('./document-cross-numeric'); } catch { crossNumericCache = null; }
   return crossNumericCache;
 }
+let signatureBlockCache = null;
+function getSignatureBlock() {
+  if (signatureBlockCache) return signatureBlockCache;
+  try { signatureBlockCache = require('./document-signature-block'); } catch { signatureBlockCache = null; }
+  return signatureBlockCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1709,6 +1715,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const acronymsBlock = buildAcronymsBlock(files);
   const temporalExpressionsBlock = buildTemporalExpressionsBlock(files);
   const crossNumericBlock = buildCrossNumericBlock(files);
+  const signatureBlocksBlock = buildSignatureBlocksBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1757,6 +1764,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     acronymsBlock,
     temporalExpressionsBlock,
     crossNumericBlock,
+    signatureBlocksBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2360,6 +2368,21 @@ function buildCrossNumericBlock(files) {
   return engine.renderComparisonBlock(report);
 }
 
+/**
+ * Signature blocks — sign-off sections at the tail of each document
+ * (Name / Title / Date / Company / Witness rows). Lets the chat
+ * answer "who signed this and on behalf of whom?" with verbatim
+ * lines instead of inference from prose.
+ */
+function buildSignatureBlocksBlock(files) {
+  const engine = getSignatureBlock();
+  if (!engine || typeof engine.buildSignaturesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSignaturesForFiles(list);
+  return engine.renderSignaturesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2563,6 +2586,7 @@ module.exports = {
   buildAcronymsBlock,
   buildTemporalExpressionsBlock,
   buildCrossNumericBlock,
+  buildSignatureBlocksBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

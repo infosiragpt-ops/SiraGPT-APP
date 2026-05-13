@@ -1124,6 +1124,7 @@ router.post(
             || documentEnrichment?.acronymsBlock
             || documentEnrichment?.temporalExpressionsBlock
             || documentEnrichment?.crossNumericBlock
+            || documentEnrichment?.signatureBlocksBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1319,6 +1320,11 @@ router.post(
             // model has the head-to-head number table before its
             // narrative synthesis.
             if (documentEnrichment.crossNumericBlock) parts.push(documentEnrichment.crossNumericBlock);
+            // Signature blocks = tail sign-off sections. Sits near the
+            // metadata block so the model has both the document's
+            // declared provenance (version + author at the top) AND
+            // the formal sign-off rows at the tail.
+            if (documentEnrichment.signatureBlocksBlock) parts.push(documentEnrichment.signatureBlocksBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
