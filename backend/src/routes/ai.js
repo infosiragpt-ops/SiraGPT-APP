@@ -26,6 +26,7 @@ const rag = require('../services/rag-service');
 const operationalRag = require('../services/rag/operational-runtime');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
+const documentBlockBudget = require('../services/document-block-budget');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const modelRouter = require('../services/ai-product-os/model-router');
 const {
@@ -1454,6 +1455,56 @@ router.post(
             // Directive = recipe the model should follow when answering.
             if (documentEnrichment.directiveBlock) parts.push(documentEnrichment.directiveBlock);
             documentEnrichmentBlock = `\n\n${parts.join('\n\n')}`;
+            // Block-budget post-pass: with 75+ deterministic blocks the
+            // concatenated enrichment can exceed the model's prompt
+            // window. When the combined size crosses the soft cap, we
+            // rebuild the block using the doctype-aware selector so
+            // the most-relevant blocks survive. Always-on blocks
+            // (PII safety, profile, directive, executive summary)
+            // survive any pressure. Default 80 KB cap (~20 K tokens
+            // of enrichment, leaving plenty for chat history + raw
+            // file text). Override via SIRAGPT_ENRICHMENT_MAX_CHARS.
+            const enrichmentSoftCap = Number.parseInt(process.env.SIRAGPT_ENRICHMENT_MAX_CHARS, 10) || 80_000;
+            if (documentEnrichmentBlock.length > enrichmentSoftCap) {
+              try {
+                const ENRICHMENT_BLOCK_ORDER = [
+                  'piiSafetyBlock', 'profileBlock', 'outlineBlock', 'glossaryBlock',
+                  'readabilityBlock', 'insightsBlock', 'evidenceMapBlock',
+                  'consistencyBlock', 'numericCoherenceBlock', 'temporalTimelineBlock',
+                  'actionDashboardBlock', 'audienceToneBlock', 'semanticGraphBlock',
+                  'kpisBlock', 'riskRegisterBlock', 'factDensityBlock',
+                  'relationshipsBlock', 'sectionSimilarityBlock', 'numericStatisticsBlock',
+                  'qualityGradeBlock', 'titlesBlock', 'tldrBlock', 'sentimentBlock',
+                  'keyPhrasesBlock', 'obligationsBlock', 'scopeExclusionsBlock',
+                  'stakeholderMapBlock', 'jurisdictionBlock', 'definitionsBlock',
+                  'crossReferenceBlock', 'pricingBlock', 'metadataBlock',
+                  'complianceBlock', 'warrantiesBlock', 'disputeResolutionBlock',
+                  'indemnificationBlock', 'acronymsBlock', 'temporalExpressionsBlock',
+                  'crossNumericBlock', 'signatureBlocksBlock', 'qaPairsBlock',
+                  'hypothesesBlock', 'recommendationsBlock', 'assumptionsBlock',
+                  'conditionalClausesBlock', 'counterArgumentsBlock', 'callsToActionBlock',
+                  'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
+                  'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
+                  'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock',
+                  'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
+                  'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
+                ];
+                const orderedNamed = ENRICHMENT_BLOCK_ORDER
+                  .map((name) => ({ name, content: documentEnrichment[name] }))
+                  .filter((p) => typeof p.content === 'string' && p.content.length > 0);
+                const budgeted = documentBlockBudget.joinWithinBudget(orderedNamed, {
+                  docType: documentEnrichment.primaryDocType,
+                  maxChars: enrichmentSoftCap,
+                });
+                if (budgeted) {
+                  documentEnrichmentBlock = `\n\n${budgeted}`;
+                  console.log(`[ai/enrichment] block-budget applied: ${parts.join('\n\n').length} → ${budgeted.length} chars (cap=${enrichmentSoftCap})`);
+                }
+              } catch (budgetErr) {
+                console.warn('[ai/enrichment] block-budget failed (keeping full enrichment):', budgetErr?.message || budgetErr);
+              }
+            }
           }
         } catch (docErr) {
           console.warn('[ai] document professional analyzer unavailable (continuing without):', docErr.message || docErr);
