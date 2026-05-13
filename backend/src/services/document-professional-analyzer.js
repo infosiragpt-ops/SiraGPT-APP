@@ -319,6 +319,12 @@ function getTemporalExpressions() {
   try { temporalExpressionsCache = require('./document-temporal-expressions'); } catch { temporalExpressionsCache = null; }
   return temporalExpressionsCache;
 }
+let crossNumericCache = null;
+function getCrossNumeric() {
+  if (crossNumericCache) return crossNumericCache;
+  try { crossNumericCache = require('./document-cross-numeric'); } catch { crossNumericCache = null; }
+  return crossNumericCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1702,6 +1708,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const indemnificationBlock = buildIndemnificationBlock(files);
   const acronymsBlock = buildAcronymsBlock(files);
   const temporalExpressionsBlock = buildTemporalExpressionsBlock(files);
+  const crossNumericBlock = buildCrossNumericBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1749,6 +1756,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     indemnificationBlock,
     acronymsBlock,
     temporalExpressionsBlock,
+    crossNumericBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2337,6 +2345,21 @@ function buildTemporalExpressionsBlock(files) {
   return engine.renderExpressionsBlock(report);
 }
 
+/**
+ * Cross-file numeric comparison block — side-by-side leaderboard for
+ * the same concept-tag (revenue / margin / churn / NPS / headcount /
+ * uptime / etc.) across the attached files. Fires only when 2+
+ * files share at least one concept with a captured value.
+ */
+function buildCrossNumericBlock(files) {
+  const engine = getCrossNumeric();
+  if (!engine || typeof engine.buildComparisonForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length < 2) return '';
+  const report = engine.buildComparisonForFiles(list);
+  return engine.renderComparisonBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2539,6 +2562,7 @@ module.exports = {
   buildIndemnificationBlock,
   buildAcronymsBlock,
   buildTemporalExpressionsBlock,
+  buildCrossNumericBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

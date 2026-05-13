@@ -1123,6 +1123,7 @@ router.post(
             || documentEnrichment?.indemnificationBlock
             || documentEnrichment?.acronymsBlock
             || documentEnrichment?.temporalExpressionsBlock
+            || documentEnrichment?.crossNumericBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1312,6 +1313,12 @@ router.post(
             // year, dentro de 6 meses) when answering planning
             // questions.
             if (documentEnrichment.temporalExpressionsBlock) parts.push(documentEnrichment.temporalExpressionsBlock);
+            // Cross-file numeric comparison = leaderboard for shared
+            // concept-tags across files (only fires for 2+ files).
+            // Sits before the high-level comparison block so the
+            // model has the head-to-head number table before its
+            // narrative synthesis.
+            if (documentEnrichment.crossNumericBlock) parts.push(documentEnrichment.crossNumericBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
