@@ -451,6 +451,12 @@ function getTables() {
   try { tablesCache = require('./document-tables'); } catch { tablesCache = null; }
   return tablesCache;
 }
+let codeBlocksCache = null;
+function getCodeBlocks() {
+  if (codeBlocksCache) return codeBlocksCache;
+  try { codeBlocksCache = require('./document-code-blocks'); } catch { codeBlocksCache = null; }
+  return codeBlocksCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1856,6 +1862,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const contactsBlock = buildContactsBlock(files);
   const footnotesBlock = buildFootnotesBlock(files);
   const tablesBlock = buildTablesBlock(files);
+  const codeBlocksBlock = buildCodeBlocksBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1925,6 +1932,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     contactsBlock,
     footnotesBlock,
     tablesBlock,
+    codeBlocksBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2839,6 +2847,20 @@ function buildTablesBlock(files) {
   return engine.renderTablesBlock(report);
 }
 
+/**
+ * Code-blocks block — fenced code blocks (\`\`\`language) with a
+ * 12-line preview. Useful for technical / SDK / runbook docs;
+ * empty for prose-only files.
+ */
+function buildCodeBlocksBlock(files) {
+  const engine = getCodeBlocks();
+  if (!engine || typeof engine.buildCodeBlocksForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCodeBlocksForFiles(list);
+  return engine.renderCodeBlocksBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3063,6 +3085,7 @@ module.exports = {
   buildContactsBlock,
   buildFootnotesBlock,
   buildTablesBlock,
+  buildCodeBlocksBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

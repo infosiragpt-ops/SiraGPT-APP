@@ -1146,6 +1146,7 @@ router.post(
             || documentEnrichment?.contactsBlock
             || documentEnrichment?.footnotesBlock
             || documentEnrichment?.tablesBlock
+            || documentEnrichment?.codeBlocksBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1426,6 +1427,9 @@ router.post(
             // markdown tables found in the body. Lets the chat quote
             // "table 3" verbatim instead of summarising.
             if (documentEnrichment.tablesBlock) parts.push(documentEnrichment.tablesBlock);
+            // Code blocks = fenced ```language … ``` with snippet
+            // preview. Useful for technical / SDK / runbook docs.
+            if (documentEnrichment.codeBlocksBlock) parts.push(documentEnrichment.codeBlocksBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1491,7 +1495,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
