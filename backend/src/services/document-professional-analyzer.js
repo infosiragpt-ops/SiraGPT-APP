@@ -163,6 +163,12 @@ function getAudienceTone() {
   try { audienceToneCache = require('./document-audience-tone'); } catch { audienceToneCache = null; }
   return audienceToneCache;
 }
+let semanticGraphCache = null;
+function getSemanticGraph() {
+  if (semanticGraphCache) return semanticGraphCache;
+  try { semanticGraphCache = require('./document-semantic-graph'); } catch { semanticGraphCache = null; }
+  return semanticGraphCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1520,6 +1526,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const temporalTimelineBlock = buildTemporalTimelineBlock(files);
   const actionDashboardBlock = buildActionDashboardBlock(files);
   const audienceToneBlock = buildAudienceToneBlock(files);
+  const semanticGraphBlock = buildSemanticGraphBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1541,6 +1548,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     temporalTimelineBlock,
     actionDashboardBlock,
     audienceToneBlock,
+    semanticGraphBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1724,6 +1732,22 @@ function buildAudienceToneBlock(files) {
   return engine.renderAudienceToneBlock(report);
 }
 
+/**
+ * Cross-document semantic graph block — entity-keyed view of the
+ * attached batch. Lets the chat answer "what does each document say
+ * about X?" and surface monetary conflicts when the same entity is
+ * paired with different amounts across files. Only fires for 1+ file
+ * but is most useful for multi-document analysis.
+ */
+function buildSemanticGraphBlock(files) {
+  const engine = getSemanticGraph();
+  if (!engine || typeof engine.buildGraphForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGraphForFiles(list);
+  return engine.renderGraphBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -1900,6 +1924,7 @@ module.exports = {
   buildTemporalTimelineBlock,
   buildActionDashboardBlock,
   buildAudienceToneBlock,
+  buildSemanticGraphBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

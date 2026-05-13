@@ -1080,6 +1080,7 @@ router.post(
             || documentEnrichment?.temporalTimelineBlock
             || documentEnrichment?.actionDashboardBlock
             || documentEnrichment?.audienceToneBlock
+            || documentEnrichment?.semanticGraphBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1133,6 +1134,13 @@ router.post(
             // so the model knows whether documents share a register
             // before it synthesises across them.
             if (documentEnrichment.audienceToneBlock) parts.push(documentEnrichment.audienceToneBlock);
+            // Cross-document semantic graph = entity-keyed view across
+            // all files. Sits BEFORE the cross-document comparison
+            // block (which is summary-level) so the model has the raw
+            // entity-mention map to ground its synthesis. Surfaces
+            // monetary conflicts when the same entity is paired with
+            // different amounts across files.
+            if (documentEnrichment.semanticGraphBlock) parts.push(documentEnrichment.semanticGraphBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
