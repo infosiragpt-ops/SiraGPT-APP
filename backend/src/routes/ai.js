@@ -1082,6 +1082,7 @@ router.post(
             || documentEnrichment?.audienceToneBlock
             || documentEnrichment?.semanticGraphBlock
             || documentEnrichment?.kpisBlock
+            || documentEnrichment?.riskRegisterBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1148,6 +1149,13 @@ router.post(
             // cross-doc comparison so the synthesis can lean on the
             // KPI list when it answers headline-number questions.
             if (documentEnrichment.kpisBlock) parts.push(documentEnrichment.kpisBlock);
+            // Risk register = categorised, severity-scored threats with
+            // mitigation flags. Sits next to the KPIs (numbers + risks
+            // are the two operational axes) and BEFORE cross-doc
+            // comparison so the synthesis can lean on the severity-
+            // sorted register when answering "what should we worry
+            // about?".
+            if (documentEnrichment.riskRegisterBlock) parts.push(documentEnrichment.riskRegisterBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

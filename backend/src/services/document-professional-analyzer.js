@@ -175,6 +175,12 @@ function getKpiExtractor() {
   try { kpiExtractorCache = require('./document-kpi-extractor'); } catch { kpiExtractorCache = null; }
   return kpiExtractorCache;
 }
+let riskRegisterCache = null;
+function getRiskRegister() {
+  if (riskRegisterCache) return riskRegisterCache;
+  try { riskRegisterCache = require('./document-risk-register'); } catch { riskRegisterCache = null; }
+  return riskRegisterCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1534,6 +1540,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const audienceToneBlock = buildAudienceToneBlock(files);
   const semanticGraphBlock = buildSemanticGraphBlock(files);
   const kpisBlock = buildKpisBlock(files);
+  const riskRegisterBlock = buildRiskRegisterBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1557,6 +1564,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     audienceToneBlock,
     semanticGraphBlock,
     kpisBlock,
+    riskRegisterBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1771,6 +1779,24 @@ function buildKpisBlock(files) {
   return engine.renderKpisBlock(report);
 }
 
+/**
+ * Risk register block — categorised, severity-scored risks across the
+ * attached document(s). Differs from the deep-analyzer's "risk
+ * sentences" bucket by tagging each entry with a category
+ * (operational / legal / financial / technical / reputational) and a
+ * severity (critical → low) plus a flag when the source itself
+ * proposes a mitigation. Sits next to the KPI block so the model has
+ * both axes (numbers + threats) before the cross-doc synthesis.
+ */
+function buildRiskRegisterBlock(files) {
+  const engine = getRiskRegister();
+  if (!engine || typeof engine.buildRegisterForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRegisterForFiles(list);
+  return engine.renderRegisterBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -1949,6 +1975,7 @@ module.exports = {
   buildAudienceToneBlock,
   buildSemanticGraphBlock,
   buildKpisBlock,
+  buildRiskRegisterBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
