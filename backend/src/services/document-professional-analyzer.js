@@ -265,6 +265,12 @@ function getDefinitionsExtractor() {
   try { definitionsExtractorCache = require('./document-definitions-extractor'); } catch { definitionsExtractorCache = null; }
   return definitionsExtractorCache;
 }
+let crossReferenceCache = null;
+function getCrossReference() {
+  if (crossReferenceCache) return crossReferenceCache;
+  try { crossReferenceCache = require('./document-cross-reference'); } catch { crossReferenceCache = null; }
+  return crossReferenceCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1639,6 +1645,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const stakeholderMapBlock = buildStakeholderMapBlock(files);
   const jurisdictionBlock = buildJurisdictionBlock(files);
   const definitionsBlock = buildDefinitionsBlock(files);
+  const crossReferenceBlock = buildCrossReferenceBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1677,6 +1684,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     stakeholderMapBlock,
     jurisdictionBlock,
     definitionsBlock,
+    crossReferenceBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2128,6 +2136,21 @@ function buildDefinitionsBlock(files) {
   return engine.renderDefinitionsBlock(report);
 }
 
+/**
+ * Cross-reference block — internal pointers ("see Section 4.2",
+ * "véase la Cláusula 3.1"). Lets the model follow clause chains
+ * across the same document when answering "what does Section X
+ * say?" without re-scanning.
+ */
+function buildCrossReferenceBlock(files) {
+  const engine = getCrossReference();
+  if (!engine || typeof engine.buildReferencesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildReferencesForFiles(list);
+  return engine.renderReferencesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2321,6 +2344,7 @@ module.exports = {
   buildStakeholderMapBlock,
   buildJurisdictionBlock,
   buildDefinitionsBlock,
+  buildCrossReferenceBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

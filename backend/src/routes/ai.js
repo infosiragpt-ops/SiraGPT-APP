@@ -1114,6 +1114,7 @@ router.post(
             || documentEnrichment?.stakeholderMapBlock
             || documentEnrichment?.jurisdictionBlock
             || documentEnrichment?.definitionsBlock
+            || documentEnrichment?.crossReferenceBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1259,6 +1260,11 @@ router.post(
             // docs lean on definitions; the chat needs them to anchor
             // every later quote in the document's constrained sense.
             if (documentEnrichment.definitionsBlock) parts.push(documentEnrichment.definitionsBlock);
+            // Cross-references = internal pointers (Section 4.2, Annex
+            // A). Sits next to definitions so the model can follow
+            // chained clauses inside the document, not just guess at
+            // their targets.
+            if (documentEnrichment.crossReferenceBlock) parts.push(documentEnrichment.crossReferenceBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
