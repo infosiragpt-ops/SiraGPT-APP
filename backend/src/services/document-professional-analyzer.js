@@ -277,6 +277,12 @@ function getPricingExtractor() {
   try { pricingExtractorCache = require('./document-pricing-extractor'); } catch { pricingExtractorCache = null; }
   return pricingExtractorCache;
 }
+let metadataExtractorCache = null;
+function getMetadataExtractor() {
+  if (metadataExtractorCache) return metadataExtractorCache;
+  try { metadataExtractorCache = require('./document-metadata-extractor'); } catch { metadataExtractorCache = null; }
+  return metadataExtractorCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1653,6 +1659,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const definitionsBlock = buildDefinitionsBlock(files);
   const crossReferenceBlock = buildCrossReferenceBlock(files);
   const pricingBlock = buildPricingBlock(files);
+  const metadataBlock = buildMetadataBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1693,6 +1700,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     definitionsBlock,
     crossReferenceBlock,
     pricingBlock,
+    metadataBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2174,6 +2182,21 @@ function buildPricingBlock(files) {
   return engine.renderPricingBlock(report);
 }
 
+/**
+ * Metadata block — authoring stamps the document itself emits
+ * (version, effective / issued / revision dates, author / signer /
+ * reference number). Lets the chat anchor its answer in the
+ * document's stated provenance.
+ */
+function buildMetadataBlock(files) {
+  const engine = getMetadataExtractor();
+  if (!engine || typeof engine.buildMetadataForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMetadataForFiles(list);
+  return engine.renderMetadataBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2369,6 +2392,7 @@ module.exports = {
   buildDefinitionsBlock,
   buildCrossReferenceBlock,
   buildPricingBlock,
+  buildMetadataBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

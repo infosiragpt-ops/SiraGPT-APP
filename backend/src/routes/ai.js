@@ -1116,6 +1116,7 @@ router.post(
             || documentEnrichment?.definitionsBlock
             || documentEnrichment?.crossReferenceBlock
             || documentEnrichment?.pricingBlock
+            || documentEnrichment?.metadataBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1271,6 +1272,10 @@ router.post(
             // chat needs the commercial register (price + period)
             // anchored before answering "how much does X cost?".
             if (documentEnrichment.pricingBlock) parts.push(documentEnrichment.pricingBlock);
+            // Metadata = document-stamped version / dates / author /
+            // signer. Sits next to titles + grade so the model has the
+            // provenance frame before quoting body text.
+            if (documentEnrichment.metadataBlock) parts.push(documentEnrichment.metadataBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
