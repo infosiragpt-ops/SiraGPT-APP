@@ -1183,6 +1183,10 @@ router.post(
             || documentEnrichment?.vcsRefsBlock
             || documentEnrichment?.standardsBlock
             || documentEnrichment?.networkBlock
+            || documentEnrichment?.httpStatusBlock
+            || documentEnrichment?.timezonesBlock
+            || documentEnrichment?.mathBlock
+            || documentEnrichment?.booleanBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1582,6 +1586,14 @@ router.post(
             if (documentEnrichment.standardsBlock) parts.push(documentEnrichment.standardsBlock);
             // Network = IPv4 / IPv6 (with CIDR) / MAC / ports.
             if (documentEnrichment.networkBlock) parts.push(documentEnrichment.networkBlock);
+            // HTTP status codes = 1xx-5xx classes. Routes "what status?".
+            if (documentEnrichment.httpStatusBlock) parts.push(documentEnrichment.httpStatusBlock);
+            // Time zones = UTC/GMT offsets, named TZs, IANA IDs.
+            if (documentEnrichment.timezonesBlock) parts.push(documentEnrichment.timezonesBlock);
+            // Math = LaTeX inline / display / environment expressions.
+            if (documentEnrichment.mathBlock) parts.push(documentEnrichment.mathBlock);
+            // Boolean = labeled yes/no/true/false + glyph values.
+            if (documentEnrichment.booleanBlock) parts.push(documentEnrichment.booleanBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1647,7 +1659,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

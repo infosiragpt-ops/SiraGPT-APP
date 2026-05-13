@@ -673,6 +673,30 @@ function getNetwork() {
   try { networkCache = require('./document-network'); } catch { networkCache = null; }
   return networkCache;
 }
+let httpStatusCache = null;
+function getHttpStatus() {
+  if (httpStatusCache) return httpStatusCache;
+  try { httpStatusCache = require('./document-http-status'); } catch { httpStatusCache = null; }
+  return httpStatusCache;
+}
+let timezonesCache = null;
+function getTimezones() {
+  if (timezonesCache) return timezonesCache;
+  try { timezonesCache = require('./document-timezones'); } catch { timezonesCache = null; }
+  return timezonesCache;
+}
+let mathCache = null;
+function getMath() {
+  if (mathCache) return mathCache;
+  try { mathCache = require('./document-math'); } catch { mathCache = null; }
+  return mathCache;
+}
+let booleanCache = null;
+function getBoolean() {
+  if (booleanCache) return booleanCache;
+  try { booleanCache = require('./document-boolean'); } catch { booleanCache = null; }
+  return booleanCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2115,6 +2139,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const vcsRefsBlock = buildVcsRefsBlock(files);
   const standardsBlock = buildStandardsBlock(files);
   const networkBlock = buildNetworkBlock(files);
+  const httpStatusBlock = buildHttpStatusBlock(files);
+  const timezonesBlock = buildTimezonesBlock(files);
+  const mathBlock = buildMathBlock(files);
+  const booleanBlock = buildBooleanBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2221,6 +2249,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     vcsRefsBlock,
     standardsBlock,
     networkBlock,
+    httpStatusBlock,
+    timezonesBlock,
+    mathBlock,
+    booleanBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3677,6 +3709,59 @@ function buildNetworkBlock(files) {
   return engine.renderNetworkBlock(report);
 }
 
+/**
+ * HTTP status block — 1xx/2xx/3xx/4xx/5xx codes with semantic class.
+ * Routes "what status?" / "4xx error?" to a citeable list.
+ */
+function buildHttpStatusBlock(files) {
+  const engine = getHttpStatus();
+  if (!engine || typeof engine.buildHttpStatusForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHttpStatusForFiles(list);
+  return engine.renderHttpStatusBlock(report);
+}
+
+/**
+ * Timezones block — UTC/GMT offsets, named abbreviations, IANA IDs.
+ * Routes "what time zone?" / "what's the offset?".
+ */
+function buildTimezonesBlock(files) {
+  const engine = getTimezones();
+  if (!engine || typeof engine.buildTimezonesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTimezonesForFiles(list);
+  return engine.renderTimezonesBlock(report);
+}
+
+/**
+ * Math block — LaTeX inline / display / environment math expressions.
+ * Routes "what equation?" / "what math?".
+ */
+function buildMathBlock(files) {
+  const engine = getMath();
+  if (!engine || typeof engine.buildMathForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMathForFiles(list);
+  return engine.renderMathBlock(report);
+}
+
+/**
+ * Boolean block — labeled yes/no/true/false config / FAQ values
+ * plus glyph forms (✓ / ✗ / ☑ / ☐). Routes "is X enabled?" /
+ * "what's the answer?".
+ */
+function buildBooleanBlock(files) {
+  const engine = getBoolean();
+  if (!engine || typeof engine.buildBooleansForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBooleansForFiles(list);
+  return engine.renderBooleansBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3938,6 +4023,10 @@ module.exports = {
   buildVcsRefsBlock,
   buildStandardsBlock,
   buildNetworkBlock,
+  buildHttpStatusBlock,
+  buildTimezonesBlock,
+  buildMathBlock,
+  buildBooleanBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
