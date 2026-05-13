@@ -1101,6 +1101,7 @@ router.post(
             || documentEnrichment?.kpisBlock
             || documentEnrichment?.riskRegisterBlock
             || documentEnrichment?.factDensityBlock
+            || documentEnrichment?.relationshipsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1180,6 +1181,12 @@ router.post(
             // WHERE the densest evidence lives before deciding which
             // section to cite.
             if (documentEnrichment.factDensityBlock) parts.push(documentEnrichment.factDensityBlock);
+            // Document relationships = pairwise classification
+            // (versions / complementary / conflicting / unrelated).
+            // Sits BEFORE cross-doc comparison so the model knows
+            // which pairs deserve side-by-side analysis vs which to
+            // analyse independently.
+            if (documentEnrichment.relationshipsBlock) parts.push(documentEnrichment.relationshipsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

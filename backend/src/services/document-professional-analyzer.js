@@ -187,6 +187,12 @@ function getFactDensity() {
   try { factDensityCache = require('./document-fact-density'); } catch { factDensityCache = null; }
   return factDensityCache;
 }
+let relationshipClassifierCache = null;
+function getRelationshipClassifier() {
+  if (relationshipClassifierCache) return relationshipClassifierCache;
+  try { relationshipClassifierCache = require('./document-relationship-classifier'); } catch { relationshipClassifierCache = null; }
+  return relationshipClassifierCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1548,6 +1554,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const kpisBlock = buildKpisBlock(files);
   const riskRegisterBlock = buildRiskRegisterBlock(files);
   const factDensityBlock = buildFactDensityBlock(files);
+  const relationshipsBlock = buildRelationshipsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1573,6 +1580,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     kpisBlock,
     riskRegisterBlock,
     factDensityBlock,
+    relationshipsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1821,6 +1829,20 @@ function buildFactDensityBlock(files) {
   return engine.renderDensityBlock(report);
 }
 
+/**
+ * Document relationships block — pairwise classification (versions /
+ * complementary / conflicting / unrelated). Fires only for 2+ files.
+ * Returns empty when every pair is "unrelated" to avoid noise.
+ */
+function buildRelationshipsBlock(files) {
+  const engine = getRelationshipClassifier();
+  if (!engine || typeof engine.classifyRelationships !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length < 2) return '';
+  const report = engine.classifyRelationships(list);
+  return engine.renderRelationshipsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2001,6 +2023,7 @@ module.exports = {
   buildKpisBlock,
   buildRiskRegisterBlock,
   buildFactDensityBlock,
+  buildRelationshipsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
