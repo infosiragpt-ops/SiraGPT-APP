@@ -229,6 +229,12 @@ function getSentiment() {
   try { sentimentCache = require('./document-sentiment'); } catch { sentimentCache = null; }
   return sentimentCache;
 }
+let keyPhrasesCache = null;
+function getKeyPhrases() {
+  if (keyPhrasesCache) return keyPhrasesCache;
+  try { keyPhrasesCache = require('./document-key-phrases'); } catch { keyPhrasesCache = null; }
+  return keyPhrasesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1597,6 +1603,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const titlesBlock = buildTitlesBlock(files);
   const tldrBlock = buildTldrBlock(files);
   const sentimentBlock = buildSentimentBlock(files);
+  const keyPhrasesBlock = buildKeyPhrasesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1629,6 +1636,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     titlesBlock,
     tldrBlock,
     sentimentBlock,
+    keyPhrasesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1987,6 +1995,21 @@ function buildSentimentBlock(files) {
   return engine.renderSentimentBlock(report);
 }
 
+/**
+ * Key phrases block — TF × IDF-light keyphrase ranking across the
+ * attached batch (single-file uploads degrade to TF only). Lets the
+ * chat answer "what is this document about?" with the topical anchors
+ * already weighted against the rest of the batch.
+ */
+function buildKeyPhrasesBlock(files) {
+  const engine = getKeyPhrases();
+  if (!engine || typeof engine.buildKeyPhrasesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildKeyPhrasesForFiles(list);
+  return engine.renderKeyPhrasesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2174,6 +2197,7 @@ module.exports = {
   buildTitlesBlock,
   buildTldrBlock,
   buildSentimentBlock,
+  buildKeyPhrasesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

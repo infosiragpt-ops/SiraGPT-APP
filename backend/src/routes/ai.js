@@ -1108,6 +1108,7 @@ router.post(
             || documentEnrichment?.titlesBlock
             || documentEnrichment?.tldrBlock
             || documentEnrichment?.sentimentBlock
+            || documentEnrichment?.keyPhrasesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1224,6 +1225,10 @@ router.post(
             // negative risk section, positive close) when it mirrors
             // the source's tone in the answer.
             if (documentEnrichment.sentimentBlock) parts.push(documentEnrichment.sentimentBlock);
+            // Key phrases = TF×IDF-light topical anchors. Sits BEFORE
+            // the comparison block so the model has each document's
+            // topical fingerprint when it synthesises across files.
+            if (documentEnrichment.keyPhrasesBlock) parts.push(documentEnrichment.keyPhrasesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
