@@ -529,6 +529,30 @@ function getEnvVars() {
   try { envVarsCache = require('./document-env-vars'); } catch { envVarsCache = null; }
   return envVarsCache;
 }
+let sqlCache = null;
+function getSql() {
+  if (sqlCache) return sqlCache;
+  try { sqlCache = require('./document-sql'); } catch { sqlCache = null; }
+  return sqlCache;
+}
+let filePathsCache = null;
+function getFilePaths() {
+  if (filePathsCache) return filePathsCache;
+  try { filePathsCache = require('./document-file-paths'); } catch { filePathsCache = null; }
+  return filePathsCache;
+}
+let cronCache = null;
+function getCron() {
+  if (cronCache) return cronCache;
+  try { cronCache = require('./document-cron'); } catch { cronCache = null; }
+  return cronCache;
+}
+let licensesCache = null;
+function getLicenses() {
+  if (licensesCache) return licensesCache;
+  try { licensesCache = require('./document-licenses'); } catch { licensesCache = null; }
+  return licensesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1947,6 +1971,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const acceptanceCriteriaBlock = buildAcceptanceCriteriaBlock(files);
   const apiEndpointsBlock = buildApiEndpointsBlock(files);
   const envVarsBlock = buildEnvVarsBlock(files);
+  const sqlBlock = buildSqlBlock(files);
+  const filePathsBlock = buildFilePathsBlock(files);
+  const cronBlock = buildCronBlock(files);
+  const licensesBlock = buildLicensesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2029,6 +2057,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     acceptanceCriteriaBlock,
     apiEndpointsBlock,
     envVarsBlock,
+    sqlBlock,
+    filePathsBlock,
+    cronBlock,
+    licensesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3145,6 +3177,65 @@ function buildEnvVarsBlock(files) {
   return engine.renderEnvVarsBlock(report);
 }
 
+/**
+ * SQL block — classifies SQL statements detected in the document(s)
+ * by kind (DDL / DML / DQL / DCL / TCL) with target table where
+ * applicable. Routes "what tables does this touch?" / "is there a
+ * DDL change?" to a citeable inventory.
+ */
+function buildSqlBlock(files) {
+  const engine = getSql();
+  if (!engine || typeof engine.buildSqlForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSqlForFiles(list);
+  return engine.renderSqlBlock(report);
+}
+
+/**
+ * File paths block — filesystem paths (POSIX absolute,
+ * home-relative ~/, project-relative with known extension,
+ * Windows absolute). Different from API endpoints and URLs.
+ * Routes "what files does this reference?" to a citeable inventory.
+ */
+function buildFilePathsBlock(files) {
+  const engine = getFilePaths();
+  if (!engine || typeof engine.buildFilePathsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFilePathsForFiles(list);
+  return engine.renderFilePathsBlock(report);
+}
+
+/**
+ * Cron block — 5/6/7-field cron expressions + named expressions
+ * (@daily / @hourly / etc.) + K8s/YAML schedule: lines. Routes
+ * "when does this run?" / "what's the schedule?" to a citeable list.
+ */
+function buildCronBlock(files) {
+  const engine = getCron();
+  if (!engine || typeof engine.buildCronForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCronForFiles(list);
+  return engine.renderCronBlock(report);
+}
+
+/**
+ * Licenses block — SPDX identifiers, SPDX-License-Identifier headers,
+ * "Licensed under …" attributions, Copyright lines, "All Rights
+ * Reserved" declarations. Routes "what license is this under?" /
+ * "who holds the copyright?" to a citeable inventory.
+ */
+function buildLicensesBlock(files) {
+  const engine = getLicenses();
+  if (!engine || typeof engine.buildLicensesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildLicensesForFiles(list);
+  return engine.renderLicensesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3382,6 +3473,10 @@ module.exports = {
   buildAcceptanceCriteriaBlock,
   buildApiEndpointsBlock,
   buildEnvVarsBlock,
+  buildSqlBlock,
+  buildFilePathsBlock,
+  buildCronBlock,
+  buildLicensesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

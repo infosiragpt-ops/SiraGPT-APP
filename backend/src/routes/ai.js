@@ -1159,6 +1159,10 @@ router.post(
             || documentEnrichment?.acceptanceCriteriaBlock
             || documentEnrichment?.apiEndpointsBlock
             || documentEnrichment?.envVarsBlock
+            || documentEnrichment?.sqlBlock
+            || documentEnrichment?.filePathsBlock
+            || documentEnrichment?.cronBlock
+            || documentEnrichment?.licensesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1488,6 +1492,19 @@ router.post(
             // referenced as env vars (bare, $/env/process.env prefixed,
             // .env declarations). Routes "what env vars does this need?".
             if (documentEnrichment.envVarsBlock) parts.push(documentEnrichment.envVarsBlock);
+            // SQL statements = DDL/DML/DQL/DCL/TCL classification with
+            // target tables. Routes "what tables does this touch?" /
+            // "is there a DDL change?" to a citeable inventory.
+            if (documentEnrichment.sqlBlock) parts.push(documentEnrichment.sqlBlock);
+            // File paths = POSIX/home/project/Windows path references.
+            // Routes "what files does this reference?" to a citeable list.
+            if (documentEnrichment.filePathsBlock) parts.push(documentEnrichment.filePathsBlock);
+            // Cron / scheduling = 5/6/7-field cron + named expressions
+            // (@daily/@hourly/etc.) + K8s schedule: lines.
+            if (documentEnrichment.cronBlock) parts.push(documentEnrichment.cronBlock);
+            // Licenses / copyright = SPDX IDs, SPDX header, "Licensed
+            // under …", Copyright lines, All Rights Reserved.
+            if (documentEnrichment.licensesBlock) parts.push(documentEnrichment.licensesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1553,7 +1570,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
