@@ -1138,6 +1138,7 @@ router.post(
             || documentEnrichment?.benchmarksBlock
             || documentEnrichment?.goalsTargetsBlock
             || documentEnrichment?.slaTermsBlock
+            || documentEnrichment?.dataClassificationBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1388,6 +1389,10 @@ router.post(
             // the operational cluster so the chat has the firm
             // numerical commitments ready.
             if (documentEnrichment.slaTermsBlock) parts.push(documentEnrichment.slaTermsBlock);
+            // Data classification = document-level handling labels.
+            // The chat respects them when deciding how to surface or
+            // echo information.
+            if (documentEnrichment.dataClassificationBlock) parts.push(documentEnrichment.dataClassificationBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

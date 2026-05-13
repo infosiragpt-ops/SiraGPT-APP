@@ -409,6 +409,12 @@ function getSLATerms() {
   try { slaTermsCache = require('./document-sla-terms'); } catch { slaTermsCache = null; }
   return slaTermsCache;
 }
+let dataClassificationCache = null;
+function getDataClassification() {
+  if (dataClassificationCache) return dataClassificationCache;
+  try { dataClassificationCache = require('./document-data-classification'); } catch { dataClassificationCache = null; }
+  return dataClassificationCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1807,6 +1813,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const benchmarksBlock = buildBenchmarksBlock(files);
   const goalsTargetsBlock = buildGoalsTargetsBlock(files);
   const slaTermsBlock = buildSLATermsBlock(files);
+  const dataClassificationBlock = buildDataClassificationBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1869,6 +1876,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     benchmarksBlock,
     goalsTargetsBlock,
     slaTermsBlock,
+    dataClassificationBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2681,6 +2689,21 @@ function buildSLATermsBlock(files) {
   return engine.renderSLATermsBlock(report);
 }
 
+/**
+ * Data-classification block — document-level labels (Confidential /
+ * Restricted / Public / Internal Use Only / PII / PHI / Trade Secret
+ * / TLP Red/Amber/Green/White). Lets the chat respect the source's
+ * handling policy when answering.
+ */
+function buildDataClassificationBlock(files) {
+  const engine = getDataClassification();
+  if (!engine || typeof engine.buildClassificationForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildClassificationForFiles(list);
+  return engine.renderClassificationBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2898,6 +2921,7 @@ module.exports = {
   buildBenchmarksBlock,
   buildGoalsTargetsBlock,
   buildSLATermsBlock,
+  buildDataClassificationBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
