@@ -385,6 +385,12 @@ function getFactVsOpinion() {
   try { factVsOpinionCache = require('./document-fact-vs-opinion'); } catch { factVsOpinionCache = null; }
   return factVsOpinionCache;
 }
+let scenariosCache = null;
+function getScenarios() {
+  if (scenariosCache) return scenariosCache;
+  try { scenariosCache = require('./document-scenarios'); } catch { scenariosCache = null; }
+  return scenariosCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1779,6 +1785,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const callsToActionBlock = buildCallsToActionBlock(files);
   const disclosuresBlock = buildDisclosuresBlock(files);
   const factVsOpinionBlock = buildFactVsOpinionBlock(files);
+  const scenariosBlock = buildScenariosBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1837,6 +1844,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     callsToActionBlock,
     disclosuresBlock,
     factVsOpinionBlock,
+    scenariosBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2590,6 +2598,21 @@ function buildFactVsOpinionBlock(files) {
   return engine.renderClassificationBlock(report);
 }
 
+/**
+ * Scenarios block — scenario-planning language (best / worst / base
+ * case, sensitivity analyses, stress tests). Lets the chat answer
+ * "what scenarios does the document model?" / "what's the worst
+ * case?" with citeable trigger sentences.
+ */
+function buildScenariosBlock(files) {
+  const engine = getScenarios();
+  if (!engine || typeof engine.buildScenariosForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildScenariosForFiles(list);
+  return engine.renderScenariosBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2803,6 +2826,7 @@ module.exports = {
   buildCallsToActionBlock,
   buildDisclosuresBlock,
   buildFactVsOpinionBlock,
+  buildScenariosBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

@@ -1134,6 +1134,7 @@ router.post(
             || documentEnrichment?.callsToActionBlock
             || documentEnrichment?.disclosuresBlock
             || documentEnrichment?.factVsOpinionBlock
+            || documentEnrichment?.scenariosBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1368,6 +1369,9 @@ router.post(
             // Fact vs opinion = binary classifier per sentence so the
             // chat can distinguish "verifiable" from "author's view".
             if (documentEnrichment.factVsOpinionBlock) parts.push(documentEnrichment.factVsOpinionBlock);
+            // Scenarios = best / worst / base case + sensitivity.
+            // Useful for finance / strategy docs.
+            if (documentEnrichment.scenariosBlock) parts.push(documentEnrichment.scenariosBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
