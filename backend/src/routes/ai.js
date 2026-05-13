@@ -1127,6 +1127,7 @@ router.post(
             || documentEnrichment?.signatureBlocksBlock
             || documentEnrichment?.qaPairsBlock
             || documentEnrichment?.hypothesesBlock
+            || documentEnrichment?.recommendationsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1336,6 +1337,10 @@ router.post(
             // questions. Useful for academic / scientific docs;
             // empty for non-research files.
             if (documentEnrichment.hypothesesBlock) parts.push(documentEnrichment.hypothesesBlock);
+            // Recommendations = "we recommend / suggest / advise"
+            // sentences. Sits alongside the operational dashboard so
+            // suggested actions appear next to binding obligations.
+            if (documentEnrichment.recommendationsBlock) parts.push(documentEnrichment.recommendationsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

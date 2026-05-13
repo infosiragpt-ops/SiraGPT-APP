@@ -343,6 +343,12 @@ function getHypotheses() {
   try { hypothesesCache = require('./document-hypotheses'); } catch { hypothesesCache = null; }
   return hypothesesCache;
 }
+let recommendationsCache = null;
+function getRecommendations() {
+  if (recommendationsCache) return recommendationsCache;
+  try { recommendationsCache = require('./document-recommendations'); } catch { recommendationsCache = null; }
+  return recommendationsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1730,6 +1736,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const signatureBlocksBlock = buildSignatureBlocksBlock(files);
   const qaPairsBlock = buildQaPairsBlock(files);
   const hypothesesBlock = buildHypothesesBlock(files);
+  const recommendationsBlock = buildRecommendationsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1781,6 +1788,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     signatureBlocksBlock,
     qaPairsBlock,
     hypothesesBlock,
+    recommendationsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2429,6 +2437,21 @@ function buildHypothesesBlock(files) {
   return engine.renderHypothesesBlock(report);
 }
 
+/**
+ * Recommendations block — explicit "we recommend / suggest" sentences
+ * the document proposes. Different from obligations (binding) and
+ * deep-analyzer actions (generic): these are SUGGESTED courses of
+ * action the author explicitly proposes.
+ */
+function buildRecommendationsBlock(files) {
+  const engine = getRecommendations();
+  if (!engine || typeof engine.buildRecommendationsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRecommendationsForFiles(list);
+  return engine.renderRecommendationsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2635,6 +2658,7 @@ module.exports = {
   buildSignatureBlocksBlock,
   buildQaPairsBlock,
   buildHypothesesBlock,
+  buildRecommendationsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
