@@ -745,6 +745,30 @@ function getLanguageRatio() {
   try { languageRatioCache = require('./document-language-ratio'); } catch { languageRatioCache = null; }
   return languageRatioCache;
 }
+let regexPatternsCache = null;
+function getRegexPatterns() {
+  if (regexPatternsCache) return regexPatternsCache;
+  try { regexPatternsCache = require('./document-regex-patterns'); } catch { regexPatternsCache = null; }
+  return regexPatternsCache;
+}
+let fileExtensionsCache = null;
+function getFileExtensions() {
+  if (fileExtensionsCache) return fileExtensionsCache;
+  try { fileExtensionsCache = require('./document-file-extensions'); } catch { fileExtensionsCache = null; }
+  return fileExtensionsCache;
+}
+let codeDefsCache = null;
+function getCodeDefs() {
+  if (codeDefsCache) return codeDefsCache;
+  try { codeDefsCache = require('./document-code-defs'); } catch { codeDefsCache = null; }
+  return codeDefsCache;
+}
+let tonePolarityCache = null;
+function getTonePolarity() {
+  if (tonePolarityCache) return tonePolarityCache;
+  try { tonePolarityCache = require('./document-tone-polarity'); } catch { tonePolarityCache = null; }
+  return tonePolarityCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2199,6 +2223,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const imagesBlock = buildImagesBlock(files);
   const mediaBlock = buildMediaBlock(files);
   const languageRatioBlock = buildLanguageRatioBlock(files);
+  const regexPatternsBlock = buildRegexPatternsBlock(files);
+  const fileExtensionsBlock = buildFileExtensionsBlock(files);
+  const codeDefsBlock = buildCodeDefsBlock(files);
+  const tonePolarityBlock = buildTonePolarityBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2317,6 +2345,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     imagesBlock,
     mediaBlock,
     languageRatioBlock,
+    regexPatternsBlock,
+    fileExtensionsBlock,
+    codeDefsBlock,
+    tonePolarityBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3935,6 +3967,59 @@ function buildLanguageRatioBlock(files) {
   return engine.renderLanguageRatioBlock(report);
 }
 
+/**
+ * Regex patterns block — JS/Python/backtick regex literals. Routes
+ * "what regex?" / "show me the patterns".
+ */
+function buildRegexPatternsBlock(files) {
+  const engine = getRegexPatterns();
+  if (!engine || typeof engine.buildRegexPatternsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRegexPatternsForFiles(list);
+  return engine.renderRegexPatternsBlock(report);
+}
+
+/**
+ * File extensions block — distribution of file extensions by category
+ * (code/doc/data/image/archive/media/web/config/other). Routes
+ * "what file types?".
+ */
+function buildFileExtensionsBlock(files) {
+  const engine = getFileExtensions();
+  if (!engine || typeof engine.buildFileExtensionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFileExtensionsForFiles(list);
+  return engine.renderFileExtensionsBlock(report);
+}
+
+/**
+ * Code definitions block — function/class/type definitions across
+ * JS/TS/Python/Go/Rust. Routes "what functions/classes?".
+ */
+function buildCodeDefsBlock(files) {
+  const engine = getCodeDefs();
+  if (!engine || typeof engine.buildCodeDefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCodeDefsForFiles(list);
+  return engine.renderCodeDefsBlock(report);
+}
+
+/**
+ * Tone polarity block — per-document positive/negative/neutral/mixed
+ * scoring from a curated lexicon. Routes "what's the tone?".
+ */
+function buildTonePolarityBlock(files) {
+  const engine = getTonePolarity();
+  if (!engine || typeof engine.buildTonePolarityForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTonePolarityForFiles(list);
+  return engine.renderTonePolarityBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4208,6 +4293,10 @@ module.exports = {
   buildImagesBlock,
   buildMediaBlock,
   buildLanguageRatioBlock,
+  buildRegexPatternsBlock,
+  buildFileExtensionsBlock,
+  buildCodeDefsBlock,
+  buildTonePolarityBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
