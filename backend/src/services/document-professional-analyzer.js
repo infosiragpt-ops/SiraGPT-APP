@@ -349,6 +349,12 @@ function getRecommendations() {
   try { recommendationsCache = require('./document-recommendations'); } catch { recommendationsCache = null; }
   return recommendationsCache;
 }
+let assumptionsCache = null;
+function getAssumptions() {
+  if (assumptionsCache) return assumptionsCache;
+  try { assumptionsCache = require('./document-assumptions'); } catch { assumptionsCache = null; }
+  return assumptionsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1737,6 +1743,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const qaPairsBlock = buildQaPairsBlock(files);
   const hypothesesBlock = buildHypothesesBlock(files);
   const recommendationsBlock = buildRecommendationsBlock(files);
+  const assumptionsBlock = buildAssumptionsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1789,6 +1796,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     qaPairsBlock,
     hypothesesBlock,
     recommendationsBlock,
+    assumptionsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2452,6 +2460,22 @@ function buildRecommendationsBlock(files) {
   return engine.renderRecommendationsBlock(report);
 }
 
+/**
+ * Assumptions block — "we assume / suponemos / under the assumption
+ * that" sentences. Critical for auditing proposals, financial
+ * models, risk assessments, and research. Surfaces the author's
+ * mental model so the chat treats the document's claims as
+ * conditional on these premises.
+ */
+function buildAssumptionsBlock(files) {
+  const engine = getAssumptions();
+  if (!engine || typeof engine.buildAssumptionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAssumptionsForFiles(list);
+  return engine.renderAssumptionsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2659,6 +2683,7 @@ module.exports = {
   buildQaPairsBlock,
   buildHypothesesBlock,
   buildRecommendationsBlock,
+  buildAssumptionsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

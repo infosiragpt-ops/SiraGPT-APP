@@ -1128,6 +1128,7 @@ router.post(
             || documentEnrichment?.qaPairsBlock
             || documentEnrichment?.hypothesesBlock
             || documentEnrichment?.recommendationsBlock
+            || documentEnrichment?.assumptionsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1341,6 +1342,9 @@ router.post(
             // sentences. Sits alongside the operational dashboard so
             // suggested actions appear next to binding obligations.
             if (documentEnrichment.recommendationsBlock) parts.push(documentEnrichment.recommendationsBlock);
+            // Assumptions = explicit author premises. Critical for
+            // auditability — the chat must condition claims on these.
+            if (documentEnrichment.assumptionsBlock) parts.push(documentEnrichment.assumptionsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
