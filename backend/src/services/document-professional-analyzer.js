@@ -217,6 +217,12 @@ function getTitleExtractor() {
   try { titleExtractorCache = require('./document-title-extractor'); } catch { titleExtractorCache = null; }
   return titleExtractorCache;
 }
+let tldrCache = null;
+function getTldr() {
+  if (tldrCache) return tldrCache;
+  try { tldrCache = require('./document-tldr'); } catch { tldrCache = null; }
+  return tldrCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1583,6 +1589,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const numericStatisticsBlock = buildNumericStatisticsBlock(files);
   const qualityGradeBlock = buildQualityGradeBlock(files);
   const titlesBlock = buildTitlesBlock(files);
+  const tldrBlock = buildTldrBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1613,6 +1620,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     numericStatisticsBlock,
     qualityGradeBlock,
     titlesBlock,
+    tldrBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1940,6 +1948,21 @@ function buildTitlesBlock(files) {
   return engine.renderTitlesBlock(report);
 }
 
+/**
+ * TL;DR block — three-bullet deterministic executive summary per
+ * document combining the most salient sentence (lede / fact anchor),
+ * the top deep-analyzer claim, and the top actionable / decision /
+ * risk. Bullets are verbatim sentences so the model can quote them.
+ */
+function buildTldrBlock(files) {
+  const engine = getTldr();
+  if (!engine || typeof engine.buildTldrForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTldrForFiles(list);
+  return engine.renderTldrBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2125,6 +2148,7 @@ module.exports = {
   buildNumericStatisticsBlock,
   buildQualityGradeBlock,
   buildTitlesBlock,
+  buildTldrBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

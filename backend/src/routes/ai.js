@@ -1106,6 +1106,7 @@ router.post(
             || documentEnrichment?.numericStatisticsBlock
             || documentEnrichment?.qualityGradeBlock
             || documentEnrichment?.titlesBlock
+            || documentEnrichment?.tldrBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1212,6 +1213,11 @@ router.post(
             // cite each document by its human title rather than its
             // filename for the rest of the answer.
             if (documentEnrichment.titlesBlock) parts.push(documentEnrichment.titlesBlock);
+            // TL;DR = 3-bullet executive summary per file. Sits right
+            // after the titles block so the model can open analytical
+            // answers by quoting the bullets verbatim under each
+            // document's title.
+            if (documentEnrichment.tldrBlock) parts.push(documentEnrichment.tldrBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
