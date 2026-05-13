@@ -1136,6 +1136,7 @@ router.post(
             || documentEnrichment?.factVsOpinionBlock
             || documentEnrichment?.scenariosBlock
             || documentEnrichment?.benchmarksBlock
+            || documentEnrichment?.goalsTargetsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1377,6 +1378,10 @@ router.post(
             // to". Lets the chat answer "how does X compare?" with
             // citeable trigger sentences.
             if (documentEnrichment.benchmarksBlock) parts.push(documentEnrichment.benchmarksBlock);
+            // Goals & targets = explicit objectives / OKRs / targets.
+            // Sits next to recommendations / actions so the chat
+            // distinguishes aspirations from operational TODOs.
+            if (documentEnrichment.goalsTargetsBlock) parts.push(documentEnrichment.goalsTargetsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

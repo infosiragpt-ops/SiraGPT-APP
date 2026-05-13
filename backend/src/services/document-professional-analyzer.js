@@ -397,6 +397,12 @@ function getBenchmarks() {
   try { benchmarksCache = require('./document-benchmarks'); } catch { benchmarksCache = null; }
   return benchmarksCache;
 }
+let goalsTargetsCache = null;
+function getGoalsTargets() {
+  if (goalsTargetsCache) return goalsTargetsCache;
+  try { goalsTargetsCache = require('./document-goals-targets'); } catch { goalsTargetsCache = null; }
+  return goalsTargetsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1793,6 +1799,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const factVsOpinionBlock = buildFactVsOpinionBlock(files);
   const scenariosBlock = buildScenariosBlock(files);
   const benchmarksBlock = buildBenchmarksBlock(files);
+  const goalsTargetsBlock = buildGoalsTargetsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1853,6 +1860,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     factVsOpinionBlock,
     scenariosBlock,
     benchmarksBlock,
+    goalsTargetsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2636,6 +2644,20 @@ function buildBenchmarksBlock(files) {
   return engine.renderBenchmarksBlock(report);
 }
 
+/**
+ * Goals & targets block — explicit objective / OKR / target / KR
+ * statements. Different from action items (operational TODOs) and
+ * recommendations (suggestions): these are aspirational commitments.
+ */
+function buildGoalsTargetsBlock(files) {
+  const engine = getGoalsTargets();
+  if (!engine || typeof engine.buildGoalsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGoalsForFiles(list);
+  return engine.renderGoalsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2851,6 +2873,7 @@ module.exports = {
   buildFactVsOpinionBlock,
   buildScenariosBlock,
   buildBenchmarksBlock,
+  buildGoalsTargetsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
