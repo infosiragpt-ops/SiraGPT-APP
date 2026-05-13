@@ -1131,6 +1131,7 @@ router.post(
             || documentEnrichment?.assumptionsBlock
             || documentEnrichment?.conditionalClausesBlock
             || documentEnrichment?.counterArgumentsBlock
+            || documentEnrichment?.callsToActionBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1355,6 +1356,9 @@ router.post(
             // objections / caveats. Sits next to discourse so the chat
             // has both the main argument and its self-stated objections.
             if (documentEnrichment.counterArgumentsBlock) parts.push(documentEnrichment.counterArgumentsBlock);
+            // Calls-to-action = reader-directed imperatives. Useful
+            // mostly for marketing / sales docs; empty otherwise.
+            if (documentEnrichment.callsToActionBlock) parts.push(documentEnrichment.callsToActionBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

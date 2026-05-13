@@ -367,6 +367,12 @@ function getCounterArguments() {
   try { counterArgumentsCache = require('./document-counter-arguments'); } catch { counterArgumentsCache = null; }
   return counterArgumentsCache;
 }
+let callToActionCache = null;
+function getCallToAction() {
+  if (callToActionCache) return callToActionCache;
+  try { callToActionCache = require('./document-call-to-action'); } catch { callToActionCache = null; }
+  return callToActionCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1758,6 +1764,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const assumptionsBlock = buildAssumptionsBlock(files);
   const conditionalClausesBlock = buildConditionalClausesBlock(files);
   const counterArgumentsBlock = buildCounterArgumentsBlock(files);
+  const callsToActionBlock = buildCallsToActionBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1813,6 +1820,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     assumptionsBlock,
     conditionalClausesBlock,
     counterArgumentsBlock,
+    callsToActionBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2520,6 +2528,20 @@ function buildCounterArgumentsBlock(files) {
   return engine.renderCounterArgumentsBlock(report);
 }
 
+/**
+ * Calls-to-action block — reader-directed imperatives (sign up /
+ * subscribe / register / regístrate / suscríbete). Urgency tag set
+ * when "now / today / limited time" qualifiers are present.
+ */
+function buildCallsToActionBlock(files) {
+  const engine = getCallToAction();
+  if (!engine || typeof engine.buildCTAsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCTAsForFiles(list);
+  return engine.renderCTAsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2730,6 +2752,7 @@ module.exports = {
   buildAssumptionsBlock,
   buildConditionalClausesBlock,
   buildCounterArgumentsBlock,
+  buildCallsToActionBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
