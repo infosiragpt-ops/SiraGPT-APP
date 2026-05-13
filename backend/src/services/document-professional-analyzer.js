@@ -115,6 +115,12 @@ function getDeepAnalyzer() {
   try { deepAnalyzerCache = require('./document-deep-analyzer'); } catch { deepAnalyzerCache = null; }
   return deepAnalyzerCache;
 }
+let quoteExtractorCache = null;
+function getQuoteExtractor() {
+  if (quoteExtractorCache) return quoteExtractorCache;
+  try { quoteExtractorCache = require('./document-quote-extractor'); } catch { quoteExtractorCache = null; }
+  return quoteExtractorCache;
+}
 let evidenceMapCache = null;
 function getEvidenceMap() {
   if (evidenceMapCache) return evidenceMapCache;
@@ -1473,6 +1479,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const qualityBlock = buildQualityBlock(files, profiles);
   const evidenceMapBlock = buildEvidenceMapBlock(files);
   const deepAnalysisBlock = buildDeepAnalysisBlock(files);
+  const quotesBlock = buildQuotesBlock(files);
 
   return {
     profileBlock,
@@ -1487,6 +1494,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     qualityBlock,
     evidenceMapBlock,
     deepAnalysisBlock,
+    quotesBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -1557,6 +1565,21 @@ function buildDeepAnalysisBlock(files) {
   if (list.length === 0) return '';
   const report = engine.buildDeepAnalysisForFiles(list);
   return engine.renderDeepAnalysisBlock(report);
+}
+
+/**
+ * Quotes & citations block — surfaces verbatim language and bibliographic
+ * markers (parenthetical author-year, bracketed numerics, et-al, footnote
+ * markers) so the model can answer literal-quote and source-trace
+ * questions without paraphrasing. Empty when nothing is extracted.
+ */
+function buildQuotesBlock(files) {
+  const engine = getQuoteExtractor();
+  if (!engine || typeof engine.buildQuotesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildQuotesForFiles(list);
+  return engine.renderQuotesBlock(report);
 }
 
 function buildConsistencyBlock(files) {
@@ -1728,6 +1751,7 @@ module.exports = {
   buildQualityBlock,
   buildEvidenceMapBlock,
   buildDeepAnalysisBlock,
+  buildQuotesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

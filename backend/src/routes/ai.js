@@ -1075,6 +1075,7 @@ router.post(
             || documentEnrichment?.qualityBlock
             || documentEnrichment?.evidenceMapBlock
             || documentEnrichment?.deepAnalysisBlock
+            || documentEnrichment?.quotesBlock
           ) {
             const parts = [];
             // PII safety frame goes FIRST so the model reads "do not echo
@@ -1112,6 +1113,12 @@ router.post(
             // and BEFORE the directive (so the model has concrete semantic
             // anchors when it commits to the recipe).
             if (documentEnrichment.deepAnalysisBlock) parts.push(documentEnrichment.deepAnalysisBlock);
+            // Quotes & citations — verbatim language + bibliographic
+            // markers. Sits AFTER the deep-analysis (claims are
+            // paraphrasable summaries; quotes are literal) and BEFORE
+            // the directive so the model can route literal-quote and
+            // source-trace questions to this block directly.
+            if (documentEnrichment.quotesBlock) parts.push(documentEnrichment.quotesBlock);
             // Directive = recipe the model should follow when answering.
             if (documentEnrichment.directiveBlock) parts.push(documentEnrichment.directiveBlock);
             documentEnrichmentBlock = `\n\n${parts.join('\n\n')}`;
