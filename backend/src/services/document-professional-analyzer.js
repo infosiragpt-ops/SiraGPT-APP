@@ -283,6 +283,12 @@ function getMetadataExtractor() {
   try { metadataExtractorCache = require('./document-metadata-extractor'); } catch { metadataExtractorCache = null; }
   return metadataExtractorCache;
 }
+let complianceMatcherCache = null;
+function getComplianceMatcher() {
+  if (complianceMatcherCache) return complianceMatcherCache;
+  try { complianceMatcherCache = require('./document-compliance-matcher'); } catch { complianceMatcherCache = null; }
+  return complianceMatcherCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1660,6 +1666,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const crossReferenceBlock = buildCrossReferenceBlock(files);
   const pricingBlock = buildPricingBlock(files);
   const metadataBlock = buildMetadataBlock(files);
+  const complianceBlock = buildComplianceBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1701,6 +1708,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     crossReferenceBlock,
     pricingBlock,
     metadataBlock,
+    complianceBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2197,6 +2205,21 @@ function buildMetadataBlock(files) {
   return engine.renderMetadataBlock(report);
 }
 
+/**
+ * Compliance framework block — explicit mentions of regulated
+ * standards (GDPR / HIPAA / ISO 27001 / SOC 2 / PCI-DSS / SOX / EU AI
+ * Act / etc.) with a one-line summary so the model speaks to the
+ * named framework specifically.
+ */
+function buildComplianceBlock(files) {
+  const engine = getComplianceMatcher();
+  if (!engine || typeof engine.buildComplianceForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildComplianceForFiles(list);
+  return engine.renderComplianceBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2393,6 +2416,7 @@ module.exports = {
   buildCrossReferenceBlock,
   buildPricingBlock,
   buildMetadataBlock,
+  buildComplianceBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

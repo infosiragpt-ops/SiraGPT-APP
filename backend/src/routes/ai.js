@@ -1117,6 +1117,7 @@ router.post(
             || documentEnrichment?.crossReferenceBlock
             || documentEnrichment?.pricingBlock
             || documentEnrichment?.metadataBlock
+            || documentEnrichment?.complianceBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1276,6 +1277,11 @@ router.post(
             // signer. Sits next to titles + grade so the model has the
             // provenance frame before quoting body text.
             if (documentEnrichment.metadataBlock) parts.push(documentEnrichment.metadataBlock);
+            // Compliance frameworks = regulated standards mentioned
+            // (GDPR / HIPAA / ISO 27001 / SOC 2 / PCI-DSS / SOX, etc.)
+            // with a short summary. Sits next to jurisdiction so the
+            // model has the full regulatory frame ready.
+            if (documentEnrichment.complianceBlock) parts.push(documentEnrichment.complianceBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
