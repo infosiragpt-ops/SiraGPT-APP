@@ -1145,6 +1145,7 @@ router.post(
             || documentEnrichment?.urlsBlock
             || documentEnrichment?.contactsBlock
             || documentEnrichment?.footnotesBlock
+            || documentEnrichment?.tablesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1421,6 +1422,10 @@ router.post(
             // "what does footnote N say?" by quoting the body
             // verbatim instead of synthesising.
             if (documentEnrichment.footnotesBlock) parts.push(documentEnrichment.footnotesBlock);
+            // Embedded tables = caption + header + first N rows of
+            // markdown tables found in the body. Lets the chat quote
+            // "table 3" verbatim instead of summarising.
+            if (documentEnrichment.tablesBlock) parts.push(documentEnrichment.tablesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1486,7 +1491,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

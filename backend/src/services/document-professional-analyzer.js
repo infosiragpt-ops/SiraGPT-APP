@@ -445,6 +445,12 @@ function getFootnotes() {
   try { footnotesCache = require('./document-footnotes'); } catch { footnotesCache = null; }
   return footnotesCache;
 }
+let tablesCache = null;
+function getTables() {
+  if (tablesCache) return tablesCache;
+  try { tablesCache = require('./document-tables'); } catch { tablesCache = null; }
+  return tablesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1849,6 +1855,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const urlsBlock = buildUrlsBlock(files);
   const contactsBlock = buildContactsBlock(files);
   const footnotesBlock = buildFootnotesBlock(files);
+  const tablesBlock = buildTablesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1917,6 +1924,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     urlsBlock,
     contactsBlock,
     footnotesBlock,
+    tablesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2816,6 +2824,21 @@ function buildFootnotesBlock(files) {
   return engine.renderFootnotesBlock(report);
 }
 
+/**
+ * Markdown tables block — surfaces embedded markdown tables with
+ * caption + header + first N rows so the chat can quote "table N"
+ * verbatim. Different from the evidence-map block which extracts
+ * table previews from spreadsheet attachments via DB hydration.
+ */
+function buildTablesBlock(files) {
+  const engine = getTables();
+  if (!engine || typeof engine.buildTablesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTablesForFiles(list);
+  return engine.renderTablesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3039,6 +3062,7 @@ module.exports = {
   buildUrlsBlock,
   buildContactsBlock,
   buildFootnotesBlock,
+  buildTablesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
