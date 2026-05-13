@@ -1167,6 +1167,10 @@ router.post(
             || documentEnrichment?.riskMatrixBlock
             || documentEnrichment?.versionsBlock
             || documentEnrichment?.decisionRecordsBlock
+            || documentEnrichment?.domainsBlock
+            || documentEnrichment?.currencyBlock
+            || documentEnrichment?.percentagesBlock
+            || documentEnrichment?.citationsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1523,6 +1527,20 @@ router.post(
             // / Alternatives / Trade-offs / Rationale. Routes "what's
             // the decision?" / "why?" / "alternatives?".
             if (documentEnrichment.decisionRecordsBlock) parts.push(documentEnrichment.decisionRecordsBlock);
+            // Domains = bare domain names. Routes "what domains does
+            // this reference?" to a citeable list.
+            if (documentEnrichment.domainsBlock) parts.push(documentEnrichment.domainsBlock);
+            // Currency amounts = monetary amounts with currency tags
+            // (symbol-prefix, ISO-suffix, ISO-prefix). Routes "what
+            // amount?" / "how much?" to a citeable list.
+            if (documentEnrichment.currencyBlock) parts.push(documentEnrichment.currencyBlock);
+            // Percentages = numeric (12%, +15%), word form (12 percent
+            // / por ciento), pp/bps. Routes "what's the rate?".
+            if (documentEnrichment.percentagesBlock) parts.push(documentEnrichment.percentagesBlock);
+            // Citations = academic citations (numeric, bracketed
+            // author-year, parenthetical, et al. in-text) +
+            // References section. Routes "what's cited?".
+            if (documentEnrichment.citationsBlock) parts.push(documentEnrichment.citationsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1588,7 +1606,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

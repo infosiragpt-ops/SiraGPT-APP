@@ -577,6 +577,30 @@ function getDecisionRecords() {
   try { decisionRecordsCache = require('./document-decision-records'); } catch { decisionRecordsCache = null; }
   return decisionRecordsCache;
 }
+let domainsCache = null;
+function getDomains() {
+  if (domainsCache) return domainsCache;
+  try { domainsCache = require('./document-domains'); } catch { domainsCache = null; }
+  return domainsCache;
+}
+let currencyCache = null;
+function getCurrency() {
+  if (currencyCache) return currencyCache;
+  try { currencyCache = require('./document-currency'); } catch { currencyCache = null; }
+  return currencyCache;
+}
+let percentagesCache = null;
+function getPercentages() {
+  if (percentagesCache) return percentagesCache;
+  try { percentagesCache = require('./document-percentages'); } catch { percentagesCache = null; }
+  return percentagesCache;
+}
+let citationsCache = null;
+function getCitations() {
+  if (citationsCache) return citationsCache;
+  try { citationsCache = require('./document-citations'); } catch { citationsCache = null; }
+  return citationsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2003,6 +2027,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const riskMatrixBlock = buildRiskMatrixBlock(files);
   const versionsBlock = buildVersionsBlock(files);
   const decisionRecordsBlock = buildDecisionRecordsBlock(files);
+  const domainsBlock = buildDomainsBlock(files);
+  const currencyBlock = buildCurrencyBlock(files);
+  const percentagesBlock = buildPercentagesBlock(files);
+  const citationsBlock = buildCitationsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2093,6 +2121,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     riskMatrixBlock,
     versionsBlock,
     decisionRecordsBlock,
+    domainsBlock,
+    currencyBlock,
+    percentagesBlock,
+    citationsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3328,6 +3360,64 @@ function buildDecisionRecordsBlock(files) {
   return engine.renderDecisionRecordsBlock(report);
 }
 
+/**
+ * Domains block — bare domain names (no scheme, no path). Validated
+ * against a curated TLD list. Different from URLs (scheme+path) and
+ * emails. Routes "what domains does this reference?" to a citeable list.
+ */
+function buildDomainsBlock(files) {
+  const engine = getDomains();
+  if (!engine || typeof engine.buildDomainsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDomainsForFiles(list);
+  return engine.renderDomainsBlock(report);
+}
+
+/**
+ * Currency block — monetary amounts with currency tags (symbol-prefix,
+ * ISO-suffix, ISO-prefix). Different from pricing (named tiers) and
+ * numeric stats. Routes "what amount?" / "how much?" to a list.
+ */
+function buildCurrencyBlock(files) {
+  const engine = getCurrency();
+  if (!engine || typeof engine.buildCurrencyForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCurrencyForFiles(list);
+  return engine.renderCurrencyBlock(report);
+}
+
+/**
+ * Percentages block — numeric (12%, +15%), word-form (12 percent /
+ * por ciento), percentage-points, basis-points. Routes "what's the
+ * rate?" / "what percentage?" to a citeable inventory.
+ */
+function buildPercentagesBlock(files) {
+  const engine = getPercentages();
+  if (!engine || typeof engine.buildPercentagesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPercentagesForFiles(list);
+  return engine.renderPercentagesBlock(report);
+}
+
+/**
+ * Citations block — academic citation patterns (numeric, bracketed
+ * author-year, parenthetical author-year, "et al." in-text) plus
+ * detection of References/Bibliography section. Routes "what
+ * references are cited?" / "is this peer-reviewed?" to a citeable
+ * inventory.
+ */
+function buildCitationsBlock(files) {
+  const engine = getCitations();
+  if (!engine || typeof engine.buildCitationsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCitationsForFiles(list);
+  return engine.renderCitationsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3573,6 +3663,10 @@ module.exports = {
   buildRiskMatrixBlock,
   buildVersionsBlock,
   buildDecisionRecordsBlock,
+  buildDomainsBlock,
+  buildCurrencyBlock,
+  buildPercentagesBlock,
+  buildCitationsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
