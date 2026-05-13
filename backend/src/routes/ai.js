@@ -1079,6 +1079,7 @@ router.post(
             || documentEnrichment?.numericCoherenceBlock
             || documentEnrichment?.temporalTimelineBlock
             || documentEnrichment?.actionDashboardBlock
+            || documentEnrichment?.audienceToneBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1126,6 +1127,12 @@ router.post(
             // sees the working "what's next" view before doing
             // cross-document synthesis.
             if (documentEnrichment.actionDashboardBlock) parts.push(documentEnrichment.actionDashboardBlock);
+            // Audience + tone classification — register the writer is
+            // using. Sits AFTER the operations dashboard (factual punch
+            // list comes first) and BEFORE cross-document comparison
+            // so the model knows whether documents share a register
+            // before it synthesises across them.
+            if (documentEnrichment.audienceToneBlock) parts.push(documentEnrichment.audienceToneBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

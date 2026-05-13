@@ -157,6 +157,12 @@ function getActionDashboard() {
   try { actionDashboardCache = require('./document-action-dashboard'); } catch { actionDashboardCache = null; }
   return actionDashboardCache;
 }
+let audienceToneCache = null;
+function getAudienceTone() {
+  if (audienceToneCache) return audienceToneCache;
+  try { audienceToneCache = require('./document-audience-tone'); } catch { audienceToneCache = null; }
+  return audienceToneCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1513,6 +1519,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const numericCoherenceBlock = buildNumericCoherenceBlock(files);
   const temporalTimelineBlock = buildTemporalTimelineBlock(files);
   const actionDashboardBlock = buildActionDashboardBlock(files);
+  const audienceToneBlock = buildAudienceToneBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1533,6 +1540,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     numericCoherenceBlock,
     temporalTimelineBlock,
     actionDashboardBlock,
+    audienceToneBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1697,6 +1705,23 @@ function buildActionDashboardBlock(files) {
   if (list.length === 0) return '';
   const report = engine.buildDashboardForFiles(list);
   return engine.renderDashboardBlock(report);
+}
+
+/**
+ * Audience + tone block — two-axis classification of each file. The chat
+ * uses this to mirror the source's register (executive vs academic vs
+ * support) and tone (formal / persuasive / instructional / analytical /
+ * conversational / urgent) instead of defaulting to a generic house
+ * style. Flags mixed-register batches so multi-file uploads don't get
+ * their analyses smudged together.
+ */
+function buildAudienceToneBlock(files) {
+  const engine = getAudienceTone();
+  if (!engine || typeof engine.buildAudienceToneForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAudienceToneForFiles(list);
+  return engine.renderAudienceToneBlock(report);
 }
 
 function buildConsistencyBlock(files) {
@@ -1874,6 +1899,7 @@ module.exports = {
   buildNumericCoherenceBlock,
   buildTemporalTimelineBlock,
   buildActionDashboardBlock,
+  buildAudienceToneBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
