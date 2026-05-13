@@ -421,6 +421,12 @@ function getApprovalWorkflow() {
   try { approvalWorkflowCache = require('./document-approval-workflow'); } catch { approvalWorkflowCache = null; }
   return approvalWorkflowCache;
 }
+let executiveSummaryCache = null;
+function getExecutiveSummary() {
+  if (executiveSummaryCache) return executiveSummaryCache;
+  try { executiveSummaryCache = require('./document-executive-summary'); } catch { executiveSummaryCache = null; }
+  return executiveSummaryCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1821,6 +1827,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const slaTermsBlock = buildSLATermsBlock(files);
   const dataClassificationBlock = buildDataClassificationBlock(files);
   const approvalWorkflowBlock = buildApprovalWorkflowBlock(files);
+  const executiveSummaryBlock = buildExecutiveSummaryBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1885,6 +1892,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     slaTermsBlock,
     dataClassificationBlock,
     approvalWorkflowBlock,
+    executiveSummaryBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2727,6 +2735,21 @@ function buildApprovalWorkflowBlock(files) {
   return engine.renderApprovalsBlock(report);
 }
 
+/**
+ * Executive summary block — single-card per-file synthesis combining
+ * title + grade + TL;DR + top KPI + top risk + top obligation. The
+ * chat opens analytical answers with this block before diving into
+ * per-axis detail.
+ */
+function buildExecutiveSummaryBlock(files) {
+  const engine = getExecutiveSummary();
+  if (!engine || typeof engine.buildExecutiveSummaryForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildExecutiveSummaryForFiles(list);
+  return engine.renderExecutiveSummaryBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2946,6 +2969,7 @@ module.exports = {
   buildSLATermsBlock,
   buildDataClassificationBlock,
   buildApprovalWorkflowBlock,
+  buildExecutiveSummaryBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
