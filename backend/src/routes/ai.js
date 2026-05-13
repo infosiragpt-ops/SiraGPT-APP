@@ -1115,6 +1115,7 @@ router.post(
             || documentEnrichment?.jurisdictionBlock
             || documentEnrichment?.definitionsBlock
             || documentEnrichment?.crossReferenceBlock
+            || documentEnrichment?.pricingBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1265,6 +1266,11 @@ router.post(
             // chained clauses inside the document, not just guess at
             // their targets.
             if (documentEnrichment.crossReferenceBlock) parts.push(documentEnrichment.crossReferenceBlock);
+            // Pricing & fees = labelled monetary anchors with cadence.
+            // Sits next to the obligations / scope cluster because the
+            // chat needs the commercial register (price + period)
+            // anchored before answering "how much does X cost?".
+            if (documentEnrichment.pricingBlock) parts.push(documentEnrichment.pricingBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

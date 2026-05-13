@@ -271,6 +271,12 @@ function getCrossReference() {
   try { crossReferenceCache = require('./document-cross-reference'); } catch { crossReferenceCache = null; }
   return crossReferenceCache;
 }
+let pricingExtractorCache = null;
+function getPricingExtractor() {
+  if (pricingExtractorCache) return pricingExtractorCache;
+  try { pricingExtractorCache = require('./document-pricing-extractor'); } catch { pricingExtractorCache = null; }
+  return pricingExtractorCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1646,6 +1652,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const jurisdictionBlock = buildJurisdictionBlock(files);
   const definitionsBlock = buildDefinitionsBlock(files);
   const crossReferenceBlock = buildCrossReferenceBlock(files);
+  const pricingBlock = buildPricingBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1685,6 +1692,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     jurisdictionBlock,
     definitionsBlock,
     crossReferenceBlock,
+    pricingBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2151,6 +2159,21 @@ function buildCrossReferenceBlock(files) {
   return engine.renderReferencesBlock(report);
 }
 
+/**
+ * Pricing block — monetary anchors with label / amount / currency /
+ * cadence (per hour / monthly / annual / per user / one-time). Routes
+ * "how much does X cost?" / "what's the rate?" questions to a
+ * citeable list rather than re-scanning prose.
+ */
+function buildPricingBlock(files) {
+  const engine = getPricingExtractor();
+  if (!engine || typeof engine.buildPricingForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPricingForFiles(list);
+  return engine.renderPricingBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2345,6 +2368,7 @@ module.exports = {
   buildJurisdictionBlock,
   buildDefinitionsBlock,
   buildCrossReferenceBlock,
+  buildPricingBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
