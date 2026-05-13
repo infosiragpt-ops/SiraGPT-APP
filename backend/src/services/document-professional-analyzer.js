@@ -211,6 +211,12 @@ function getQualityGrade() {
   try { qualityGradeCache = require('./document-quality-grade'); } catch { qualityGradeCache = null; }
   return qualityGradeCache;
 }
+let titleExtractorCache = null;
+function getTitleExtractor() {
+  if (titleExtractorCache) return titleExtractorCache;
+  try { titleExtractorCache = require('./document-title-extractor'); } catch { titleExtractorCache = null; }
+  return titleExtractorCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1576,6 +1582,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const sectionSimilarityBlock = buildSectionSimilarityBlock(files);
   const numericStatisticsBlock = buildNumericStatisticsBlock(files);
   const qualityGradeBlock = buildQualityGradeBlock(files);
+  const titlesBlock = buildTitlesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1605,6 +1612,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     sectionSimilarityBlock,
     numericStatisticsBlock,
     qualityGradeBlock,
+    titlesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1917,6 +1925,21 @@ function buildQualityGradeBlock(files) {
   return engine.renderGradeBlock(report);
 }
 
+/**
+ * Title block — canonical title detected per document. Heuristic
+ * source ranking: markdown # → HTML <title>/<h1> → PDF first-line
+ * → filename fallback. Lets the chat cite the document by its
+ * human title rather than its filename.
+ */
+function buildTitlesBlock(files) {
+  const engine = getTitleExtractor();
+  if (!engine || typeof engine.buildTitlesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTitlesForFiles(list);
+  return engine.renderTitlesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2101,6 +2124,7 @@ module.exports = {
   buildSectionSimilarityBlock,
   buildNumericStatisticsBlock,
   buildQualityGradeBlock,
+  buildTitlesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

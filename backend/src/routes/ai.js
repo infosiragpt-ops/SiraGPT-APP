@@ -1105,6 +1105,7 @@ router.post(
             || documentEnrichment?.sectionSimilarityBlock
             || documentEnrichment?.numericStatisticsBlock
             || documentEnrichment?.qualityGradeBlock
+            || documentEnrichment?.titlesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1206,6 +1207,11 @@ router.post(
             // block so the model has the "weight by source quality"
             // calibration before synthesising across files.
             if (documentEnrichment.qualityGradeBlock) parts.push(documentEnrichment.qualityGradeBlock);
+            // Titles map = canonical title detected per file. Sits at
+            // the END of the per-file metadata layer so the model can
+            // cite each document by its human title rather than its
+            // filename for the rest of the answer.
+            if (documentEnrichment.titlesBlock) parts.push(documentEnrichment.titlesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
