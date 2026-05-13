@@ -1107,6 +1107,7 @@ router.post(
             || documentEnrichment?.qualityGradeBlock
             || documentEnrichment?.titlesBlock
             || documentEnrichment?.tldrBlock
+            || documentEnrichment?.sentimentBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1218,6 +1219,11 @@ router.post(
             // answers by quoting the bullets verbatim under each
             // document's title.
             if (documentEnrichment.tldrBlock) parts.push(documentEnrichment.tldrBlock);
+            // Sentiment = per-section polarity. Sits next to the TL;DR
+            // so the model has the rhetorical contour (positive lede,
+            // negative risk section, positive close) when it mirrors
+            // the source's tone in the answer.
+            if (documentEnrichment.sentimentBlock) parts.push(documentEnrichment.sentimentBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

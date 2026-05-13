@@ -223,6 +223,12 @@ function getTldr() {
   try { tldrCache = require('./document-tldr'); } catch { tldrCache = null; }
   return tldrCache;
 }
+let sentimentCache = null;
+function getSentiment() {
+  if (sentimentCache) return sentimentCache;
+  try { sentimentCache = require('./document-sentiment'); } catch { sentimentCache = null; }
+  return sentimentCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1590,6 +1596,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const qualityGradeBlock = buildQualityGradeBlock(files);
   const titlesBlock = buildTitlesBlock(files);
   const tldrBlock = buildTldrBlock(files);
+  const sentimentBlock = buildSentimentBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1621,6 +1628,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     qualityGradeBlock,
     titlesBlock,
     tldrBlock,
+    sentimentBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1963,6 +1971,22 @@ function buildTldrBlock(files) {
   return engine.renderTldrBlock(report);
 }
 
+/**
+ * Sentiment block — per-section polarity surfaced from a positive vs
+ * negative bilingual lexicon. Hedges + intensifiers amplify; negations
+ * within ±3 tokens flip. Helps the model detect tone shifts inside a
+ * single document (neutral intro → very-negative risks → positive
+ * conclusion) instead of flattening everything to a single mood.
+ */
+function buildSentimentBlock(files) {
+  const engine = getSentiment();
+  if (!engine || typeof engine.buildSentimentForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSentimentForFiles(list);
+  return engine.renderSentimentBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2149,6 +2173,7 @@ module.exports = {
   buildQualityGradeBlock,
   buildTitlesBlock,
   buildTldrBlock,
+  buildSentimentBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
