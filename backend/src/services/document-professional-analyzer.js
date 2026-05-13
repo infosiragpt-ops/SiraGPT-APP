@@ -457,6 +457,12 @@ function getCodeBlocks() {
   try { codeBlocksCache = require('./document-code-blocks'); } catch { codeBlocksCache = null; }
   return codeBlocksCache;
 }
+let figureRefsCache = null;
+function getFigureRefs() {
+  if (figureRefsCache) return figureRefsCache;
+  try { figureRefsCache = require('./document-figure-refs'); } catch { figureRefsCache = null; }
+  return figureRefsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1863,6 +1869,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const footnotesBlock = buildFootnotesBlock(files);
   const tablesBlock = buildTablesBlock(files);
   const codeBlocksBlock = buildCodeBlocksBlock(files);
+  const figureRefsBlock = buildFigureRefsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1933,6 +1940,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     footnotesBlock,
     tablesBlock,
     codeBlocksBlock,
+    figureRefsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2861,6 +2869,21 @@ function buildCodeBlocksBlock(files) {
   return engine.renderCodeBlocksBlock(report);
 }
 
+/**
+ * Figure / table references block — Figure / Table / Chart /
+ * Equation / Diagram / Appendix labels with caption when stated.
+ * Different from cross-references (Section / Article pointers):
+ * targets visual / artefact references with optional captions.
+ */
+function buildFigureRefsBlock(files) {
+  const engine = getFigureRefs();
+  if (!engine || typeof engine.buildFigureRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFigureRefsForFiles(list);
+  return engine.renderFigureRefsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3086,6 +3109,7 @@ module.exports = {
   buildFootnotesBlock,
   buildTablesBlock,
   buildCodeBlocksBlock,
+  buildFigureRefsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

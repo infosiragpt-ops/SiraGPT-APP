@@ -1147,6 +1147,7 @@ router.post(
             || documentEnrichment?.footnotesBlock
             || documentEnrichment?.tablesBlock
             || documentEnrichment?.codeBlocksBlock
+            || documentEnrichment?.figureRefsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1430,6 +1431,10 @@ router.post(
             // Code blocks = fenced ```language … ``` with snippet
             // preview. Useful for technical / SDK / runbook docs.
             if (documentEnrichment.codeBlocksBlock) parts.push(documentEnrichment.codeBlocksBlock);
+            // Figure / table refs = visual-artefact pointers with
+            // caption. Routes "what does Figure N show?" to a
+            // citeable list.
+            if (documentEnrichment.figureRefsBlock) parts.push(documentEnrichment.figureRefsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1495,7 +1500,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
