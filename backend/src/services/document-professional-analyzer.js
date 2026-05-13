@@ -301,6 +301,12 @@ function getDisputeResolution() {
   try { disputeResolutionCache = require('./document-dispute-resolution'); } catch { disputeResolutionCache = null; }
   return disputeResolutionCache;
 }
+let indemnificationCache = null;
+function getIndemnification() {
+  if (indemnificationCache) return indemnificationCache;
+  try { indemnificationCache = require('./document-indemnification'); } catch { indemnificationCache = null; }
+  return indemnificationCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1681,6 +1687,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const complianceBlock = buildComplianceBlock(files);
   const warrantiesBlock = buildWarrantiesBlock(files);
   const disputeResolutionBlock = buildDisputeResolutionBlock(files);
+  const indemnificationBlock = buildIndemnificationBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1725,6 +1732,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     complianceBlock,
     warrantiesBlock,
     disputeResolutionBlock,
+    indemnificationBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2266,6 +2274,22 @@ function buildDisputeResolutionBlock(files) {
   return engine.renderDisputesBlock(report);
 }
 
+/**
+ * Indemnification & liability block — captures clauses that allocate
+ * financial responsibility (positive duty to indemnify, aggregate
+ * liability caps, exclusions of consequential / indirect / punitive
+ * damages). Lets the chat answer "who bears the cost if X goes
+ * wrong?" with citeable clauses.
+ */
+function buildIndemnificationBlock(files) {
+  const engine = getIndemnification();
+  if (!engine || typeof engine.buildIndemnificationForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildIndemnificationForFiles(list);
+  return engine.renderIndemnificationBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2465,6 +2489,7 @@ module.exports = {
   buildComplianceBlock,
   buildWarrantiesBlock,
   buildDisputeResolutionBlock,
+  buildIndemnificationBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

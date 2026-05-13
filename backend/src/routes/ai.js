@@ -1120,6 +1120,7 @@ router.post(
             || documentEnrichment?.complianceBlock
             || documentEnrichment?.warrantiesBlock
             || documentEnrichment?.disputeResolutionBlock
+            || documentEnrichment?.indemnificationBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1293,6 +1294,11 @@ router.post(
             // the legal cluster so the model knows how disagreements
             // get resolved before any cross-document synthesis.
             if (documentEnrichment.disputeResolutionBlock) parts.push(documentEnrichment.disputeResolutionBlock);
+            // Indemnification + liability allocation = who pays when
+            // things go wrong. Closes the legal cluster (obligations
+            // + warranties + dispute resolution + indemnification)
+            // before any cross-document synthesis.
+            if (documentEnrichment.indemnificationBlock) parts.push(documentEnrichment.indemnificationBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
