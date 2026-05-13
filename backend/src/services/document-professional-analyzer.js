@@ -331,6 +331,12 @@ function getSignatureBlock() {
   try { signatureBlockCache = require('./document-signature-block'); } catch { signatureBlockCache = null; }
   return signatureBlockCache;
 }
+let qaPairsCache = null;
+function getQaPairs() {
+  if (qaPairsCache) return qaPairsCache;
+  try { qaPairsCache = require('./document-qa-pairs'); } catch { qaPairsCache = null; }
+  return qaPairsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1716,6 +1722,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const temporalExpressionsBlock = buildTemporalExpressionsBlock(files);
   const crossNumericBlock = buildCrossNumericBlock(files);
   const signatureBlocksBlock = buildSignatureBlocksBlock(files);
+  const qaPairsBlock = buildQaPairsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1765,6 +1772,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     temporalExpressionsBlock,
     crossNumericBlock,
     signatureBlocksBlock,
+    qaPairsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2383,6 +2391,21 @@ function buildSignatureBlocksBlock(files) {
   return engine.renderSignaturesBlock(report);
 }
 
+/**
+ * Q&A pairs block — explicit question + answer pairs from FAQs /
+ * runbooks / knowledge-base articles. Lets the chat surface the
+ * answer verbatim when the user's question semantically matches one
+ * already in the source, rather than re-synthesising the answer.
+ */
+function buildQaPairsBlock(files) {
+  const engine = getQaPairs();
+  if (!engine || typeof engine.buildQaForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildQaForFiles(list);
+  return engine.renderQaBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2587,6 +2610,7 @@ module.exports = {
   buildTemporalExpressionsBlock,
   buildCrossNumericBlock,
   buildSignatureBlocksBlock,
+  buildQaPairsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

@@ -1125,6 +1125,7 @@ router.post(
             || documentEnrichment?.temporalExpressionsBlock
             || documentEnrichment?.crossNumericBlock
             || documentEnrichment?.signatureBlocksBlock
+            || documentEnrichment?.qaPairsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1325,6 +1326,11 @@ router.post(
             // declared provenance (version + author at the top) AND
             // the formal sign-off rows at the tail.
             if (documentEnrichment.signatureBlocksBlock) parts.push(documentEnrichment.signatureBlocksBlock);
+            // Q&A pairs = FAQ / runbook question→answer mappings.
+            // When the user's question matches one already in the
+            // source, the chat answers from the verbatim pair rather
+            // than re-synthesising.
+            if (documentEnrichment.qaPairsBlock) parts.push(documentEnrichment.qaPairsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
