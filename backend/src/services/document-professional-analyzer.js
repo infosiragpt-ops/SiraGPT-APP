@@ -841,6 +841,30 @@ function getExamples() {
   try { examplesCache = require('./document-examples'); } catch { examplesCache = null; }
   return examplesCache;
 }
+let approximationsCache = null;
+function getApproximations() {
+  if (approximationsCache) return approximationsCache;
+  try { approximationsCache = require('./document-approximations'); } catch { approximationsCache = null; }
+  return approximationsCache;
+}
+let questionsCache = null;
+function getQuestions() {
+  if (questionsCache) return questionsCache;
+  try { questionsCache = require('./document-questions'); } catch { questionsCache = null; }
+  return questionsCache;
+}
+let imperativesCache = null;
+function getImperatives() {
+  if (imperativesCache) return imperativesCache;
+  try { imperativesCache = require('./document-imperatives'); } catch { imperativesCache = null; }
+  return imperativesCache;
+}
+let definitionsCache = null;
+function getDefinitions() {
+  if (definitionsCache) return definitionsCache;
+  try { definitionsCache = require('./document-definitions'); } catch { definitionsCache = null; }
+  return definitionsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2311,6 +2335,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const intensifiersBlock = buildIntensifiersBlock(files);
   const reportingBlock = buildReportingBlock(files);
   const examplesBlock = buildExamplesBlock(files);
+  const approximationsBlock = buildApproximationsBlock(files);
+  const questionsBlock = buildQuestionsBlock(files);
+  const imperativesBlock = buildImperativesBlock(files);
+  const inTextDefinitionsBlock = buildInTextDefinitionsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2445,6 +2473,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     intensifiersBlock,
     reportingBlock,
     examplesBlock,
+    approximationsBlock,
+    questionsBlock,
+    imperativesBlock,
+    inTextDefinitionsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4247,6 +4279,46 @@ function buildExamplesBlock(files) {
   return engine.renderExamplesBlock(report);
 }
 
+/** Approximations block — about/roughly/aproximadamente hedges around numbers. */
+function buildApproximationsBlock(files) {
+  const engine = getApproximations();
+  if (!engine || typeof engine.buildApproximationsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildApproximationsForFiles(list);
+  return engine.renderApproximationsBlock(report);
+}
+
+/** Questions block — interrogative sentences classified by kind. */
+function buildQuestionsBlock(files) {
+  const engine = getQuestions();
+  if (!engine || typeof engine.buildQuestionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildQuestionsForFiles(list);
+  return engine.renderQuestionsBlock(report);
+}
+
+/** Imperatives block — commands/instructions via verb whitelist. */
+function buildImperativesBlock(files) {
+  const engine = getImperatives();
+  if (!engine || typeof engine.buildImperativesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildImperativesForFiles(list);
+  return engine.renderImperativesBlock(report);
+}
+
+/** In-text definitions block — "X is Y" / "X means Y" patterns. */
+function buildInTextDefinitionsBlock(files) {
+  const engine = getDefinitions();
+  if (!engine || typeof engine.buildDefinitionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDefinitionsForFiles(list);
+  return engine.renderDefinitionsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4536,6 +4608,10 @@ module.exports = {
   buildIntensifiersBlock,
   buildReportingBlock,
   buildExamplesBlock,
+  buildApproximationsBlock,
+  buildQuestionsBlock,
+  buildImperativesBlock,
+  buildInTextDefinitionsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
