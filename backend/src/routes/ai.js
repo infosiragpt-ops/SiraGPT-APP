@@ -1081,6 +1081,7 @@ router.post(
             || documentEnrichment?.actionDashboardBlock
             || documentEnrichment?.audienceToneBlock
             || documentEnrichment?.semanticGraphBlock
+            || documentEnrichment?.kpisBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1141,6 +1142,12 @@ router.post(
             // monetary conflicts when the same entity is paired with
             // different amounts across files.
             if (documentEnrichment.semanticGraphBlock) parts.push(documentEnrichment.semanticGraphBlock);
+            // KPI extractor = quantitative headline metrics with their
+            // period / trend / source sentence. Sits AFTER the entity
+            // graph (so the model has the entity ↔ doc map) and BEFORE
+            // cross-doc comparison so the synthesis can lean on the
+            // KPI list when it answers headline-number questions.
+            if (documentEnrichment.kpisBlock) parts.push(documentEnrichment.kpisBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

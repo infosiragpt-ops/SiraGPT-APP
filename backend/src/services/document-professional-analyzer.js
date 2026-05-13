@@ -169,6 +169,12 @@ function getSemanticGraph() {
   try { semanticGraphCache = require('./document-semantic-graph'); } catch { semanticGraphCache = null; }
   return semanticGraphCache;
 }
+let kpiExtractorCache = null;
+function getKpiExtractor() {
+  if (kpiExtractorCache) return kpiExtractorCache;
+  try { kpiExtractorCache = require('./document-kpi-extractor'); } catch { kpiExtractorCache = null; }
+  return kpiExtractorCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1527,6 +1533,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const actionDashboardBlock = buildActionDashboardBlock(files);
   const audienceToneBlock = buildAudienceToneBlock(files);
   const semanticGraphBlock = buildSemanticGraphBlock(files);
+  const kpisBlock = buildKpisBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1549,6 +1556,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     actionDashboardBlock,
     audienceToneBlock,
     semanticGraphBlock,
+    kpisBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1748,6 +1756,21 @@ function buildSemanticGraphBlock(files) {
   return engine.renderGraphBlock(report);
 }
 
+/**
+ * KPI extractor block — quantitative metrics (label / value / period /
+ * direction) pulled from the attached document(s). Routes the chat's
+ * "what's the X metric?" / "show me the headline numbers" questions
+ * directly to a citeable list instead of re-scanning text.
+ */
+function buildKpisBlock(files) {
+  const engine = getKpiExtractor();
+  if (!engine || typeof engine.buildKpisForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildKpisForFiles(list);
+  return engine.renderKpisBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -1925,6 +1948,7 @@ module.exports = {
   buildActionDashboardBlock,
   buildAudienceToneBlock,
   buildSemanticGraphBlock,
+  buildKpisBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
