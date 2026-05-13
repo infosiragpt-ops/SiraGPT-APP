@@ -697,6 +697,30 @@ function getBoolean() {
   try { booleanCache = require('./document-boolean'); } catch { booleanCache = null; }
   return booleanCache;
 }
+let tocCache = null;
+function getToc() {
+  if (tocCache) return tocCache;
+  try { tocCache = require('./document-toc'); } catch { tocCache = null; }
+  return tocCache;
+}
+let htmlAttrsCache = null;
+function getHtmlAttrs() {
+  if (htmlAttrsCache) return htmlAttrsCache;
+  try { htmlAttrsCache = require('./document-html-attrs'); } catch { htmlAttrsCache = null; }
+  return htmlAttrsCache;
+}
+let blockquotesCache = null;
+function getBlockquotes() {
+  if (blockquotesCache) return blockquotesCache;
+  try { blockquotesCache = require('./document-blockquotes'); } catch { blockquotesCache = null; }
+  return blockquotesCache;
+}
+let definitionListsCache = null;
+function getDefinitionLists() {
+  if (definitionListsCache) return definitionListsCache;
+  try { definitionListsCache = require('./document-definition-lists'); } catch { definitionListsCache = null; }
+  return definitionListsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2143,6 +2167,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const timezonesBlock = buildTimezonesBlock(files);
   const mathBlock = buildMathBlock(files);
   const booleanBlock = buildBooleanBlock(files);
+  const tocBlock = buildTocBlock(files);
+  const htmlAttrsBlock = buildHtmlAttrsBlock(files);
+  const blockquotesBlock = buildBlockquotesBlock(files);
+  const definitionListsBlock = buildDefinitionListsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2253,6 +2281,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     timezonesBlock,
     mathBlock,
     booleanBlock,
+    tocBlock,
+    htmlAttrsBlock,
+    blockquotesBlock,
+    definitionListsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3762,6 +3794,62 @@ function buildBooleanBlock(files) {
   return engine.renderBooleansBlock(report);
 }
 
+/**
+ * TOC block — Table of Contents sections detected via explicit headers
+ * (Contents / TOC / Índice / Sumario / Tabla de contenidos) followed by
+ * indented or numbered items. Different from outline (heading-derived).
+ */
+function buildTocBlock(files) {
+  const engine = getToc();
+  if (!engine || typeof engine.buildTocForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTocForFiles(list);
+  return engine.renderTocBlock(report);
+}
+
+/**
+ * HTML attrs block — referenced HTML attributes (inline values,
+ * labeled mentions, aria-* / data-* / on*). Filtered by curated
+ * whitelist. Routes "what HTML attributes are used?".
+ */
+function buildHtmlAttrsBlock(files) {
+  const engine = getHtmlAttrs();
+  if (!engine || typeof engine.buildHtmlAttrsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHtmlAttrsForFiles(list);
+  return engine.renderHtmlAttrsBlock(report);
+}
+
+/**
+ * Blockquotes block — markdown blockquotes with optional "— Author"
+ * attribution. Different from inline quote extractor. Routes
+ * "what's the quote?" / "any pull quotes?".
+ */
+function buildBlockquotesBlock(files) {
+  const engine = getBlockquotes();
+  if (!engine || typeof engine.buildBlockquotesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBlockquotesForFiles(list);
+  return engine.renderBlockquotesBlock(report);
+}
+
+/**
+ * Definition lists block — term/definition pairs (Markdown DL syntax
+ * and HTML dt/dd mentions). Different from glossary extractor by
+ * surfacing arbitrary pairs in any section.
+ */
+function buildDefinitionListsBlock(files) {
+  const engine = getDefinitionLists();
+  if (!engine || typeof engine.buildDefinitionListsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDefinitionListsForFiles(list);
+  return engine.renderDefinitionListsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4027,6 +4115,10 @@ module.exports = {
   buildTimezonesBlock,
   buildMathBlock,
   buildBooleanBlock,
+  buildTocBlock,
+  buildHtmlAttrsBlock,
+  buildBlockquotesBlock,
+  buildDefinitionListsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
