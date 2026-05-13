@@ -1150,6 +1150,7 @@ router.post(
             || documentEnrichment?.figureRefsBlock
             || documentEnrichment?.checklistsBlock
             || documentEnrichment?.identifiersBlock
+            || documentEnrichment?.bulletListsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1444,6 +1445,9 @@ router.post(
             // Identifiers = ISBN / DOI / arXiv / ticker / CVE / etc.
             // Lets the chat anchor on the source's stated IDs.
             if (documentEnrichment.identifiersBlock) parts.push(documentEnrichment.identifiersBlock);
+            // Bullet lists = markdown bullet / numbered lists grouped
+            // under their heading. Surfaces source-structured lists.
+            if (documentEnrichment.bulletListsBlock) parts.push(documentEnrichment.bulletListsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1509,7 +1513,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

@@ -475,6 +475,12 @@ function getIdentifiers() {
   try { identifiersCache = require('./document-identifiers'); } catch { identifiersCache = null; }
   return identifiersCache;
 }
+let bulletListsCache = null;
+function getBulletLists() {
+  if (bulletListsCache) return bulletListsCache;
+  try { bulletListsCache = require('./document-bullet-lists'); } catch { bulletListsCache = null; }
+  return bulletListsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1884,6 +1890,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const figureRefsBlock = buildFigureRefsBlock(files);
   const checklistsBlock = buildChecklistsBlock(files);
   const identifiersBlock = buildIdentifiersBlock(files);
+  const bulletListsBlock = buildBulletListsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1957,6 +1964,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     figureRefsBlock,
     checklistsBlock,
     identifiersBlock,
+    bulletListsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2929,6 +2937,20 @@ function buildIdentifiersBlock(files) {
   return engine.renderIdentifiersBlock(report);
 }
 
+/**
+ * Bullet lists block — markdown bullets / numbered lists grouped
+ * under their heading. Surfaces source-structured lists verbatim
+ * (skips checkbox items since those go in the checklists block).
+ */
+function buildBulletListsBlock(files) {
+  const engine = getBulletLists();
+  if (!engine || typeof engine.buildBulletListsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBulletListsForFiles(list);
+  return engine.renderBulletListsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3157,6 +3179,7 @@ module.exports = {
   buildFigureRefsBlock,
   buildChecklistsBlock,
   buildIdentifiersBlock,
+  buildBulletListsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
