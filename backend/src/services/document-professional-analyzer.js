@@ -361,6 +361,12 @@ function getConditionalClauses() {
   try { conditionalClausesCache = require('./document-conditional-clauses'); } catch { conditionalClausesCache = null; }
   return conditionalClausesCache;
 }
+let counterArgumentsCache = null;
+function getCounterArguments() {
+  if (counterArgumentsCache) return counterArgumentsCache;
+  try { counterArgumentsCache = require('./document-counter-arguments'); } catch { counterArgumentsCache = null; }
+  return counterArgumentsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1751,6 +1757,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const recommendationsBlock = buildRecommendationsBlock(files);
   const assumptionsBlock = buildAssumptionsBlock(files);
   const conditionalClausesBlock = buildConditionalClausesBlock(files);
+  const counterArgumentsBlock = buildCounterArgumentsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1805,6 +1812,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     recommendationsBlock,
     assumptionsBlock,
     conditionalClausesBlock,
+    counterArgumentsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2498,6 +2506,20 @@ function buildConditionalClausesBlock(files) {
   return engine.renderConditionalsBlock(report);
 }
 
+/**
+ * Counter-arguments block — sentences that introduce a contrasting
+ * view, exception or caveat. Lets the chat answer "what are the
+ * objections?" / "what's the counter-view?" with citeable sentences.
+ */
+function buildCounterArgumentsBlock(files) {
+  const engine = getCounterArguments();
+  if (!engine || typeof engine.buildCounterArgumentsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCounterArgumentsForFiles(list);
+  return engine.renderCounterArgumentsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2707,6 +2729,7 @@ module.exports = {
   buildRecommendationsBlock,
   buildAssumptionsBlock,
   buildConditionalClausesBlock,
+  buildCounterArgumentsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

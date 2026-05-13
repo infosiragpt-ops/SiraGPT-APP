@@ -1130,6 +1130,7 @@ router.post(
             || documentEnrichment?.recommendationsBlock
             || documentEnrichment?.assumptionsBlock
             || documentEnrichment?.conditionalClausesBlock
+            || documentEnrichment?.counterArgumentsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1350,6 +1351,10 @@ router.post(
             // Lets the chat answer "what happens if X?" with citeable
             // trigger sentences rather than inference from prose.
             if (documentEnrichment.conditionalClausesBlock) parts.push(documentEnrichment.conditionalClausesBlock);
+            // Counter-arguments = sentences that introduce contrast /
+            // objections / caveats. Sits next to discourse so the chat
+            // has both the main argument and its self-stated objections.
+            if (documentEnrichment.counterArgumentsBlock) parts.push(documentEnrichment.counterArgumentsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
