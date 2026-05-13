@@ -1143,6 +1143,7 @@ router.post(
             || documentEnrichment?.executiveSummaryBlock
             || documentEnrichment?.urlsBlock
             || documentEnrichment?.contactsBlock
+            || documentEnrichment?.footnotesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1415,6 +1416,10 @@ router.post(
             // both raw + masked variants. The chat respects the
             // document's data-classification label when echoing.
             if (documentEnrichment.contactsBlock) parts.push(documentEnrichment.contactsBlock);
+            // Footnotes = marker → body pairs. Lets the chat answer
+            // "what does footnote N say?" by quoting the body
+            // verbatim instead of synthesising.
+            if (documentEnrichment.footnotesBlock) parts.push(documentEnrichment.footnotesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

@@ -439,6 +439,12 @@ function getContactInfo() {
   try { contactInfoCache = require('./document-contact-info'); } catch { contactInfoCache = null; }
   return contactInfoCache;
 }
+let footnotesCache = null;
+function getFootnotes() {
+  if (footnotesCache) return footnotesCache;
+  try { footnotesCache = require('./document-footnotes'); } catch { footnotesCache = null; }
+  return footnotesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1842,6 +1848,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const executiveSummaryBlock = buildExecutiveSummaryBlock(files);
   const urlsBlock = buildUrlsBlock(files);
   const contactsBlock = buildContactsBlock(files);
+  const footnotesBlock = buildFootnotesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1909,6 +1916,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     executiveSummaryBlock,
     urlsBlock,
     contactsBlock,
+    footnotesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2794,6 +2802,20 @@ function buildContactsBlock(files) {
   return engine.renderContactsBlock(report);
 }
 
+/**
+ * Footnotes block — markdown / numbered footnote definitions paired
+ * with their markers. Routes "what does footnote N say?" to a
+ * citeable marker→body table.
+ */
+function buildFootnotesBlock(files) {
+  const engine = getFootnotes();
+  if (!engine || typeof engine.buildFootnotesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFootnotesForFiles(list);
+  return engine.renderFootnotesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3016,6 +3038,7 @@ module.exports = {
   buildExecutiveSummaryBlock,
   buildUrlsBlock,
   buildContactsBlock,
+  buildFootnotesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
