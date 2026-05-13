@@ -247,6 +247,12 @@ function getScopeExclusions() {
   try { scopeExclusionsCache = require('./document-scope-exclusions'); } catch { scopeExclusionsCache = null; }
   return scopeExclusionsCache;
 }
+let stakeholderMapCache = null;
+function getStakeholderMap() {
+  if (stakeholderMapCache) return stakeholderMapCache;
+  try { stakeholderMapCache = require('./document-stakeholder-map'); } catch { stakeholderMapCache = null; }
+  return stakeholderMapCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1618,6 +1624,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const keyPhrasesBlock = buildKeyPhrasesBlock(files);
   const obligationsBlock = buildObligationsBlock(files);
   const scopeExclusionsBlock = buildScopeExclusionsBlock(files);
+  const stakeholderMapBlock = buildStakeholderMapBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1653,6 +1660,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     keyPhrasesBlock,
     obligationsBlock,
     scopeExclusionsBlock,
+    stakeholderMapBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2057,6 +2065,22 @@ function buildScopeExclusionsBlock(files) {
   return engine.renderScopeBlock(report);
 }
 
+/**
+ * Stakeholder map block — role-based stakeholder counts grouped by
+ * function (leadership / operations / customer / partner / investor
+ * / regulator / workforce / legal). Helps the model know whose
+ * interests dominate each document before answering "who is
+ * affected?" / "who decides?".
+ */
+function buildStakeholderMapBlock(files) {
+  const engine = getStakeholderMap();
+  if (!engine || typeof engine.buildStakeholderMapForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildStakeholderMapForFiles(list);
+  return engine.renderStakeholderBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2247,6 +2271,7 @@ module.exports = {
   buildKeyPhrasesBlock,
   buildObligationsBlock,
   buildScopeExclusionsBlock,
+  buildStakeholderMapBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

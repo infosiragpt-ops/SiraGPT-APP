@@ -1111,6 +1111,7 @@ router.post(
             || documentEnrichment?.keyPhrasesBlock
             || documentEnrichment?.obligationsBlock
             || documentEnrichment?.scopeExclusionsBlock
+            || documentEnrichment?.stakeholderMapBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1241,6 +1242,11 @@ router.post(
             // the boundary frame ("what's in / out") before any
             // cross-document synthesis.
             if (documentEnrichment.scopeExclusionsBlock) parts.push(documentEnrichment.scopeExclusionsBlock);
+            // Stakeholder map = role-based stakeholders by group
+            // (leadership / operations / customer / partner / etc.).
+            // Sits next to obligations + scope so the model has the
+            // "who" frame before any cross-document synthesis.
+            if (documentEnrichment.stakeholderMapBlock) parts.push(documentEnrichment.stakeholderMapBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
