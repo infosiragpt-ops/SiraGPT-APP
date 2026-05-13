@@ -553,6 +553,30 @@ function getLicenses() {
   try { licensesCache = require('./document-licenses'); } catch { licensesCache = null; }
   return licensesCache;
 }
+let dependenciesCache = null;
+function getDependencies() {
+  if (dependenciesCache) return dependenciesCache;
+  try { dependenciesCache = require('./document-dependencies'); } catch { dependenciesCache = null; }
+  return dependenciesCache;
+}
+let riskMatrixCache = null;
+function getRiskMatrix() {
+  if (riskMatrixCache) return riskMatrixCache;
+  try { riskMatrixCache = require('./document-risk-matrix'); } catch { riskMatrixCache = null; }
+  return riskMatrixCache;
+}
+let versionsCache = null;
+function getVersions() {
+  if (versionsCache) return versionsCache;
+  try { versionsCache = require('./document-versions'); } catch { versionsCache = null; }
+  return versionsCache;
+}
+let decisionRecordsCache = null;
+function getDecisionRecords() {
+  if (decisionRecordsCache) return decisionRecordsCache;
+  try { decisionRecordsCache = require('./document-decision-records'); } catch { decisionRecordsCache = null; }
+  return decisionRecordsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1975,6 +1999,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const filePathsBlock = buildFilePathsBlock(files);
   const cronBlock = buildCronBlock(files);
   const licensesBlock = buildLicensesBlock(files);
+  const dependenciesBlock = buildDependenciesBlock(files);
+  const riskMatrixBlock = buildRiskMatrixBlock(files);
+  const versionsBlock = buildVersionsBlock(files);
+  const decisionRecordsBlock = buildDecisionRecordsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2061,6 +2089,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     filePathsBlock,
     cronBlock,
     licensesBlock,
+    dependenciesBlock,
+    riskMatrixBlock,
+    versionsBlock,
+    decisionRecordsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3236,6 +3268,66 @@ function buildLicensesBlock(files) {
   return engine.renderLicensesBlock(report);
 }
 
+/**
+ * Dependencies block — package declarations across npm/pip/cargo/
+ * gomod/maven ecosystems with name + version. Routes "what
+ * dependencies does this use?" / "what version of X?" to a citeable
+ * inventory.
+ */
+function buildDependenciesBlock(files) {
+  const engine = getDependencies();
+  if (!engine || typeof engine.buildDependenciesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDependenciesForFiles(list);
+  return engine.renderDependenciesBlock(report);
+}
+
+/**
+ * Risk matrix block — likelihood/impact pairings and numeric risk
+ * scores normalised to very-low/low/medium/high/critical. Routes
+ * "what's the risk score?" / "what's the likelihood/impact?" to a
+ * citeable matrix. Different from priority/severity (ticket-level).
+ */
+function buildRiskMatrixBlock(files) {
+  const engine = getRiskMatrix();
+  if (!engine || typeof engine.buildRiskMatrixForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRiskMatrixForFiles(list);
+  return engine.renderRiskMatrixBlock(report);
+}
+
+/**
+ * Versions block — SemVer, labeled "Version: X.Y.Z" lines, release
+ * headers, CalVer. Different from per-package dependencies by focusing
+ * on document-level versioning. Routes "what version is this?" /
+ * "what's the latest release?" to a citeable list.
+ */
+function buildVersionsBlock(files) {
+  const engine = getVersions();
+  if (!engine || typeof engine.buildVersionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildVersionsForFiles(list);
+  return engine.renderVersionsBlock(report);
+}
+
+/**
+ * Decision records block — ADR-shaped fields (Decision / Context /
+ * Consequences / Alternatives / Trade-offs / Rationale) in English
+ * and Spanish. Routes "what's the decision?", "why was this decided?",
+ * "what are the alternatives?" to a citeable record.
+ */
+function buildDecisionRecordsBlock(files) {
+  const engine = getDecisionRecords();
+  if (!engine || typeof engine.buildDecisionRecordsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDecisionRecordsForFiles(list);
+  return engine.renderDecisionRecordsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3477,6 +3569,10 @@ module.exports = {
   buildFilePathsBlock,
   buildCronBlock,
   buildLicensesBlock,
+  buildDependenciesBlock,
+  buildRiskMatrixBlock,
+  buildVersionsBlock,
+  buildDecisionRecordsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

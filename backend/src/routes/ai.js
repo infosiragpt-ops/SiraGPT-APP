@@ -1163,6 +1163,10 @@ router.post(
             || documentEnrichment?.filePathsBlock
             || documentEnrichment?.cronBlock
             || documentEnrichment?.licensesBlock
+            || documentEnrichment?.dependenciesBlock
+            || documentEnrichment?.riskMatrixBlock
+            || documentEnrichment?.versionsBlock
+            || documentEnrichment?.decisionRecordsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1505,6 +1509,20 @@ router.post(
             // Licenses / copyright = SPDX IDs, SPDX header, "Licensed
             // under …", Copyright lines, All Rights Reserved.
             if (documentEnrichment.licensesBlock) parts.push(documentEnrichment.licensesBlock);
+            // Dependencies = npm/pip/cargo/gomod/maven packages with
+            // versions. Routes "what dependencies does this use?".
+            if (documentEnrichment.dependenciesBlock) parts.push(documentEnrichment.dependenciesBlock);
+            // Risk matrix = formal Likelihood × Impact pairings +
+            // Risk Score lines (English + Spanish). Routes "what's
+            // the risk score?" to a citeable matrix.
+            if (documentEnrichment.riskMatrixBlock) parts.push(documentEnrichment.riskMatrixBlock);
+            // Versions / releases = SemVer + labeled lines + release
+            // headers + CalVer. Routes "what version is this?".
+            if (documentEnrichment.versionsBlock) parts.push(documentEnrichment.versionsBlock);
+            // Decision records (ADR) = Decision / Context / Consequences
+            // / Alternatives / Trade-offs / Rationale. Routes "what's
+            // the decision?" / "why?" / "alternatives?".
+            if (documentEnrichment.decisionRecordsBlock) parts.push(documentEnrichment.decisionRecordsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1570,7 +1588,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
