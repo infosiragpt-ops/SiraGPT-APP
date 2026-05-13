@@ -1078,6 +1078,7 @@ router.post(
             || documentEnrichment?.quotesBlock
             || documentEnrichment?.numericCoherenceBlock
             || documentEnrichment?.temporalTimelineBlock
+            || documentEnrichment?.actionDashboardBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1117,6 +1118,14 @@ router.post(
             // model has a time axis when synthesising across documents
             // ("doc A says X happened in Q1, doc B says Y was due Q2").
             if (documentEnrichment.temporalTimelineBlock) parts.push(documentEnrichment.temporalTimelineBlock);
+            // Operations dashboard fuses deep-analyzer + temporal-timeline
+            // into a single priority-ordered punch list (overdue →
+            // upcoming → open questions → dateless actions → risks →
+            // recent decisions). Sits AFTER the timeline (so the chrono
+            // axis is established) and BEFORE comparison so the model
+            // sees the working "what's next" view before doing
+            // cross-document synthesis.
+            if (documentEnrichment.actionDashboardBlock) parts.push(documentEnrichment.actionDashboardBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

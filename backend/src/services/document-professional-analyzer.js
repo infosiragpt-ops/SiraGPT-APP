@@ -151,6 +151,12 @@ function getTemporalTimeline() {
   try { temporalTimelineCache = require('./document-temporal-timeline'); } catch { temporalTimelineCache = null; }
   return temporalTimelineCache;
 }
+let actionDashboardCache = null;
+function getActionDashboard() {
+  if (actionDashboardCache) return actionDashboardCache;
+  try { actionDashboardCache = require('./document-action-dashboard'); } catch { actionDashboardCache = null; }
+  return actionDashboardCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1506,6 +1512,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const quotesBlock = buildQuotesBlock(files);
   const numericCoherenceBlock = buildNumericCoherenceBlock(files);
   const temporalTimelineBlock = buildTemporalTimelineBlock(files);
+  const actionDashboardBlock = buildActionDashboardBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1525,6 +1532,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     quotesBlock,
     numericCoherenceBlock,
     temporalTimelineBlock,
+    actionDashboardBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1672,6 +1680,23 @@ function buildTemporalTimelineBlock(files) {
   if (list.length === 0) return '';
   const report = engine.buildTimelineForFiles(list);
   return engine.renderTimelineBlock(report);
+}
+
+/**
+ * Action dashboard block — priority-ordered operations punch list that
+ * fuses deep-analyzer (actions/decisions/risks/open questions) with the
+ * temporal-timeline (overdue/upcoming deadlines). Surfaces the working
+ * "what's next" view above raw text so the model answers operations
+ * questions ("what's overdue?", "what's pending?") from a single
+ * authoritative summary instead of re-scanning per call.
+ */
+function buildActionDashboardBlock(files) {
+  const engine = getActionDashboard();
+  if (!engine || typeof engine.buildDashboardForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDashboardForFiles(list);
+  return engine.renderDashboardBlock(report);
 }
 
 function buildConsistencyBlock(files) {
@@ -1848,6 +1873,7 @@ module.exports = {
   buildSectionRolesBlock,
   buildNumericCoherenceBlock,
   buildTemporalTimelineBlock,
+  buildActionDashboardBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
