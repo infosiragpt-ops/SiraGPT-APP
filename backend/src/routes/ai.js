@@ -1110,6 +1110,7 @@ router.post(
             || documentEnrichment?.sentimentBlock
             || documentEnrichment?.keyPhrasesBlock
             || documentEnrichment?.obligationsBlock
+            || documentEnrichment?.scopeExclusionsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1235,6 +1236,11 @@ router.post(
             // cross-doc comparison so the model has each party's
             // commitments anchored when synthesising across files.
             if (documentEnrichment.obligationsBlock) parts.push(documentEnrichment.obligationsBlock);
+            // Scope & exclusions = explicit "covers X" / "excludes Y"
+            // statements. Sits next to obligations so the model has
+            // the boundary frame ("what's in / out") before any
+            // cross-document synthesis.
+            if (documentEnrichment.scopeExclusionsBlock) parts.push(documentEnrichment.scopeExclusionsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

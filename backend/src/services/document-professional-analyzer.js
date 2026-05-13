@@ -241,6 +241,12 @@ function getObligations() {
   try { obligationsCache = require('./document-obligations-extractor'); } catch { obligationsCache = null; }
   return obligationsCache;
 }
+let scopeExclusionsCache = null;
+function getScopeExclusions() {
+  if (scopeExclusionsCache) return scopeExclusionsCache;
+  try { scopeExclusionsCache = require('./document-scope-exclusions'); } catch { scopeExclusionsCache = null; }
+  return scopeExclusionsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1611,6 +1617,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const sentimentBlock = buildSentimentBlock(files);
   const keyPhrasesBlock = buildKeyPhrasesBlock(files);
   const obligationsBlock = buildObligationsBlock(files);
+  const scopeExclusionsBlock = buildScopeExclusionsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1645,6 +1652,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     sentimentBlock,
     keyPhrasesBlock,
     obligationsBlock,
+    scopeExclusionsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2034,6 +2042,21 @@ function buildObligationsBlock(files) {
   return engine.renderObligationsBlock(report);
 }
 
+/**
+ * Scope & exclusions block — sentences that explicitly state what is
+ * COVERED vs what is EXCLUDED. Lets the chat answer "is X in scope?"
+ * / "what's NOT included?" / "does this cover Y?" by quoting the
+ * source boundary directly rather than inferring from prose.
+ */
+function buildScopeExclusionsBlock(files) {
+  const engine = getScopeExclusions();
+  if (!engine || typeof engine.buildScopeForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildScopeForFiles(list);
+  return engine.renderScopeBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2223,6 +2246,7 @@ module.exports = {
   buildSentimentBlock,
   buildKeyPhrasesBlock,
   buildObligationsBlock,
+  buildScopeExclusionsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
