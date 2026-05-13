@@ -379,6 +379,12 @@ function getDisclosures() {
   try { disclosuresCache = require('./document-disclosures'); } catch { disclosuresCache = null; }
   return disclosuresCache;
 }
+let factVsOpinionCache = null;
+function getFactVsOpinion() {
+  if (factVsOpinionCache) return factVsOpinionCache;
+  try { factVsOpinionCache = require('./document-fact-vs-opinion'); } catch { factVsOpinionCache = null; }
+  return factVsOpinionCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1772,6 +1778,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const counterArgumentsBlock = buildCounterArgumentsBlock(files);
   const callsToActionBlock = buildCallsToActionBlock(files);
   const disclosuresBlock = buildDisclosuresBlock(files);
+  const factVsOpinionBlock = buildFactVsOpinionBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1829,6 +1836,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     counterArgumentsBlock,
     callsToActionBlock,
     disclosuresBlock,
+    factVsOpinionBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2566,6 +2574,22 @@ function buildDisclosuresBlock(files) {
   return engine.renderDisclosuresBlock(report);
 }
 
+/**
+ * Fact vs opinion block — separates sentences into verifiable facts
+ * (numbers / dates / entities / report-style verbs) vs subjective
+ * opinions (hedges / believe / seems / parece / creemos). Helps the
+ * chat distinguish "what's verifiable" from "what's the author's
+ * view".
+ */
+function buildFactVsOpinionBlock(files) {
+  const engine = getFactVsOpinion();
+  if (!engine || typeof engine.buildClassificationForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildClassificationForFiles(list);
+  return engine.renderClassificationBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2778,6 +2802,7 @@ module.exports = {
   buildCounterArgumentsBlock,
   buildCallsToActionBlock,
   buildDisclosuresBlock,
+  buildFactVsOpinionBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
