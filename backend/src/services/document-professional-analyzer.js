@@ -625,6 +625,30 @@ function getHashtags() {
   try { hashtagsCache = require('./document-hashtags'); } catch { hashtagsCache = null; }
   return hashtagsCache;
 }
+let sectionLabelsCache = null;
+function getSectionLabels() {
+  if (sectionLabelsCache) return sectionLabelsCache;
+  try { sectionLabelsCache = require('./document-section-labels'); } catch { sectionLabelsCache = null; }
+  return sectionLabelsCache;
+}
+let signoffsCache = null;
+function getSignoffs() {
+  if (signoffsCache) return signoffsCache;
+  try { signoffsCache = require('./document-signoffs'); } catch { signoffsCache = null; }
+  return signoffsCache;
+}
+let hashesCache = null;
+function getHashes() {
+  if (hashesCache) return hashesCache;
+  try { hashesCache = require('./document-hashes'); } catch { hashesCache = null; }
+  return hashesCache;
+}
+let couponsCache = null;
+function getCoupons() {
+  if (couponsCache) return couponsCache;
+  try { couponsCache = require('./document-coupons'); } catch { couponsCache = null; }
+  return couponsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2059,6 +2083,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const coordinatesBlock = buildCoordinatesBlock(files);
   const trademarkBlock = buildTrademarkBlock(files);
   const hashtagsBlock = buildHashtagsBlock(files);
+  const sectionLabelsBlock = buildSectionLabelsBlock(files);
+  const signoffsBlock = buildSignoffsBlock(files);
+  const hashesBlock = buildHashesBlock(files);
+  const couponsBlock = buildCouponsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2157,6 +2185,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     coordinatesBlock,
     trademarkBlock,
     hashtagsBlock,
+    sectionLabelsBlock,
+    signoffsBlock,
+    hashesBlock,
+    couponsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3505,6 +3537,61 @@ function buildHashtagsBlock(files) {
   return engine.renderHashtagsBlock(report);
 }
 
+/**
+ * Section labels block — numbered references (Section / § /
+ * Chapter / Article / Part / Annex / Appendix / Clause / Paragraph)
+ * including Spanish equivalents. Routes "what's Section X?" / "what
+ * does Article 5 say?" to a citeable inventory.
+ */
+function buildSectionLabelsBlock(files) {
+  const engine = getSectionLabels();
+  if (!engine || typeof engine.buildSectionLabelsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSectionLabelsForFiles(list);
+  return engine.renderSectionLabelsBlock(report);
+}
+
+/**
+ * Sign-offs block — letter/email closing salutations (Sincerely,
+ * Regards, Cheers, Atentamente, Saludos cordiales, …) + following
+ * name. Routes "who signed?" / "what's the closing?".
+ */
+function buildSignoffsBlock(files) {
+  const engine = getSignoffs();
+  if (!engine || typeof engine.buildSignoffsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSignoffsForFiles(list);
+  return engine.renderSignoffsBlock(report);
+}
+
+/**
+ * Hashes block — cryptographic hex digests classified by length
+ * (MD5/SHA-1/SHA-256/SHA-512/BLAKE). Routes "what's the hash?".
+ */
+function buildHashesBlock(files) {
+  const engine = getHashes();
+  if (!engine || typeof engine.buildHashesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHashesForFiles(list);
+  return engine.renderHashesBlock(report);
+}
+
+/**
+ * Coupons block — promo / discount / voucher codes (labeled and
+ * use-phrase forms). Routes "what's the promo code?" / "what discount?".
+ */
+function buildCouponsBlock(files) {
+  const engine = getCoupons();
+  if (!engine || typeof engine.buildCouponsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCouponsForFiles(list);
+  return engine.renderCouponsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3758,6 +3845,10 @@ module.exports = {
   buildCoordinatesBlock,
   buildTrademarkBlock,
   buildHashtagsBlock,
+  buildSectionLabelsBlock,
+  buildSignoffsBlock,
+  buildHashesBlock,
+  buildCouponsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

@@ -1175,6 +1175,10 @@ router.post(
             || documentEnrichment?.coordinatesBlock
             || documentEnrichment?.trademarkBlock
             || documentEnrichment?.hashtagsBlock
+            || documentEnrichment?.sectionLabelsBlock
+            || documentEnrichment?.signoffsBlock
+            || documentEnrichment?.hashesBlock
+            || documentEnrichment?.couponsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1555,6 +1559,16 @@ router.post(
             if (documentEnrichment.trademarkBlock) parts.push(documentEnrichment.trademarkBlock);
             // Hashtags / handles = social-style #tag and @user references.
             if (documentEnrichment.hashtagsBlock) parts.push(documentEnrichment.hashtagsBlock);
+            // Section labels = Section / § / Chapter / Article / Part /
+            // Annex / Appendix / Clause references with Spanish equivs.
+            // Routes "what's Section X?" / "what does Article 5 say?".
+            if (documentEnrichment.sectionLabelsBlock) parts.push(documentEnrichment.sectionLabelsBlock);
+            // Sign-offs = letter/email closings + name. Routes "who signed?".
+            if (documentEnrichment.signoffsBlock) parts.push(documentEnrichment.signoffsBlock);
+            // Hashes = MD5/SHA/BLAKE hex digests. Routes "what's the hash?".
+            if (documentEnrichment.hashesBlock) parts.push(documentEnrichment.hashesBlock);
+            // Coupons = promo/discount/voucher codes. Routes "promo code?".
+            if (documentEnrichment.couponsBlock) parts.push(documentEnrichment.couponsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1620,7 +1634,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
