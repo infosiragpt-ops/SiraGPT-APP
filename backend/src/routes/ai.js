@@ -1076,6 +1076,8 @@ router.post(
             || documentEnrichment?.evidenceMapBlock
             || documentEnrichment?.deepAnalysisBlock
             || documentEnrichment?.quotesBlock
+            || documentEnrichment?.numericCoherenceBlock
+            || documentEnrichment?.temporalTimelineBlock
           ) {
             const parts = [];
             // PII safety frame goes FIRST so the model reads "do not echo
@@ -1100,6 +1102,19 @@ router.post(
             // Consistency check flags intra-document contradictions before
             // the model commits to a position based on a single mention.
             if (documentEnrichment.consistencyBlock) parts.push(documentEnrichment.consistencyBlock);
+            // Numeric coherence pairs with consistency: positive math
+            // validation (sums that audit cleanly) plus the soft signals
+            // the strict checker doesn't emit — percentage groups that
+            // almost-sum-to-100, growth-rate arithmetic, currency mixing,
+            // share splits, average vs declared range. Sits right after
+            // consistency so the model reads "what's wrong" then "what
+            // adds up" before moving to cross-doc synthesis.
+            if (documentEnrichment.numericCoherenceBlock) parts.push(documentEnrichment.numericCoherenceBlock);
+            // Temporal timeline = chronological ordering of dated events
+            // with each anchor sentence. Sits before comparison so the
+            // model has a time axis when synthesising across documents
+            // ("doc A says X happened in Q1, doc B says Y was due Q2").
+            if (documentEnrichment.temporalTimelineBlock) parts.push(documentEnrichment.temporalTimelineBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

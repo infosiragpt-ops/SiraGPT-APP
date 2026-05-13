@@ -127,6 +127,18 @@ function getEvidenceMap() {
   try { evidenceMapCache = require('./document-evidence-map'); } catch { evidenceMapCache = null; }
   return evidenceMapCache;
 }
+let numericCoherenceCache = null;
+function getNumericCoherence() {
+  if (numericCoherenceCache) return numericCoherenceCache;
+  try { numericCoherenceCache = require('./document-numeric-coherence'); } catch { numericCoherenceCache = null; }
+  return numericCoherenceCache;
+}
+let temporalTimelineCache = null;
+function getTemporalTimeline() {
+  if (temporalTimelineCache) return temporalTimelineCache;
+  try { temporalTimelineCache = require('./document-temporal-timeline'); } catch { temporalTimelineCache = null; }
+  return temporalTimelineCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1480,6 +1492,8 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const evidenceMapBlock = buildEvidenceMapBlock(files);
   const deepAnalysisBlock = buildDeepAnalysisBlock(files);
   const quotesBlock = buildQuotesBlock(files);
+  const numericCoherenceBlock = buildNumericCoherenceBlock(files);
+  const temporalTimelineBlock = buildTemporalTimelineBlock(files);
 
   return {
     profileBlock,
@@ -1495,6 +1509,8 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     evidenceMapBlock,
     deepAnalysisBlock,
     quotesBlock,
+    numericCoherenceBlock,
+    temporalTimelineBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -1580,6 +1596,36 @@ function buildQuotesBlock(files) {
   if (list.length === 0) return '';
   const report = engine.buildQuotesForFiles(list);
   return engine.renderQuotesBlock(report);
+}
+
+/**
+ * Numeric coherence block — positive math validation that pairs with the
+ * consistency checker. Confirmations (sums that audit cleanly) ground the
+ * model so it doesn't invent corrections; warnings/errors flag groups
+ * that don't reconcile (percentages, growth deltas, currency mixing,
+ * share totals, averages out of declared range).
+ */
+function buildNumericCoherenceBlock(files) {
+  const engine = getNumericCoherence();
+  if (!engine || typeof engine.buildCoherenceForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCoherenceForFiles(list);
+  return engine.renderCoherenceBlock(report);
+}
+
+/**
+ * Temporal timeline block — chronological ordering of dated events across
+ * the attached document(s). Lets the model answer "what happened when",
+ * "what is upcoming", "what is overdue" without re-scanning raw text.
+ */
+function buildTemporalTimelineBlock(files) {
+  const engine = getTemporalTimeline();
+  if (!engine || typeof engine.buildTimelineForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTimelineForFiles(list);
+  return engine.renderTimelineBlock(report);
 }
 
 function buildConsistencyBlock(files) {
@@ -1752,6 +1798,8 @@ module.exports = {
   buildEvidenceMapBlock,
   buildDeepAnalysisBlock,
   buildQuotesBlock,
+  buildNumericCoherenceBlock,
+  buildTemporalTimelineBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
