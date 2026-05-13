@@ -1078,6 +1078,7 @@ router.post(
             || documentEnrichment?.quotesBlock
             || documentEnrichment?.numericCoherenceBlock
             || documentEnrichment?.temporalTimelineBlock
+            || documentEnrichment?.discourseBlock
           ) {
             const parts = [];
             // PII safety frame goes FIRST so the model reads "do not echo
@@ -1134,6 +1135,12 @@ router.post(
             // the directive so the model can route literal-quote and
             // source-trace questions to this block directly.
             if (documentEnrichment.quotesBlock) parts.push(documentEnrichment.quotesBlock);
+            // Discourse map = argumentative scaffolding (contrast,
+            // causation, sequence, conclusion). Sits BEFORE the
+            // directive so the model can route "what's the argument"
+            // / "where's the conclusion" navigation questions to this
+            // block instead of re-scanning the raw text.
+            if (documentEnrichment.discourseBlock) parts.push(documentEnrichment.discourseBlock);
             // Directive = recipe the model should follow when answering.
             if (documentEnrichment.directiveBlock) parts.push(documentEnrichment.directiveBlock);
             documentEnrichmentBlock = `\n\n${parts.join('\n\n')}`;

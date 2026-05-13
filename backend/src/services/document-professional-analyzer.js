@@ -121,6 +121,12 @@ function getQuoteExtractor() {
   try { quoteExtractorCache = require('./document-quote-extractor'); } catch { quoteExtractorCache = null; }
   return quoteExtractorCache;
 }
+let discourseMapperCache = null;
+function getDiscourseMapper() {
+  if (discourseMapperCache) return discourseMapperCache;
+  try { discourseMapperCache = require('./document-discourse-mapper'); } catch { discourseMapperCache = null; }
+  return discourseMapperCache;
+}
 let evidenceMapCache = null;
 function getEvidenceMap() {
   if (evidenceMapCache) return evidenceMapCache;
@@ -1494,6 +1500,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const quotesBlock = buildQuotesBlock(files);
   const numericCoherenceBlock = buildNumericCoherenceBlock(files);
   const temporalTimelineBlock = buildTemporalTimelineBlock(files);
+  const discourseBlock = buildDiscourseBlock(files);
 
   return {
     profileBlock,
@@ -1511,6 +1518,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     quotesBlock,
     numericCoherenceBlock,
     temporalTimelineBlock,
+    discourseBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -1596,6 +1604,20 @@ function buildQuotesBlock(files) {
   if (list.length === 0) return '';
   const report = engine.buildQuotesForFiles(list);
   return engine.renderQuotesBlock(report);
+}
+
+/**
+ * Discourse map block — surfaces the argumentative connectives in reading
+ * order so the model can navigate by argument flow (contrast / causation /
+ * sequence / conclusion / exemplification / concession / emphasis).
+ */
+function buildDiscourseBlock(files) {
+  const engine = getDiscourseMapper();
+  if (!engine || typeof engine.buildDiscourseForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDiscourseForFiles(list);
+  return engine.renderDiscourseBlock(report);
 }
 
 /**
@@ -1798,6 +1820,7 @@ module.exports = {
   buildEvidenceMapBlock,
   buildDeepAnalysisBlock,
   buildQuotesBlock,
+  buildDiscourseBlock,
   buildNumericCoherenceBlock,
   buildTemporalTimelineBlock,
   loadAnalysesByFileId,
