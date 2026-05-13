@@ -292,10 +292,36 @@ function renderFidelityNote(report) {
   return combined;
 }
 
+/**
+ * Convenience wrapper for the chat path: takes the assistant's final
+ * response and the array of processed files, builds the signal pool
+ * and runs the audit in one call. Returns a tiny serialisable summary
+ * the caller can log without leaking signal sets into logs.
+ *
+ * @param {string} response                final assistant content
+ * @param {Array<{ extractedText?: string, name?: string }>} files
+ * @returns {{ summary, score, level, total, supported, unsupported, contradicted, note }}
+ */
+function auditChatResponse(response, files) {
+  const signals = buildSignalsFromFiles(files);
+  const audit = auditResponse({ response, signals });
+  return {
+    summary: `score=${audit.score} level=${audit.level} supported=${audit.supported} unsupported=${audit.unsupported} contradicted=${audit.contradicted}`,
+    score: audit.score,
+    level: audit.level,
+    total: audit.total,
+    supported: audit.supported,
+    unsupported: audit.unsupported,
+    contradicted: audit.contradicted,
+    note: renderFidelityNote(audit),
+  };
+}
+
 module.exports = {
   buildSignalsFromFiles,
   auditResponse,
   renderFidelityNote,
+  auditChatResponse,
   _internal: {
     splitSentences,
     isAssertive,

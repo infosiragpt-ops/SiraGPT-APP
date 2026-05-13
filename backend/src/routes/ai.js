@@ -25,6 +25,7 @@ const {
 const rag = require('../services/rag-service');
 const operationalRag = require('../services/rag/operational-runtime');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
+const documentResponseFidelity = require('../services/document-response-fidelity');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const modelRouter = require('../services/ai-product-os/model-router');
 const {
@@ -672,6 +673,22 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
   try {
     console.log("Background task: Saving to database...", { assistantFiles });
 
+    // Post-response fidelity audit — fires only when files were attached
+    // AND we have a non-empty assistant content. Pure deterministic check
+    // (numbers / dates / entities anchors vs source signals); never
+    // modifies the response and never throws. Logged for observability
+    // so the team can spot fidelity drift over time. Wrapped in its own
+    // try/catch so a fidelity bug can't break the save path.
+    if (Array.isArray(processedFiles) && processedFiles.length > 0 && typeof fullResponseContent === 'string' && fullResponseContent.trim().length > 0) {
+      try {
+        const audit = documentResponseFidelity.auditChatResponse(fullResponseContent, processedFiles);
+        if (audit.total > 0 && (audit.unsupported > 0 || audit.contradicted > 0)) {
+          console.log(`[ai/fidelity] ${audit.summary} chatId=${chatId || 'none'} files=${processedFiles.length}`);
+        }
+      } catch (fidelityErr) {
+        console.warn('[ai/fidelity] audit failed (continuing):', fidelityErr?.message || fidelityErr);
+      }
+    }
 
     // ✅ Token calculation with tiktoken
     const promptTokens = usageService.calculateTextTokens(prompt, model);

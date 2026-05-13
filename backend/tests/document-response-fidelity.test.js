@@ -138,3 +138,13 @@ test('signals expose set-shaped numbers/dates/entities', () => {
   assert.ok(s.dates instanceof Set);
   assert.ok(s.entities instanceof Set);
 });
+
+test('auditChatResponse convenience helper returns a summary string and counts', () => {
+  const { auditChatResponse } = require('../src/services/document-response-fidelity');
+  const files = [{ name: 'doc.md', extractedText: 'Acme Corp received $1,200,000 on 2026-06-15.' }];
+  const response = 'Acme Corp received $1,200,000 on 2026-06-15.';
+  const out = auditChatResponse(response, files);
+  assert.match(out.summary, /score=/);
+  assert.ok(out.supported >= 1);
+  assert.ok(typeof out.note === 'string');
+});
