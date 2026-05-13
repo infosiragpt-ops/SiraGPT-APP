@@ -721,6 +721,30 @@ function getDefinitionLists() {
   try { definitionListsCache = require('./document-definition-lists'); } catch { definitionListsCache = null; }
   return definitionListsCache;
 }
+let todosCache = null;
+function getTodos() {
+  if (todosCache) return todosCache;
+  try { todosCache = require('./document-todos'); } catch { todosCache = null; }
+  return todosCache;
+}
+let imagesCache = null;
+function getImages() {
+  if (imagesCache) return imagesCache;
+  try { imagesCache = require('./document-images'); } catch { imagesCache = null; }
+  return imagesCache;
+}
+let mediaCache = null;
+function getMedia() {
+  if (mediaCache) return mediaCache;
+  try { mediaCache = require('./document-media'); } catch { mediaCache = null; }
+  return mediaCache;
+}
+let languageRatioCache = null;
+function getLanguageRatio() {
+  if (languageRatioCache) return languageRatioCache;
+  try { languageRatioCache = require('./document-language-ratio'); } catch { languageRatioCache = null; }
+  return languageRatioCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2171,6 +2195,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const htmlAttrsBlock = buildHtmlAttrsBlock(files);
   const blockquotesBlock = buildBlockquotesBlock(files);
   const definitionListsBlock = buildDefinitionListsBlock(files);
+  const todosBlock = buildTodosBlock(files);
+  const imagesBlock = buildImagesBlock(files);
+  const mediaBlock = buildMediaBlock(files);
+  const languageRatioBlock = buildLanguageRatioBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2285,6 +2313,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     htmlAttrsBlock,
     blockquotesBlock,
     definitionListsBlock,
+    todosBlock,
+    imagesBlock,
+    mediaBlock,
+    languageRatioBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -3850,6 +3882,59 @@ function buildDefinitionListsBlock(files) {
   return engine.renderDefinitionListsBlock(report);
 }
 
+/**
+ * TODO markers block — TODO/FIXME/NOTE/HACK/XXX/WIP/BUG with severity
+ * classification and Spanish equivalents. Routes "what's pending?"
+ * / "what needs fixing?".
+ */
+function buildTodosBlock(files) {
+  const engine = getTodos();
+  if (!engine || typeof engine.buildTodosForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTodosForFiles(list);
+  return engine.renderTodosBlock(report);
+}
+
+/**
+ * Images block — markdown / HTML images + emoji shortcodes with
+ * alt-text accessibility status. Routes "what images?".
+ */
+function buildImagesBlock(files) {
+  const engine = getImages();
+  if (!engine || typeof engine.buildImagesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildImagesForFiles(list);
+  return engine.renderImagesBlock(report);
+}
+
+/**
+ * Media block — audio/video filenames, HTML5 audio/video tags,
+ * timecodes, episode markers. Routes "what audio/video?".
+ */
+function buildMediaBlock(files) {
+  const engine = getMedia();
+  if (!engine || typeof engine.buildMediaForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMediaForFiles(list);
+  return engine.renderMediaBlock(report);
+}
+
+/**
+ * Language ratio block — per-document stopword-frequency language mix
+ * across 6 languages (en/es/pt/fr/it/de). Routes "what languages?".
+ */
+function buildLanguageRatioBlock(files) {
+  const engine = getLanguageRatio();
+  if (!engine || typeof engine.buildLanguageRatioForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildLanguageRatioForFiles(list);
+  return engine.renderLanguageRatioBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4119,6 +4204,10 @@ module.exports = {
   buildHtmlAttrsBlock,
   buildBlockquotesBlock,
   buildDefinitionListsBlock,
+  buildTodosBlock,
+  buildImagesBlock,
+  buildMediaBlock,
+  buildLanguageRatioBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

@@ -1191,6 +1191,10 @@ router.post(
             || documentEnrichment?.htmlAttrsBlock
             || documentEnrichment?.blockquotesBlock
             || documentEnrichment?.definitionListsBlock
+            || documentEnrichment?.todosBlock
+            || documentEnrichment?.imagesBlock
+            || documentEnrichment?.mediaBlock
+            || documentEnrichment?.languageRatioBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1606,6 +1610,14 @@ router.post(
             if (documentEnrichment.blockquotesBlock) parts.push(documentEnrichment.blockquotesBlock);
             // Definition lists = term/definition pairs (Markdown DL / dt-dd).
             if (documentEnrichment.definitionListsBlock) parts.push(documentEnrichment.definitionListsBlock);
+            // TODOs = TODO/FIXME/NOTE/HACK/XXX/WIP/BUG markers.
+            if (documentEnrichment.todosBlock) parts.push(documentEnrichment.todosBlock);
+            // Images = markdown / HTML images + emoji + a11y status.
+            if (documentEnrichment.imagesBlock) parts.push(documentEnrichment.imagesBlock);
+            // Media = audio/video filenames + timecodes + episode markers.
+            if (documentEnrichment.mediaBlock) parts.push(documentEnrichment.mediaBlock);
+            // Language ratio = per-doc multi-language mix.
+            if (documentEnrichment.languageRatioBlock) parts.push(documentEnrichment.languageRatioBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1671,7 +1683,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
