@@ -1149,6 +1149,7 @@ router.post(
             || documentEnrichment?.codeBlocksBlock
             || documentEnrichment?.figureRefsBlock
             || documentEnrichment?.checklistsBlock
+            || documentEnrichment?.identifiersBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1440,6 +1441,9 @@ router.post(
             // the chat answer "what's pending?" from source-marked
             // bullets instead of inference.
             if (documentEnrichment.checklistsBlock) parts.push(documentEnrichment.checklistsBlock);
+            // Identifiers = ISBN / DOI / arXiv / ticker / CVE / etc.
+            // Lets the chat anchor on the source's stated IDs.
+            if (documentEnrichment.identifiersBlock) parts.push(documentEnrichment.identifiersBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1505,7 +1509,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

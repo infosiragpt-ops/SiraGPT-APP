@@ -469,6 +469,12 @@ function getChecklists() {
   try { checklistsCache = require('./document-checklists'); } catch { checklistsCache = null; }
   return checklistsCache;
 }
+let identifiersCache = null;
+function getIdentifiers() {
+  if (identifiersCache) return identifiersCache;
+  try { identifiersCache = require('./document-identifiers'); } catch { identifiersCache = null; }
+  return identifiersCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1877,6 +1883,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const codeBlocksBlock = buildCodeBlocksBlock(files);
   const figureRefsBlock = buildFigureRefsBlock(files);
   const checklistsBlock = buildChecklistsBlock(files);
+  const identifiersBlock = buildIdentifiersBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1949,6 +1956,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     codeBlocksBlock,
     figureRefsBlock,
     checklistsBlock,
+    identifiersBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2907,6 +2915,20 @@ function buildChecklistsBlock(files) {
   return engine.renderChecklistsBlock(report);
 }
 
+/**
+ * Identifiers block — standardised IDs (ISBN, DOI, arXiv, PMID,
+ * ticker, CUSIP, CIK, ISIN, UUID, ARN, CVE, RFC). Routes "what's
+ * the document ID?" to a citeable list.
+ */
+function buildIdentifiersBlock(files) {
+  const engine = getIdentifiers();
+  if (!engine || typeof engine.buildIdentifiersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildIdentifiersForFiles(list);
+  return engine.renderIdentifiersBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3134,6 +3156,7 @@ module.exports = {
   buildCodeBlocksBlock,
   buildFigureRefsBlock,
   buildChecklistsBlock,
+  buildIdentifiersBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
