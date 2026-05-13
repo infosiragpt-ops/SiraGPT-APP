@@ -1199,6 +1199,10 @@ router.post(
             || documentEnrichment?.fileExtensionsBlock
             || documentEnrichment?.codeDefsBlock
             || documentEnrichment?.tonePolarityBlock
+            || documentEnrichment?.quantifiersBlock
+            || documentEnrichment?.modalsBlock
+            || documentEnrichment?.negationBlock
+            || documentEnrichment?.readingTimeBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1630,6 +1634,14 @@ router.post(
             if (documentEnrichment.codeDefsBlock) parts.push(documentEnrichment.codeDefsBlock);
             // Tone polarity = positive/negative/neutral/mixed scoring.
             if (documentEnrichment.tonePolarityBlock) parts.push(documentEnrichment.tonePolarityBlock);
+            // Quantifiers = universal/existential/negative/cardinal scope.
+            if (documentEnrichment.quantifiersBlock) parts.push(documentEnrichment.quantifiersBlock);
+            // Modals = strong/recommended/permitted/possibility/prohibited.
+            if (documentEnrichment.modalsBlock) parts.push(documentEnrichment.modalsBlock);
+            // Negation = density + double-negation patterns.
+            if (documentEnrichment.negationBlock) parts.push(documentEnrichment.negationBlock);
+            // Reading time = per-file word count + time bands.
+            if (documentEnrichment.readingTimeBlock) parts.push(documentEnrichment.readingTimeBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1695,7 +1707,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

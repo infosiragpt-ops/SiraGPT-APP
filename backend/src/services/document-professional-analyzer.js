@@ -769,6 +769,30 @@ function getTonePolarity() {
   try { tonePolarityCache = require('./document-tone-polarity'); } catch { tonePolarityCache = null; }
   return tonePolarityCache;
 }
+let quantifiersCache = null;
+function getQuantifiers() {
+  if (quantifiersCache) return quantifiersCache;
+  try { quantifiersCache = require('./document-quantifiers'); } catch { quantifiersCache = null; }
+  return quantifiersCache;
+}
+let modalsCache = null;
+function getModals() {
+  if (modalsCache) return modalsCache;
+  try { modalsCache = require('./document-modals'); } catch { modalsCache = null; }
+  return modalsCache;
+}
+let negationCache = null;
+function getNegation() {
+  if (negationCache) return negationCache;
+  try { negationCache = require('./document-negation'); } catch { negationCache = null; }
+  return negationCache;
+}
+let readingTimeCache = null;
+function getReadingTime() {
+  if (readingTimeCache) return readingTimeCache;
+  try { readingTimeCache = require('./document-reading-time'); } catch { readingTimeCache = null; }
+  return readingTimeCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2227,6 +2251,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const fileExtensionsBlock = buildFileExtensionsBlock(files);
   const codeDefsBlock = buildCodeDefsBlock(files);
   const tonePolarityBlock = buildTonePolarityBlock(files);
+  const quantifiersBlock = buildQuantifiersBlock(files);
+  const modalsBlock = buildModalsBlock(files);
+  const negationBlock = buildNegationBlock(files);
+  const readingTimeBlock = buildReadingTimeBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2349,6 +2377,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     fileExtensionsBlock,
     codeDefsBlock,
     tonePolarityBlock,
+    quantifiersBlock,
+    modalsBlock,
+    negationBlock,
+    readingTimeBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4020,6 +4052,57 @@ function buildTonePolarityBlock(files) {
   return engine.renderTonePolarityBlock(report);
 }
 
+/**
+ * Quantifiers block — universal / existential / negative / cardinal
+ * propositional quantifiers. Routes "what's the scope?".
+ */
+function buildQuantifiersBlock(files) {
+  const engine = getQuantifiers();
+  if (!engine || typeof engine.buildQuantifiersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildQuantifiersForFiles(list);
+  return engine.renderQuantifiersBlock(report);
+}
+
+/**
+ * Modals block — modal verbs classified by normativity (strong /
+ * recommended / permitted / possibility / prohibited).
+ */
+function buildModalsBlock(files) {
+  const engine = getModals();
+  if (!engine || typeof engine.buildModalsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildModalsForFiles(list);
+  return engine.renderModalsBlock(report);
+}
+
+/**
+ * Negation block — negation density + double-neg patterns.
+ */
+function buildNegationBlock(files) {
+  const engine = getNegation();
+  if (!engine || typeof engine.buildNegationForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNegationForFiles(list);
+  return engine.renderNegationBlock(report);
+}
+
+/**
+ * Reading time block — per-file word/char count + reading time
+ * at three WPM bands.
+ */
+function buildReadingTimeBlock(files) {
+  const engine = getReadingTime();
+  if (!engine || typeof engine.buildReadingTimeForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildReadingTimeForFiles(list);
+  return engine.renderReadingTimeBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4297,6 +4380,10 @@ module.exports = {
   buildFileExtensionsBlock,
   buildCodeDefsBlock,
   buildTonePolarityBlock,
+  buildQuantifiersBlock,
+  buildModalsBlock,
+  buildNegationBlock,
+  buildReadingTimeBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
