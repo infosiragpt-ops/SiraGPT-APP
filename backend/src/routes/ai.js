@@ -1112,6 +1112,7 @@ router.post(
             || documentEnrichment?.obligationsBlock
             || documentEnrichment?.scopeExclusionsBlock
             || documentEnrichment?.stakeholderMapBlock
+            || documentEnrichment?.jurisdictionBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1247,6 +1248,11 @@ router.post(
             // Sits next to obligations + scope so the model has the
             // "who" frame before any cross-document synthesis.
             if (documentEnrichment.stakeholderMapBlock) parts.push(documentEnrichment.stakeholderMapBlock);
+            // Jurisdiction = country / currency / regulator /
+            // governing-law signals. Sits next to obligations /
+            // scope / stakeholders so the model has the legal frame
+            // ready before any cross-document synthesis.
+            if (documentEnrichment.jurisdictionBlock) parts.push(documentEnrichment.jurisdictionBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

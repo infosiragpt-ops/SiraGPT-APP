@@ -253,6 +253,12 @@ function getStakeholderMap() {
   try { stakeholderMapCache = require('./document-stakeholder-map'); } catch { stakeholderMapCache = null; }
   return stakeholderMapCache;
 }
+let jurisdictionDetectorCache = null;
+function getJurisdictionDetector() {
+  if (jurisdictionDetectorCache) return jurisdictionDetectorCache;
+  try { jurisdictionDetectorCache = require('./document-jurisdiction-detector'); } catch { jurisdictionDetectorCache = null; }
+  return jurisdictionDetectorCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1625,6 +1631,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const obligationsBlock = buildObligationsBlock(files);
   const scopeExclusionsBlock = buildScopeExclusionsBlock(files);
   const stakeholderMapBlock = buildStakeholderMapBlock(files);
+  const jurisdictionBlock = buildJurisdictionBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1661,6 +1668,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     obligationsBlock,
     scopeExclusionsBlock,
     stakeholderMapBlock,
+    jurisdictionBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2081,6 +2089,21 @@ function buildStakeholderMapBlock(files) {
   return engine.renderStakeholderBlock(report);
 }
 
+/**
+ * Jurisdiction block — surfaces country/sub-national jurisdictions
+ * mentioned, dominant currency, regulator references and any explicit
+ * governing-law clauses. Lets the chat answer "which law applies?"
+ * "which regulator oversees this?" without re-scanning raw text.
+ */
+function buildJurisdictionBlock(files) {
+  const engine = getJurisdictionDetector();
+  if (!engine || typeof engine.buildJurisdictionForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildJurisdictionForFiles(list);
+  return engine.renderJurisdictionBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2272,6 +2295,7 @@ module.exports = {
   buildObligationsBlock,
   buildScopeExclusionsBlock,
   buildStakeholderMapBlock,
+  buildJurisdictionBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
