@@ -1141,6 +1141,7 @@ router.post(
             || documentEnrichment?.dataClassificationBlock
             || documentEnrichment?.approvalWorkflowBlock
             || documentEnrichment?.executiveSummaryBlock
+            || documentEnrichment?.urlsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1405,6 +1406,10 @@ router.post(
             // sequence so the model can use it as a stable opener
             // for analytical answers.
             if (documentEnrichment.executiveSummaryBlock) parts.push(documentEnrichment.executiveSummaryBlock);
+            // URLs & links = HTTP(S) hyperlinks with anchor /
+            // context. Useful for any document that references
+            // external resources.
+            if (documentEnrichment.urlsBlock) parts.push(documentEnrichment.urlsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);

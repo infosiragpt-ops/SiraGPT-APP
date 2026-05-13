@@ -427,6 +427,12 @@ function getExecutiveSummary() {
   try { executiveSummaryCache = require('./document-executive-summary'); } catch { executiveSummaryCache = null; }
   return executiveSummaryCache;
 }
+let urlExtractorCache = null;
+function getUrlExtractor() {
+  if (urlExtractorCache) return urlExtractorCache;
+  try { urlExtractorCache = require('./document-url-extractor'); } catch { urlExtractorCache = null; }
+  return urlExtractorCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1828,6 +1834,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const dataClassificationBlock = buildDataClassificationBlock(files);
   const approvalWorkflowBlock = buildApprovalWorkflowBlock(files);
   const executiveSummaryBlock = buildExecutiveSummaryBlock(files);
+  const urlsBlock = buildUrlsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1893,6 +1900,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     dataClassificationBlock,
     approvalWorkflowBlock,
     executiveSummaryBlock,
+    urlsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2750,6 +2758,20 @@ function buildExecutiveSummaryBlock(files) {
   return engine.renderExecutiveSummaryBlock(report);
 }
 
+/**
+ * URLs & links block — HTTP(S) URLs + markdown links with anchor /
+ * context. Lets the chat answer "what URLs does the document
+ * reference?" with citeable verbatim links.
+ */
+function buildUrlsBlock(files) {
+  const engine = getUrlExtractor();
+  if (!engine || typeof engine.buildURLsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildURLsForFiles(list);
+  return engine.renderURLsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2970,6 +2992,7 @@ module.exports = {
   buildDataClassificationBlock,
   buildApprovalWorkflowBlock,
   buildExecutiveSummaryBlock,
+  buildUrlsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
