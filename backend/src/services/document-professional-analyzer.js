@@ -337,6 +337,12 @@ function getQaPairs() {
   try { qaPairsCache = require('./document-qa-pairs'); } catch { qaPairsCache = null; }
   return qaPairsCache;
 }
+let hypothesesCache = null;
+function getHypotheses() {
+  if (hypothesesCache) return hypothesesCache;
+  try { hypothesesCache = require('./document-hypotheses'); } catch { hypothesesCache = null; }
+  return hypothesesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1723,6 +1729,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const crossNumericBlock = buildCrossNumericBlock(files);
   const signatureBlocksBlock = buildSignatureBlocksBlock(files);
   const qaPairsBlock = buildQaPairsBlock(files);
+  const hypothesesBlock = buildHypothesesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1773,6 +1780,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     crossNumericBlock,
     signatureBlocksBlock,
     qaPairsBlock,
+    hypothesesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2406,6 +2414,21 @@ function buildQaPairsBlock(files) {
   return engine.renderQaBlock(report);
 }
 
+/**
+ * Hypotheses block — research hypotheses, null hypotheses, and
+ * research questions stated by academic / scientific documents. Helps
+ * the chat answer "what is the document testing?" with citeable
+ * statements instead of synthesising from prose.
+ */
+function buildHypothesesBlock(files) {
+  const engine = getHypotheses();
+  if (!engine || typeof engine.buildHypothesesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHypothesesForFiles(list);
+  return engine.renderHypothesesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2611,6 +2634,7 @@ module.exports = {
   buildCrossNumericBlock,
   buildSignatureBlocksBlock,
   buildQaPairsBlock,
+  buildHypothesesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

@@ -1126,6 +1126,7 @@ router.post(
             || documentEnrichment?.crossNumericBlock
             || documentEnrichment?.signatureBlocksBlock
             || documentEnrichment?.qaPairsBlock
+            || documentEnrichment?.hypothesesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1331,6 +1332,10 @@ router.post(
             // source, the chat answers from the verbatim pair rather
             // than re-synthesising.
             if (documentEnrichment.qaPairsBlock) parts.push(documentEnrichment.qaPairsBlock);
+            // Hypotheses = research / null hypotheses + research
+            // questions. Useful for academic / scientific docs;
+            // empty for non-research files.
+            if (documentEnrichment.hypothesesBlock) parts.push(documentEnrichment.hypothesesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
