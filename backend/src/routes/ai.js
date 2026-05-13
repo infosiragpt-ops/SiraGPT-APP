@@ -1073,6 +1073,7 @@ router.post(
             || documentEnrichment?.outlineBlock
             || documentEnrichment?.readabilityBlock
             || documentEnrichment?.qualityBlock
+            || documentEnrichment?.evidenceMapBlock
             || documentEnrichment?.deepAnalysisBlock
           ) {
             const parts = [];
@@ -1092,6 +1093,9 @@ router.post(
             if (documentEnrichment.readabilityBlock) parts.push(documentEnrichment.readabilityBlock);
             // Insights = pre-extracted facts (entities, dates, numbers, risks).
             if (documentEnrichment.insightsBlock) parts.push(documentEnrichment.insightsBlock);
+            // Evidence map = citeable anchors by page/sheet/slide. Keep it
+            // before consistency/comparison so later synthesis stays grounded.
+            if (documentEnrichment.evidenceMapBlock) parts.push(documentEnrichment.evidenceMapBlock);
             // Consistency check flags intra-document contradictions before
             // the model commits to a position based on a single mention.
             if (documentEnrichment.consistencyBlock) parts.push(documentEnrichment.consistencyBlock);

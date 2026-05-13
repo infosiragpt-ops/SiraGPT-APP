@@ -1,6 +1,9 @@
 export const LONG_PASTE_MIN_CHARS = 1200
 export const LONG_PASTE_MIN_WORDS = 200
 export const LONG_PASTE_MIN_LINES = 20
+export const INFORMATION_PASTE_MIN_CHARS = 180
+export const INFORMATION_PASTE_MIN_WORDS = 35
+export const INFORMATION_PASTE_MIN_LINES = 3
 // Lower threshold for research/academic content with strong structure
 export const LONG_PASTE_STRUCTURAL_MIN_CHARS = 350
 export const LONG_PASTE_STRUCTURAL_SIGNALS = 2
@@ -180,11 +183,33 @@ export function shouldCompilePastedTextAsDocument(input: string): boolean {
   const wordCount = countWords(text)
   const lineCount = text.split("\n").filter(line => line.trim().length > 0).length
   const structuralSignals = countStructuralSignals(text)
+  const detection = detectPastedContentKind(text)
+  const sentenceCount = (text.match(/[.!?。！？]\s+/g) || []).length + (/[.!?。！？]$/.test(text) ? 1 : 0)
 
   // Primary thresholds
   if (charCount >= LONG_PASTE_MIN_CHARS) return true
   if (wordCount >= LONG_PASTE_MIN_WORDS) return true
   if (lineCount >= LONG_PASTE_MIN_LINES) return true
+
+  // Structured pasted information should become an attachment even when
+  // short. This is what makes copy/paste feel document-native instead of
+  // dumping source material into the composer as prompt text.
+  if (charCount >= 80 && detection.kind !== "prose" && detection.confidence >= 0.72) return true
+
+  // Professional note/email/report snippets are often only a few paragraphs.
+  // Keep normal one-line prompts in the textarea, but compile any pasted
+  // information that has enough body or structure to be worth auditing.
+  if (
+    charCount >= INFORMATION_PASTE_MIN_CHARS
+    && (
+      wordCount >= INFORMATION_PASTE_MIN_WORDS
+      || lineCount >= INFORMATION_PASTE_MIN_LINES
+      || structuralSignals >= 1
+      || sentenceCount >= 2
+    )
+  ) {
+    return true
+  }
 
   // Structural threshold (academic/research/code content with fewer chars)
   if (charCount >= LONG_PASTE_STRUCTURAL_MIN_CHARS && structuralSignals >= LONG_PASTE_STRUCTURAL_SIGNALS) return true
@@ -565,6 +590,34 @@ const KIND_TO_EXT: Record<PastedContentKind, { extension: string; mime: string }
   env_file: { extension: "env", mime: "text/plain" },
 }
 
+const UPLOAD_SAFE_DETECTED_MIMES = new Set([
+  "application/json",
+  "application/xml",
+  "message/rfc822",
+  "text/csv",
+  "text/html",
+  "text/markdown",
+  "text/plain",
+  "text/tab-separated-values",
+  "text/xml",
+])
+
+const EXECUTABLE_CODE_EXTENSIONS = new Set([
+  "bat",
+  "cmd",
+  "com",
+  "js",
+  "jse",
+  "lua",
+  "php",
+  "pl",
+  "ps1",
+  "py",
+  "rb",
+  "sh",
+  "zsh",
+])
+
 const LANGUAGE_TO_EXT: Record<string, string> = {
   typescript: "ts",
   javascript: "js",
@@ -939,6 +992,12 @@ function buildFilename(args: {
   const { slug, safeTimestamp, detection } = args
   // Dockerfile is special — it's the canonical filename, not an extension.
   if (detection.kind === "dockerfile") return `${slug}-${safeTimestamp}.Dockerfile`
+  if (detection.kind === "code") {
+    const ext = detection.extension || detection.language || "code"
+    if (EXECUTABLE_CODE_EXTENSIONS.has(ext.toLowerCase())) {
+      return `${slug}-${safeTimestamp}.${ext}.txt`
+    }
+  }
   // Prose / unknown stays on the historical .txt extension to preserve
   // existing test expectations and downstream mime routing.
   if (detection.kind === "prose") return `${slug}-${safeTimestamp}.txt`
@@ -948,10 +1007,13 @@ function buildFilename(args: {
 export function createLongPasteDocumentFile(input: string, now: Date = new Date()): FileWithLongPaste {
   const metadata = buildLongPasteMetadata(input, now)
   // The File MIME defaults to "text/plain" for backwards-compat, but
-  // when the detector is highly confident we let the detected MIME flow
-  // through so the backend pipeline can pick the right parser.
+  // when the detector is highly confident AND upload-policy-safe we let
+  // the detected MIME flow through so the backend pipeline can pick the
+  // right parser. Unsupported structured MIME types still travel as
+  // text/plain with rich metadata attached, avoiding false upload rejects.
   const mime =
     metadata.detectedMime && (metadata.contentKindConfidence ?? 0) >= 0.85
+      && UPLOAD_SAFE_DETECTED_MIMES.has(metadata.detectedMime)
       ? metadata.detectedMime
       : "text/plain"
 

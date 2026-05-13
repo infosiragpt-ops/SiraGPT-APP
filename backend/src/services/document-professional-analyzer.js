@@ -115,6 +115,12 @@ function getDeepAnalyzer() {
   try { deepAnalyzerCache = require('./document-deep-analyzer'); } catch { deepAnalyzerCache = null; }
   return deepAnalyzerCache;
 }
+let evidenceMapCache = null;
+function getEvidenceMap() {
+  if (evidenceMapCache) return evidenceMapCache;
+  try { evidenceMapCache = require('./document-evidence-map'); } catch { evidenceMapCache = null; }
+  return evidenceMapCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1465,6 +1471,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const outlineBlock = buildOutlineBlock(files);
   const readabilityBlock = buildReadabilityBlock(files);
   const qualityBlock = buildQualityBlock(files, profiles);
+  const evidenceMapBlock = buildEvidenceMapBlock(files);
   const deepAnalysisBlock = buildDeepAnalysisBlock(files);
 
   return {
@@ -1478,6 +1485,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     outlineBlock,
     readabilityBlock,
     qualityBlock,
+    evidenceMapBlock,
     deepAnalysisBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
@@ -1515,6 +1523,20 @@ function buildQualityBlock(files, profiles) {
     return { file: entry.file, classification: cls };
   });
   return scorer.buildQualityForFiles(perFile, annotated);
+}
+
+/**
+ * Evidence map block - deterministic citeable snippets with page/sheet/slide
+ * anchors. This gives the model a compact audit layer before it reads raw
+ * extracted text.
+ */
+function buildEvidenceMapBlock(files) {
+  const engine = getEvidenceMap();
+  if (!engine || typeof engine.buildEvidenceMapForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildEvidenceMapForFiles(list);
+  return engine.renderEvidenceMapBlock(report);
 }
 
 /**
@@ -1704,6 +1726,7 @@ module.exports = {
   buildEnrichedFileContext,
   buildInsightsBlock,
   buildQualityBlock,
+  buildEvidenceMapBlock,
   buildDeepAnalysisBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
@@ -1717,6 +1740,7 @@ module.exports = {
     buildPerFileProfile,
     renderProfileBlock,
     renderDirectiveBlock,
+    buildEvidenceMapBlock,
     profileTableColumns,
     classifyColumnType,
     parseNumericCell,

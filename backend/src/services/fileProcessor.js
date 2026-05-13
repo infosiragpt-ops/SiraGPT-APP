@@ -107,8 +107,16 @@ class FileProcessor {
           break;
 
         case 'text/plain':
+        case 'text/markdown':
         case 'text/csv':
         case 'text/tab-separated-values':
+        case 'text/html':
+        case 'text/xml':
+        case 'application/xml':
+        case 'application/json':
+        case 'application/rtf':
+        case 'text/rtf':
+        case 'message/rfc822':
           extractedText = await this.processText(filePath);
           break;
 

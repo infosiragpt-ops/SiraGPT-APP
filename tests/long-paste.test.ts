@@ -29,11 +29,18 @@ test("long paste classifier compiles content above the MIN_LINES threshold", () 
   assert.equal(shouldCompilePastedTextAsDocument(twentyOneLines), true, "21 líneas deben convertirse en documento")
 })
 
-test("long paste classifier ignores blank lines when counting", () => {
-  // 19 non-empty lines separated by blanks → under the threshold (20).
-  // Prevents accidental triggers from double-spaced short messages.
-  const padded = Array.from({ length: 19 }, (_, i) => `linea ${i + 1}`).join("\n\n")
+test("long paste classifier ignores short padded prompts", () => {
+  const padded = "hazme un resumen\n\npor favor"
   assert.equal(shouldCompilePastedTextAsDocument(padded), false)
+})
+
+test("long paste classifier compiles short informational paste as a document", () => {
+  const pasted = [
+    "Cliente: ACME. Riesgo principal: renovacion pendiente antes del 30/06/2026.",
+    "Monto afectado: USD 24,500. Responsable: equipo legal.",
+    "Siguiente accion: revisar clausula 8 y preparar respuesta formal.",
+  ].join("\n")
+  assert.equal(shouldCompilePastedTextAsDocument(pasted), true)
 })
 
 test("long paste classifier detects structural content (academic/research)", () => {
@@ -165,12 +172,12 @@ test("metadata: filename extension reflects detected content kind for JSON", () 
   assert.equal(meta.detectedMime, "application/json")
 })
 
-test("metadata: filename extension reflects detected content kind for code", () => {
+test("metadata: filename preserves detected code kind with upload-safe extension", () => {
   const py = `def factorial(n):\n    if n <= 1:\n        return 1\n    return n * factorial(n - 1)\n\nif __name__ == "__main__":\n    print(factorial(10))\n    print(factorial(20))\n    print(factorial(30))\n    print(factorial(40))\n    print(factorial(50))`
   const meta = buildLongPasteMetadata(py, new Date("2026-05-12T10:00:00Z"))
   assert.equal(meta.contentKind, "code")
   assert.equal(meta.programmingLanguage, "python")
-  assert.match(meta.filename, /\.py$/)
+  assert.match(meta.filename, /\.py\.txt$/)
 })
 
 test("metadata: includes content hash and token estimate", () => {
