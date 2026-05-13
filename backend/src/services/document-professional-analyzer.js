@@ -313,6 +313,12 @@ function getAcronymExpansion() {
   try { acronymExpansionCache = require('./document-acronym-expansion'); } catch { acronymExpansionCache = null; }
   return acronymExpansionCache;
 }
+let temporalExpressionsCache = null;
+function getTemporalExpressions() {
+  if (temporalExpressionsCache) return temporalExpressionsCache;
+  try { temporalExpressionsCache = require('./document-temporal-expressions'); } catch { temporalExpressionsCache = null; }
+  return temporalExpressionsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1695,6 +1701,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const disputeResolutionBlock = buildDisputeResolutionBlock(files);
   const indemnificationBlock = buildIndemnificationBlock(files);
   const acronymsBlock = buildAcronymsBlock(files);
+  const temporalExpressionsBlock = buildTemporalExpressionsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1741,6 +1748,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     disputeResolutionBlock,
     indemnificationBlock,
     acronymsBlock,
+    temporalExpressionsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2313,6 +2321,22 @@ function buildAcronymsBlock(files) {
   return engine.renderAcronymsBlock(report);
 }
 
+/**
+ * Temporal expressions block — RELATIVE time anchors (today / next
+ * quarter / end of fiscal year / within the next 6 months /
+ * dentro de N días). Complements the absolute-date timeline by
+ * surfacing the soft time anchors documents lean on when speaking
+ * about plans, forecasts and commitments.
+ */
+function buildTemporalExpressionsBlock(files) {
+  const engine = getTemporalExpressions();
+  if (!engine || typeof engine.buildExpressionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildExpressionsForFiles(list);
+  return engine.renderExpressionsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2514,6 +2538,7 @@ module.exports = {
   buildDisputeResolutionBlock,
   buildIndemnificationBlock,
   buildAcronymsBlock,
+  buildTemporalExpressionsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

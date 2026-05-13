@@ -1122,6 +1122,7 @@ router.post(
             || documentEnrichment?.disputeResolutionBlock
             || documentEnrichment?.indemnificationBlock
             || documentEnrichment?.acronymsBlock
+            || documentEnrichment?.temporalExpressionsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1305,6 +1306,12 @@ router.post(
             // should expect to encounter and (b) the document's own
             // expansions when those are present.
             if (documentEnrichment.acronymsBlock) parts.push(documentEnrichment.acronymsBlock);
+            // Temporal expressions = relative time anchors. Sits next
+            // to the absolute-date timeline so the model has both
+            // hard dates AND soft horizons (next quarter, end of
+            // year, dentro de 6 meses) when answering planning
+            // questions.
+            if (documentEnrichment.temporalExpressionsBlock) parts.push(documentEnrichment.temporalExpressionsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
