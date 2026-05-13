@@ -415,6 +415,12 @@ function getDataClassification() {
   try { dataClassificationCache = require('./document-data-classification'); } catch { dataClassificationCache = null; }
   return dataClassificationCache;
 }
+let approvalWorkflowCache = null;
+function getApprovalWorkflow() {
+  if (approvalWorkflowCache) return approvalWorkflowCache;
+  try { approvalWorkflowCache = require('./document-approval-workflow'); } catch { approvalWorkflowCache = null; }
+  return approvalWorkflowCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1814,6 +1820,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const goalsTargetsBlock = buildGoalsTargetsBlock(files);
   const slaTermsBlock = buildSLATermsBlock(files);
   const dataClassificationBlock = buildDataClassificationBlock(files);
+  const approvalWorkflowBlock = buildApprovalWorkflowBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1877,6 +1884,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     goalsTargetsBlock,
     slaTermsBlock,
     dataClassificationBlock,
+    approvalWorkflowBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2704,6 +2712,21 @@ function buildDataClassificationBlock(files) {
   return engine.renderClassificationBlock(report);
 }
 
+/**
+ * Approval-workflow block — Drafted by / Reviewed by / Approved by /
+ * Released by / Signed by stamps with named people and nearest date.
+ * Different from the signature-block detector (legal tail sign-off):
+ * this surfaces workflow STAGES in change-control headers.
+ */
+function buildApprovalWorkflowBlock(files) {
+  const engine = getApprovalWorkflow();
+  if (!engine || typeof engine.buildApprovalsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildApprovalsForFiles(list);
+  return engine.renderApprovalsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2922,6 +2945,7 @@ module.exports = {
   buildGoalsTargetsBlock,
   buildSLATermsBlock,
   buildDataClassificationBlock,
+  buildApprovalWorkflowBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

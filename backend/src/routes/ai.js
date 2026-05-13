@@ -1139,6 +1139,7 @@ router.post(
             || documentEnrichment?.goalsTargetsBlock
             || documentEnrichment?.slaTermsBlock
             || documentEnrichment?.dataClassificationBlock
+            || documentEnrichment?.approvalWorkflowBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1393,6 +1394,10 @@ router.post(
             // The chat respects them when deciding how to surface or
             // echo information.
             if (documentEnrichment.dataClassificationBlock) parts.push(documentEnrichment.dataClassificationBlock);
+            // Approval workflow = drafted / reviewed / approved /
+            // released / signed stamps with names + dates. Useful
+            // for change-control questions.
+            if (documentEnrichment.approvalWorkflowBlock) parts.push(documentEnrichment.approvalWorkflowBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
