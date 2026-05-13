@@ -1148,6 +1148,7 @@ router.post(
             || documentEnrichment?.tablesBlock
             || documentEnrichment?.codeBlocksBlock
             || documentEnrichment?.figureRefsBlock
+            || documentEnrichment?.checklistsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1435,6 +1436,10 @@ router.post(
             // caption. Routes "what does Figure N show?" to a
             // citeable list.
             if (documentEnrichment.figureRefsBlock) parts.push(documentEnrichment.figureRefsBlock);
+            // Checklists = markdown checkbox items with state. Lets
+            // the chat answer "what's pending?" from source-marked
+            // bullets instead of inference.
+            if (documentEnrichment.checklistsBlock) parts.push(documentEnrichment.checklistsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1500,7 +1505,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

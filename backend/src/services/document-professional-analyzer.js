@@ -463,6 +463,12 @@ function getFigureRefs() {
   try { figureRefsCache = require('./document-figure-refs'); } catch { figureRefsCache = null; }
   return figureRefsCache;
 }
+let checklistsCache = null;
+function getChecklists() {
+  if (checklistsCache) return checklistsCache;
+  try { checklistsCache = require('./document-checklists'); } catch { checklistsCache = null; }
+  return checklistsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1870,6 +1876,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const tablesBlock = buildTablesBlock(files);
   const codeBlocksBlock = buildCodeBlocksBlock(files);
   const figureRefsBlock = buildFigureRefsBlock(files);
+  const checklistsBlock = buildChecklistsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1941,6 +1948,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     tablesBlock,
     codeBlocksBlock,
     figureRefsBlock,
+    checklistsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -2884,6 +2892,21 @@ function buildFigureRefsBlock(files) {
   return engine.renderFigureRefsBlock(report);
 }
 
+/**
+ * Checklists block — markdown checkbox items grouped under their
+ * heading with done / pending / in-progress / unclear state. Routes
+ * "what's still pending?" / "what's been done?" to source-marked
+ * bullets instead of inference.
+ */
+function buildChecklistsBlock(files) {
+  const engine = getChecklists();
+  if (!engine || typeof engine.buildChecklistsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildChecklistsForFiles(list);
+  return engine.renderChecklistsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -3110,6 +3133,7 @@ module.exports = {
   buildTablesBlock,
   buildCodeBlocksBlock,
   buildFigureRefsBlock,
+  buildChecklistsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
