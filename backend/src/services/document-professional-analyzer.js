@@ -205,6 +205,12 @@ function getNumericStatistics() {
   try { numericStatisticsCache = require('./document-numeric-statistics'); } catch { numericStatisticsCache = null; }
   return numericStatisticsCache;
 }
+let qualityGradeCache = null;
+function getQualityGrade() {
+  if (qualityGradeCache) return qualityGradeCache;
+  try { qualityGradeCache = require('./document-quality-grade'); } catch { qualityGradeCache = null; }
+  return qualityGradeCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1569,6 +1575,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const relationshipsBlock = buildRelationshipsBlock(files);
   const sectionSimilarityBlock = buildSectionSimilarityBlock(files);
   const numericStatisticsBlock = buildNumericStatisticsBlock(files);
+  const qualityGradeBlock = buildQualityGradeBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -1597,6 +1604,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     relationshipsBlock,
     sectionSimilarityBlock,
     numericStatisticsBlock,
+    qualityGradeBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -1892,6 +1900,23 @@ function buildNumericStatisticsBlock(files) {
   return engine.renderStatisticsBlock(report);
 }
 
+/**
+ * Quality grade block — letter grade per document (A → F) over seven
+ * weighted dimensions: structure, density, citations, clarity,
+ * completeness, freshness, traceability. Lets the chat hint how much
+ * weight a claim from each document deserves — a higher grade does
+ * not mean the content is correct, only that it's well-structured,
+ * sourced, and current.
+ */
+function buildQualityGradeBlock(files) {
+  const engine = getQualityGrade();
+  if (!engine || typeof engine.buildGradesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGradesForFiles(list);
+  return engine.renderGradeBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -2075,6 +2100,7 @@ module.exports = {
   buildRelationshipsBlock,
   buildSectionSimilarityBlock,
   buildNumericStatisticsBlock,
+  buildQualityGradeBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

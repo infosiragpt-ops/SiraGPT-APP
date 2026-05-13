@@ -1104,6 +1104,7 @@ router.post(
             || documentEnrichment?.relationshipsBlock
             || documentEnrichment?.sectionSimilarityBlock
             || documentEnrichment?.numericStatisticsBlock
+            || documentEnrichment?.qualityGradeBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1200,6 +1201,11 @@ router.post(
             // sequence so the model has KPIs + relationships first
             // and treats this block as the statistical-claim register.
             if (documentEnrichment.numericStatisticsBlock) parts.push(documentEnrichment.numericStatisticsBlock);
+            // Quality grade = compact letter grade per document over
+            // seven weighted dimensions. Sits BEFORE the comparison
+            // block so the model has the "weight by source quality"
+            // calibration before synthesising across files.
+            if (documentEnrichment.qualityGradeBlock) parts.push(documentEnrichment.qualityGradeBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
