@@ -109,6 +109,12 @@ function getQualityScorer() {
   try { qualityScorerCache = require('./document-analysis-quality-scorer'); } catch { qualityScorerCache = null; }
   return qualityScorerCache;
 }
+let deepAnalyzerCache = null;
+function getDeepAnalyzer() {
+  if (deepAnalyzerCache) return deepAnalyzerCache;
+  try { deepAnalyzerCache = require('./document-deep-analyzer'); } catch { deepAnalyzerCache = null; }
+  return deepAnalyzerCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -1459,6 +1465,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const outlineBlock = buildOutlineBlock(files);
   const readabilityBlock = buildReadabilityBlock(files);
   const qualityBlock = buildQualityBlock(files, profiles);
+  const deepAnalysisBlock = buildDeepAnalysisBlock(files);
 
   return {
     profileBlock,
@@ -1471,6 +1478,7 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     outlineBlock,
     readabilityBlock,
     qualityBlock,
+    deepAnalysisBlock,
     primaryDocType,
     perFileProfile: profiles.map((p) => ({
       fileId: p.fileId,
@@ -1515,6 +1523,20 @@ function buildQualityBlock(files, profiles) {
  * inverted date range, polar contradiction, percentage overflow, tense
  * conflict). Empty string when nothing fires.
  */
+/**
+ * Deep-analysis block — sentence-level claims, actions, decisions, open
+ * questions and risks. Complementary to insights (entities/numbers) and
+ * consistency (intra-doc contradictions). Empty when nothing extracted.
+ */
+function buildDeepAnalysisBlock(files) {
+  const engine = getDeepAnalyzer();
+  if (!engine || typeof engine.buildDeepAnalysisForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDeepAnalysisForFiles(list);
+  return engine.renderDeepAnalysisBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -1682,6 +1704,7 @@ module.exports = {
   buildEnrichedFileContext,
   buildInsightsBlock,
   buildQualityBlock,
+  buildDeepAnalysisBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

@@ -1073,6 +1073,7 @@ router.post(
             || documentEnrichment?.outlineBlock
             || documentEnrichment?.readabilityBlock
             || documentEnrichment?.qualityBlock
+            || documentEnrichment?.deepAnalysisBlock
           ) {
             const parts = [];
             // PII safety frame goes FIRST so the model reads "do not echo
@@ -1102,6 +1103,11 @@ router.post(
             // model self-calibrates ("I'm at 38% coverage, here's what I
             // have evidence for") instead of hallucinating completeness.
             if (documentEnrichment.qualityBlock) parts.push(documentEnrichment.qualityBlock);
+            // Deep analysis = sentence-level claims/actions/decisions/risks.
+            // Sits AFTER quality (so the model sees coverage caveat first)
+            // and BEFORE the directive (so the model has concrete semantic
+            // anchors when it commits to the recipe).
+            if (documentEnrichment.deepAnalysisBlock) parts.push(documentEnrichment.deepAnalysisBlock);
             // Directive = recipe the model should follow when answering.
             if (documentEnrichment.directiveBlock) parts.push(documentEnrichment.directiveBlock);
             documentEnrichmentBlock = `\n\n${parts.join('\n\n')}`;
