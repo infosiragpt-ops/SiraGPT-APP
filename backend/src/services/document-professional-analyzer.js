@@ -961,6 +961,30 @@ function getCurrencySymbols() {
   try { currencySymbolsCache = require('./document-currency-symbols'); } catch { currencySymbolsCache = null; }
   return currencySymbolsCache;
 }
+let phoneCodesCache = null;
+function getPhoneCodes() {
+  if (phoneCodesCache) return phoneCodesCache;
+  try { phoneCodesCache = require('./document-phone-codes'); } catch { phoneCodesCache = null; }
+  return phoneCodesCache;
+}
+let postalCodesCache = null;
+function getPostalCodes() {
+  if (postalCodesCache) return postalCodesCache;
+  try { postalCodesCache = require('./document-postal-codes'); } catch { postalCodesCache = null; }
+  return postalCodesCache;
+}
+let addressesCache = null;
+function getAddresses() {
+  if (addressesCache) return addressesCache;
+  try { addressesCache = require('./document-addresses'); } catch { addressesCache = null; }
+  return addressesCache;
+}
+let mimeTypesCache = null;
+function getMimeTypes() {
+  if (mimeTypesCache) return mimeTypesCache;
+  try { mimeTypesCache = require('./document-mime-types'); } catch { mimeTypesCache = null; }
+  return mimeTypesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2451,6 +2475,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const socialUrlsBlock = buildSocialUrlsBlock(files);
   const geneProteinBlock = buildGeneProteinBlock(files);
   const currencySymbolsBlock = buildCurrencySymbolsBlock(files);
+  const phoneCodesBlock = buildPhoneCodesBlock(files);
+  const postalCodesBlock = buildPostalCodesBlock(files);
+  const addressesBlock = buildAddressesBlock(files);
+  const mimeTypesBlock = buildMimeTypesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2605,6 +2633,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     socialUrlsBlock,
     geneProteinBlock,
     currencySymbolsBlock,
+    phoneCodesBlock,
+    postalCodesBlock,
+    addressesBlock,
+    mimeTypesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4607,6 +4639,46 @@ function buildCurrencySymbolsBlock(files) {
   return engine.renderCurrencySymbolsBlock(report);
 }
 
+/** Phone codes block — E.164 phone numbers with country resolution. */
+function buildPhoneCodesBlock(files) {
+  const engine = getPhoneCodes();
+  if (!engine || typeof engine.buildPhoneCodesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPhoneCodesForFiles(list);
+  return engine.renderPhoneCodesBlock(report);
+}
+
+/** Postal codes block — UK/CA/BR/JP/US/labeled postal codes. */
+function buildPostalCodesBlock(files) {
+  const engine = getPostalCodes();
+  if (!engine || typeof engine.buildPostalCodesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPostalCodesForFiles(list);
+  return engine.renderPostalCodesBlock(report);
+}
+
+/** Addresses block — street addresses (US/Spanish/PO Box/labeled). */
+function buildAddressesBlock(files) {
+  const engine = getAddresses();
+  if (!engine || typeof engine.buildAddressesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAddressesForFiles(list);
+  return engine.renderAddressesBlock(report);
+}
+
+/** MIME types block — IANA Media-Type references. */
+function buildMimeTypesBlock(files) {
+  const engine = getMimeTypes();
+  if (!engine || typeof engine.buildMimeTypesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMimeTypesForFiles(list);
+  return engine.renderMimeTypesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4916,6 +4988,10 @@ module.exports = {
   buildSocialUrlsBlock,
   buildGeneProteinBlock,
   buildCurrencySymbolsBlock,
+  buildPhoneCodesBlock,
+  buildPostalCodesBlock,
+  buildAddressesBlock,
+  buildMimeTypesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

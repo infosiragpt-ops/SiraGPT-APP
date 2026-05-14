@@ -1231,6 +1231,10 @@ router.post(
             || documentEnrichment?.socialUrlsBlock
             || documentEnrichment?.geneProteinBlock
             || documentEnrichment?.currencySymbolsBlock
+            || documentEnrichment?.phoneCodesBlock
+            || documentEnrichment?.postalCodesBlock
+            || documentEnrichment?.addressesBlock
+            || documentEnrichment?.mimeTypesBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1727,6 +1731,14 @@ router.post(
             if (documentEnrichment.geneProteinBlock) parts.push(documentEnrichment.geneProteinBlock);
             // Currency symbols standalone = €/$/£/¥/₹/₿ branding.
             if (documentEnrichment.currencySymbolsBlock) parts.push(documentEnrichment.currencySymbolsBlock);
+            // Phone codes = E.164 + country resolution.
+            if (documentEnrichment.phoneCodesBlock) parts.push(documentEnrichment.phoneCodesBlock);
+            // Postal codes = UK/CA/BR/JP/US/labeled.
+            if (documentEnrichment.postalCodesBlock) parts.push(documentEnrichment.postalCodesBlock);
+            // Addresses = street lines (US/Spanish/PO Box).
+            if (documentEnrichment.addressesBlock) parts.push(documentEnrichment.addressesBlock);
+            // MIME types = IANA Media-Type references.
+            if (documentEnrichment.mimeTypesBlock) parts.push(documentEnrichment.mimeTypesBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1792,7 +1804,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock', 'attributionsBlock', 'comparativesBlock', 'causalBlock', 'concessionBlock', 'hedgingBlock', 'intensifiersBlock', 'reportingBlock', 'examplesBlock', 'approximationsBlock', 'questionsBlock', 'imperativesBlock', 'inTextDefinitionsBlock', 'fiscalYearBlock', 'ratiosBlock', 'ordinalsBlock', 'geoRegionsBlock', 'trackingBlock', 'weatherBlock', 'scientificNotationBlock', 'taxaBlock', 'chemistryBlock', 'fxRatesBlock', 'ibanSwiftBlock', 'licensePlatesBlock', 'legalCitationsBlock', 'socialUrlsBlock', 'geneProteinBlock', 'currencySymbolsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock', 'attributionsBlock', 'comparativesBlock', 'causalBlock', 'concessionBlock', 'hedgingBlock', 'intensifiersBlock', 'reportingBlock', 'examplesBlock', 'approximationsBlock', 'questionsBlock', 'imperativesBlock', 'inTextDefinitionsBlock', 'fiscalYearBlock', 'ratiosBlock', 'ordinalsBlock', 'geoRegionsBlock', 'trackingBlock', 'weatherBlock', 'scientificNotationBlock', 'taxaBlock', 'chemistryBlock', 'fxRatesBlock', 'ibanSwiftBlock', 'licensePlatesBlock', 'legalCitationsBlock', 'socialUrlsBlock', 'geneProteinBlock', 'currencySymbolsBlock', 'phoneCodesBlock', 'postalCodesBlock', 'addressesBlock', 'mimeTypesBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
