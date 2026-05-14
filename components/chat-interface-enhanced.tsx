@@ -7599,7 +7599,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       {showTextCta ? (
                         <>
                           <PremiumCardIcon className="h-[18px] w-[24px] shrink-0 drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
-                          <span>{isFree ? 'Subir de plan' : 'Upgrade Now'}</span>
+                          <span>{isFree ? 'Subir de plan' : 'Mejorar plan'}</span>
                         </>
                       ) : (
                         <PremiumCardIcon className="h-[18px] w-[24px] drop-shadow-[0_1px_1px_rgba(0,0,0,0.15)]" />
@@ -7612,17 +7612,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onOpenChange={setSubscribeOpen}
                   user={currentUserInfo || user}
                 />
-                {/* Share conversation modal (ChatGPT-style) */}
+                {/* Share conversation modal */}
                 <Dialog open={shareModalOpen} onOpenChange={setShareModalOpen}>
                   <DialogContent className="max-w-md">
                     <DialogHeader>
-                      <DialogTitle>Share conversation</DialogTitle>
+                      <DialogTitle>Compartir conversación</DialogTitle>
                       <DialogDescription>
-                        Anyone with this link can view the conversation. You can copy or open it to share wherever you like.
+                        Cualquier persona con este enlace podrá ver la conversación. Puedes copiarlo o abrirlo para compartirlo donde necesites.
                       </DialogDescription>
                     </DialogHeader>
                     <div className="mt-4 space-y-3">
-                      <div className="text-xs font-medium text-muted-foreground">Shareable link</div>
+                      <div className="text-xs font-medium text-muted-foreground">Enlace para compartir</div>
                       <div className="flex items-center gap-2">
                         <input
                           readOnly
@@ -7636,10 +7636,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           onClick={() => {
                             if (!shareUrl) return;
                             navigator.clipboard.writeText(shareUrl);
-                            toast.success('Link copied to clipboard');
+                            toast.success('Enlace copiado al portapapeles');
                           }}
                         >
-                          Copy link
+                          Copiar enlace
                         </Button>
                       </div>
                     </div>
@@ -7654,12 +7654,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             }
                           }}
                         >
-                          Open link
+                          Abrir enlace
                         </Button>
                       )}
                       <DialogClose asChild>
                         <Button size="sm" variant="default">
-                          Done
+                          Listo
                         </Button>
                       </DialogClose>
                     </DialogFooter>
