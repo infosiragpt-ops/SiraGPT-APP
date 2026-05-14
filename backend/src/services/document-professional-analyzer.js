@@ -1417,6 +1417,30 @@ function getPricingTiers() {
   try { pricingTiersCache = require('./document-pricing-tiers'); } catch { pricingTiersCache = null; }
   return pricingTiersCache;
 }
+let arxivIdsCache = null;
+function getArxivIds() {
+  if (arxivIdsCache) return arxivIdsCache;
+  try { arxivIdsCache = require('./document-arxiv-ids'); } catch { arxivIdsCache = null; }
+  return arxivIdsCache;
+}
+let doiIdsCache = null;
+function getDoiIds() {
+  if (doiIdsCache) return doiIdsCache;
+  try { doiIdsCache = require('./document-doi-ids'); } catch { doiIdsCache = null; }
+  return doiIdsCache;
+}
+let orcidIdsCache = null;
+function getOrcidIds() {
+  if (orcidIdsCache) return orcidIdsCache;
+  try { orcidIdsCache = require('./document-orcid-ids'); } catch { orcidIdsCache = null; }
+  return orcidIdsCache;
+}
+let wikiRefsCache = null;
+function getWikiRefs() {
+  if (wikiRefsCache) return wikiRefsCache;
+  try { wikiRefsCache = require('./document-wiki-refs'); } catch { wikiRefsCache = null; }
+  return wikiRefsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2983,6 +3007,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const isoLangsBlock = buildIsoLangsBlock(files);
   const prReviewStatesBlock = buildPrReviewStatesBlock(files);
   const pricingTiersBlock = buildPricingTiersBlock(files);
+  const arxivIdsBlock = buildArxivIdsBlock(files);
+  const doiIdsBlock = buildDoiIdsBlock(files);
+  const orcidIdsBlock = buildOrcidIdsBlock(files);
+  const wikiRefsBlock = buildWikiRefsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3213,6 +3241,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     isoLangsBlock,
     prReviewStatesBlock,
     pricingTiersBlock,
+    arxivIdsBlock,
+    doiIdsBlock,
+    orcidIdsBlock,
+    wikiRefsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5911,6 +5943,42 @@ function buildPricingTiersBlock(files) {
   return engine.renderPricingTiersBlock(report);
 }
 
+function buildArxivIdsBlock(files) {
+  const engine = getArxivIds();
+  if (!engine || typeof engine.buildArxivIdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildArxivIdsForFiles(list);
+  return engine.renderArxivIdsBlock(report);
+}
+
+function buildDoiIdsBlock(files) {
+  const engine = getDoiIds();
+  if (!engine || typeof engine.buildDoiIdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDoiIdsForFiles(list);
+  return engine.renderDoiIdsBlock(report);
+}
+
+function buildOrcidIdsBlock(files) {
+  const engine = getOrcidIds();
+  if (!engine || typeof engine.buildOrcidIdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOrcidIdsForFiles(list);
+  return engine.renderOrcidIdsBlock(report);
+}
+
+function buildWikiRefsBlock(files) {
+  const engine = getWikiRefs();
+  if (!engine || typeof engine.buildWikiRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWikiRefsForFiles(list);
+  return engine.renderWikiRefsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6296,6 +6364,10 @@ module.exports = {
   buildIsoLangsBlock,
   buildPrReviewStatesBlock,
   buildPricingTiersBlock,
+  buildArxivIdsBlock,
+  buildDoiIdsBlock,
+  buildOrcidIdsBlock,
+  buildWikiRefsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
