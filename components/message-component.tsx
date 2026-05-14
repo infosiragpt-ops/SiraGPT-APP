@@ -2545,7 +2545,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 "bg-muted/85 text-foreground dark:bg-[hsl(var(--surface-elevated))] dark:text-foreground",
                                 "border border-transparent shadow-none",
                                 "text-[14.5px] leading-[1.55] tracking-[-0.005em]",
-                                "transition-colors duration-[var(--duration-base,220ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
+                                "transition-colors duration-base ease-smooth",
                                 // Wrap long tokens (pasted URLs, code strings, or
                                 // long sentences in narrow split-view) instead of
                                 // pushing the bubble past the pane edge.

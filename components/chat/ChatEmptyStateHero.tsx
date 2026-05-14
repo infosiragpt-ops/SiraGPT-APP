@@ -135,7 +135,7 @@ export function ChatEmptyStateHero({
             className={cn(
               "group flex items-center gap-2 rounded-2xl border border-border/60 bg-card/60 px-3 py-2.5 text-left",
               "shadow-[0_1px_2px_rgba(15,23,42,0.03)] dark:shadow-none",
-              "transition-all duration-[var(--duration-base,220ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
+              "transition-all duration-base ease-smooth",
               "hover:border-border hover:bg-accent/60 hover:shadow-[0_2px_6px_rgba(15,23,42,0.06)] hover:-translate-y-[1px]",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
               "active:translate-y-0",

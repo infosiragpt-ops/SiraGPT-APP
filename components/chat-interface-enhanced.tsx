@@ -3074,7 +3074,7 @@ const NavbarModelSelector = ({
           "bg-transparent text-foreground",
           "border border-transparent",
           "text-[13.5px] font-semibold tracking-tight",
-          "transition-[background-color,border-color,color] duration-[var(--duration-base,220ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
+          "transition-[background-color,border-color,color] duration-base ease-smooth",
           "hover:bg-muted/45 hover:border-border/40",
           "active:scale-[0.985]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
@@ -3375,6 +3375,32 @@ function ChatInterfaceContent() {
     ) as HTMLElement | null;
     if (viewport) setRadixViewport(viewport);
   }, [currentChat?.id]);
+
+  // ── Scroll-to-bottom pill ────────────────────────────────────────
+  // Tracks whether the user is currently at the bottom of the message
+  // list. If they scroll up (e.g. to read history while a long answer
+  // is streaming) we surface a floating pill above the composer that
+  // jumps back to the latest message on click — the same affordance
+  // ChatGPT / Claude use. Threshold of 96px keeps the pill from
+  // appearing on micro-scrolls (single-line keystroke jitter).
+  const [isAtBottom, setIsAtBottom] = React.useState(true);
+  React.useEffect(() => {
+    if (!radixViewport) return;
+    const onScroll = () => {
+      const distance = radixViewport.scrollHeight - radixViewport.scrollTop - radixViewport.clientHeight;
+      setIsAtBottom(distance < 96);
+    };
+    onScroll();
+    radixViewport.addEventListener('scroll', onScroll, { passive: true });
+    const ro = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(onScroll)
+      : null;
+    ro?.observe(radixViewport);
+    return () => {
+      radixViewport.removeEventListener('scroll', onScroll);
+      ro?.disconnect();
+    };
+  }, [radixViewport]);
 
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -6691,6 +6717,23 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       handleSend()
+    } else if (e.key === "Escape") {
+      // Esc cascade — peel one layer of context per press so the user
+      // can back out without reaching for the mouse:
+      //   1. Voice Studio open → close it
+      //   2. Any active tool/connector → close all
+      //   3. Otherwise → blur the textarea
+      if (showAudioPanel) {
+        e.preventDefault()
+        setShowAudioPanel(false)
+        return
+      }
+      if (hasActiveTools) {
+        e.preventDefault()
+        closeAllToolsAndConnectors()
+        return
+      }
+      ;(e.currentTarget as HTMLTextAreaElement).blur()
     }
   }
 
@@ -7612,7 +7655,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       "bg-background",
                       "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
                       "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                      "transition-[border-color,background-color,box-shadow,ring-color] duration-[var(--duration-base)] ease-[var(--ease-out-smooth)]",
+                      "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
                       "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
                       "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
                     )}
@@ -7767,7 +7810,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     aria-label={label}
                                     title={label}
                                     className={cn(
-                                      "h-9 w-9 rounded-full p-0 transition-all duration-[var(--duration-base)] ease-[var(--ease-out-smooth)]",
+                                      "h-9 w-9 rounded-full p-0 transition-all duration-base ease-smooth",
                                       "bg-foreground text-background",
                                       "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_4px_10px_-2px_rgba(0,0,0,0.12)]",
                                       "hover:bg-foreground/92 hover:shadow-[0_2px_4px_rgba(0,0,0,0.12),0_8px_16px_-4px_rgba(0,0,0,0.22)] hover:-translate-y-[0.5px]",
@@ -8009,7 +8052,43 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   {/* Input & Actions */}
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
-                    <div className="max-w-3xl mx-auto space-y-2 bg-background">
+                    <div className="relative max-w-3xl mx-auto space-y-2 bg-background">
+                      {/* Scroll-to-bottom pill — only shown when the
+                          user has scrolled up. Floats just above the
+                          composer surface so the click target sits in
+                          the same zone the user's hand is already
+                          near. Aria-live so assistive tech announces
+                          "new messages below" as the pill appears. */}
+                      <div
+                        aria-live="polite"
+                        className={cn(
+                          "pointer-events-none absolute left-1/2 -top-12 z-20 -translate-x-1/2",
+                          "transition-all duration-base ease-smooth",
+                          isAtBottom
+                            ? "opacity-0 translate-y-1"
+                            : "opacity-100 translate-y-0",
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={scrollToBottom}
+                          aria-label="Ir al final de la conversación"
+                          className={cn(
+                            "pointer-events-auto inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
+                            "border border-border/55 bg-background/95 backdrop-blur-md",
+                            "text-[12.5px] font-medium text-foreground/80",
+                            "shadow-[0_4px_14px_-4px_rgba(15,23,42,0.18),0_1px_2px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_28px_-12px_rgba(0,0,0,0.55)]",
+                            "transition-all duration-fast ease-smooth",
+                            "hover:bg-background hover:border-border hover:-translate-y-[1px] hover:text-foreground",
+                            "active:translate-y-0 active:scale-[0.97]",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                          )}
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" strokeWidth={2} />
+                          <span>Ir al final</span>
+                        </button>
+                      </div>
+
                       {/* Input Area */}
 
                       {/* Same composer as the initial state — chips
@@ -8018,11 +8097,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         className={cn(
                           "composer-surface group/composer relative overflow-hidden rounded-3xl",
                           "bg-background",
-                          "ring-1 ring-black/[0.08] dark:ring-0",
-                          "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-none",
-                          "transition-[border-color,background-color,box-shadow,ring-color] duration-200 ease-out",
-                          "hover:ring-black/[0.12] dark:hover:ring-0",
-                          "focus-within:ring-2 focus-within:ring-foreground/[0.14] dark:focus-within:ring-0",
+                          "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
+                          "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
+                          "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
+                          "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
+                          "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
                         )}
                       >
                         <ActiveOptionsDisplay

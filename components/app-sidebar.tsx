@@ -163,7 +163,7 @@ function SidebarNavItem({
           isActive={active}
           className={cn(
             "group/nav w-full justify-start h-9 px-3 rounded-lg",
-            "transition-[background-color,color,box-shadow] duration-[var(--duration-fast,150ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
+            "transition-[background-color,color,box-shadow] duration-fast ease-smooth",
             "hover:bg-muted/45",
             active && "bg-accent text-accent-foreground shadow-[inset_2px_0_0_0_hsl(var(--accent-violet)/0.65)] dark:shadow-[inset_2px_0_0_0_hsl(var(--accent-violet)/0.7)]",
             pending && "opacity-70"
@@ -348,6 +348,31 @@ export function AppSidebar() {
   }, [markSharedNavigationIntent, t])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
+
+  // ── Global keyboard shortcut: ⌘K / Ctrl+K opens chat search ──────
+  // Mirrors the affordance every Claude / Linear / Notion user
+  // already has in muscle memory. Skipped while focus is in an
+  // input/textarea/contenteditable so we don't hijack regular typing.
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      const isTyping =
+        tag === "input" || tag === "textarea" || target?.isContentEditable === true
+      const isCmdK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k"
+      if (!isCmdK) return
+      // ⌘K from anywhere — even mid-input — should still open search.
+      // This is the convention every productivity app follows, so the
+      // `isTyping` gate above only protects accidental letter shortcuts
+      // (none added here yet, just the gate skeleton for future ones).
+      if (isTyping && !isCmdK) return
+      event.preventDefault()
+      setSearchOpen((current) => !current)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
   const [editTitle, setEditTitle] = React.useState("")
   const [optimisticUpdates, setOptimisticUpdates] = React.useState<Record<string, string>>({})

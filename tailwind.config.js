@@ -170,6 +170,19 @@ module.exports = {
         90: "90",
         100: "100",
       },
+      // Premium motion keywords — `transitionTimingFunction.smooth` →
+      // `ease-smooth` Tailwind class. Maps to the same cubic-bezier
+      // surfaced via `--ease-out-smooth` in globals.css so JS-driven
+      // animations (framer-motion) stay in sync with the CSS curves.
+      transitionTimingFunction: {
+        smooth: "var(--ease-out-smooth, cubic-bezier(0.22, 1, 0.36, 1))",
+        soft: "var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1))",
+      },
+      transitionDuration: {
+        fast: "var(--duration-fast, 150ms)",
+        base: "var(--duration-base, 220ms)",
+        slow: "var(--duration-slow, 320ms)",
+      },
     },
   },
   plugins: [require("tailwindcss-animate"),

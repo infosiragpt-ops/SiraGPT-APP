@@ -48,7 +48,7 @@ export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: 
                             onClick={onPreview}
                             className={cn(
                                 "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11.5px] font-medium text-zinc-300",
-                                "transition-[background-color,color] duration-[var(--duration-fast,150ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
+                                "transition-[background-color,color] duration-fast ease-smooth",
                                 "hover:bg-white/[0.08] hover:text-white",
                                 "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/40",
                             )}
@@ -63,7 +63,7 @@ export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: 
                         onClick={handleCopy}
                         className={cn(
                             "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11.5px] font-medium text-zinc-300",
-                            "transition-[background-color,color] duration-[var(--duration-fast,150ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
+                            "transition-[background-color,color] duration-fast ease-smooth",
                             "hover:bg-white/[0.08] hover:text-white",
                             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/40",
                             isCopied && "text-emerald-400 hover:text-emerald-300",
