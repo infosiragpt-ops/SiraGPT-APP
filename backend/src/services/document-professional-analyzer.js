@@ -1369,6 +1369,30 @@ function getLinuxDistros() {
   try { linuxDistrosCache = require('./document-linux-distros'); } catch { linuxDistrosCache = null; }
   return linuxDistrosCache;
 }
+let lifecyclePhasesCache = null;
+function getLifecyclePhases() {
+  if (lifecyclePhasesCache) return lifecyclePhasesCache;
+  try { lifecyclePhasesCache = require('./document-lifecycle-phases'); } catch { lifecyclePhasesCache = null; }
+  return lifecyclePhasesCache;
+}
+let projectCodenamesCache = null;
+function getProjectCodenames() {
+  if (projectCodenamesCache) return projectCodenamesCache;
+  try { projectCodenamesCache = require('./document-project-codenames'); } catch { projectCodenamesCache = null; }
+  return projectCodenamesCache;
+}
+let riskLevelsCache = null;
+function getRiskLevels() {
+  if (riskLevelsCache) return riskLevelsCache;
+  try { riskLevelsCache = require('./document-risk-levels'); } catch { riskLevelsCache = null; }
+  return riskLevelsCache;
+}
+let saasMetricsCache = null;
+function getSaasMetrics() {
+  if (saasMetricsCache) return saasMetricsCache;
+  try { saasMetricsCache = require('./document-saas-metrics'); } catch { saasMetricsCache = null; }
+  return saasMetricsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2927,6 +2951,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const exitCodesBlock = buildExitCodesBlock(files);
   const networkPortsBlock = buildNetworkPortsBlock(files);
   const linuxDistrosBlock = buildLinuxDistrosBlock(files);
+  const lifecyclePhasesBlock = buildLifecyclePhasesBlock(files);
+  const projectCodenamesBlock = buildProjectCodenamesBlock(files);
+  const riskLevelsBlock = buildRiskLevelsBlock(files);
+  const saasMetricsBlock = buildSaasMetricsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3149,6 +3177,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     exitCodesBlock,
     networkPortsBlock,
     linuxDistrosBlock,
+    lifecyclePhasesBlock,
+    projectCodenamesBlock,
+    riskLevelsBlock,
+    saasMetricsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5775,6 +5807,42 @@ function buildLinuxDistrosBlock(files) {
   return engine.renderLinuxDistrosBlock(report);
 }
 
+function buildLifecyclePhasesBlock(files) {
+  const engine = getLifecyclePhases();
+  if (!engine || typeof engine.buildLifecyclePhasesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildLifecyclePhasesForFiles(list);
+  return engine.renderLifecyclePhasesBlock(report);
+}
+
+function buildProjectCodenamesBlock(files) {
+  const engine = getProjectCodenames();
+  if (!engine || typeof engine.buildProjectCodenamesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildProjectCodenamesForFiles(list);
+  return engine.renderProjectCodenamesBlock(report);
+}
+
+function buildRiskLevelsBlock(files) {
+  const engine = getRiskLevels();
+  if (!engine || typeof engine.buildRiskLevelsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRiskLevelsForFiles(list);
+  return engine.renderRiskLevelsBlock(report);
+}
+
+function buildSaasMetricsBlock(files) {
+  const engine = getSaasMetrics();
+  if (!engine || typeof engine.buildSaasMetricsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSaasMetricsForFiles(list);
+  return engine.renderSaasMetricsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6152,6 +6220,10 @@ module.exports = {
   buildExitCodesBlock,
   buildNetworkPortsBlock,
   buildLinuxDistrosBlock,
+  buildLifecyclePhasesBlock,
+  buildProjectCodenamesBlock,
+  buildRiskLevelsBlock,
+  buildSaasMetricsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
