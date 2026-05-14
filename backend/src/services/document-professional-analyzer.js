@@ -1609,6 +1609,30 @@ function getPipReqs() {
   try { pipReqsCache = require('./document-pip-reqs'); } catch { pipReqsCache = null; }
   return pipReqsCache;
 }
+let composerPkgsCache = null;
+function getComposerPkgs() {
+  if (composerPkgsCache) return composerPkgsCache;
+  try { composerPkgsCache = require('./document-composer-pkgs'); } catch { composerPkgsCache = null; }
+  return composerPkgsCache;
+}
+let nugetPkgsCache = null;
+function getNugetPkgs() {
+  if (nugetPkgsCache) return nugetPkgsCache;
+  try { nugetPkgsCache = require('./document-nuget-pkgs'); } catch { nugetPkgsCache = null; }
+  return nugetPkgsCache;
+}
+let gemPkgsCache = null;
+function getGemPkgs() {
+  if (gemPkgsCache) return gemPkgsCache;
+  try { gemPkgsCache = require('./document-gem-pkgs'); } catch { gemPkgsCache = null; }
+  return gemPkgsCache;
+}
+let hexPkgsCache = null;
+function getHexPkgs() {
+  if (hexPkgsCache) return hexPkgsCache;
+  try { hexPkgsCache = require('./document-hex-pkgs'); } catch { hexPkgsCache = null; }
+  return hexPkgsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3207,6 +3231,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const goModulesBlock = buildGoModulesBlock(files);
   const mavenCoordsBlock = buildMavenCoordsBlock(files);
   const pipReqsBlock = buildPipReqsBlock(files);
+  const composerPkgsBlock = buildComposerPkgsBlock(files);
+  const nugetPkgsBlock = buildNugetPkgsBlock(files);
+  const gemPkgsBlock = buildGemPkgsBlock(files);
+  const hexPkgsBlock = buildHexPkgsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3469,6 +3497,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     goModulesBlock,
     mavenCoordsBlock,
     pipReqsBlock,
+    composerPkgsBlock,
+    nugetPkgsBlock,
+    gemPkgsBlock,
+    hexPkgsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6455,6 +6487,42 @@ function buildPipReqsBlock(files) {
   return engine.renderPipReqsBlock(report);
 }
 
+function buildComposerPkgsBlock(files) {
+  const engine = getComposerPkgs();
+  if (!engine || typeof engine.buildComposerPkgsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildComposerPkgsForFiles(list);
+  return engine.renderComposerPkgsBlock(report);
+}
+
+function buildNugetPkgsBlock(files) {
+  const engine = getNugetPkgs();
+  if (!engine || typeof engine.buildNugetPkgsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNugetPkgsForFiles(list);
+  return engine.renderNugetPkgsBlock(report);
+}
+
+function buildGemPkgsBlock(files) {
+  const engine = getGemPkgs();
+  if (!engine || typeof engine.buildGemPkgsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGemPkgsForFiles(list);
+  return engine.renderGemPkgsBlock(report);
+}
+
+function buildHexPkgsBlock(files) {
+  const engine = getHexPkgs();
+  if (!engine || typeof engine.buildHexPkgsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHexPkgsForFiles(list);
+  return engine.renderHexPkgsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6872,6 +6940,10 @@ module.exports = {
   buildGoModulesBlock,
   buildMavenCoordsBlock,
   buildPipReqsBlock,
+  buildComposerPkgsBlock,
+  buildNugetPkgsBlock,
+  buildGemPkgsBlock,
+  buildHexPkgsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
