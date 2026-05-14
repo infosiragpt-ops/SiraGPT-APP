@@ -1729,6 +1729,30 @@ function getRegexFlags() {
   try { regexFlagsCache = require('./document-regex-flags'); } catch { regexFlagsCache = null; }
   return regexFlagsCache;
 }
+let vueSfcCache = null;
+function getVueSfc() {
+  if (vueSfcCache) return vueSfcCache;
+  try { vueSfcCache = require('./document-vue-sfc'); } catch { vueSfcCache = null; }
+  return vueSfcCache;
+}
+let astroCache = null;
+function getAstro() {
+  if (astroCache) return astroCache;
+  try { astroCache = require('./document-astro'); } catch { astroCache = null; }
+  return astroCache;
+}
+let e2eTestsCache = null;
+function getE2eTests() {
+  if (e2eTestsCache) return e2eTestsCache;
+  try { e2eTestsCache = require('./document-e2e-tests'); } catch { e2eTestsCache = null; }
+  return e2eTestsCache;
+}
+let mswHandlersCache = null;
+function getMswHandlers() {
+  if (mswHandlersCache) return mswHandlersCache;
+  try { mswHandlersCache = require('./document-msw-handlers'); } catch { mswHandlersCache = null; }
+  return mswHandlersCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3347,6 +3371,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const cssVarsBlock = buildCssVarsBlock(files);
   const composeServicesBlock = buildComposeServicesBlock(files);
   const regexFlagsBlock = buildRegexFlagsBlock(files);
+  const vueSfcBlock = buildVueSfcBlock(files);
+  const astroBlock = buildAstroBlock(files);
+  const e2eTestsBlock = buildE2eTestsBlock(files);
+  const mswHandlersBlock = buildMswHandlersBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3629,6 +3657,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     cssVarsBlock,
     composeServicesBlock,
     regexFlagsBlock,
+    vueSfcBlock,
+    astroBlock,
+    e2eTestsBlock,
+    mswHandlersBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6795,6 +6827,42 @@ function buildRegexFlagsBlock(files) {
   return engine.renderRegexFlagsBlock(report);
 }
 
+function buildVueSfcBlock(files) {
+  const engine = getVueSfc();
+  if (!engine || typeof engine.buildVueSfcForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildVueSfcForFiles(list);
+  return engine.renderVueSfcBlock(report);
+}
+
+function buildAstroBlock(files) {
+  const engine = getAstro();
+  if (!engine || typeof engine.buildAstroForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAstroForFiles(list);
+  return engine.renderAstroBlock(report);
+}
+
+function buildE2eTestsBlock(files) {
+  const engine = getE2eTests();
+  if (!engine || typeof engine.buildE2eTestsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildE2eTestsForFiles(list);
+  return engine.renderE2eTestsBlock(report);
+}
+
+function buildMswHandlersBlock(files) {
+  const engine = getMswHandlers();
+  if (!engine || typeof engine.buildMswHandlersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMswHandlersForFiles(list);
+  return engine.renderMswHandlersBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7232,6 +7300,10 @@ module.exports = {
   buildCssVarsBlock,
   buildComposeServicesBlock,
   buildRegexFlagsBlock,
+  buildVueSfcBlock,
+  buildAstroBlock,
+  buildE2eTestsBlock,
+  buildMswHandlersBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
