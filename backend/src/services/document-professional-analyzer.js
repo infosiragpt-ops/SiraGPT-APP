@@ -1297,6 +1297,30 @@ function getTlds() {
   try { tldsCache = require('./document-tlds'); } catch { tldsCache = null; }
   return tldsCache;
 }
+let stockTickersCache = null;
+function getStockTickers() {
+  if (stockTickersCache) return stockTickersCache;
+  try { stockTickersCache = require('./document-stock-tickers'); } catch { stockTickersCache = null; }
+  return stockTickersCache;
+}
+let hardwareSpecsCache = null;
+function getHardwareSpecs() {
+  if (hardwareSpecsCache) return hardwareSpecsCache;
+  try { hardwareSpecsCache = require('./document-hardware-specs'); } catch { hardwareSpecsCache = null; }
+  return hardwareSpecsCache;
+}
+let bandwidthUnitsCache = null;
+function getBandwidthUnits() {
+  if (bandwidthUnitsCache) return bandwidthUnitsCache;
+  try { bandwidthUnitsCache = require('./document-bandwidth-units'); } catch { bandwidthUnitsCache = null; }
+  return bandwidthUnitsCache;
+}
+let trackingNumbersCache = null;
+function getTrackingNumbers() {
+  if (trackingNumbersCache) return trackingNumbersCache;
+  try { trackingNumbersCache = require('./document-tracking-numbers'); } catch { trackingNumbersCache = null; }
+  return trackingNumbersCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2843,6 +2867,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const pmTicketsBlock = buildPmTicketsBlock(files);
   const slaTargetsBlock = buildSlaTargetsBlock(files);
   const tldsBlock = buildTldsBlock(files);
+  const stockTickersBlock = buildStockTickersBlock(files);
+  const hardwareSpecsBlock = buildHardwareSpecsBlock(files);
+  const bandwidthUnitsBlock = buildBandwidthUnitsBlock(files);
+  const trackingNumbersBlock = buildTrackingNumbersBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3053,6 +3081,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     pmTicketsBlock,
     slaTargetsBlock,
     tldsBlock,
+    stockTickersBlock,
+    hardwareSpecsBlock,
+    bandwidthUnitsBlock,
+    trackingNumbersBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5571,6 +5603,42 @@ function buildTldsBlock(files) {
   return engine.renderTldsBlock(report);
 }
 
+function buildStockTickersBlock(files) {
+  const engine = getStockTickers();
+  if (!engine || typeof engine.buildStockTickersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildStockTickersForFiles(list);
+  return engine.renderStockTickersBlock(report);
+}
+
+function buildHardwareSpecsBlock(files) {
+  const engine = getHardwareSpecs();
+  if (!engine || typeof engine.buildHardwareSpecsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHardwareSpecsForFiles(list);
+  return engine.renderHardwareSpecsBlock(report);
+}
+
+function buildBandwidthUnitsBlock(files) {
+  const engine = getBandwidthUnits();
+  if (!engine || typeof engine.buildBandwidthUnitsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBandwidthUnitsForFiles(list);
+  return engine.renderBandwidthUnitsBlock(report);
+}
+
+function buildTrackingNumbersBlock(files) {
+  const engine = getTrackingNumbers();
+  if (!engine || typeof engine.buildTrackingNumbersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTrackingNumbersForFiles(list);
+  return engine.renderTrackingNumbersBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5936,6 +6004,10 @@ module.exports = {
   buildPmTicketsBlock,
   buildSlaTargetsBlock,
   buildTldsBlock,
+  buildStockTickersBlock,
+  buildHardwareSpecsBlock,
+  buildBandwidthUnitsBlock,
+  buildTrackingNumbersBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
