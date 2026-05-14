@@ -1054,9 +1054,9 @@ const ActionsDropdown = ({
                 <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
               <div className="flex-1">
-                <div className="liquid-label font-medium text-sm">Upload Files</div>
+                <div className="liquid-label font-medium text-sm">Subir archivos</div>
                 <div className="text-xs text-muted-foreground">
-                  {isUploading ? 'Uploading...' : 'Images, PDFs, Documents'}
+                  {isUploading ? 'Subiendo…' : 'Imágenes, PDFs, documentos'}
                 </div>
               </div>
             </div>
@@ -2131,7 +2131,7 @@ const ActiveToolsDisplay = ({
       {isVideoGenerationActive && (
         <div className="flex items-center gap-1.5 bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 px-2 py-1 rounded-full text-xs border border-orange-200 dark:border-orange-800">
           <Video className="h-3 w-3" />
-          <span className="font-medium">Video Generation</span>
+          <span className="font-medium">Generar video</span>
           <Button
             variant="ghost"
             size="sm"
@@ -2165,7 +2165,7 @@ const ActiveToolsDisplay = ({
       {chatType === 'thesis' && (
         <div className="flex items-center gap-1.5 bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300 px-2 py-1 rounded-full text-xs border border-purple-200 dark:border-purple-800">
           <BookOpen className="h-3 w-3" />
-          <span className="font-medium">Thesis Generator</span>
+          <span className="font-medium">Generador de tesis</span>
           <div className="w-2 h-2 bg-purple-500 rounded-full ml-1" />
           <Button
             variant="ghost"
