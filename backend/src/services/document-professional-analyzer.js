@@ -1489,6 +1489,30 @@ function getComplianceRefs() {
   try { complianceRefsCache = require('./document-compliance-refs'); } catch { complianceRefsCache = null; }
   return complianceRefsCache;
 }
+let tlsCiphersCache = null;
+function getTlsCiphers() {
+  if (tlsCiphersCache) return tlsCiphersCache;
+  try { tlsCiphersCache = require('./document-tls-ciphers'); } catch { tlsCiphersCache = null; }
+  return tlsCiphersCache;
+}
+let dnsRecordsCache = null;
+function getDnsRecords() {
+  if (dnsRecordsCache) return dnsRecordsCache;
+  try { dnsRecordsCache = require('./document-dns-records'); } catch { dnsRecordsCache = null; }
+  return dnsRecordsCache;
+}
+let emailAuthCache = null;
+function getEmailAuth() {
+  if (emailAuthCache) return emailAuthCache;
+  try { emailAuthCache = require('./document-email-auth'); } catch { emailAuthCache = null; }
+  return emailAuthCache;
+}
+let openapiKeysCache = null;
+function getOpenapiKeys() {
+  if (openapiKeysCache) return openapiKeysCache;
+  try { openapiKeysCache = require('./document-openapi-keys'); } catch { openapiKeysCache = null; }
+  return openapiKeysCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3067,6 +3091,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const latexCommandsBlock = buildLatexCommandsBlock(files);
   const progLangsBlock = buildProgLangsBlock(files);
   const complianceRefsBlock = buildComplianceRefsBlock(files);
+  const tlsCiphersBlock = buildTlsCiphersBlock(files);
+  const dnsRecordsBlock = buildDnsRecordsBlock(files);
+  const emailAuthBlock = buildEmailAuthBlock(files);
+  const openapiKeysBlock = buildOpenapiKeysBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3309,6 +3337,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     latexCommandsBlock,
     progLangsBlock,
     complianceRefsBlock,
+    tlsCiphersBlock,
+    dnsRecordsBlock,
+    emailAuthBlock,
+    openapiKeysBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6115,6 +6147,42 @@ function buildComplianceRefsBlock(files) {
   return engine.renderComplianceRefsBlock(report);
 }
 
+function buildTlsCiphersBlock(files) {
+  const engine = getTlsCiphers();
+  if (!engine || typeof engine.buildTlsCiphersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTlsCiphersForFiles(list);
+  return engine.renderTlsCiphersBlock(report);
+}
+
+function buildDnsRecordsBlock(files) {
+  const engine = getDnsRecords();
+  if (!engine || typeof engine.buildDnsRecordsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDnsRecordsForFiles(list);
+  return engine.renderDnsRecordsBlock(report);
+}
+
+function buildEmailAuthBlock(files) {
+  const engine = getEmailAuth();
+  if (!engine || typeof engine.buildEmailAuthForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildEmailAuthForFiles(list);
+  return engine.renderEmailAuthBlock(report);
+}
+
+function buildOpenapiKeysBlock(files) {
+  const engine = getOpenapiKeys();
+  if (!engine || typeof engine.buildOpenapiKeysForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOpenapiKeysForFiles(list);
+  return engine.renderOpenapiKeysBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6512,6 +6580,10 @@ module.exports = {
   buildLatexCommandsBlock,
   buildProgLangsBlock,
   buildComplianceRefsBlock,
+  buildTlsCiphersBlock,
+  buildDnsRecordsBlock,
+  buildEmailAuthBlock,
+  buildOpenapiKeysBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
