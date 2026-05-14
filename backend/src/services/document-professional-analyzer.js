@@ -1129,6 +1129,30 @@ function getGitShas() {
   try { gitShasCache = require('./document-git-shas'); } catch { gitShasCache = null; }
   return gitShasCache;
 }
+let cloudStorageCache = null;
+function getCloudStorage() {
+  if (cloudStorageCache) return cloudStorageCache;
+  try { cloudStorageCache = require('./document-cloud-storage'); } catch { cloudStorageCache = null; }
+  return cloudStorageCache;
+}
+let webVitalsCache = null;
+function getWebVitals() {
+  if (webVitalsCache) return webVitalsCache;
+  try { webVitalsCache = require('./document-web-vitals'); } catch { webVitalsCache = null; }
+  return webVitalsCache;
+}
+let ariaA11yCache = null;
+function getAriaA11y() {
+  if (ariaA11yCache) return ariaA11yCache;
+  try { ariaA11yCache = require('./document-aria-a11y'); } catch { ariaA11yCache = null; }
+  return ariaA11yCache;
+}
+let i18nKeysCache = null;
+function getI18nKeys() {
+  if (i18nKeysCache) return i18nKeysCache;
+  try { i18nKeysCache = require('./document-i18n-keys'); } catch { i18nKeysCache = null; }
+  return i18nKeysCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2647,6 +2671,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const envNamesBlock = buildEnvNamesBlock(files);
   const testBlocksBlock = buildTestBlocksBlock(files);
   const gitShasBlock = buildGitShasBlock(files);
+  const cloudStorageBlock = buildCloudStorageBlock(files);
+  const webVitalsBlock = buildWebVitalsBlock(files);
+  const ariaA11yBlock = buildAriaA11yBlock(files);
+  const i18nKeysBlock = buildI18nKeysBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2829,6 +2857,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     envNamesBlock,
     testBlocksBlock,
     gitShasBlock,
+    cloudStorageBlock,
+    webVitalsBlock,
+    ariaA11yBlock,
+    i18nKeysBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5095,6 +5127,42 @@ function buildGitShasBlock(files) {
   return engine.renderGitShasBlock(report);
 }
 
+function buildCloudStorageBlock(files) {
+  const engine = getCloudStorage();
+  if (!engine || typeof engine.buildCloudStorageForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCloudStorageForFiles(list);
+  return engine.renderCloudStorageBlock(report);
+}
+
+function buildWebVitalsBlock(files) {
+  const engine = getWebVitals();
+  if (!engine || typeof engine.buildWebVitalsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWebVitalsForFiles(list);
+  return engine.renderWebVitalsBlock(report);
+}
+
+function buildAriaA11yBlock(files) {
+  const engine = getAriaA11y();
+  if (!engine || typeof engine.buildAriaA11yForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAriaA11yForFiles(list);
+  return engine.renderAriaA11yBlock(report);
+}
+
+function buildI18nKeysBlock(files) {
+  const engine = getI18nKeys();
+  if (!engine || typeof engine.buildI18nKeysForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildI18nKeysForFiles(list);
+  return engine.renderI18nKeysBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5432,6 +5500,10 @@ module.exports = {
   buildEnvNamesBlock,
   buildTestBlocksBlock,
   buildGitShasBlock,
+  buildCloudStorageBlock,
+  buildWebVitalsBlock,
+  buildAriaA11yBlock,
+  buildI18nKeysBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,

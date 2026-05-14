@@ -1259,6 +1259,10 @@ router.post(
             || documentEnrichment?.envNamesBlock
             || documentEnrichment?.testBlocksBlock
             || documentEnrichment?.gitShasBlock
+            || documentEnrichment?.cloudStorageBlock
+            || documentEnrichment?.webVitalsBlock
+            || documentEnrichment?.ariaA11yBlock
+            || documentEnrichment?.i18nKeysBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1811,6 +1815,14 @@ router.post(
             if (documentEnrichment.testBlocksBlock) parts.push(documentEnrichment.testBlocksBlock);
             // Git commit SHAs — short (7-12) / medium / full (40).
             if (documentEnrichment.gitShasBlock) parts.push(documentEnrichment.gitShasBlock);
+            // Cloud storage paths: s3:// / gs:// / abfs:// / wasb:// / hdfs://.
+            if (documentEnrichment.cloudStorageBlock) parts.push(documentEnrichment.cloudStorageBlock);
+            // Core Web Vitals (LCP / FID / INP / CLS / TTFB / FCP / TBT) with bucket classification.
+            if (documentEnrichment.webVitalsBlock) parts.push(documentEnrichment.webVitalsBlock);
+            // ARIA / a11y markers: role / aria-* / alt / tabindex.
+            if (documentEnrichment.ariaA11yBlock) parts.push(documentEnrichment.ariaA11yBlock);
+            // I18n keys: t() / I18n.t() / $t() / formatMessage / translate pipe.
+            if (documentEnrichment.i18nKeysBlock) parts.push(documentEnrichment.i18nKeysBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1876,7 +1888,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock', 'attributionsBlock', 'comparativesBlock', 'causalBlock', 'concessionBlock', 'hedgingBlock', 'intensifiersBlock', 'reportingBlock', 'examplesBlock', 'approximationsBlock', 'questionsBlock', 'imperativesBlock', 'inTextDefinitionsBlock', 'fiscalYearBlock', 'ratiosBlock', 'ordinalsBlock', 'geoRegionsBlock', 'trackingBlock', 'weatherBlock', 'scientificNotationBlock', 'taxaBlock', 'chemistryBlock', 'fxRatesBlock', 'ibanSwiftBlock', 'licensePlatesBlock', 'legalCitationsBlock', 'socialUrlsBlock', 'geneProteinBlock', 'currencySymbolsBlock', 'phoneCodesBlock', 'postalCodesBlock', 'addressesBlock', 'mimeTypesBlock', 'utmParamsBlock', 'creditCardsBlock', 'ssnPiiBlock', 'apiKeysBlock', 'httpMethodsBlock', 'containerRefsBlock', 'k8sRefsBlock', 'metricsBlock', 'oauthScopesBlock', 'cspDirectivesBlock', 'mathOperatorsBlock', 'spdxComplexBlock', 'featureFlagsBlock', 'cookieAttrsBlock', 'otelTraceBlock', 'cloudArnsBlock', 'mlModelsBlock', 'dbConnStringsBlock', 'graphqlOpsBlock', 'grpcRefsBlock', 'stackTracesBlock', 'envNamesBlock', 'testBlocksBlock', 'gitShasBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock', 'attributionsBlock', 'comparativesBlock', 'causalBlock', 'concessionBlock', 'hedgingBlock', 'intensifiersBlock', 'reportingBlock', 'examplesBlock', 'approximationsBlock', 'questionsBlock', 'imperativesBlock', 'inTextDefinitionsBlock', 'fiscalYearBlock', 'ratiosBlock', 'ordinalsBlock', 'geoRegionsBlock', 'trackingBlock', 'weatherBlock', 'scientificNotationBlock', 'taxaBlock', 'chemistryBlock', 'fxRatesBlock', 'ibanSwiftBlock', 'licensePlatesBlock', 'legalCitationsBlock', 'socialUrlsBlock', 'geneProteinBlock', 'currencySymbolsBlock', 'phoneCodesBlock', 'postalCodesBlock', 'addressesBlock', 'mimeTypesBlock', 'utmParamsBlock', 'creditCardsBlock', 'ssnPiiBlock', 'apiKeysBlock', 'httpMethodsBlock', 'containerRefsBlock', 'k8sRefsBlock', 'metricsBlock', 'oauthScopesBlock', 'cspDirectivesBlock', 'mathOperatorsBlock', 'spdxComplexBlock', 'featureFlagsBlock', 'cookieAttrsBlock', 'otelTraceBlock', 'cloudArnsBlock', 'mlModelsBlock', 'dbConnStringsBlock', 'graphqlOpsBlock', 'grpcRefsBlock', 'stackTracesBlock', 'envNamesBlock', 'testBlocksBlock', 'gitShasBlock', 'cloudStorageBlock', 'webVitalsBlock', 'ariaA11yBlock', 'i18nKeysBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];
