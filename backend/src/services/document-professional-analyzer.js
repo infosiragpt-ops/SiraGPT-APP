@@ -1345,6 +1345,30 @@ function getMediaTimestamps() {
   try { mediaTimestampsCache = require('./document-media-timestamps'); } catch { mediaTimestampsCache = null; }
   return mediaTimestampsCache;
 }
+let linuxSignalsCache = null;
+function getLinuxSignals() {
+  if (linuxSignalsCache) return linuxSignalsCache;
+  try { linuxSignalsCache = require('./document-linux-signals'); } catch { linuxSignalsCache = null; }
+  return linuxSignalsCache;
+}
+let exitCodesCache = null;
+function getExitCodes() {
+  if (exitCodesCache) return exitCodesCache;
+  try { exitCodesCache = require('./document-exit-codes'); } catch { exitCodesCache = null; }
+  return exitCodesCache;
+}
+let networkPortsCache = null;
+function getNetworkPorts() {
+  if (networkPortsCache) return networkPortsCache;
+  try { networkPortsCache = require('./document-network-ports'); } catch { networkPortsCache = null; }
+  return networkPortsCache;
+}
+let linuxDistrosCache = null;
+function getLinuxDistros() {
+  if (linuxDistrosCache) return linuxDistrosCache;
+  try { linuxDistrosCache = require('./document-linux-distros'); } catch { linuxDistrosCache = null; }
+  return linuxDistrosCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2899,6 +2923,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const cryptoWalletsBlock = buildCryptoWalletsBlock(files);
   const cveIdsBlock = buildCveIdsBlock(files);
   const mediaTimestampsBlock = buildMediaTimestampsBlock(files);
+  const linuxSignalsBlock = buildLinuxSignalsBlock(files);
+  const exitCodesBlock = buildExitCodesBlock(files);
+  const networkPortsBlock = buildNetworkPortsBlock(files);
+  const linuxDistrosBlock = buildLinuxDistrosBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3117,6 +3145,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     cryptoWalletsBlock,
     cveIdsBlock,
     mediaTimestampsBlock,
+    linuxSignalsBlock,
+    exitCodesBlock,
+    networkPortsBlock,
+    linuxDistrosBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5707,6 +5739,42 @@ function buildMediaTimestampsBlock(files) {
   return engine.renderMediaTimestampsBlock(report);
 }
 
+function buildLinuxSignalsBlock(files) {
+  const engine = getLinuxSignals();
+  if (!engine || typeof engine.buildLinuxSignalsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildLinuxSignalsForFiles(list);
+  return engine.renderLinuxSignalsBlock(report);
+}
+
+function buildExitCodesBlock(files) {
+  const engine = getExitCodes();
+  if (!engine || typeof engine.buildExitCodesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildExitCodesForFiles(list);
+  return engine.renderExitCodesBlock(report);
+}
+
+function buildNetworkPortsBlock(files) {
+  const engine = getNetworkPorts();
+  if (!engine || typeof engine.buildNetworkPortsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNetworkPortsForFiles(list);
+  return engine.renderNetworkPortsBlock(report);
+}
+
+function buildLinuxDistrosBlock(files) {
+  const engine = getLinuxDistros();
+  if (!engine || typeof engine.buildLinuxDistrosForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildLinuxDistrosForFiles(list);
+  return engine.renderLinuxDistrosBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6080,6 +6148,10 @@ module.exports = {
   buildCryptoWalletsBlock,
   buildCveIdsBlock,
   buildMediaTimestampsBlock,
+  buildLinuxSignalsBlock,
+  buildExitCodesBlock,
+  buildNetworkPortsBlock,
+  buildLinuxDistrosBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
