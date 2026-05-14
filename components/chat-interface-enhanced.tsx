@@ -3074,10 +3074,11 @@ const NavbarModelSelector = ({
           "bg-transparent text-foreground",
           "border border-transparent",
           "text-[13.5px] font-semibold tracking-tight",
-          "transition-colors duration-200",
-          "hover:bg-muted/40",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-          "data-[state=open]:bg-muted/50",
+          "transition-[background-color,border-color,color] duration-[var(--duration-base,220ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
+          "hover:bg-muted/45 hover:border-border/40",
+          "active:scale-[0.985]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+          "data-[state=open]:bg-muted/55 data-[state=open]:border-border/50",
         )}
       >
         {selectedModelData && <IconProvider name={resolveModelIconName(selectedModelData)} className="h-4 w-4 shrink-0" />}

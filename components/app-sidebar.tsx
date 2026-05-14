@@ -162,8 +162,10 @@ function SidebarNavItem({
           asChild
           isActive={active}
           className={cn(
-            "group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40",
-            active && "bg-accent text-accent-foreground",
+            "group/nav w-full justify-start h-9 px-3 rounded-lg",
+            "transition-[background-color,color,box-shadow] duration-[var(--duration-fast,150ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
+            "hover:bg-muted/45",
+            active && "bg-accent text-accent-foreground shadow-[inset_2px_0_0_0_hsl(var(--accent-violet)/0.65)] dark:shadow-[inset_2px_0_0_0_hsl(var(--accent-violet)/0.7)]",
             pending && "opacity-70"
           )}
           variant="default"
