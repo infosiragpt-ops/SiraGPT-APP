@@ -556,10 +556,42 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
  * A streaming assistant message grows one token at a time. Isolate
  * its layout so each chunk doesn't trigger a relayout of every
  * element above — that's what makes long generations feel janky.
+ *
+ * The `::after` pseudo-element renders a soft pulsing bar after the
+ * last visible character (Claude-style "cursor at the front of the
+ * token river"). It's positioned inline so it hugs the cursor
+ * naturally as markdown grows, and disappears the moment the stream
+ * resolves. Respects `prefers-reduced-motion` via the parent rule.
  */
 .streaming-message {
   contain: layout style;
   overflow-anchor: none;
+}
+
+.streaming-message :is(p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th):last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.55ch;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  background: linear-gradient(
+    180deg,
+    hsl(var(--foreground) / 0.55) 0%,
+    hsl(var(--foreground) / 0.85) 100%
+  );
+  border-radius: 1px;
+  animation: premium-caret 1.05s var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)) infinite;
+  /* Prevent the cursor from being treated as overflow that would
+     cause horizontal scrollbars on narrow viewports. */
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-message :is(p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th):last-child::after {
+    animation: none;
+    background: hsl(var(--foreground) / 0.5);
+  }
 }
 
 /* Custom scrollbar for chat */

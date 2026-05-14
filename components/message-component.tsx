@@ -2540,11 +2540,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             //                      around short text like "hola".
                             //   rounded-br-[6px]   subtle "tail" toward sender side
                             <Card className={cn(
-                                "chat-user-bubble relative w-fit rounded-[16px] rounded-br-[6px]",
-                                "px-3 py-1.5",
-                                "bg-[#F4F4F4] text-primary dark:bg-[#1E1E1E] dark:text-white",
+                                "chat-user-bubble relative w-fit rounded-[18px] rounded-br-[8px]",
+                                "px-3.5 py-2",
+                                "bg-muted/85 text-foreground dark:bg-[hsl(var(--surface-elevated))] dark:text-foreground",
                                 "border border-transparent shadow-none",
-                                "text-[14.5px] leading-[1.5]",
+                                "text-[14.5px] leading-[1.55] tracking-[-0.005em]",
+                                "transition-colors duration-[var(--duration-base,220ms)] ease-[var(--ease-out-smooth,cubic-bezier(0.22,1,0.36,1))]",
                                 // Wrap long tokens (pasted URLs, code strings, or
                                 // long sentences in narrow split-view) instead of
                                 // pushing the bubble past the pane edge.
