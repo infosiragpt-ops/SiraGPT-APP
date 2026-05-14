@@ -1777,6 +1777,30 @@ function getMongoAgg() {
   try { mongoAggCache = require('./document-mongo-agg'); } catch { mongoAggCache = null; }
   return mongoAggCache;
 }
+let helmCache = null;
+function getHelm() {
+  if (helmCache) return helmCache;
+  try { helmCache = require('./document-helm'); } catch { helmCache = null; }
+  return helmCache;
+}
+let vitestCache = null;
+function getVitest() {
+  if (vitestCache) return vitestCache;
+  try { vitestCache = require('./document-vitest'); } catch { vitestCache = null; }
+  return vitestCache;
+}
+let mjmlCache = null;
+function getMjml() {
+  if (mjmlCache) return mjmlCache;
+  try { mjmlCache = require('./document-mjml'); } catch { mjmlCache = null; }
+  return mjmlCache;
+}
+let stripeCache = null;
+function getStripe() {
+  if (stripeCache) return stripeCache;
+  try { stripeCache = require('./document-stripe'); } catch { stripeCache = null; }
+  return stripeCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3403,6 +3427,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const jsonLdBlock = buildJsonLdBlock(files);
   const tailwindBlock = buildTailwindBlock(files);
   const mongoAggBlock = buildMongoAggBlock(files);
+  const helmBlock = buildHelmBlock(files);
+  const vitestBlock = buildVitestBlock(files);
+  const mjmlBlock = buildMjmlBlock(files);
+  const stripeBlock = buildStripeBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3693,6 +3721,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     jsonLdBlock,
     tailwindBlock,
     mongoAggBlock,
+    helmBlock,
+    vitestBlock,
+    mjmlBlock,
+    stripeBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6931,6 +6963,42 @@ function buildMongoAggBlock(files) {
   return engine.renderMongoAggBlock(report);
 }
 
+function buildHelmBlock(files) {
+  const engine = getHelm();
+  if (!engine || typeof engine.buildHelmForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHelmForFiles(list);
+  return engine.renderHelmBlock(report);
+}
+
+function buildVitestBlock(files) {
+  const engine = getVitest();
+  if (!engine || typeof engine.buildVitestForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildVitestForFiles(list);
+  return engine.renderVitestBlock(report);
+}
+
+function buildMjmlBlock(files) {
+  const engine = getMjml();
+  if (!engine || typeof engine.buildMjmlForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMjmlForFiles(list);
+  return engine.renderMjmlBlock(report);
+}
+
+function buildStripeBlock(files) {
+  const engine = getStripe();
+  if (!engine || typeof engine.buildStripeForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildStripeForFiles(list);
+  return engine.renderStripeBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7376,6 +7444,10 @@ module.exports = {
   buildJsonLdBlock,
   buildTailwindBlock,
   buildMongoAggBlock,
+  buildHelmBlock,
+  buildVitestBlock,
+  buildMjmlBlock,
+  buildStripeBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
