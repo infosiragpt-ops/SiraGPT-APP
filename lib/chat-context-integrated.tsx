@@ -1290,7 +1290,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setChatType(type);
     try {
       const response = await apiClient.createChat({
-        title: initialContent ? initialContent.substring(0, 30) : "New Chat",
+        title: initialContent ? initialContent.substring(0, 30) : "Nuevo chat",
         model: selectedModel,
         isWordConnectorChat: options?.isWordConnectorChat || false,
         isExcelConnectorChat: options?.isExcelConnectorChat || false,
@@ -1463,13 +1463,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         id: `msg-${Date.now()}`,
         chatId: currentChat.id,
         role: "ASSISTANT",
-        content: `Hello! I'm ${availableModels.find(m => m.name === selectedModel)?.displayName || selectedModel}. How can I help you today?`,
+        content: `Hola, soy ${availableModels.find(m => m.name === selectedModel)?.displayName || selectedModel}. ¿En qué te puedo ayudar?`,
         timestamp: new Date().toISOString(),
       }
 
       const clearedChat = {
         ...currentChat,
-        title: "New Chat",
+        title: "Nuevo chat",
         messages: [initialMessage],
         updatedAt: new Date().toISOString(),
       }

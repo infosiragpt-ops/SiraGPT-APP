@@ -3514,7 +3514,7 @@ function ChatInterfaceContent() {
   }, []);
 
   /**
-   * Resets all tools, connectors, and UI states - used when switching chats or clicking "New Chat"
+   * Resets all tools, connectors, and UI states - used when switching chats or clicking "Nuevo chat"
    */
   const resetAllToolsAndConnectors = React.useCallback(() => {
     // Close all tools and connectors
@@ -4568,7 +4568,7 @@ But first, you need to connect your Spotify account securely using the button be
   }, [currentChat?.id, closeAllToolsAndConnectors]);
 
 
-  // Listen for "New Chat" button click to reset all states
+  // Listen for "Nuevo chat" button click to reset all states
   React.useEffect(() => {
     const handleResetChatState = () => {
       console.log('🔄 Resetting all chat states (New Chat clicked)');
@@ -6606,7 +6606,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       let newChat = currentChat;
       if (!currentChat) {
         const response = await apiClient.createChat({
-          title: prompt ? prompt.substring(0, 30) : "New Chat",
+          title: prompt ? prompt.substring(0, 30) : "Nuevo chat",
           model: selectedModel,
         });
         newChat = response.chat;
@@ -7539,7 +7539,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 {!rightPanelActive && (
                   <WhatsAppButton
                     className="chat-header-icon-btn chat-optional-action"
-                    message="Hi 👋, I'm interested in SiraGPT. Could you share more about its features and pricing?"
+                    message="Hola 👋, me interesa SiraGPT. ¿Podrían contarme más sobre sus funciones y precios?"
                   />
                 )}
                 <ThemeToggle className="chat-header-icon-btn" />
