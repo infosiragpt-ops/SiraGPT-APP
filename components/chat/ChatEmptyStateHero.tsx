@@ -153,6 +153,17 @@ export function ChatEmptyStateHero({
           </motion.button>
         ))}
       </div>
+
+      {/* Discoverability hint — quiet line under the prompt grid that
+          surfaces the most useful global shortcut (⌘K / Ctrl+K opens
+          the chat search). Tailwind's `kbd` lookalike style keeps it
+          legible without competing with the hero. */}
+      <p className="mt-6 flex items-center justify-center gap-1.5 text-[11.5px] text-muted-foreground">
+        <span>Buscar chats</span>
+        <kbd className="inline-flex h-5 items-center rounded-md border border-border/55 bg-muted/40 px-1.5 font-mono text-[10.5px] font-medium tracking-wide text-foreground/75">
+          ⌘K
+        </kbd>
+      </p>
     </motion.div>
   )
 }
