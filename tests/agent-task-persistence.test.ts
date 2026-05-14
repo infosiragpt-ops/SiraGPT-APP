@@ -6,6 +6,7 @@ const cjsRequire = createRequire(__filename)
 
 const persistence = cjsRequire("../../backend/src/services/agents/agent-task-persistence") as {
   INTERNAL: {
+    buildExistingTaskLookup: (data: Record<string, unknown>) => Record<string, unknown>
     isTerminalStatus: (status?: string) => boolean
     stateFromEvent: (state: Record<string, unknown> | null, event: Record<string, unknown>) => Record<string, unknown> | null
     statusFromEvent: (event: Record<string, unknown>, fallback?: string) => string
@@ -43,5 +44,17 @@ describe("agent-task-persistence", () => {
 
     assert.equal(persistence.INTERNAL.isTerminalStatus("completed"), true)
     assert.ok(data.completedAt instanceof Date)
+  })
+
+  it("busca tareas existentes por id y jobId antes de crear", () => {
+    assert.deepEqual(
+      persistence.INTERNAL.buildExistingTaskLookup({ id: "task-1", jobId: "job-1" }),
+      { OR: [{ id: "task-1" }, { jobId: "job-1" }] },
+    )
+
+    assert.deepEqual(
+      persistence.INTERNAL.buildExistingTaskLookup({ id: "task-1", jobId: "task-1" }),
+      { id: "task-1" },
+    )
   })
 })

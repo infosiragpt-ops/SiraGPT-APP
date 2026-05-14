@@ -90,6 +90,17 @@ async function updateExistingAgentTask(where, data) {
   return prisma.agentTask.findFirst({ where });
 }
 
+function buildExistingTaskLookup(data = {}) {
+  const id = data.id ? String(data.id) : '';
+  const jobId = data.jobId ? String(data.jobId) : '';
+  if (id && jobId && id !== jobId) {
+    return { OR: [{ id }, { jobId }] };
+  }
+  if (id) return { id };
+  if (jobId) return { jobId };
+  return {};
+}
+
 async function upsertAgentTask(task = {}) {
   if (!hasModel('agentTask') || !task.taskId || !task.userId) return null;
   const data = withTerminalTimestamps({
@@ -108,6 +119,13 @@ async function upsertAgentTask(task = {}) {
     failedAt: task.failedAt ? new Date(task.failedAt) : null,
   }, task);
   try {
+    const existing = await prisma.agentTask.findFirst({
+      where: buildExistingTaskLookup(data),
+      select: { id: true },
+    });
+    if (existing?.id) {
+      return await updateExistingAgentTask({ id: existing.id }, data);
+    }
     return await prisma.agentTask.create({ data });
   } catch (err) {
     if (err?.code === 'P2002') {
@@ -350,6 +368,7 @@ module.exports = {
   recoverOrphanedAgentTasks,
   upsertAgentTask,
   INTERNAL: {
+    buildExistingTaskLookup,
     isTerminalStatus,
     stateFromEvent,
     statusFromEvent,
