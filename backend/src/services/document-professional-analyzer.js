@@ -1585,6 +1585,30 @@ function getBotTokens() {
   try { botTokensCache = require('./document-bot-tokens'); } catch { botTokensCache = null; }
   return botTokensCache;
 }
+let cargoPackagesCache = null;
+function getCargoPackages() {
+  if (cargoPackagesCache) return cargoPackagesCache;
+  try { cargoPackagesCache = require('./document-cargo-packages'); } catch { cargoPackagesCache = null; }
+  return cargoPackagesCache;
+}
+let goModulesCache = null;
+function getGoModules() {
+  if (goModulesCache) return goModulesCache;
+  try { goModulesCache = require('./document-go-modules'); } catch { goModulesCache = null; }
+  return goModulesCache;
+}
+let mavenCoordsCache = null;
+function getMavenCoords() {
+  if (mavenCoordsCache) return mavenCoordsCache;
+  try { mavenCoordsCache = require('./document-maven-coords'); } catch { mavenCoordsCache = null; }
+  return mavenCoordsCache;
+}
+let pipReqsCache = null;
+function getPipReqs() {
+  if (pipReqsCache) return pipReqsCache;
+  try { pipReqsCache = require('./document-pip-reqs'); } catch { pipReqsCache = null; }
+  return pipReqsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3179,6 +3203,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const wktGeometryBlock = buildWktGeometryBlock(files);
   const mdRefLinksBlock = buildMdRefLinksBlock(files);
   const botTokensBlock = buildBotTokensBlock(files);
+  const cargoPackagesBlock = buildCargoPackagesBlock(files);
+  const goModulesBlock = buildGoModulesBlock(files);
+  const mavenCoordsBlock = buildMavenCoordsBlock(files);
+  const pipReqsBlock = buildPipReqsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3437,6 +3465,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     wktGeometryBlock,
     mdRefLinksBlock,
     botTokensBlock,
+    cargoPackagesBlock,
+    goModulesBlock,
+    mavenCoordsBlock,
+    pipReqsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6387,6 +6419,42 @@ function buildBotTokensBlock(files) {
   return engine.renderBotTokensBlock(report);
 }
 
+function buildCargoPackagesBlock(files) {
+  const engine = getCargoPackages();
+  if (!engine || typeof engine.buildCargoPackagesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCargoPackagesForFiles(list);
+  return engine.renderCargoPackagesBlock(report);
+}
+
+function buildGoModulesBlock(files) {
+  const engine = getGoModules();
+  if (!engine || typeof engine.buildGoModulesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGoModulesForFiles(list);
+  return engine.renderGoModulesBlock(report);
+}
+
+function buildMavenCoordsBlock(files) {
+  const engine = getMavenCoords();
+  if (!engine || typeof engine.buildMavenCoordsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMavenCoordsForFiles(list);
+  return engine.renderMavenCoordsBlock(report);
+}
+
+function buildPipReqsBlock(files) {
+  const engine = getPipReqs();
+  if (!engine || typeof engine.buildPipReqsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPipReqsForFiles(list);
+  return engine.renderPipReqsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6800,6 +6868,10 @@ module.exports = {
   buildWktGeometryBlock,
   buildMdRefLinksBlock,
   buildBotTokensBlock,
+  buildCargoPackagesBlock,
+  buildGoModulesBlock,
+  buildMavenCoordsBlock,
+  buildPipReqsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
