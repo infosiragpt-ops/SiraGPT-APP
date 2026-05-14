@@ -1215,6 +1215,10 @@ router.post(
             || documentEnrichment?.questionsBlock
             || documentEnrichment?.imperativesBlock
             || documentEnrichment?.inTextDefinitionsBlock
+            || documentEnrichment?.fiscalYearBlock
+            || documentEnrichment?.ratiosBlock
+            || documentEnrichment?.ordinalsBlock
+            || documentEnrichment?.geoRegionsBlock
             || documentEnrichment?.discourseBlock
             || documentEnrichment?.sectionRolesBlock
           ) {
@@ -1679,6 +1683,14 @@ router.post(
             // In-text definitions = inline "X is Y" / "X means Y" patterns
             // (distinct from glossary definitions extractor).
             if (documentEnrichment.inTextDefinitionsBlock) parts.push(documentEnrichment.inTextDefinitionsBlock);
+            // Fiscal year = FY24/Q1/quarter markers.
+            if (documentEnrichment.fiscalYearBlock) parts.push(documentEnrichment.fiscalYearBlock);
+            // Ratios = 3:1 / "3 to 1" / X per Y / fractions.
+            if (documentEnrichment.ratiosBlock) parts.push(documentEnrichment.ratiosBlock);
+            // Ordinals = 1st/first/primero/1º ranking markers.
+            if (documentEnrichment.ordinalsBlock) parts.push(documentEnrichment.ordinalsBlock);
+            // Geo regions = continents/groupings/ISO/countries.
+            if (documentEnrichment.geoRegionsBlock) parts.push(documentEnrichment.geoRegionsBlock);
             // Cross-document synthesis only fires for ≥2 files; sits next to
             // insights so the model sees aggregate truth before per-file detail.
             if (documentEnrichment.comparisonBlock) parts.push(documentEnrichment.comparisonBlock);
@@ -1744,7 +1756,7 @@ router.post(
                   'disclosuresBlock', 'factVsOpinionBlock', 'scenariosBlock',
                   'benchmarksBlock', 'goalsTargetsBlock', 'slaTermsBlock',
                   'dataClassificationBlock', 'approvalWorkflowBlock', 'executiveSummaryBlock',
-                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock', 'attributionsBlock', 'comparativesBlock', 'causalBlock', 'concessionBlock', 'hedgingBlock', 'intensifiersBlock', 'reportingBlock', 'examplesBlock', 'approximationsBlock', 'questionsBlock', 'imperativesBlock', 'inTextDefinitionsBlock',
+                  'urlsBlock', 'contactsBlock', 'footnotesBlock', 'tablesBlock', 'codeBlocksBlock', 'figureRefsBlock', 'checklistsBlock', 'identifiersBlock', 'bulletListsBlock', 'mermaidBlock', 'prioritiesBlock', 'ownershipBlock', 'timestampsBlock', 'statusBlock', 'acceptanceCriteriaBlock', 'apiEndpointsBlock', 'envVarsBlock', 'sqlBlock', 'filePathsBlock', 'cronBlock', 'licensesBlock', 'dependenciesBlock', 'riskMatrixBlock', 'versionsBlock', 'decisionRecordsBlock', 'domainsBlock', 'currencyBlock', 'percentagesBlock', 'citationsBlock', 'colorsBlock', 'coordinatesBlock', 'trademarkBlock', 'hashtagsBlock', 'sectionLabelsBlock', 'signoffsBlock', 'hashesBlock', 'couponsBlock', 'fileSizesBlock', 'vcsRefsBlock', 'standardsBlock', 'networkBlock', 'httpStatusBlock', 'timezonesBlock', 'mathBlock', 'booleanBlock', 'tocBlock', 'htmlAttrsBlock', 'blockquotesBlock', 'definitionListsBlock', 'todosBlock', 'imagesBlock', 'mediaBlock', 'languageRatioBlock', 'regexPatternsBlock', 'fileExtensionsBlock', 'codeDefsBlock', 'tonePolarityBlock', 'quantifiersBlock', 'modalsBlock', 'negationBlock', 'readingTimeBlock', 'attributionsBlock', 'comparativesBlock', 'causalBlock', 'concessionBlock', 'hedgingBlock', 'intensifiersBlock', 'reportingBlock', 'examplesBlock', 'approximationsBlock', 'questionsBlock', 'imperativesBlock', 'inTextDefinitionsBlock', 'fiscalYearBlock', 'ratiosBlock', 'ordinalsBlock', 'geoRegionsBlock',
                   'comparisonBlock', 'qualityBlock', 'deepAnalysisBlock', 'quotesBlock',
                   'discourseBlock', 'sectionRolesBlock', 'directiveBlock',
                 ];

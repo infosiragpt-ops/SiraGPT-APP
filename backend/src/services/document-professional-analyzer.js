@@ -865,6 +865,30 @@ function getDefinitions() {
   try { definitionsCache = require('./document-definitions'); } catch { definitionsCache = null; }
   return definitionsCache;
 }
+let fiscalYearCache = null;
+function getFiscalYear() {
+  if (fiscalYearCache) return fiscalYearCache;
+  try { fiscalYearCache = require('./document-fiscal-year'); } catch { fiscalYearCache = null; }
+  return fiscalYearCache;
+}
+let ratiosCache = null;
+function getRatios() {
+  if (ratiosCache) return ratiosCache;
+  try { ratiosCache = require('./document-ratios'); } catch { ratiosCache = null; }
+  return ratiosCache;
+}
+let ordinalsCache = null;
+function getOrdinals() {
+  if (ordinalsCache) return ordinalsCache;
+  try { ordinalsCache = require('./document-ordinals'); } catch { ordinalsCache = null; }
+  return ordinalsCache;
+}
+let geoRegionsCache = null;
+function getGeoRegions() {
+  if (geoRegionsCache) return geoRegionsCache;
+  try { geoRegionsCache = require('./document-geo-regions'); } catch { geoRegionsCache = null; }
+  return geoRegionsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2339,6 +2363,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const questionsBlock = buildQuestionsBlock(files);
   const imperativesBlock = buildImperativesBlock(files);
   const inTextDefinitionsBlock = buildInTextDefinitionsBlock(files);
+  const fiscalYearBlock = buildFiscalYearBlock(files);
+  const ratiosBlock = buildRatiosBlock(files);
+  const ordinalsBlock = buildOrdinalsBlock(files);
+  const geoRegionsBlock = buildGeoRegionsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2477,6 +2505,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     questionsBlock,
     imperativesBlock,
     inTextDefinitionsBlock,
+    fiscalYearBlock,
+    ratiosBlock,
+    ordinalsBlock,
+    geoRegionsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4319,6 +4351,46 @@ function buildInTextDefinitionsBlock(files) {
   return engine.renderDefinitionsBlock(report);
 }
 
+/** Fiscal year block — FY24/Q1/quarter markers. */
+function buildFiscalYearBlock(files) {
+  const engine = getFiscalYear();
+  if (!engine || typeof engine.buildFiscalYearForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFiscalYearForFiles(list);
+  return engine.renderFiscalYearBlock(report);
+}
+
+/** Ratios block — 3:1 / "3 to 1" / X per Y / fractions. */
+function buildRatiosBlock(files) {
+  const engine = getRatios();
+  if (!engine || typeof engine.buildRatiosForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRatiosForFiles(list);
+  return engine.renderRatiosBlock(report);
+}
+
+/** Ordinals block — 1st/first/primero/1º position markers. */
+function buildOrdinalsBlock(files) {
+  const engine = getOrdinals();
+  if (!engine || typeof engine.buildOrdinalsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOrdinalsForFiles(list);
+  return engine.renderOrdinalsBlock(report);
+}
+
+/** Geographic regions block — continents/groupings/ISO/countries. */
+function buildGeoRegionsBlock(files) {
+  const engine = getGeoRegions();
+  if (!engine || typeof engine.buildGeoRegionsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGeoRegionsForFiles(list);
+  return engine.renderGeoRegionsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4612,6 +4684,10 @@ module.exports = {
   buildQuestionsBlock,
   buildImperativesBlock,
   buildInTextDefinitionsBlock,
+  buildFiscalYearBlock,
+  buildRatiosBlock,
+  buildOrdinalsBlock,
+  buildGeoRegionsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
