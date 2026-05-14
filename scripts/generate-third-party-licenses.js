@@ -42,6 +42,23 @@ const PLATFORM_BIN_PATTERN =
 // drift gate stable cross-platform.
 const PLATFORM_CONDITIONAL_NAMES = new Set([
   'fsevents', // macOS-only: native binding to the FSEvents kernel API
+  // Optional+peer deps that npm sometimes installs and sometimes skips
+  // depending on host/cache state, causing the drift gate to flap.
+  // None affect runtime: `retry`/`@types/retry` are transitive optional
+  // peers of `p-retry@6.2.1`, which itself only resolves via legacy
+  // peerDependencies of packages we no longer use directly. Excluding
+  // them keeps the report deterministic across runs.
+  'retry',
+  '@types/retry',
+]);
+
+// Specific name@version combos to drop. Same motivation as the
+// PLATFORM_CONDITIONAL_NAMES set above: certain transitive versions are
+// non-deterministically present across CI hosts. Listing just the unstable
+// version keeps the package row in the report (so attribution stays accurate)
+// while preventing the version list from flapping.
+const PINNED_VERSION_SKIPS = new Set([
+  'p-retry@6.2.1',
 ]);
 
 function isPlatformBinary(name) {
@@ -118,6 +135,10 @@ function collect() {
       const name = pkgVersion.slice(0, at);
       const version = pkgVersion.slice(at + 1);
       if (isPlatformBinary(name)) {
+        platformBinariesSkipped += 1;
+        continue;
+      }
+      if (PINNED_VERSION_SKIPS.has(`${name}@${version}`)) {
         platformBinariesSkipped += 1;
         continue;
       }
