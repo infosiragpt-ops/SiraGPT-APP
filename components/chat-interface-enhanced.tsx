@@ -6796,7 +6796,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   }, [setUploadedFiles]);
 
-  const isInitial = !currentChat && !showAudioPanel && !isWordConnectorActive && !isExcelConnectorActive
+  // "Initial" state = the empty-canvas + hero greeting + example chips.
+  // We surface it when there's no current chat at all OR when the
+  // chat exists but has zero rendered messages (right after
+  // `clearCurrentChat`, or a fresh chat created without a seed
+  // assistant turn). The previous logic only checked `!currentChat`,
+  // which left cleared chats stuck on a blank ScrollArea.
+  const hasRenderableMessages = (currentChat?.messages?.length || 0) > 0
+  const isInitial =
+    !showAudioPanel &&
+    !isWordConnectorActive &&
+    !isExcelConnectorActive &&
+    !hasRenderableMessages
 
   // Any active tool/connector/thesis mode? Used to conditionally render
   // the "tool pills" row below the input — if nothing is active, we

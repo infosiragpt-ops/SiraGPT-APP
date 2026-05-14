@@ -1459,18 +1459,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     try {
       await apiClient.clearChat(currentChat.id)
 
-      const initialMessage: Message = {
-        id: `msg-${Date.now()}`,
-        chatId: currentChat.id,
-        role: "ASSISTANT",
-        content: `Hola, soy ${availableModels.find(m => m.name === selectedModel)?.displayName || selectedModel}. ¿En qué te puedo ayudar?`,
-        timestamp: new Date().toISOString(),
-      }
-
+      // Empty messages array — the chat surface re-renders the
+      // empty-state hero (greeting + example prompt chips) instead of
+      // a pre-seeded assistant turn the user never asked for. Matches
+      // Claude.ai's "clear chat" UX where the canvas resets fully.
       const clearedChat = {
         ...currentChat,
         title: "Nuevo chat",
-        messages: [initialMessage],
+        messages: [],
         updatedAt: new Date().toISOString(),
       }
 
