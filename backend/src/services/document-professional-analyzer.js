@@ -1513,6 +1513,30 @@ function getOpenapiKeys() {
   try { openapiKeysCache = require('./document-openapi-keys'); } catch { openapiKeysCache = null; }
   return openapiKeysCache;
 }
+let kafkaRefsCache = null;
+function getKafkaRefs() {
+  if (kafkaRefsCache) return kafkaRefsCache;
+  try { kafkaRefsCache = require('./document-kafka-refs'); } catch { kafkaRefsCache = null; }
+  return kafkaRefsCache;
+}
+let ansiEscapesCache = null;
+function getAnsiEscapes() {
+  if (ansiEscapesCache) return ansiEscapesCache;
+  try { ansiEscapesCache = require('./document-ansi-escapes'); } catch { ansiEscapesCache = null; }
+  return ansiEscapesCache;
+}
+let sqlWindowsCache = null;
+function getSqlWindows() {
+  if (sqlWindowsCache) return sqlWindowsCache;
+  try { sqlWindowsCache = require('./document-sql-windows'); } catch { sqlWindowsCache = null; }
+  return sqlWindowsCache;
+}
+let websocketMarkersCache = null;
+function getWebsocketMarkers() {
+  if (websocketMarkersCache) return websocketMarkersCache;
+  try { websocketMarkersCache = require('./document-websocket-markers'); } catch { websocketMarkersCache = null; }
+  return websocketMarkersCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3095,6 +3119,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const dnsRecordsBlock = buildDnsRecordsBlock(files);
   const emailAuthBlock = buildEmailAuthBlock(files);
   const openapiKeysBlock = buildOpenapiKeysBlock(files);
+  const kafkaRefsBlock = buildKafkaRefsBlock(files);
+  const ansiEscapesBlock = buildAnsiEscapesBlock(files);
+  const sqlWindowsBlock = buildSqlWindowsBlock(files);
+  const websocketMarkersBlock = buildWebsocketMarkersBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3341,6 +3369,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     dnsRecordsBlock,
     emailAuthBlock,
     openapiKeysBlock,
+    kafkaRefsBlock,
+    ansiEscapesBlock,
+    sqlWindowsBlock,
+    websocketMarkersBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6183,6 +6215,42 @@ function buildOpenapiKeysBlock(files) {
   return engine.renderOpenapiKeysBlock(report);
 }
 
+function buildKafkaRefsBlock(files) {
+  const engine = getKafkaRefs();
+  if (!engine || typeof engine.buildKafkaRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildKafkaRefsForFiles(list);
+  return engine.renderKafkaRefsBlock(report);
+}
+
+function buildAnsiEscapesBlock(files) {
+  const engine = getAnsiEscapes();
+  if (!engine || typeof engine.buildAnsiEscapesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAnsiEscapesForFiles(list);
+  return engine.renderAnsiEscapesBlock(report);
+}
+
+function buildSqlWindowsBlock(files) {
+  const engine = getSqlWindows();
+  if (!engine || typeof engine.buildSqlWindowsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSqlWindowsForFiles(list);
+  return engine.renderSqlWindowsBlock(report);
+}
+
+function buildWebsocketMarkersBlock(files) {
+  const engine = getWebsocketMarkers();
+  if (!engine || typeof engine.buildWebsocketMarkersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWebsocketMarkersForFiles(list);
+  return engine.renderWebsocketMarkersBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6584,6 +6652,10 @@ module.exports = {
   buildDnsRecordsBlock,
   buildEmailAuthBlock,
   buildOpenapiKeysBlock,
+  buildKafkaRefsBlock,
+  buildAnsiEscapesBlock,
+  buildSqlWindowsBlock,
+  buildWebsocketMarkersBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
