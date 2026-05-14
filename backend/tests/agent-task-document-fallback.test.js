@@ -52,10 +52,43 @@ test('buildAttachmentGroundedFallbackAnswer prefers document findings over inter
   assert.doesNotMatch(answer, /docintel_retrieve|busqueda semantica general|Título del articulo/);
 });
 
+test('buildAttachmentGroundedFallbackAnswer respects one-paragraph XLSX summaries', () => {
+  clearAgentModules();
+  const { buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+  const ctx = [
+    'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
+    '',
+    '### Archivo adjunto 1: seleccionados_autorregulacion_aprendizaje.xlsx',
+    'id: file-xlsx-1',
+    'tipo: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '',
+    '| Título del articulo | Autores | Año de publicacion | Resultados |',
+    '| Autorregulación y aprendizaje autonomo | Equipo A | 2024 | Se encontró que la planificación del estudio y la autoevaluación mejoran el rendimiento academico en secundaria. |',
+    '| Aula invertida y autonomia | Equipo B | 2026 | Los resultados muestran que actividades previas con recursos digitales incrementan la participación y la autonomia del estudiante. |',
+    '| Metacognicion escolar | Equipo C | 2025 | El documento recomienda seguimiento docente, metas semanales y retroalimentacion para sostener habitos de aprendizaje autorregulado. |',
+  ].join('\n');
+
+  const answer = buildAttachmentGroundedFallbackAnswer({
+    goal: 'dame un resumen en un solo parrafo',
+    uploadedFileContext: ctx,
+    reason: '401 Incorrect API key provided',
+  });
+
+  assert.match(answer, /planificación del estudio|planificacion del estudio/);
+  assert.match(answer, /autonomia del estudiante/);
+  assert.match(answer, /retroalimentacion/);
+  assert.doesNotMatch(answer, /^###/m);
+  assert.doesNotMatch(answer, /^- /m);
+  assert.equal(answer.split(/\n{2,}/).length, 1);
+  assert.doesNotMatch(answer, /Incorrect API key|401/);
+});
+
 test('runAgentTaskJob: uploaded document receives local fallback answer without OPENAI_API_KEY', async () => {
-  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV']);
+  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV']);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-fallback-'));
   delete process.env.OPENAI_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
   process.env.AGENT_TASK_STORE_DIR = storeDir;
   process.env.NODE_ENV = 'test';
   clearAgentModules();
@@ -231,6 +264,7 @@ test('runAgentTaskJob: uploaded document recovers when model runtime throws quot
     assert.equal(snapshot.streamState.done, true);
     assert.equal(snapshot.streamState.error, undefined);
     assert.equal(snapshot.streamState.stoppedReason, 'attachment_runtime_recovery');
+    assert.ok(snapshot.streamState.steps.length >= 1, 'runtime recovery should emit at least one visible step');
     assert.match(snapshot.streamState.finalText, /Análisis del documento adjunto/);
     assert.match(snapshot.streamState.finalText, /uso compulsivo de redes sociales se asocia/);
     assert.doesNotMatch(snapshot.streamState.finalText, /insufficient_quota|api[_ -]?key/i);
@@ -312,6 +346,7 @@ test('runAgentTaskJob: uploaded document recovers when model runtime completes w
     assert.equal(snapshot.streamState.done, true);
     assert.equal(snapshot.streamState.error, undefined);
     assert.equal(snapshot.streamState.stoppedReason, 'attachment_empty_response_recovery');
+    assert.ok(snapshot.streamState.steps.length >= 1, 'empty response recovery should emit at least one visible step');
     assert.match(snapshot.streamState.finalText, /Análisis del documento adjunto/);
     assert.match(snapshot.streamState.finalText, /ventas del proximo trimestre subiran 18/);
     assert.match(snapshot.streamState.finalText, /Siguiente paso recomendado/);

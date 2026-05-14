@@ -216,6 +216,15 @@ function sanitizeAttachmentFallbackReason(reason) {
   return 'el runtime principal no completó la solicitud';
 }
 
+function wantsSingleParagraphAnswer(request) {
+  const value = normalizedKey(request);
+  return (
+    /\b(?:un|uno|1)\s+(?:solo\s+)?parrafo\b/.test(value) ||
+    /\ben\s+(?:un|uno|1)\s+parrafo\b/.test(value) ||
+    /\bparrafo\s+unico\b/.test(value)
+  );
+}
+
 function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason = '' }) {
   const cleanedRaw = stripScaffolding(uploadedFileContext);
   const cleaned = normalizeAttachmentFallbackContent(cleanedRaw)
@@ -250,6 +259,17 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
     .slice(0, Math.max(3, Math.min(5, bulletSentences.length)))
     .map((sentence) => `- ${sentence.length > 360 ? `${sentence.slice(0, 360).trim()}...` : sentence}`)
     .join('\n');
+
+  if (wantsSingleParagraphAnswer(request)) {
+    const selected = (bulletSentences.length ? bulletSentences : sentences)
+      .slice(0, Math.max(3, Math.min(5, bulletSentences.length || sentences.length)));
+    const paragraph = selected.join(' ').replace(/\s+/g, ' ').trim();
+    const clipped = paragraph.length > 1800 ? `${paragraph.slice(0, 1800).trim()}...` : paragraph;
+    const inlineNote = publicReason
+      ? ` Respondí con análisis documental local porque ${publicReason}.`
+      : '';
+    return `${clipped}${inlineNote}`;
+  }
 
   if (!wantsConclusions) {
     const body = sentences.slice(0, Math.max(4, paragraphCount * 2)).join(' ');
@@ -1352,6 +1372,13 @@ async function runAgentTaskJob(payload = {}, job = null) {
           ? 'El runtime terminó sin una respuesta útil; se recuperó usando el texto extraído del documento.'
           : 'El runtime terminó sin una respuesta útil; se devolvió una salida clara para pedir un archivo legible.',
       });
+      if (stepIdCounter === 0) {
+        stepIdCounter = 1;
+        currentStepId = 's1';
+        emit({ type: 'step_start', id: currentStepId, label: 'Recuperando respuesta desde el documento', icon: 'file-text' });
+        emit({ type: 'step_done', id: currentStepId, ok: Boolean(fallbackMarkdown) });
+        currentStepId = null;
+      }
       emit({
         type: 'quality_gate',
         gate: 'attachment_empty_response_recovery',
@@ -1404,10 +1431,11 @@ async function runAgentTaskJob(payload = {}, job = null) {
     }
 
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
+    const completedStepCount = Math.max(result.steps.length, stepIdCounter);
     const doneEvent = emit({
       type: 'done',
       stoppedReason,
-      stats: { steps: result.steps.length, artifacts: artifacts.length },
+      stats: { steps: completedStepCount, artifacts: artifacts.length },
     });
 
     const status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
@@ -1448,7 +1476,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     taskStore.markTaskStatus(task, status, {
       streamState,
       stats: {
-        steps: result.steps.length,
+        steps: completedStepCount,
         artifacts: artifacts.length,
         durationMs: Date.now() - startedAt,
         stoppedReason,
@@ -1459,7 +1487,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
       try {
         durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, status, {
           stats: {
-            steps: result.steps.length,
+            steps: completedStepCount,
             artifacts: artifacts.length,
             durationMs: Date.now() - startedAt,
             stoppedReason,
@@ -1480,7 +1508,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
       chatId,
       status,
       stoppedReason,
-      steps: result.steps.length,
+      steps: completedStepCount,
       artifacts: artifacts.length,
       durationMs: Date.now() - startedAt,
     });
