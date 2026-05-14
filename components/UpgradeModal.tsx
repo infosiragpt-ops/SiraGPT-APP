@@ -76,7 +76,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
       }
 
       if (!currentUser) {
-        toast.error("Please sign in to subscribe")
+        toast.error("Inicia sesión para suscribirte")
         return
       }
 
@@ -95,13 +95,13 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
       if (status === 503 || /not configured/i.test(err?.message || "")) {
         toast.error(
           data?.message ||
-            "Payment processing isn't configured yet. Please contact support.",
+            "El procesamiento de pagos aún no está configurado. Contacta a soporte.",
           { duration: 6000 }
         )
       } else if (status === 401) {
-        toast.error("Your session expired — please sign in again.")
+        toast.error("Tu sesión expiró — inicia sesión de nuevo.")
       } else {
-        toast.error(err?.message || "Subscription failed")
+        toast.error(err?.message || "Falló la suscripción")
       }
     } finally {
       setLoadingPlan(null)

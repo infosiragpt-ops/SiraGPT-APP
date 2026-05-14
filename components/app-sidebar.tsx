@@ -767,7 +767,7 @@ export function AppSidebar() {
       // This ensures the UI shows the updated title immediately and it persists
       // The optimistic update will remain until page refresh or chat list reload
 
-      toast.success("Chat renamed successfully")
+      toast.success("Chat renombrado")
     } catch (error) {
       console.error('Failed to update chat title:', error)
 
